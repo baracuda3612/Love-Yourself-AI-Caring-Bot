@@ -1,7 +1,7 @@
 # Новий файл app/scheduler.py
 import asyncio
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import pytz
@@ -12,6 +12,8 @@ from apscheduler.triggers.cron import CronTrigger
 from app.ai import generate_daily_message
 from app.config import DB_URL, DEFAULT_SEND_HOUR, MODEL
 from app.db import (
+    AIPlan,
+    AIPlanStep,
     Delivery,
     SessionLocal,
     User,
@@ -218,5 +220,38 @@ async def schedule_daily_loop():
         )
         for reminder in reminders:
             schedule_custom_reminder(reminder)
+
+        now_utc = datetime.now(pytz.UTC)
+        plan_rows = (
+            db.query(AIPlanStep, AIPlan, User)
+            .join(AIPlan, AIPlan.id == AIPlanStep.plan_id)
+            .join(User, User.id == AIPlan.user_id)
+            .filter(
+                AIPlan.status == "active",
+                AIPlanStep.is_completed == False,
+                User.active == True,
+            )
+            .all()
+        )
+
+        dirty = False
+        for step, plan, user in plan_rows:
+            if not step.job_id:
+                step.job_id = AIPlanStep.generate_job_id(user.id, plan.id)
+                dirty = True
+            run_date = step.scheduled_for.astimezone(pytz.UTC)
+            if run_date <= now_utc:
+                run_date = now_utc + timedelta(minutes=1)
+            scheduler.add_job(
+                send_scheduled_message,
+                'date',
+                id=step.job_id,
+                run_date=run_date,
+                args=[user.tg_id, step.message],
+                replace_existing=True,
+            )
+
+        if dirty:
+            db.commit()
 
     await asyncio.Event().wait()

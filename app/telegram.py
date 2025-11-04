@@ -125,6 +125,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from app.db import UserReminder, UserMemoryProfile, AIPlan, AIPlanStep, SessionLocal
 from app.scheduler import add_job, schedule_custom_reminder, send_scheduled_message
+from app.ai_plans import generate_ai_plan
 import parsedatetime as pdt
 import datetime
 import pytz
@@ -230,30 +231,52 @@ async def cmd_plan(m: Message):
     # 1) Отримати memory profile (якщо є)
     with SessionLocal() as db:
         u = db.query(User).filter(User.tg_id==m.from_user.id).first()
-        mp = db.query(UserMemoryProfile).filter(UserMemoryProfile.user_id==u.id).first() if u else None
+        if not u:
+            await m.answer("Натисніть /start")
+            return
+        mp = db.query(UserMemoryProfile).filter(UserMemoryProfile.user_id==u.id).first()
         # 2) Виклик до OpenAI: generate list of steps: [{day:1, send_at: '2025-11-05 22:00', message: '...'}, ...]
         # Тут припускаємо, що є утиліта generate_ai_plan(prompt, memory_profile)
-        from app.openai_utils import generate_ai_plan  # потрібна реалізація
-        plan_name, steps = generate_ai_plan(args, mp.profile_data if mp else None, timezone=u.timezone if u else "Europe/Kyiv")
+        plan_name, steps = generate_ai_plan(
+            args,
+            mp.profile_data if mp else None,
+            timezone=u.timezone or "Europe/Kyiv",
+        )
+        if not steps:
+            await m.answer("Не вдалося сформувати план. Спробуйте уточнити запит.")
+            return
+
         # 3) Зберегти AIPlan і AIPlanStep та додати job-и
-        plan = AIPlan(user_id=u.id if u else None, name=plan_name, description=args)
+        plan = AIPlan(user_id=u.id, name=plan_name, description=args)
         db.add(plan)
         db.commit()
-        for s in steps:
-            scheduled_for_utc = s["scheduled_for"].astimezone(pytz.UTC)
-            job_id = AIPlanStep.generate_job_id(m.from_user.id, plan.id)
-            # Додати job (використайте ту ж функцію _send_reminder або спільну)
-            def _send_plan_step(chat_id, text_):
-                send_scheduled_message(chat_id, text_)
+        db.refresh(plan)
 
+        scheduled_count = 0
+        now_utc = datetime.datetime.now(pytz.UTC)
+        for s in steps:
+            scheduled_local = s["scheduled_for"]
+            if not isinstance(scheduled_local, datetime.datetime):
+                continue
+            scheduled_for_utc = scheduled_local.astimezone(pytz.UTC)
+            if scheduled_for_utc <= now_utc:
+                scheduled_for_utc = now_utc + datetime.timedelta(minutes=1)
+            job_id = AIPlanStep.generate_job_id(u.id, plan.id)
             add_job(
-                _send_plan_step,
+                send_scheduled_message,
                 'date',
                 id=job_id,
                 run_date=scheduled_for_utc,
-                args=[m.from_user.id, s["message"]],
+                args=[u.tg_id, s["message"]],
+                replace_existing=True,
             )
-            step = AIPlanStep(plan_id=plan.id, job_id=job_id, message=s["message"], scheduled_for=scheduled_for_utc)
+            step = AIPlanStep(
+                plan_id=plan.id,
+                job_id=job_id,
+                message=s["message"],
+                scheduled_for=scheduled_for_utc,
+            )
             db.add(step)
+            scheduled_count += 1
         db.commit()
-        await m.answer(f"План '{plan_name}' створено та заплановано {len(steps)} повідомлень.")
+        await m.answer(f"План '{plan_name}' створено та заплановано {scheduled_count} повідомлень.")
