@@ -1,5 +1,16 @@
-# Заміна/оновлення файлу app/db.py
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, Text, ForeignKey, JSON
+from sqlalchemy import (
+    create_engine,
+    Column,
+    Integer,
+    String,
+    Boolean,
+    DateTime,
+    Text,
+    ForeignKey,
+    JSON,
+    inspect,
+    text,
+)
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from sqlalchemy.sql import func
 from app.config import DB_URL
@@ -71,7 +82,7 @@ class UserReminder(Base):
     job_id = Column(String, unique=True, nullable=False)   # APScheduler job_id
     message = Column(Text, nullable=False)
     cron_expression = Column(String, nullable=True)        # якщо повторюване (cron-like)
-    run_at = Column(DateTime(timezone=True), nullable=True) # якщо одноразове
+    scheduled_at = Column(DateTime(timezone=True), nullable=True)  # якщо одноразове
     timezone = Column(String, nullable=False)
     active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -107,8 +118,11 @@ class AIPlanStep(Base):
     def generate_job_id(user_id: int, plan_id: int) -> str:
         return f"user_{user_id}_plan_{plan_id}_step_{uuid.uuid4().hex[:8]}"
 
+
 def init_db():
     Base.metadata.create_all(bind=engine)
+    _migrate_user_reminders()
+
 
 def get_db():
     db = SessionLocal()
@@ -116,3 +130,24 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def _migrate_user_reminders():
+    """Ensure legacy columns are migrated to the current schema."""
+    inspector = inspect(engine)
+    if "user_reminders" not in inspector.get_table_names():
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("user_reminders")}
+
+    if "scheduled_at" in columns or "run_at" not in columns:
+        return
+
+    rename_sql = "ALTER TABLE user_reminders RENAME COLUMN run_at TO scheduled_at"
+
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(rename_sql))
+    except Exception:
+        # If rename isn't supported (older SQLite/different dialect), skip silently.
+        pass
