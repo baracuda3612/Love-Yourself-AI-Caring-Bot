@@ -8,3 +8,6 @@ SQLAlchemy==2.0.23
 uvloop==0.18.0  # Стабільніша версія
 pydantic==2.5.3
 pydantic-core==2.14.6
+apscheduler==3.10.1
+parsedatetime==2.6
+python-dateutil

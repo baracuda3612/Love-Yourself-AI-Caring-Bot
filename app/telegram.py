@@ -120,3 +120,121 @@ async def cb_fb(c: CallbackQuery):
 async def cb_ask(c: CallbackQuery):
     await c.message.answer("Напиши питання наступним повідомленням.")
     await c.answer()
+# Додайте ці функції/хендлери в кінець app/telegram.py або інтегруйте з існуючими
+from aiogram.filters import Command
+from aiogram.types import Message
+from app.db import UserReminder, UserMemoryProfile, AIPlan, AIPlanStep, SessionLocal
+from app.scheduler import add_job, remove_job
+import parsedatetime as pdt
+import datetime
+import pytz
+
+pdt_calendar = pdt.Calendar()
+
+def parse_natural_time(text: str, user_tz: str = "Europe/Kyiv"):
+    # Повертає datetime у UTC або None
+    now_local = datetime.datetime.now(pytz.timezone(user_tz))
+    time_struct, parse_status = pdt_calendar.parseDT(text, sourceTime=now_local)
+    if parse_status == 0:
+        return None
+    # Перетворюємо на UTC naive
+    return time_struct.astimezone(pytz.UTC)
+
+@dp.message(Command("start_memory_test"))
+async def start_memory_test(m: Message):
+    # Простий приклад: збір пар ключ-значення у кілька повідомлень 
+    await m.answer("Почнемо короткий тест. Напишіть кілька фактів про себе у форматі 'ключ:значення'. Коли закінчите, надішліть /done_memory")
+    with SessionLocal() as db:
+        # зберегти маркер, що користувач у режимі опитування — реалізуйте FSM або простий флаг
+        pass
+
+@dp.message(Command("done_memory"))
+async def done_memory(m: Message):
+    # Тут потрібно зібрані повідомлення конвертувати в JSON і зберегти UserMemoryProfile
+    await m.answer("Профіль збережено.")
+
+@dp.message(Command("remind"))
+async def cmd_remind(m: Message):
+    # Приклад виклику: /remind завтра о 09:00 важлива зустріч
+    args = m.get_args()
+    if not args:
+        await m.answer("Використання: /remind <час> <повідомлення>")
+        return
+    # Розділити час і текст (найпростіше: перше слово/фраза до першої лапки або до першого довгого тексту)
+    # Для MVP - припустимо формат: /remind <час> | <повідомлення>
+    if "|" in args:
+        time_part, text = [s.strip() for s in args.split("|", 1)]
+    else:
+        # Якщо нема роздільника - намагаймося виділити час парсером parsedatetime
+        # Спроба: шукаємо дату/час на початку рядка
+        parts = args.split(" ", 3)
+        time_part = parts[0] if parts else args
+        text = args[len(time_part):].strip() or "Нагадування"
+    with SessionLocal() as db:
+        u = db.query(User).filter(User.tg_id==m.from_user.id).first()
+        user_tz = u.timezone if u else "Europe/Kyiv"
+        dt_utc = parse_natural_time(time_part, user_tz)
+        if not dt_utc:
+            await m.answer("Не зрозумів час. Спробуйте: 'завтра о 9:00' або 'через 2 години' або використайте формат 'час | текст'.")
+            return
+        job_id = UserReminder.generate_job_id(m.from_user.id)
+        # Додати job
+        def _send_reminder(user_id, text_):
+            # функція, що викликає бот.send_message (імпортувати bot) — витягти у окрему утиліту
+            from app.telegram import bot as tg_bot
+            tg_bot.loop.create_task(tg_bot.send_message(m.from_user.id, text_))
+        add_job(_send_reminder, 'date', id=job_id, run_date=dt_utc, args=[m.from_user.id, text])
+        # Зберегти в DB
+        rem = UserReminder(user_id=u.id if u else None, job_id=job_id, message=text, run_at=dt_utc, timezone=user_tz)
+        db.add(rem)
+        db.commit()
+        await m.answer(f"Нагадування заплановано на {dt_utc.astimezone(pytz.timezone(user_tz)).strftime('%Y-%m-%d %H:%M %Z')} (job_id={job_id})")
+
+@dp.message(Command("my_reminders"))
+async def cmd_my_reminders(m: Message):
+    with SessionLocal() as db:
+        u = db.query(User).filter(User.tg_id==m.from_user.id).first()
+        if not u:
+            await m.answer("Натисніть /start")
+            return
+        rs = db.query(UserReminder).filter(UserReminder.user_id==u.id, UserReminder.active==True).all()
+        if not rs:
+            await m.answer("У вас немає активних нагадувань.")
+            return
+        text = "Ваші нагадування:\n\n"
+        for r in rs:
+            when = r.run_at.astimezone(pytz.timezone(u.timezone)).strftime('%Y-%m-%d %H:%M') if r.run_at else r.cron_expression
+            text += f"- id:{r.id} job:{r.job_id} коли:{when} текст:{r.message}\n"
+        await m.answer(text)
+
+@dp.message(Command("plan"))
+async def cmd_plan(m: Message):
+    # Використати OpenAI (викликати існуючу функцію generate_ai_plan) з системним prompt + memory_profile
+    args = m.get_args()
+    if not args:
+        await m.answer("Використання: /plan <опис плану> (наприклад: 'план покращення сну на 30 днів')")
+        return
+    # 1) Отримати memory profile (якщо є)
+    with SessionLocal() as db:
+        u = db.query(User).filter(User.tg_id==m.from_user.id).first()
+        mp = db.query(UserMemoryProfile).filter(UserMemoryProfile.user_id==u.id).first() if u else None
+        # 2) Виклик до OpenAI: generate list of steps: [{day:1, send_at: '2025-11-05 22:00', message: '...'}, ...]
+        # Тут припускаємо, що є утиліта generate_ai_plan(prompt, memory_profile)
+        from app.openai_utils import generate_ai_plan  # потрібна реалізація
+        plan_name, steps = generate_ai_plan(args, mp.profile_data if mp else None, timezone=u.timezone if u else "Europe/Kyiv")
+        # 3) Зберегти AIPlan і AIPlanStep та додати job-и
+        plan = AIPlan(user_id=u.id if u else None, name=plan_name, description=args)
+        db.add(plan)
+        db.commit()
+        for s in steps:
+            scheduled_for_utc = s["scheduled_for"].astimezone(pytz.UTC)
+            job_id = AIPlanStep.generate_job_id(m.from_user.id, plan.id)
+            # Додати job (використайте ту ж функцію _send_reminder або спільну)
+            def _send_plan_step(user_id, text_):
+                from app.telegram import bot as tg_bot
+                tg_bot.loop.create_task(tg_bot.send_message(m.from_user.id, text_))
+            add_job(_send_plan_step, 'date', id=job_id, run_date=scheduled_for_utc, args=[m.from_user.id, s["message"]])
+            step = AIPlanStep(plan_id=plan.id, job_id=job_id, message=s["message"], scheduled_for=scheduled_for_utc)
+            db.add(step)
+        db.commit()
+        await m.answer(f"План '{plan_name}' створено та заплановано {len(steps)} повідомлень.")

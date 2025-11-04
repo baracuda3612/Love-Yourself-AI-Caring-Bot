@@ -1,8 +1,9 @@
-
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, Text, ForeignKey
+# Заміна/оновлення файлу app/db.py
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, Text, ForeignKey, JSON
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from sqlalchemy.sql import func
 from app.config import DB_URL
+import uuid
 
 engine = create_engine(DB_URL, echo=False, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
@@ -53,5 +54,65 @@ class UsageCounter(Base):
     month = Column(String, index=True)
     month_ask_count = Column(Integer, default=0)
 
+# Нові моделі
+
+class UserMemoryProfile(Base):
+    __tablename__ = "user_memory_profiles"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+    profile_data = Column(JSON, nullable=False)  # структурований JSON профілю пам'яті
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+class UserReminder(Base):
+    __tablename__ = "user_reminders"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    job_id = Column(String, unique=True, nullable=False)   # APScheduler job_id
+    message = Column(Text, nullable=False)
+    cron_expression = Column(String, nullable=True)        # якщо повторюване (cron-like)
+    run_at = Column(DateTime(timezone=True), nullable=True) # якщо одноразове
+    timezone = Column(String, nullable=False)
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    @staticmethod
+    def generate_job_id(user_id: int, reminder_type: str = "reminder") -> str:
+        return f"user_{user_id}_{reminder_type}_{uuid.uuid4().hex[:8]}"
+
+class AIPlan(Base):
+    __tablename__ = "ai_plans"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    name = Column(String, nullable=False)
+    description = Column(Text)
+    status = Column(String, default="active")  # active/completed/cancelled
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    completed_at = Column(DateTime(timezone=True))
+    steps = relationship("AIPlanStep", back_populates="plan", cascade="all, delete-orphan")
+
+class AIPlanStep(Base):
+    __tablename__ = "ai_plan_steps"
+    id = Column(Integer, primary_key=True)
+    plan_id = Column(Integer, ForeignKey("ai_plans.id"), nullable=False)
+    job_id = Column(String, unique=True, nullable=True)  # APScheduler job id
+    message = Column(Text, nullable=False)
+    scheduled_for = Column(DateTime(timezone=True), nullable=False)
+    is_completed = Column(Boolean, default=False)
+    completed_at = Column(DateTime(timezone=True))
+    plan = relationship("AIPlan", back_populates="steps")
+
+    @staticmethod
+    def generate_job_id(user_id: int, plan_id: int) -> str:
+        return f"user_{user_id}_plan_{plan_id}_step_{uuid.uuid4().hex[:8]}"
+
 def init_db():
     Base.metadata.create_all(bind=engine)
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()

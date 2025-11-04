@@ -1,60 +1,45 @@
-import asyncio
-from datetime import datetime
-import pytz
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import select
+# Новий файл app/scheduler.py
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+import os
+from app.config import DB_URL
 
-from app.db import SessionLocal, User, Delivery
-from app.config import TZ, DEFAULT_SEND_HOUR
-from app.ai import generate_daily_message
-from app.telegram import send_daily_with_buttons, bot
+# Використаємо окремий файл для jobstore поруч із основною БД (jobs.sqlite)
+# Якщо DB_URL = sqlite:///./ly_bot.db -> jobs at ./jobs.sqlite
+if DB_URL.startswith("sqlite:///"):
+    base_path = DB_URL.replace("sqlite:///", "")
+    base_dir = os.path.dirname(os.path.abspath(base_path)) or "."
+    jobs_db_path = os.path.join(base_dir, "jobs.sqlite")
+    jobstore_url = f"sqlite:///{jobs_db_path}"
+else:
+    # Якщо Postgres/інші, можна використовувати той же DB_URL
+    jobstore_url = DB_URL
 
-tz = pytz.timezone(TZ)
+jobstores = {
+    'default': SQLAlchemyJobStore(url=jobstore_url)
+}
 
-async def schedule_daily_loop():
-    scheduler = AsyncIOScheduler(timezone=TZ)
-    # 🔔 Запуск один раз на день у задану годину (хвилина = 00)
-    scheduler.add_job(check_and_schedule_deliveries, "cron",
-                      hour=DEFAULT_SEND_HOUR, minute=0, id="daily_check")
+scheduler = BackgroundScheduler(jobstores=jobstores, timezone="UTC")
+
+def init_scheduler():
+    # Запускати при старті програми
     scheduler.start()
 
-async def check_and_schedule_deliveries():
-    """Один раз на день обійти активних юзерів і надіслати по одному повідомленню."""
-    with SessionLocal() as db:
-        users = db.scalars(select(User).where(User.active == True)).all()
-        for u in users:
-            await send_once(u.id)
+def shutdown_scheduler():
+    scheduler.shutdown(wait=True)
 
-async def send_once(user_pk: int):
-    """Згенерувати і надіслати одне щоденне повідомлення користувачу."""
-    from sqlalchemy import select
-    with SessionLocal() as db:
-        u = db.get(User, user_pk)
-        if not u:
-            return
+# Утиліти для додавання/видалення job-ів
+def add_job(func, trigger, id=None, **kwargs):
+    return scheduler.add_job(func, trigger, id=id, **kwargs)
 
-        # Генерація тексту
-        text, usage = generate_daily_message(
-            user_profile=f"{u.first_name or ''} @{u.username or ''}",
-            template_override=u.prompt_template
-        )
+def remove_job(job_id):
+    try:
+        scheduler.remove_job(job_id)
+    except Exception:
+        pass
 
-        # Відправка
-        msg = await send_daily_with_buttons(bot, u.tg_id, text)
-
-        # Логування доставки
-        now = datetime.now(pytz.timezone(u.timezone or "Europe/Kyiv"))
-        d = Delivery(
-            user_id=u.id,
-            scheduled_for=now,
-            sent_at=now,
-            status="sent",
-            message_id=msg.message_id if msg else None,
-            prompt_snapshot=u.prompt_template,
-            model="gpt-4o-mini",
-            tokens_prompt=usage.get("prompt_tokens", 0),
-            tokens_completion=usage.get("completion_tokens", 0),
-            tokens_total=usage.get("total_tokens", 0),
-        )
-        db.add(d)
-        db.commit()
+def reschedule_job(job_id, **trigger_args):
+    try:
+        scheduler.reschedule_job(job_id, **trigger_args)
+    except Exception:
+        raise
