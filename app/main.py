@@ -10,7 +10,7 @@ from app.scheduler import schedule_daily_loop
 
 async def main():
     init_db()
-    await schedule_daily_loop()
+    asyncio.create_task(schedule_daily_loop())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
