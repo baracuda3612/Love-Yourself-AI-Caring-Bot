@@ -71,7 +71,7 @@ class UserReminder(Base):
     job_id = Column(String, unique=True, nullable=False)   # APScheduler job_id
     message = Column(Text, nullable=False)
     cron_expression = Column(String, nullable=True)        # якщо повторюване (cron-like)
-    run_at = Column(DateTime(timezone=True), nullable=True) # якщо одноразове
+    scheduled_at = Column(DateTime(timezone=True), nullable=True)  # якщо одноразове
     timezone = Column(String, nullable=False)
     active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
