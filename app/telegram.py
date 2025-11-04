@@ -124,7 +124,7 @@ async def cb_ask(c: CallbackQuery):
 from aiogram.filters import Command
 from aiogram.types import Message
 from app.db import UserReminder, UserMemoryProfile, AIPlan, AIPlanStep, SessionLocal
-from app.scheduler import add_job, remove_job
+from app.scheduler import add_job, schedule_custom_reminder, send_scheduled_message
 import parsedatetime as pdt
 import datetime
 import pytz
@@ -172,23 +172,32 @@ async def cmd_remind(m: Message):
         text = args[len(time_part):].strip() or "Нагадування"
     with SessionLocal() as db:
         u = db.query(User).filter(User.tg_id==m.from_user.id).first()
-        user_tz = u.timezone if u else "Europe/Kyiv"
+        if not u:
+            await m.answer("Натисніть /start")
+            return
+        user_tz = u.timezone if u.timezone else "Europe/Kyiv"
         dt_utc = parse_natural_time(time_part, user_tz)
         if not dt_utc:
             await m.answer("Не зрозумів час. Спробуйте: 'завтра о 9:00' або 'через 2 години' або використайте формат 'час | текст'.")
             return
-        job_id = UserReminder.generate_job_id(m.from_user.id)
-        # Додати job
-        def _send_reminder(user_id, text_):
-            # функція, що викликає бот.send_message (імпортувати bot) — витягти у окрему утиліту
-            from app.telegram import bot as tg_bot
-            tg_bot.loop.create_task(tg_bot.send_message(m.from_user.id, text_))
-        add_job(_send_reminder, 'date', id=job_id, run_date=dt_utc, args=[m.from_user.id, text])
-        # Зберегти в DB
-        rem = UserReminder(user_id=u.id if u else None, job_id=job_id, message=text, run_at=dt_utc, timezone=user_tz)
-        db.add(rem)
+        job_id = UserReminder.generate_job_id(u.id)
+        reminder = UserReminder(
+            user_id=u.id,
+            job_id=job_id,
+            message=text,
+            scheduled_at=dt_utc,
+            timezone=user_tz,
+        )
+        db.add(reminder)
         db.commit()
-        await m.answer(f"Нагадування заплановано на {dt_utc.astimezone(pytz.timezone(user_tz)).strftime('%Y-%m-%d %H:%M %Z')} (job_id={job_id})")
+        db.refresh(reminder)
+
+    schedule_custom_reminder(reminder)
+
+    scheduled_local = dt_utc.astimezone(pytz.timezone(user_tz))
+    await m.answer(
+        f"Нагадування заплановано на {scheduled_local.strftime('%Y-%m-%d %H:%M %Z')} (job_id={job_id})"
+    )
 
 @dp.message(Command("my_reminders"))
 async def cmd_my_reminders(m: Message):
@@ -203,7 +212,11 @@ async def cmd_my_reminders(m: Message):
             return
         text = "Ваші нагадування:\n\n"
         for r in rs:
-            when = r.run_at.astimezone(pytz.timezone(u.timezone)).strftime('%Y-%m-%d %H:%M') if r.run_at else r.cron_expression
+            when = (
+                r.scheduled_at.astimezone(pytz.timezone(u.timezone)).strftime('%Y-%m-%d %H:%M')
+                if r.scheduled_at
+                else r.cron_expression
+            )
             text += f"- id:{r.id} job:{r.job_id} коли:{when} текст:{r.message}\n"
         await m.answer(text)
 
@@ -230,10 +243,16 @@ async def cmd_plan(m: Message):
             scheduled_for_utc = s["scheduled_for"].astimezone(pytz.UTC)
             job_id = AIPlanStep.generate_job_id(m.from_user.id, plan.id)
             # Додати job (використайте ту ж функцію _send_reminder або спільну)
-            def _send_plan_step(user_id, text_):
-                from app.telegram import bot as tg_bot
-                tg_bot.loop.create_task(tg_bot.send_message(m.from_user.id, text_))
-            add_job(_send_plan_step, 'date', id=job_id, run_date=scheduled_for_utc, args=[m.from_user.id, s["message"]])
+            def _send_plan_step(chat_id, text_):
+                send_scheduled_message(chat_id, text_)
+
+            add_job(
+                _send_plan_step,
+                'date',
+                id=job_id,
+                run_date=scheduled_for_utc,
+                args=[m.from_user.id, s["message"]],
+            )
             step = AIPlanStep(plan_id=plan.id, job_id=job_id, message=s["message"], scheduled_for=scheduled_for_utc)
             db.add(step)
         db.commit()

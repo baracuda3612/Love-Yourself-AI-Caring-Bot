@@ -73,6 +73,26 @@ def _cron_for_user(user: User) -> CronTrigger:
     return CronTrigger(hour=hour, minute=0, timezone=tz)
 
 
+def _submit_coroutine(coro):
+    if _event_loop is None:
+        return None
+    return asyncio.run_coroutine_threadsafe(coro, _event_loop)
+
+
+async def _send_message_async(chat_id: int, text: str):
+    """Send a message from scheduled job context."""
+    from app.telegram import bot as tg_bot
+
+    try:
+        return await tg_bot.send_message(chat_id, text)
+    except Exception:
+        return None
+
+
+def send_scheduled_message(chat_id: int, text: str):
+    return _submit_coroutine(_send_message_async(chat_id, text))
+
+
 async def _send_daily(user_id: int):
     # Виконується всередині головного циклу
     from app.telegram import bot as tg_bot, send_daily_with_buttons
@@ -110,23 +130,25 @@ async def _send_daily(user_id: int):
         db.commit()
 
 
-async def _send_custom_reminder(user_id: int, message: str, reminder_id: int | None = None):
-    from app.telegram import bot as tg_bot
-
+async def _send_custom_reminder(reminder_id: int):
     with SessionLocal() as db:
-        user = db.query(User).filter(User.id == user_id).first()
+        reminder = db.query(UserReminder).filter(UserReminder.id == reminder_id).first()
+        if not reminder or not reminder.active:
+            return
+
+        user = db.query(User).filter(User.id == reminder.user_id).first()
         if not user:
             return
-        try:
-            await tg_bot.send_message(user.tg_id, message)
-        except Exception:
+
+        message = await _send_message_async(user.tg_id, reminder.message)
+
+        if not reminder.cron_expression:
+            reminder.active = False
+        if message is None:
+            db.commit()
             return
 
-        if reminder_id is not None:
-            reminder = db.query(UserReminder).filter(UserReminder.id == reminder_id).first()
-            if reminder and not reminder.cron_expression:
-                reminder.active = False
-            db.commit()
+        db.commit()
 
 
 def schedule_daily_delivery(user: User):
@@ -136,29 +158,20 @@ def schedule_daily_delivery(user: User):
     job_id = f"daily_{user.id}"
 
     def _job():
-        if _event_loop is None:
-            return
-        asyncio.run_coroutine_threadsafe(_send_daily(user.id), _event_loop)
+        _submit_coroutine(_send_daily(user.id))
 
     trigger = _cron_for_user(user)
     scheduler.add_job(_job, trigger, id=job_id, replace_existing=True)
 
 
-def restore_custom_reminder(reminder: UserReminder):
+def schedule_custom_reminder(reminder: UserReminder):
     if not reminder.active:
         return
 
     job_id = reminder.job_id
-    if scheduler.get_job(job_id):
-        return
 
     def _job():
-        if _event_loop is None:
-            return
-        asyncio.run_coroutine_threadsafe(
-            _send_custom_reminder(reminder.user_id, reminder.message, reminder.id),
-            _event_loop,
-        )
+        _submit_coroutine(_send_custom_reminder(reminder.id))
 
     if reminder.cron_expression:
         try:
@@ -168,12 +181,16 @@ def restore_custom_reminder(reminder: UserReminder):
         except ValueError:
             return
         scheduler.add_job(_job, trigger, id=job_id, replace_existing=True)
-    elif reminder.run_at and reminder.run_at > datetime.now(pytz.UTC):
+    elif reminder.scheduled_at:
+        scheduled_utc = reminder.scheduled_at.astimezone(pytz.UTC)
+        if scheduled_utc <= datetime.now(pytz.UTC):
+            _submit_coroutine(_send_custom_reminder(reminder.id))
+            return
         scheduler.add_job(
             _job,
             "date",
             id=job_id,
-            run_date=reminder.run_at.astimezone(pytz.UTC),
+            run_date=scheduled_utc,
             replace_existing=True,
         )
 
@@ -200,6 +217,6 @@ async def schedule_daily_loop():
             .all()
         )
         for reminder in reminders:
-            restore_custom_reminder(reminder)
+            schedule_custom_reminder(reminder)
 
     await asyncio.Event().wait()
