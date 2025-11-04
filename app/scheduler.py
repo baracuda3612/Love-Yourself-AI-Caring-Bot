@@ -1,4 +1,4 @@
-# Новий файл app/scheduler.py
+# app/scheduler.py
 import asyncio
 import os
 from datetime import datetime, timedelta
@@ -31,10 +31,7 @@ else:
     # Якщо Postgres/інші, можна використовувати той же DB_URL
     jobstore_url = DB_URL
 
-jobstores = {
-    'default': SQLAlchemyJobStore(url=jobstore_url)
-}
-
+jobstores = {"default": SQLAlchemyJobStore(url=jobstore_url)}
 scheduler = BackgroundScheduler(jobstores=jobstores, timezone="UTC")
 
 _scheduler_started = False
@@ -72,7 +69,7 @@ def reschedule_job(job_id, **trigger_args):
 def _cron_for_user(user: User) -> CronTrigger:
     tz = user.timezone or "Europe/Kyiv"
     hour = user.send_hour if user.send_hour is not None else DEFAULT_SEND_HOUR
-    return CronTrigger(hour=hour, minute=0, timezone=tz)
+    return CronTrigger(hour=hour, minute=0, timezone=pytz.timezone(tz))
 
 
 def _submit_coroutine(coro):
@@ -92,6 +89,7 @@ async def _send_message_async(chat_id: int, text: str):
 
 
 def send_scheduled_message(chat_id: int, text: str):
+    # Топ-рівень, серіалізується нормально
     return _submit_coroutine(_send_message_async(chat_id, text))
 
 
@@ -146,58 +144,93 @@ async def _send_custom_reminder(reminder_id: int):
 
         if not reminder.cron_expression:
             reminder.active = False
-        if message is None:
-            db.commit()
-            return
 
         db.commit()
 
 
+# ===== Топ-рівневі callable для APScheduler (жодних замикань/лямбд) =====
+
+def run_daily_job(user_id: int):
+    """Sync wrapper — викликається з jobstore; запускає корутину у головному loop."""
+    _submit_coroutine(_send_daily(user_id))
+
+
+def run_custom_reminder_job(reminder_id: int):
+    """Sync wrapper для custom reminder."""
+    _submit_coroutine(_send_custom_reminder(reminder_id))
+
+
+# ===== API для реєстрації задач =====
+
 def schedule_daily_delivery(user: User):
+    """Щоденне повідомлення за user.send_hour / timezone."""
     if not user.active:
         return
 
     job_id = f"daily_{user.id}"
-
-    def _job():
-        _submit_coroutine(_send_daily(user.id))
-
     trigger = _cron_for_user(user)
-    scheduler.add_job(_job, trigger, id=job_id, replace_existing=True)
+
+    # Використовуємо текстове посилання module:function — серіалізується коректно
+    scheduler.add_job(
+        "app.scheduler:run_daily_job",
+        trigger,
+        id=job_id,
+        kwargs={"user_id": user.id},
+        replace_existing=True,
+        misfire_grace_time=3600,
+        coalesce=True,
+        max_instances=1,
+    )
 
 
 def schedule_custom_reminder(reminder: UserReminder):
+    """Одинарне чи cron-нагадування користувачу."""
     if not reminder.active:
         return
 
     job_id = reminder.job_id
 
-    def _job():
-        _submit_coroutine(_send_custom_reminder(reminder.id))
-
     if reminder.cron_expression:
         try:
             trigger = CronTrigger.from_crontab(
-                reminder.cron_expression, timezone=reminder.timezone or "UTC"
+                reminder.cron_expression,
+                timezone=pytz.timezone(reminder.timezone or "UTC"),
             )
         except ValueError:
             return
-        scheduler.add_job(_job, trigger, id=job_id, replace_existing=True)
+
+        scheduler.add_job(
+            "app.scheduler:run_custom_reminder_job",
+            trigger,
+            id=job_id,
+            kwargs={"reminder_id": reminder.id},
+            replace_existing=True,
+            misfire_grace_time=3600,
+            coalesce=True,
+            max_instances=1,
+        )
+
     elif reminder.scheduled_at:
         scheduled_utc = reminder.scheduled_at.astimezone(pytz.UTC)
         if scheduled_utc <= datetime.now(pytz.UTC):
             _submit_coroutine(_send_custom_reminder(reminder.id))
             return
+
         scheduler.add_job(
-            _job,
+            "app.scheduler:run_custom_reminder_job",
             "date",
             id=job_id,
             run_date=scheduled_utc,
+            kwargs={"reminder_id": reminder.id},
             replace_existing=True,
+            misfire_grace_time=3600,
+            coalesce=True,
+            max_instances=1,
         )
 
 
 async def schedule_daily_loop():
+    """Ініціалізує scheduler, піднімає loop-проксі і реєструє всі актуальні job-и."""
     global _scheduler_started, _event_loop
 
     if _scheduler_started:
@@ -209,18 +242,17 @@ async def schedule_daily_loop():
     init_scheduler()
 
     with SessionLocal() as db:
+        # 1) Daily
         users = db.query(User).filter(User.active == True).all()
         for user in users:
             schedule_daily_delivery(user)
 
-        reminders = (
-            db.query(UserReminder)
-            .filter(UserReminder.active == True)
-            .all()
-        )
+        # 2) Custom reminders
+        reminders = db.query(UserReminder).filter(UserReminder.active == True).all()
         for reminder in reminders:
             schedule_custom_reminder(reminder)
 
+        # 3) Планові кроки з конкретними датами (one-shot date jobs)
         now_utc = datetime.now(pytz.UTC)
         plan_rows = (
             db.query(AIPlanStep, AIPlan, User)
@@ -239,19 +271,26 @@ async def schedule_daily_loop():
             if not step.job_id:
                 step.job_id = AIPlanStep.generate_job_id(user.id, plan.id)
                 dirty = True
+
             run_date = step.scheduled_for.astimezone(pytz.UTC)
             if run_date <= now_utc:
                 run_date = now_utc + timedelta(minutes=1)
+
+            # send_scheduled_message — вже топ-рівневий, серіалізується ок
             scheduler.add_job(
-                send_scheduled_message,
-                'date',
+                "app.scheduler:send_scheduled_message",
+                "date",
                 id=step.job_id,
                 run_date=run_date,
                 args=[user.tg_id, step.message],
                 replace_existing=True,
+                misfire_grace_time=3600,
+                coalesce=True,
+                max_instances=1,
             )
 
         if dirty:
             db.commit()
 
+    # Тримаємо процес живим
     await asyncio.Event().wait()
