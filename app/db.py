@@ -87,8 +87,9 @@ class AIPlan(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     name = Column(String, nullable=False)
     description = Column(Text)
-    status = Column(String, default="active")  # active/completed/cancelled
+    status = Column(String, default="draft")  # draft/active/done/cancelled
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    approved_at = Column(DateTime(timezone=True))
     completed_at = Column(DateTime(timezone=True))
     steps = relationship("AIPlanStep", back_populates="plan", cascade="all, delete-orphan")
 
@@ -98,7 +99,9 @@ class AIPlanStep(Base):
     plan_id = Column(Integer, ForeignKey("ai_plans.id"), nullable=False)
     job_id = Column(String, unique=True, nullable=True)  # APScheduler job id
     message = Column(Text, nullable=False)
-    scheduled_for = Column(DateTime(timezone=True), nullable=False)
+    status = Column(String, default="pending")
+    proposed_for = Column(DateTime(timezone=True))
+    scheduled_for = Column(DateTime(timezone=True), nullable=True)
     is_completed = Column(Boolean, default=False)
     completed_at = Column(DateTime(timezone=True))
     plan = relationship("AIPlan", back_populates="steps")

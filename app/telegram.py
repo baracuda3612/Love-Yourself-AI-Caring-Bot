@@ -1,8 +1,8 @@
 # app/telegram.py
 
-from aiogram import Bot, Dispatcher, F, Router, types
+from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from sqlalchemy import select
 from datetime import datetime, timedelta
@@ -10,6 +10,7 @@ import datetime as dtmod
 import pytz
 import traceback
 import parsedatetime as pdt
+from typing import List, Optional
 
 from app.config import BOT_TOKEN, ADMIN_IDS, DEFAULT_DAILY_LIMIT
 from app.db import (
@@ -17,7 +18,7 @@ from app.db import (
     UserReminder, AIPlan, AIPlanStep, UserMemoryProfile
 )
 from app.ai import answer_user_question, generate_daily_message
-from app.scheduler import add_job, schedule_custom_reminder, send_scheduled_message
+from app.scheduler import add_job, remove_job, schedule_custom_reminder, send_scheduled_message
 from app.ai_plans import generate_ai_plan
 
 # ----------------- базові речі -----------------
@@ -176,6 +177,76 @@ async def cb_ask(c: CallbackQuery):
 # ----------------- нагадування -----------------
 
 pdt_calendar = pdt.Calendar()
+PLAN_PREVIEW_STEP_LIMIT = 3
+
+
+def _get_timezone(tz_name: Optional[str]) -> pytz.BaseTzInfo:
+    try:
+        return pytz.timezone(tz_name or "Europe/Kyiv")
+    except pytz.UnknownTimeZoneError:
+        return pytz.timezone("Europe/Kyiv")
+
+
+def _format_plan_message(plan: AIPlan, steps: List[AIPlanStep], tz_name: Optional[str], *, limit: Optional[int] = None, note: Optional[str] = None) -> str:
+    tz = _get_timezone(tz_name)
+    lines: List[str] = [
+        f"План: {plan.name}",
+        f"Статус: {plan.status}",
+    ]
+    if plan.approved_at:
+        lines.append(f"Затверджено: {plan.approved_at.astimezone(tz).strftime('%Y-%m-%d %H:%M')}")
+    if note:
+        lines.append("")
+        lines.append(note)
+
+    lines.append("")
+
+    display_steps = steps if limit is None else steps[:limit]
+    for idx, step in enumerate(display_steps, 1):
+        dt_source = step.proposed_for or step.scheduled_for
+        when_str = "?"
+        if dt_source:
+            dt_local = dt_source.astimezone(tz)
+            when_str = dt_local.strftime("%Y-%m-%d %H:%M")
+        lines.append(f"{idx}. [{step.status}] {when_str}\n{step.message}")
+
+    total_steps = len(steps)
+    if limit is not None and total_steps > limit:
+        lines.append("")
+        lines.append(f"Показано перші {limit} кроки з {total_steps}.")
+
+    return "\n".join(lines).strip()
+
+
+def _plan_keyboard(plan: AIPlan) -> Optional[InlineKeyboardMarkup]:
+    if plan.status == "draft":
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="✅ Затвердити", callback_data=f"plan:approve:{plan.id}"),
+                    InlineKeyboardButton(text="🕘 Змінити час", callback_data=f"plan:change_hour:{plan.id}"),
+                ],
+                [
+                    InlineKeyboardButton(text="❌ Скасувати", callback_data=f"plan:cancel:{plan.id}"),
+                ],
+            ]
+        )
+    if plan.status == "active":
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="❌ Скасувати", callback_data=f"plan:cancel:{plan.id}")],
+            ]
+        )
+    return None
+
+
+def _extract_plan_id(data: Optional[str]) -> Optional[int]:
+    if not data:
+        return None
+    try:
+        return int(data.split(":")[-1])
+    except (ValueError, AttributeError):
+        return None
 
 def parse_natural_time(text: str, user_tz: str = "Europe/Kyiv"):
     # повертає datetime у UTC або None
@@ -283,49 +354,254 @@ async def cmd_plan(m: Message):
             await m.answer("Не вдалося сформувати план. Спробуй уточнити запит.")
             return
 
-        plan = AIPlan(user_id=u.id, name=plan_name, description=plan_prompt, status="active")
+        plan = AIPlan(
+            user_id=u.id,
+            name=plan_name,
+            description=plan_prompt,
+            status="draft",
+            approved_at=None,
+        )
         db.add(plan)
-        db.commit()
-        db.refresh(plan)
+        db.flush()
 
-        scheduled_count = 0
-        now_utc = datetime.now(pytz.UTC)
-
+        stored_steps: List[AIPlanStep] = []
         for s in steps:
             scheduled_local = s.get("scheduled_for")
             msg = s.get("message")
             if not msg:
                 continue
 
-            if isinstance(scheduled_local, (datetime, dtmod.datetime)):
-                scheduled_for_utc = scheduled_local.astimezone(pytz.UTC)
-            else:
-                # якщо прийшов рядок — проігноруємо або зсунемо на +1 хв
-                scheduled_for_utc = now_utc + timedelta(minutes=1)
-
-            if scheduled_for_utc <= now_utc:
-                scheduled_for_utc = now_utc + timedelta(minutes=1)
-
-            job_id = AIPlanStep.generate_job_id(u.id, plan.id)
-            # плановий one-shot
-            add_job(
-                send_scheduled_message,
-                'date',
-                id=job_id,
-                run_date=scheduled_for_utc,
-                args=[u.tg_id, msg],
-                replace_existing=True,
-            )
+            if not isinstance(scheduled_local, (datetime, dtmod.datetime)):
+                continue
 
             step = AIPlanStep(
                 plan_id=plan.id,
-                job_id=job_id,
+                job_id=None,
                 message=msg,
-                scheduled_for=scheduled_for_utc,
-                is_completed=False
+                status="pending",
+                proposed_for=scheduled_local,
+                scheduled_for=None,
+                is_completed=False,
             )
-            db.add(step)
-            scheduled_count += 1
+            plan.steps.append(step)
+            stored_steps.append(step)
 
         db.commit()
-        await m.answer(f"План '{plan_name}' створено. Заплановано {scheduled_count} повідомлень.")
+        db.refresh(plan)
+
+        preview_text = _format_plan_message(
+            plan,
+            stored_steps,
+            u.timezone or "Europe/Kyiv",
+            limit=PLAN_PREVIEW_STEP_LIMIT,
+        )
+        keyboard = _plan_keyboard(plan)
+        await m.answer(preview_text, reply_markup=keyboard)
+
+        db.add(
+            Response(
+                delivery_id=None,
+                user_id=u.id,
+                kind="plan_preview",
+                payload=f"plan_id={plan.id};status={plan.status};steps={len(stored_steps)}",
+            )
+        )
+        db.commit()
+
+
+@router.callback_query(F.data.startswith("plan:approve:"))
+async def cb_plan_approve(c: CallbackQuery):
+    plan_id = _extract_plan_id(c.data)
+    if not plan_id:
+        await c.answer("Не вдалося знайти план.", show_alert=True)
+        return
+
+    message_text = None
+    keyboard = None
+    alert_text = "План затверджено!"
+
+    with SessionLocal() as db:
+        plan = db.query(AIPlan).filter(AIPlan.id == plan_id).first()
+        if not plan:
+            await c.answer("План не знайдено.", show_alert=True)
+            return
+
+        user = db.query(User).filter(User.id == plan.user_id).first()
+        if not user or user.tg_id != c.from_user.id:
+            await c.answer("Немає доступу до цього плану.", show_alert=True)
+            return
+
+        tz_name = user.timezone or "Europe/Kyiv"
+        now_utc = datetime.now(pytz.UTC)
+        scheduled = 0
+
+        if plan.status == "draft":
+            for step in plan.steps:
+                proposed = step.proposed_for or datetime.now(_get_timezone(tz_name))
+                if proposed.tzinfo is None:
+                    proposed = _get_timezone(tz_name).localize(proposed)
+                scheduled_for_utc = proposed.astimezone(pytz.UTC)
+                if scheduled_for_utc <= now_utc:
+                    scheduled_for_utc = now_utc + timedelta(minutes=1)
+
+                job_id = AIPlanStep.generate_job_id(user.id, plan.id)
+                add_job(
+                    send_scheduled_message,
+                    'date',
+                    id=job_id,
+                    run_date=scheduled_for_utc,
+                    args=[user.tg_id, step.message],
+                    replace_existing=True,
+                )
+
+                step.job_id = job_id
+                step.scheduled_for = scheduled_for_utc
+                step.status = "approved"
+                step.is_completed = False
+                step.completed_at = None
+                scheduled += 1
+
+            plan.status = "active"
+            plan.approved_at = now_utc
+            plan.completed_at = None
+        else:
+            alert_text = "План уже оброблено."
+
+        db.add(
+            Response(
+                delivery_id=None,
+                user_id=user.id,
+                kind="plan_action",
+                payload=f"plan_id={plan.id};action=approve;status={plan.status};scheduled={scheduled}",
+            )
+        )
+        db.commit()
+
+        message_text = _format_plan_message(
+            plan,
+            list(plan.steps),
+            tz_name,
+            limit=PLAN_PREVIEW_STEP_LIMIT,
+        )
+        keyboard = _plan_keyboard(plan)
+
+    try:
+        await c.message.edit_text(message_text, reply_markup=keyboard)
+    except Exception:
+        await c.message.answer(message_text)
+    await c.answer(alert_text)
+
+
+@router.callback_query(F.data.startswith("plan:cancel:"))
+async def cb_plan_cancel(c: CallbackQuery):
+    plan_id = _extract_plan_id(c.data)
+    if not plan_id:
+        await c.answer("Не вдалося знайти план.", show_alert=True)
+        return
+
+    message_text = None
+    keyboard = None
+
+    with SessionLocal() as db:
+        plan = db.query(AIPlan).filter(AIPlan.id == plan_id).first()
+        if not plan:
+            await c.answer("План не знайдено.", show_alert=True)
+            return
+
+        user = db.query(User).filter(User.id == plan.user_id).first()
+        if not user or user.tg_id != c.from_user.id:
+            await c.answer("Немає доступу до цього плану.", show_alert=True)
+            return
+
+        tz_name = user.timezone or "Europe/Kyiv"
+        removed = 0
+
+        for step in plan.steps:
+            if step.job_id:
+                remove_job(step.job_id)
+                removed += 1
+            step.job_id = None
+            step.status = "canceled"
+            step.scheduled_for = None
+            step.is_completed = False
+            step.completed_at = None
+
+        plan.status = "canceled"
+        plan.completed_at = datetime.now(pytz.UTC)
+
+        db.add(
+            Response(
+                delivery_id=None,
+                user_id=user.id,
+                kind="plan_action",
+                payload=f"plan_id={plan.id};action=cancel;removed={removed}",
+            )
+        )
+        db.commit()
+
+        message_text = _format_plan_message(
+            plan,
+            list(plan.steps),
+            tz_name,
+            limit=PLAN_PREVIEW_STEP_LIMIT,
+        )
+        keyboard = _plan_keyboard(plan)
+
+    try:
+        await c.message.edit_text(message_text, reply_markup=keyboard)
+    except Exception:
+        await c.message.answer(message_text)
+    await c.answer("План скасовано.")
+
+
+@router.callback_query(F.data.startswith("plan:change_hour:"))
+async def cb_plan_change_hour(c: CallbackQuery):
+    plan_id = _extract_plan_id(c.data)
+    if not plan_id:
+        await c.answer("Не вдалося знайти план.", show_alert=True)
+        return
+
+    message_text = None
+    keyboard = None
+    note = None
+
+    with SessionLocal() as db:
+        plan = db.query(AIPlan).filter(AIPlan.id == plan_id).first()
+        if not plan:
+            await c.answer("План не знайдено.", show_alert=True)
+            return
+
+        user = db.query(User).filter(User.id == plan.user_id).first()
+        if not user or user.tg_id != c.from_user.id:
+            await c.answer("Немає доступу до цього плану.", show_alert=True)
+            return
+
+        if plan.status == "draft":
+            note = "Напишіть у чаті бажаний час або деталі — ми уточнимо розклад перед затвердженням."
+        else:
+            note = "План уже активний. Скасуйте його та створіть новий, щоб змінити час кроків."
+
+        db.add(
+            Response(
+                delivery_id=None,
+                user_id=user.id,
+                kind="plan_action",
+                payload=f"plan_id={plan.id};action=change_hour;status={plan.status}",
+            )
+        )
+        db.commit()
+
+        message_text = _format_plan_message(
+            plan,
+            list(plan.steps),
+            user.timezone or "Europe/Kyiv",
+            limit=PLAN_PREVIEW_STEP_LIMIT,
+            note=note,
+        )
+        keyboard = _plan_keyboard(plan)
+
+    try:
+        await c.message.edit_text(message_text, reply_markup=keyboard)
+    except Exception:
+        await c.message.answer(message_text)
+    await c.answer("Добре! Чекаю на уточнення часу.")
