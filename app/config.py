@@ -9,6 +9,6 @@ TZ = os.getenv("TZ","Europe/Kyiv")
 MODEL = os.getenv("MODEL","gpt-4o-mini")
 MAX_TOKENS = int(os.getenv("MAX_TOKENS","300"))
 TEMPERATURE = float(os.getenv("TEMPERATURE","0.7"))
-DB_URL = os.getenv("DB_URL","sqlite:///./ly_bot.db")
+DB_URL = "postgresql+psycopg2://postgres:HjEKbGywqsppeCydXqPFWyIydiYjJZvI@postgres.railway.internal:5432/railway"
 DEFAULT_DAILY_LIMIT = int(os.getenv("DEFAULT_DAILY_LIMIT","10"))
 DEFAULT_SEND_HOUR = int(os.getenv("DEFAULT_SEND_HOUR","9"))
