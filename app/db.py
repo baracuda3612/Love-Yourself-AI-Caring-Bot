@@ -1,5 +1,9 @@
-# Заміна/оновлення файлу app/db.py
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, Text, ForeignKey, JSON
+# app/db.py
+# Чисто і без драм: моделі під draft/approve-потік, proposed_for, approved_at тощо.
+
+from sqlalchemy import (
+    create_engine, Column, Integer, String, Boolean, DateTime, Text, ForeignKey, JSON
+)
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from sqlalchemy.sql import func
 from app.config import DB_URL
@@ -9,8 +13,12 @@ engine = create_engine(DB_URL, echo=False, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 Base = declarative_base()
 
+
+# -------------------- БАЗОВІ ТАБЛИЦІ --------------------
+
 class User(Base):
     __tablename__ = "users"
+
     id = Column(Integer, primary_key=True)
     tg_id = Column(Integer, index=True, unique=True, nullable=False)
     first_name = Column(String)
@@ -19,11 +27,16 @@ class User(Base):
     send_hour = Column(Integer, default=9)
     daily_limit = Column(Integer, default=10)
     active = Column(Boolean, default=True)
-    prompt_template = Column(Text, default="You are a concise wellbeing coach in Ukrainian. End with 1 actionable step and 1 reflective question.")
+    prompt_template = Column(
+        Text,
+        default="You are a concise wellbeing coach in Ukrainian. End with 1 actionable step and 1 reflective question."
+    )
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
 
 class Delivery(Base):
     __tablename__ = "deliveries"
+
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"), index=True)
     scheduled_for = Column(DateTime(timezone=True), nullable=False)
@@ -36,8 +49,10 @@ class Delivery(Base):
     tokens_completion = Column(Integer, default=0)
     tokens_total = Column(Integer, default=0)
 
+
 class Response(Base):
     __tablename__ = "responses"
+
     id = Column(Integer, primary_key=True)
     delivery_id = Column(Integer, nullable=True)
     user_id = Column(Integer)
@@ -45,8 +60,10 @@ class Response(Base):
     payload = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+
 class UsageCounter(Base):
     __tablename__ = "usage_counters"
+
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer)
     day = Column(String, index=True)
@@ -54,18 +71,22 @@ class UsageCounter(Base):
     month = Column(String, index=True)
     month_ask_count = Column(Integer, default=0)
 
-# Нові моделі
+
+# -------------------- НОВІ ТАБЛИЦІ --------------------
 
 class UserMemoryProfile(Base):
     __tablename__ = "user_memory_profiles"
+
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
     profile_data = Column(JSON, nullable=False)  # структурований JSON профілю пам'яті
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
+
 class UserReminder(Base):
     __tablename__ = "user_reminders"
+
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     job_id = Column(String, unique=True, nullable=False)   # APScheduler job_id
@@ -81,37 +102,55 @@ class UserReminder(Base):
     def generate_job_id(user_id: int, reminder_type: str = "reminder") -> str:
         return f"user_{user_id}_{reminder_type}_{uuid.uuid4().hex[:8]}"
 
+
 class AIPlan(Base):
     __tablename__ = "ai_plans"
+
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     name = Column(String, nullable=False)
     description = Column(Text)
-    status = Column(String, default="draft", server_default="draft")  # draft/active/completed/cancelled
+
+    # draft → active → (completed|canceled)
+    status = Column(String, default="draft", server_default="draft")
     approved_at = Column(DateTime(timezone=True))
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_at = Column(DateTime(timezone=True))
+
     steps = relationship("AIPlanStep", back_populates="plan", cascade="all, delete-orphan")
+
 
 class AIPlanStep(Base):
     __tablename__ = "ai_plan_steps"
+
     id = Column(Integer, primary_key=True)
     plan_id = Column(Integer, ForeignKey("ai_plans.id"), nullable=False)
     job_id = Column(String, unique=True, nullable=True)  # APScheduler job id
     message = Column(Text, nullable=False)
-    scheduled_for = Column(DateTime(timezone=True), nullable=False)
-    proposed_for = Column(DateTime(timezone=True))
-    status = Column(String, default="pending", server_default="pending")  # pending/approved/completed
+
+    # Для draft-потоку: під час прев’ю маємо лише proposed_for (локальний час → зберігаємо в UTC).
+    # Після approve проставляємо scheduled_for та job_id.
+    proposed_for = Column(DateTime(timezone=True))               # може бути NULL
+    scheduled_for = Column(DateTime(timezone=True), nullable=True)  # NULL у draft
+    status = Column(String, default="pending", server_default="pending")  # pending/approved/completed/canceled
+
     is_completed = Column(Boolean, default=False)
     completed_at = Column(DateTime(timezone=True))
+
     plan = relationship("AIPlan", back_populates="steps")
 
     @staticmethod
     def generate_job_id(user_id: int, plan_id: int) -> str:
         return f"user_{user_id}_plan_{plan_id}_step_{uuid.uuid4().hex[:8]}"
 
+
+# -------------------- ІНІТ --------------------
+
 def init_db():
+    # Якщо ти без Alembic — це створить відсутні таблиці (але не змінить існуючі схеми)
     Base.metadata.create_all(bind=engine)
+
 
 def get_db():
     db = SessionLocal()
