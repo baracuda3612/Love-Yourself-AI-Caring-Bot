@@ -91,8 +91,10 @@ async def on_text(m: Message):
             return
         try:
             text, usage = answer_user_question(f"{u.first_name or ''} @{u.username or ''}", m.text, u.prompt_template)
-        except Exception:
-            await m.answer("Помилка генерації. Спробуй пізніше.")
+        import traceback
+except Exception as e:
+    print("=== GENERATION ERROR ===\n", traceback.format_exc())
+    await message.answer(f"ERR [{e.__class__.__name__}]: {e}")
             return
         await m.answer(text)
         # update counters
