@@ -79,22 +79,42 @@ def _submit_coroutine(coro):
 
 
 async def _send_message_async(chat_id: int, text: str):
-    """Send a message from scheduled job context."""
+    """Надсилання повідомлення з контексту job-а."""
     from app.telegram import bot as tg_bot
-
     try:
         return await tg_bot.send_message(chat_id, text)
     except Exception:
         return None
 
 
-def send_scheduled_message(chat_id: int, text: str):
-    # Топ-рівень, серіалізується нормально
-    return _submit_coroutine(_send_message_async(chat_id, text))
+def send_scheduled_message(chat_id: int, text: str, step_id: int | None = None):
+    """
+    Топ-рівень (можна серіалізувати як 'module:function').
+    Якщо переданий step_id — відмічаємо крок виконаним і за потреби закриваємо план.
+    """
+    result = _submit_coroutine(_send_message_async(chat_id, text))
+
+    if step_id is not None:
+        with SessionLocal() as db:
+            step = db.query(AIPlanStep).filter(AIPlanStep.id == step_id).first()
+            if step:
+                step.is_completed = True
+                step.status = "completed"
+                step.completed_at = datetime.now(pytz.UTC)
+                step.job_id = None
+
+                if step.plan:
+                    all_done = all(s.is_completed or s.status == "completed" for s in step.plan.steps)
+                    if all_done:
+                        step.plan.status = "completed"
+                        step.plan.completed_at = datetime.now(pytz.UTC)
+                db.commit()
+
+    return result
 
 
 async def _send_daily(user_id: int):
-    # Виконується всередині головного циклу
+    """Щоденне повідомлення (з кнопками) для користувача."""
     from app.telegram import bot as tg_bot, send_daily_with_buttons
 
     with SessionLocal() as db:
@@ -143,12 +163,13 @@ async def _send_custom_reminder(reminder_id: int):
         message = await _send_message_async(user.tg_id, reminder.message)
 
         if not reminder.cron_expression:
+            # one-shot — деактивуємо після відправки
             reminder.active = False
 
         db.commit()
 
 
-# ===== Топ-рівневі callable для APScheduler (жодних замикань/лямбд) =====
+# ===== Топ-рівневі callable для APScheduler (ніяких лямбд/замикань) =====
 
 def run_daily_job(user_id: int):
     """Sync wrapper — викликається з jobstore; запускає корутину у головному loop."""
@@ -170,7 +191,7 @@ def schedule_daily_delivery(user: User):
     job_id = f"daily_{user.id}"
     trigger = _cron_for_user(user)
 
-    # Використовуємо текстове посилання module:function — серіалізується коректно
+    # Текстове посилання module:function — серіалізується коректно
     scheduler.add_job(
         "app.scheduler:run_daily_job",
         trigger,
@@ -229,8 +250,53 @@ def schedule_custom_reminder(reminder: UserReminder):
         )
 
 
+def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
+    """
+    Додає job для кроку плану. Повертає True, якщо ми щойно видали новий job_id
+    (тобто step був без job_id і ми його поставили).
+    """
+    if step.is_completed:
+        return False
+    if step.status and step.status != "approved":
+        return False
+    if not user or not user.active:
+        return False
+    if not step.scheduled_for:
+        # ще не затверджено/не встановлений час — нема що шедулити
+        return False
+
+    new_job_id_assigned = False
+    if not step.job_id:
+        step.job_id = AIPlanStep.generate_job_id(user.id, step.plan_id)
+        new_job_id_assigned = True
+
+    run_date = step.scheduled_for.astimezone(pytz.UTC)
+    now_utc = datetime.now(pytz.UTC)
+    if run_date <= now_utc:
+        run_date = now_utc + timedelta(minutes=1)
+
+    scheduler.add_job(
+        "app.scheduler:send_scheduled_message",
+        "date",
+        id=step.job_id,
+        run_date=run_date,
+        args=[user.tg_id, step.message, step.id],
+        replace_existing=True,
+        misfire_grace_time=3600,
+        coalesce=True,
+        max_instances=1,
+    )
+
+    return new_job_id_assigned
+
+
 async def schedule_daily_loop():
-    """Ініціалізує scheduler, піднімає loop-проксі і реєструє всі актуальні job-и."""
+    """
+    Ініціалізує scheduler, піднімає loop-проксі і реєструє всі актуальні job-и:
+    - daily для активних користувачів,
+    - custom reminders,
+    - кроки планів зі статусом approved (і з проставленим scheduled_for).
+    """
     global _scheduler_started, _event_loop
 
     if _scheduler_started:
@@ -252,8 +318,7 @@ async def schedule_daily_loop():
         for reminder in reminders:
             schedule_custom_reminder(reminder)
 
-        # 3) Планові кроки з конкретними датами (one-shot date jobs)
-        now_utc = datetime.now(pytz.UTC)
+        # 3) Кроки планів (approved + не completed + є scheduled_for)
         plan_rows = (
             db.query(AIPlanStep, AIPlan, User)
             .join(AIPlan, AIPlan.id == AIPlanStep.plan_id)
@@ -268,30 +333,16 @@ async def schedule_daily_loop():
 
         dirty = False
         for step, plan, user in plan_rows:
-            if not step.job_id:
-                step.job_id = AIPlanStep.generate_job_id(user.id, plan.id)
-                step.status = "approved"
-                dirty = True
-            elif step.status != "approved":
+            # legacy: якщо status None — вважаємо approved (щоб не зависали старі кроки)
+            if step.status is None:
                 step.status = "approved"
                 dirty = True
 
-            run_date = step.scheduled_for.astimezone(pytz.UTC)
-            if run_date <= now_utc:
-                run_date = now_utc + timedelta(minutes=1)
-
-            # send_scheduled_message — вже топ-рівневий, серіалізується ок
-            scheduler.add_job(
-                "app.scheduler:send_scheduled_message",
-                "date",
-                id=step.job_id,
-                run_date=run_date,
-                args=[user.tg_id, step.message],
-                replace_existing=True,
-                misfire_grace_time=3600,
-                coalesce=True,
-                max_instances=1,
-            )
+            # шедул лише коли є scheduled_for
+            if step.scheduled_for is not None:
+                assigned = schedule_plan_step(step, user)
+                if assigned:
+                    dirty = True
 
         if dirty:
             db.commit()
