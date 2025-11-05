@@ -1,5 +1,6 @@
 # app/db.py
-# Чисто і без драм: моделі під draft/approve-потік, proposed_for, approved_at тощо.
+# Моделі під чернетки планів: proposed_for (у draft), scheduled_for (після approve),
+# статуси кроків, approved_at у плану. Без магії, без рантайм-міграцій.
 
 from sqlalchemy import (
     create_engine, Column, Integer, String, Boolean, DateTime, Text, ForeignKey, JSON
@@ -12,7 +13,6 @@ import uuid
 engine = create_engine(DB_URL, echo=False, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 Base = declarative_base()
-
 
 # -------------------- БАЗОВІ ТАБЛИЦІ --------------------
 
@@ -71,7 +71,6 @@ class UsageCounter(Base):
     month = Column(String, index=True)
     month_ask_count = Column(Integer, default=0)
 
-
 # -------------------- НОВІ ТАБЛИЦІ --------------------
 
 class UserMemoryProfile(Base):
@@ -102,7 +101,6 @@ class UserReminder(Base):
     def generate_job_id(user_id: int, reminder_type: str = "reminder") -> str:
         return f"user_{user_id}_{reminder_type}_{uuid.uuid4().hex[:8]}"
 
-
 class AIPlan(Base):
     __tablename__ = "ai_plans"
 
@@ -111,7 +109,7 @@ class AIPlan(Base):
     name = Column(String, nullable=False)
     description = Column(Text)
 
-    # draft → active → (completed|canceled)
+    # Життєвий цикл: draft -> active -> (completed|canceled)
     status = Column(String, default="draft", server_default="draft")
     approved_at = Column(DateTime(timezone=True))
 
@@ -119,7 +117,6 @@ class AIPlan(Base):
     completed_at = Column(DateTime(timezone=True))
 
     steps = relationship("AIPlanStep", back_populates="plan", cascade="all, delete-orphan")
-
 
 class AIPlanStep(Base):
     __tablename__ = "ai_plan_steps"
@@ -129,10 +126,9 @@ class AIPlanStep(Base):
     job_id = Column(String, unique=True, nullable=True)  # APScheduler job id
     message = Column(Text, nullable=False)
 
-    # Для draft-потоку: під час прев’ю маємо лише proposed_for (локальний час → зберігаємо в UTC).
-    # Після approve проставляємо scheduled_for та job_id.
-    proposed_for = Column(DateTime(timezone=True))               # може бути NULL
-    scheduled_for = Column(DateTime(timezone=True), nullable=True)  # NULL у draft
+    # У чернетці зберігаємо proposed_for (UTC). Після approve — виставляємо scheduled_for + job_id.
+    proposed_for = Column(DateTime(timezone=True))                    # може бути NULL у старих
+    scheduled_for = Column(DateTime(timezone=True), nullable=True)    # NULL у draft
     status = Column(String, default="pending", server_default="pending")  # pending/approved/completed/canceled
 
     is_completed = Column(Boolean, default=False)
@@ -144,13 +140,11 @@ class AIPlanStep(Base):
     def generate_job_id(user_id: int, plan_id: int) -> str:
         return f"user_{user_id}_plan_{plan_id}_step_{uuid.uuid4().hex[:8]}"
 
-
 # -------------------- ІНІТ --------------------
 
 def init_db():
     # Якщо ти без Alembic — це створить відсутні таблиці (але не змінить існуючі схеми)
     Base.metadata.create_all(bind=engine)
-
 
 def get_db():
     db = SessionLocal()
