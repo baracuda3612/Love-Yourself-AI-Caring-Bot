@@ -158,7 +158,7 @@ async def on_text(m: Message):
             return
 
         try:
-            text, usage = answer_user_question(
+            text, _usage = answer_user_question(
                 f"{u.first_name or ''} @{u.username or ''}",
                 m.text,
                 u.prompt_template
@@ -214,7 +214,8 @@ def _format_plan_message(plan: AIPlan, steps: List[AIPlanStep], tz_name: Optiona
         if dt_source:
             dt_local = dt_source.astimezone(tz)
             when_str = dt_local.strftime("%Y-%m-%d %H:%M")
-        lines.append(f"{idx}. [{step.status}] {when_str}\n{step.message}")
+        st = step.status or "pending"
+        lines.append(f"{idx}. [{st}] {when_str}\n{step.message}")
 
     total_steps = len(steps)
     if limit is not None and total_steps > limit:
@@ -224,7 +225,7 @@ def _format_plan_message(plan: AIPlan, steps: List[AIPlanStep], tz_name: Optiona
     return "\n".join(lines).strip()
 
 def _plan_keyboard(plan: AIPlan):
-    if plan.status == "draft" or plan.status == "pending":
+    if plan.status in {"draft", "pending"}:
         return InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(text="✅ Затвердити", callback_data=f"plan:approve:{plan.id}"),
@@ -594,7 +595,7 @@ def _remove_future_plan_jobs(steps: list[AIPlanStep]):
             remove_job(step.job_id)
             step.job_id = None
 
-@router.message(Command("plan_status"))
+@router.message(Command("plan_status")))
 async def cmd_plan_status(m: Message):
     with SessionLocal() as db:
         u = db.scalars(select(User).where(User.tg_id == m.from_user.id)).first()
@@ -705,8 +706,6 @@ async def cmd_plan_cancel_cmd(m: Message):
 
 # ----------------- нагадування -----------------
 
-pdt_calendar = pdt.Calendar()
-
 def parse_natural_time(text: str, user_tz: str = "Europe/Kyiv"):
     # повертає datetime у UTC або None
     now_local = dtmod.datetime.now(pytz.timezone(user_tz))
@@ -790,7 +789,7 @@ async def cb_fb(c: CallbackQuery):
             db.commit()
     await c.answer("Дякую!")
 
-@router.callback_query(F.data == "ask:init")
+@router.callback_query(F.data == "ask:init"))
 async def cb_ask(c: CallbackQuery):
     await c.message.answer("Напиши питання наступним повідомленням.")
     await c.answer()
