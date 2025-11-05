@@ -1,5 +1,17 @@
 # Заміна/оновлення файлу app/db.py
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, Text, ForeignKey, JSON
+from sqlalchemy import (
+    create_engine,
+    Column,
+    Integer,
+    String,
+    Boolean,
+    DateTime,
+    Text,
+    ForeignKey,
+    JSON,
+    inspect,
+    text,
+)
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from sqlalchemy.sql import func
 from app.config import DB_URL
@@ -8,6 +20,34 @@ import uuid
 engine = create_engine(DB_URL, echo=False, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 Base = declarative_base()
+
+
+def _ensure_plan_step_columns():
+    inspector = inspect(engine)
+    if "ai_plan_steps" not in inspector.get_table_names():
+        return
+
+    existing_columns = {col["name"] for col in inspector.get_columns("ai_plan_steps")}
+
+    with engine.begin() as connection:
+        if "proposed_for" not in existing_columns:
+            connection.execute(text("ALTER TABLE ai_plan_steps ADD COLUMN proposed_for TIMESTAMP"))
+            connection.execute(
+                text(
+                    "UPDATE ai_plan_steps SET proposed_for = scheduled_for WHERE proposed_for IS NULL"
+                )
+            )
+
+        if "status" not in existing_columns:
+            connection.execute(text("ALTER TABLE ai_plan_steps ADD COLUMN status VARCHAR"))
+            connection.execute(
+                text(
+                    "UPDATE ai_plan_steps SET status = CASE WHEN is_completed = 1 THEN 'completed' ELSE 'approved' END WHERE status IS NULL"
+                )
+            )
+
+
+_ensure_plan_step_columns()
 
 class User(Base):
     __tablename__ = "users"
@@ -87,7 +127,7 @@ class AIPlan(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     name = Column(String, nullable=False)
     description = Column(Text)
-    status = Column(String, default="active")  # active/completed/cancelled
+    status = Column(String, default="active")  # pending/active/paused/done
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_at = Column(DateTime(timezone=True))
     steps = relationship("AIPlanStep", back_populates="plan", cascade="all, delete-orphan")
@@ -99,8 +139,10 @@ class AIPlanStep(Base):
     job_id = Column(String, unique=True, nullable=True)  # APScheduler job id
     message = Column(Text, nullable=False)
     scheduled_for = Column(DateTime(timezone=True), nullable=False)
+    proposed_for = Column(DateTime(timezone=True), nullable=False)
     is_completed = Column(Boolean, default=False)
     completed_at = Column(DateTime(timezone=True))
+    status = Column(String, default="approved")  # pending/approved/completed/cancelled
     plan = relationship("AIPlan", back_populates="steps")
 
     @staticmethod
