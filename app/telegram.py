@@ -789,7 +789,7 @@ async def cb_fb(c: CallbackQuery):
             db.commit()
     await c.answer("Дякую!")
 
-@router.callback_query(F.data == "ask:init"))
+@router.callback_query(F.data == "ask:init")
 async def cb_ask(c: CallbackQuery):
     await c.message.answer("Напиши питання наступним повідомленням.")
     await c.answer()
