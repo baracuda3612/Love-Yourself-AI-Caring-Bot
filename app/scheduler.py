@@ -1,5 +1,6 @@
 # app/scheduler.py
 import asyncio
+import logging
 import os
 from datetime import datetime, timedelta
 from typing import Optional
@@ -20,26 +21,25 @@ from app.db import (
     UserReminder,
 )
 
-# Використаємо окремий файл для jobstore поруч із основною БД (jobs.sqlite)
-# Якщо DB_URL = sqlite:///./ly_bot.db -> jobs at ./jobs.sqlite
+# jobstore: окремий sqlite файл поруч із основною БД, або той самий Postgres
 if DB_URL.startswith("sqlite:///"):
     base_path = DB_URL.replace("sqlite:///", "")
     base_dir = os.path.dirname(os.path.abspath(base_path)) or "."
     jobs_db_path = os.path.join(base_dir, "jobs.sqlite")
     jobstore_url = f"sqlite:///{jobs_db_path}"
 else:
-    # Якщо Postgres/інші, можна використовувати той же DB_URL
     jobstore_url = DB_URL
 
 jobstores = {"default": SQLAlchemyJobStore(url=jobstore_url)}
 scheduler = BackgroundScheduler(jobstores=jobstores, timezone="UTC")
+
+logger = logging.getLogger(__name__)
 
 _scheduler_started = False
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
 def init_scheduler():
-    # Запускати при старті програми
     scheduler.start()
 
 
@@ -47,7 +47,8 @@ def shutdown_scheduler():
     scheduler.shutdown(wait=True)
 
 
-# Утиліти для додавання/видалення job-ів
+# ——— утиліти ———
+
 def add_job(func, trigger, id=None, **kwargs):
     return scheduler.add_job(func, trigger, id=id, **kwargs)
 
@@ -89,7 +90,7 @@ async def _send_message_async(chat_id: int, text: str):
 
 def send_scheduled_message(chat_id: int, text: str, step_id: int | None = None):
     """
-    Топ-рівень (можна серіалізувати як 'module:function').
+    Топ-рівневий callable (серіалізується як 'module:function').
     Якщо переданий step_id — відмічаємо крок виконаним і за потреби закриваємо план.
     """
     result = _submit_coroutine(_send_message_async(chat_id, text))
@@ -169,7 +170,7 @@ async def _send_custom_reminder(reminder_id: int):
         db.commit()
 
 
-# ===== Топ-рівневі callable для APScheduler (ніяких лямбд/замикань) =====
+# ——— топ-рівневі callable для APScheduler (жодних замикань/лямбд) ———
 
 def run_daily_job(user_id: int):
     """Sync wrapper — викликається з jobstore; запускає корутину у головному loop."""
@@ -181,7 +182,7 @@ def run_custom_reminder_job(reminder_id: int):
     _submit_coroutine(_send_custom_reminder(reminder_id))
 
 
-# ===== API для реєстрації задач =====
+# ——— API реєстрації задач ———
 
 def schedule_daily_delivery(user: User):
     """Щоденне повідомлення за user.send_hour / timezone."""
@@ -191,7 +192,7 @@ def schedule_daily_delivery(user: User):
     job_id = f"daily_{user.id}"
     trigger = _cron_for_user(user)
 
-    # Текстове посилання module:function — серіалізується коректно
+    logger.info("Ensuring daily job %s for user %s", job_id, user.id)
     scheduler.add_job(
         "app.scheduler:run_daily_job",
         trigger,
@@ -218,8 +219,15 @@ def schedule_custom_reminder(reminder: UserReminder):
                 timezone=pytz.timezone(reminder.timezone or "UTC"),
             )
         except ValueError:
+            logger.warning(
+                "Skipping reminder %s for user %s due to invalid cron '%s'",
+                reminder.id,
+                reminder.user_id,
+                reminder.cron_expression,
+            )
             return
 
+        logger.info("Restoring cron reminder job %s for user %s", job_id, reminder.user_id)
         scheduler.add_job(
             "app.scheduler:run_custom_reminder_job",
             trigger,
@@ -237,6 +245,12 @@ def schedule_custom_reminder(reminder: UserReminder):
             _submit_coroutine(_send_custom_reminder(reminder.id))
             return
 
+        logger.info(
+            "Restoring one-shot reminder job %s for user %s at %s",
+            job_id,
+            reminder.user_id,
+            scheduled_utc.isoformat(),
+        )
         scheduler.add_job(
             "app.scheduler:run_custom_reminder_job",
             "date",
@@ -252,17 +266,17 @@ def schedule_custom_reminder(reminder: UserReminder):
 
 def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
     """
-    Додає job для кроку плану. Повертає True, якщо ми щойно видали новий job_id
-    (тобто step був без job_id і ми його поставили).
+    Додає job для кроку плану.
+    Повертає True, якщо щойно видали новий job_id (було None).
     """
     if step.is_completed:
         return False
+    # лише approved кроки шедулимо
     if step.status and step.status != "approved":
         return False
     if not user or not user.active:
         return False
     if not step.scheduled_for:
-        # ще не затверджено/не встановлений час — нема що шедулити
         return False
 
     new_job_id_assigned = False
@@ -295,7 +309,8 @@ async def schedule_daily_loop():
     Ініціалізує scheduler, піднімає loop-проксі і реєструє всі актуальні job-и:
     - daily для активних користувачів,
     - custom reminders,
-    - кроки планів зі статусом approved (і з проставленим scheduled_for).
+    - кроки планів зі статусом approved (і з проставленим scheduled_for),
+      ігноруючи paused/pending/canceled.
     """
     global _scheduler_started, _event_loop
 
@@ -305,6 +320,7 @@ async def schedule_daily_loop():
     _scheduler_started = True
     _event_loop = asyncio.get_running_loop()
 
+    logger.info("Starting scheduler restoration loop")
     init_scheduler()
 
     with SessionLocal() as db:
@@ -318,14 +334,17 @@ async def schedule_daily_loop():
         for reminder in reminders:
             schedule_custom_reminder(reminder)
 
-        # 3) Кроки планів (approved + не completed + є scheduled_for)
+        # 3) Планові кроки (approved + майбутні + не completed) для активних юзерів і не paused планів
+        now_utc = datetime.now(pytz.UTC)
         plan_rows = (
             db.query(AIPlanStep, AIPlan, User)
             .join(AIPlan, AIPlan.id == AIPlanStep.plan_id)
             .join(User, User.id == AIPlan.user_id)
             .filter(
-                AIPlan.status == "active",
+                AIPlan.status.in_(["active", "draft"]),  # draft не шедулимо, але нормалізуємо статуси
                 AIPlanStep.is_completed == False,
+                AIPlanStep.scheduled_for != None,
+                AIPlanStep.scheduled_for > now_utc,
                 User.active == True,
             )
             .all()
@@ -333,16 +352,74 @@ async def schedule_daily_loop():
 
         dirty = False
         for step, plan, user in plan_rows:
-            # legacy: якщо status None — вважаємо approved (щоб не зависали старі кроки)
+            # нормалізація статусу: None -> pending (щоб не шедулити)
             if step.status is None:
-                step.status = "approved"
+                step.status = "pending"
                 dirty = True
 
-            # шедул лише коли є scheduled_for
-            if step.scheduled_for is not None:
-                assigned = schedule_plan_step(step, user)
-                if assigned:
+            # пропускаємо paused плани — і чистимо застарілі job-и
+            if plan.status == "paused":
+                if step.job_id:
+                    existing = scheduler.get_job(step.job_id)
+                    if existing:
+                        logger.info(
+                            "Removing job %s for paused plan %s step %s",
+                            step.job_id, plan.id, step.id,
+                        )
+                        remove_job(step.job_id)
+                    else:
+                        logger.info(
+                            "Plan %s step %s paused with missing job %s",
+                            plan.id, step.id, step.job_id,
+                        )
+                    step.job_id = None
                     dirty = True
+                logger.info("Skipping plan %s step %s because plan is paused", plan.id, step.id)
+                continue
+
+            # шедулимо тільки approved
+            if step.status != "approved":
+                if step.job_id:
+                    existing = scheduler.get_job(step.job_id)
+                    if existing:
+                        logger.info(
+                            "Removing job %s for plan %s step %s due to status %s",
+                            step.job_id, plan.id, step.id, step.status,
+                        )
+                        remove_job(step.job_id)
+                    else:
+                        logger.info(
+                            "Clearing stale job %s for plan %s step %s with status %s",
+                            step.job_id, plan.id, step.id, step.status,
+                        )
+                    step.job_id = None
+                    dirty = True
+                logger.info(
+                    "Skipping scheduling for plan %s step %s with status %s",
+                    plan.id, step.id, step.status,
+                )
+                continue
+
+            # якщо job_id відсутній — згенерувати
+            if not step.job_id:
+                step.job_id = AIPlanStep.generate_job_id(user.id, plan.id)
+                dirty = True
+                logger.info(
+                    "Generated job id %s for plan %s step %s",
+                    step.job_id, plan.id, step.id,
+                )
+
+            existing_job = scheduler.get_job(step.job_id)
+            if not existing_job:
+                logger.info(
+                    "Plan %s step %s job %s missing in scheduler, re-adding",
+                    plan.id, step.id, step.job_id,
+                )
+
+            # віддати на універсальний шедулер (він ще раз перевірить дані)
+            assigned = schedule_plan_step(step, user)
+            if assigned:
+                dirty = True
 
         if dirty:
             db.commit()
