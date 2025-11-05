@@ -1,5 +1,6 @@
 # app/scheduler.py
 import asyncio
+import logging
 import os
 from datetime import datetime, timedelta
 from typing import Optional
@@ -33,6 +34,8 @@ else:
 
 jobstores = {"default": SQLAlchemyJobStore(url=jobstore_url)}
 scheduler = BackgroundScheduler(jobstores=jobstores, timezone="UTC")
+
+logger = logging.getLogger(__name__)
 
 _scheduler_started = False
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -171,6 +174,7 @@ def schedule_daily_delivery(user: User):
     trigger = _cron_for_user(user)
 
     # Використовуємо текстове посилання module:function — серіалізується коректно
+    logger.info("Ensuring daily job %s for user %s", job_id, user.id)
     scheduler.add_job(
         "app.scheduler:run_daily_job",
         trigger,
@@ -197,8 +201,17 @@ def schedule_custom_reminder(reminder: UserReminder):
                 timezone=pytz.timezone(reminder.timezone or "UTC"),
             )
         except ValueError:
+            logger.warning(
+                "Skipping reminder %s for user %s due to invalid cron '%s'",
+                reminder.id,
+                reminder.user_id,
+                reminder.cron_expression,
+            )
             return
 
+        logger.info(
+            "Restoring cron reminder job %s for user %s", job_id, reminder.user_id
+        )
         scheduler.add_job(
             "app.scheduler:run_custom_reminder_job",
             trigger,
@@ -216,6 +229,12 @@ def schedule_custom_reminder(reminder: UserReminder):
             _submit_coroutine(_send_custom_reminder(reminder.id))
             return
 
+        logger.info(
+            "Restoring one-shot reminder job %s for user %s at %s",
+            job_id,
+            reminder.user_id,
+            scheduled_utc.isoformat(),
+        )
         scheduler.add_job(
             "app.scheduler:run_custom_reminder_job",
             "date",
@@ -239,6 +258,7 @@ async def schedule_daily_loop():
     _scheduler_started = True
     _event_loop = asyncio.get_running_loop()
 
+    logger.info("Starting scheduler restoration loop")
     init_scheduler()
 
     with SessionLocal() as db:
@@ -259,8 +279,10 @@ async def schedule_daily_loop():
             .join(AIPlan, AIPlan.id == AIPlanStep.plan_id)
             .join(User, User.id == AIPlan.user_id)
             .filter(
-                AIPlan.status == "active",
+                AIPlan.status.in_(["active"]),
                 AIPlanStep.is_completed == False,
+                AIPlanStep.status == "approved",
+                AIPlanStep.scheduled_for > now_utc,
                 User.active == True,
             )
             .all()
@@ -268,15 +290,99 @@ async def schedule_daily_loop():
 
         dirty = False
         for step, plan, user in plan_rows:
+            if plan.status == "paused":
+                if step.job_id:
+                    existing = scheduler.get_job(step.job_id)
+                    if existing:
+                        logger.info(
+                            "Removing job %s for paused plan %s step %s",
+                            step.job_id,
+                            plan.id,
+                            step.id,
+                        )
+                        remove_job(step.job_id)
+                    else:
+                        logger.info(
+                            "Plan %s step %s paused with missing job %s",
+                            plan.id,
+                            step.id,
+                            step.job_id,
+                        )
+                    step.job_id = None
+                    dirty = True
+                logger.info(
+                    "Skipping plan %s step %s because plan is paused",
+                    plan.id,
+                    step.id,
+                )
+                continue
+
+            if step.status != "approved":
+                if step.job_id:
+                    existing = scheduler.get_job(step.job_id)
+                    if existing:
+                        logger.info(
+                            "Removing job %s for plan %s step %s due to status %s",
+                            step.job_id,
+                            plan.id,
+                            step.id,
+                            step.status,
+                        )
+                        remove_job(step.job_id)
+                    else:
+                        logger.info(
+                            "Clearing stale job %s for plan %s step %s with status %s",
+                            step.job_id,
+                            plan.id,
+                            step.id,
+                            step.status,
+                        )
+                    step.job_id = None
+                    dirty = True
+                logger.info(
+                    "Skipping scheduling for plan %s step %s with status %s",
+                    plan.id,
+                    step.id,
+                    step.status,
+                )
+                continue
+
             if not step.job_id:
                 step.job_id = AIPlanStep.generate_job_id(user.id, plan.id)
                 dirty = True
+                logger.info(
+                    "Generated job id %s for plan %s step %s",
+                    step.job_id,
+                    plan.id,
+                    step.id,
+                )
+
+            existing_job = scheduler.get_job(step.job_id)
+            if not existing_job:
+                logger.info(
+                    "Plan %s step %s job %s missing in scheduler, re-adding",
+                    plan.id,
+                    step.id,
+                    step.job_id,
+                )
 
             run_date = step.scheduled_for.astimezone(pytz.UTC)
             if run_date <= now_utc:
                 run_date = now_utc + timedelta(minutes=1)
+                logger.info(
+                    "Adjusted run_date for step %s to %s due to past schedule",
+                    step.id,
+                    run_date.isoformat(),
+                )
 
             # send_scheduled_message — вже топ-рівневий, серіалізується ок
+            logger.info(
+                "Restoring plan step job %s for user %s (plan %s) at %s",
+                step.job_id,
+                user.id,
+                plan.id,
+                run_date.isoformat(),
+            )
             scheduler.add_job(
                 "app.scheduler:send_scheduled_message",
                 "date",

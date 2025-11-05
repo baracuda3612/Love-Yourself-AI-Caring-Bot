@@ -97,6 +97,7 @@ class AIPlanStep(Base):
     id = Column(Integer, primary_key=True)
     plan_id = Column(Integer, ForeignKey("ai_plans.id"), nullable=False)
     job_id = Column(String, unique=True, nullable=True)  # APScheduler job id
+    status = Column(String, default="pending")  # pending/approved/canceled
     message = Column(Text, nullable=False)
     scheduled_for = Column(DateTime(timezone=True), nullable=False)
     is_completed = Column(Boolean, default=False)

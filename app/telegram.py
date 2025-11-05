@@ -306,20 +306,26 @@ async def cmd_plan(m: Message):
             if scheduled_for_utc <= now_utc:
                 scheduled_for_utc = now_utc + timedelta(minutes=1)
 
-            job_id = AIPlanStep.generate_job_id(u.id, plan.id)
-            # плановий one-shot
-            add_job(
-                send_scheduled_message,
-                'date',
-                id=job_id,
-                run_date=scheduled_for_utc,
-                args=[u.tg_id, msg],
-                replace_existing=True,
-            )
+            step_status = (s.get("status") or "approved").strip().lower()
+            if step_status not in {"approved", "pending", "canceled"}:
+                step_status = "pending"
+            job_id = None
+            if step_status == "approved" and plan.status != "paused":
+                job_id = AIPlanStep.generate_job_id(u.id, plan.id)
+                # плановий one-shot
+                add_job(
+                    send_scheduled_message,
+                    'date',
+                    id=job_id,
+                    run_date=scheduled_for_utc,
+                    args=[u.tg_id, msg],
+                    replace_existing=True,
+                )
 
             step = AIPlanStep(
                 plan_id=plan.id,
                 job_id=job_id,
+                status=step_status,
                 message=msg,
                 scheduled_for=scheduled_for_utc,
                 is_completed=False
