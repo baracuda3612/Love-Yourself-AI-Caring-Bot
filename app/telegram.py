@@ -595,7 +595,7 @@ def _remove_future_plan_jobs(steps: list[AIPlanStep]):
             remove_job(step.job_id)
             step.job_id = None
 
-@router.message(Command("plan_status")))
+@router.message(Command("plan_status"))
 async def cmd_plan_status(m: Message):
     with SessionLocal() as db:
         u = db.scalars(select(User).where(User.tg_id == m.from_user.id)).first()
