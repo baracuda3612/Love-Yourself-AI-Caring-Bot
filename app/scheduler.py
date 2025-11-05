@@ -270,6 +270,10 @@ async def schedule_daily_loop():
         for step, plan, user in plan_rows:
             if not step.job_id:
                 step.job_id = AIPlanStep.generate_job_id(user.id, plan.id)
+                step.status = "approved"
+                dirty = True
+            elif step.status != "approved":
+                step.status = "approved"
                 dirty = True
 
             run_date = step.scheduled_for.astimezone(pytz.UTC)

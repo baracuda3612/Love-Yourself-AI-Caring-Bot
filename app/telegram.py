@@ -283,7 +283,13 @@ async def cmd_plan(m: Message):
             await m.answer("Не вдалося сформувати план. Спробуй уточнити запит.")
             return
 
-        plan = AIPlan(user_id=u.id, name=plan_name, description=plan_prompt, status="active")
+        plan = AIPlan(
+            user_id=u.id,
+            name=plan_name,
+            description=plan_prompt,
+            status="active",
+            approved_at=datetime.now(pytz.UTC),
+        )
         db.add(plan)
         db.commit()
         db.refresh(plan)
@@ -297,8 +303,16 @@ async def cmd_plan(m: Message):
             if not msg:
                 continue
 
+            proposed_for_dt = None
             if isinstance(scheduled_local, (datetime, dtmod.datetime)):
-                scheduled_for_utc = scheduled_local.astimezone(pytz.UTC)
+                proposed_for_dt = scheduled_local
+                if proposed_for_dt.tzinfo is None:
+                    try:
+                        user_tz = pytz.timezone(u.timezone or "Europe/Kyiv")
+                    except pytz.UnknownTimeZoneError:
+                        user_tz = pytz.timezone("Europe/Kyiv")
+                    proposed_for_dt = user_tz.localize(proposed_for_dt)
+                scheduled_for_utc = proposed_for_dt.astimezone(pytz.UTC)
             else:
                 # якщо прийшов рядок — проігноруємо або зсунемо на +1 хв
                 scheduled_for_utc = now_utc + timedelta(minutes=1)
@@ -322,7 +336,9 @@ async def cmd_plan(m: Message):
                 job_id=job_id,
                 message=msg,
                 scheduled_for=scheduled_for_utc,
-                is_completed=False
+                proposed_for=proposed_for_dt,
+                status="approved",
+                is_completed=False,
             )
             db.add(step)
             scheduled_count += 1
