@@ -137,17 +137,36 @@ def _resolve_datetime(
     return dt_local
 
 
-def _fallback_plan(now_local: datetime) -> Tuple[str, List[Dict[str, Any]]]:
+def _fallback_plan(
+    now_local: datetime,
+    *,
+    send_time: str | None = None,
+    duration_days: int | None = None,
+) -> Tuple[str, List[Dict[str, Any]]]:
     messages = [
         "Зроби глибокий вдих. Запиши 3 речі, за які вдячний сьогодні. Поділися ними з близькою людиною.",
         "Знайди 15 хвилин для руху. Прислухайся до тіла і відзнач, що дає енергію.",
         "Перед сном випиши думки, які заважають розслабитись. Запропонуй собі лагідну відповідь на кожну.",
     ]
+    total_days = duration_days if duration_days and duration_days > 0 else len(messages)
+    hour, minute = 9, 0
+    if isinstance(send_time, str) and re.fullmatch(r"\d{2}:\d{2}", send_time):
+        hour, minute = [int(part) for part in send_time.split(":", 1)]
     steps: List[Dict[str, Any]] = []
     for idx, msg in enumerate(messages):
         dt_local = now_local + timedelta(days=idx + 1)
-        dt_local = dt_local.replace(hour=9, minute=0, second=0, microsecond=0)
+        dt_local = dt_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
         steps.append({"message": msg, "scheduled_for": dt_local})
+    existing_count = len(steps)
+    if total_days > existing_count:
+        extra_days = total_days - existing_count
+        for offset in range(extra_days):
+            dt_local = now_local + timedelta(days=existing_count + offset + 1)
+            dt_local = dt_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            steps.append({
+                "message": "Приділи трохи часу собі: відміть, що вдалося сьогодні, і заплануй щось приємне.",
+                "scheduled_for": dt_local,
+            })
     return "Турботливий план підтримки", steps
 
 
@@ -155,6 +174,11 @@ def generate_ai_plan(
     description: str,
     memory_profile: Dict[str, Any] | None = None,
     timezone: str = "Europe/Kyiv",
+    *,
+    goal: str | None = None,
+    duration_days: int | None = None,
+    send_time: str | None = None,
+    tasks_per_day: int | None = None,
 ) -> Tuple[str, List[Dict[str, Any]]]:
     """Create a personalised multi-step plan and resolved schedule."""
 
@@ -168,6 +192,14 @@ def generate_ai_plan(
         "Зроби wellbeing-план за запитом: "
         f"{description}.\nЧасовий пояс користувача: {timezone or 'Europe/Kyiv'}."
     )
+    if goal:
+        user_message += f"\nЦіль користувача: {goal}."
+    if duration_days:
+        user_message += f"\nБажана тривалість: {duration_days} днів."
+    if tasks_per_day:
+        user_message += f"\nБажана кількість кроків на день: {tasks_per_day}."
+    if send_time:
+        user_message += f"\nБажаний час повідомлень: {send_time}."
     if memory_profile:
         profile_json = json.dumps(memory_profile, ensure_ascii=False)
         user_message += f"\nДоступний профіль користувача: {profile_json}."
@@ -190,13 +222,13 @@ def generate_ai_plan(
     data = _extract_json_object(content or "") if content else None
 
     if not data:
-        return _fallback_plan(now_local)
+        return _fallback_plan(now_local, send_time=send_time, duration_days=duration_days)
 
     plan_name = (data.get("plan_name") or description or "AI План").strip()
     raw_steps = list(_parse_steps(data))
 
     if not raw_steps:
-        return _fallback_plan(now_local)
+        return _fallback_plan(now_local, send_time=send_time, duration_days=duration_days)
 
     resolved_steps: List[Dict[str, Any]] = []
     original_steps = data.get("steps") if isinstance(data.get("steps"), list) else []

@@ -26,6 +26,7 @@ from app.scheduler import (
     schedule_plan_step,
 )
 from app.ai_plans import generate_ai_plan
+from app.plan_parser import parse_plan_request
 
 # ----------------- базові речі -----------------
 
@@ -208,6 +209,16 @@ def _format_plan_message(plan: AIPlan, steps: List[AIPlanStep], tz_name: Optiona
         f"План: {_escape(plan.name or '')}",
         f"Статус: {_escape(plan.status or '')}",
     ]
+    if getattr(plan, "goal", None):
+        lines.append(f"Ціль: {_escape(plan.goal)}")
+    if getattr(plan, "duration_days", None):
+        lines.append(f"Тривалість: {_escape(plan.duration_days)} днів")
+    if getattr(plan, "tasks_per_day", None):
+        lines.append(f"Кроків на день: {_escape(plan.tasks_per_day)}")
+    send_hour = getattr(plan, "send_hour", None)
+    if send_hour is not None:
+        send_minute = getattr(plan, "send_minute", 0) or 0
+        lines.append(f"Бажаний час: {int(send_hour):02d}:{int(send_minute):02d}")
     if plan.approved_at:
         lines.append(f"Затверджено: {plan.approved_at.astimezone(tz).strftime('%Y-%m-%d %H:%M')}")
     if note:
@@ -336,11 +347,12 @@ async def _process_plan_hour_response(message: Message, db, user: User, plan_id:
 
 @router.message(Command("plan"))
 async def cmd_plan(m: Message):
-    args = m.text.split(maxsplit=1)
-    if len(args) < 2:
+    parsed = parse_plan_request(m.text or "")
+    if not parsed.original_text:
         await m.answer("Використання: /plan <опис> (наприклад: план покращення сну на 30 днів)")
         return
-    plan_prompt = args[1]
+
+    plan_prompt = parsed.goal or parsed.original_text
 
     with SessionLocal() as db:
         u = db.scalars(select(User).where(User.tg_id == m.from_user.id)).first()
@@ -355,6 +367,10 @@ async def cmd_plan(m: Message):
                 plan_prompt,
                 mp.profile_data if mp else None,
                 timezone=u.timezone or "Europe/Kyiv",
+                goal=parsed.goal,
+                duration_days=parsed.days,
+                send_time=parsed.time_str,
+                tasks_per_day=parsed.tasks_per_day,
             )
         except Exception as e:
             await m.answer(f"Помилка генерації плану: {_escape(str(e))}")
@@ -364,9 +380,14 @@ async def cmd_plan(m: Message):
         plan = AIPlan(
             user_id=u.id,
             name=plan_name,
-            description=plan_prompt,
+            description=parsed.original_text,
             status="draft",
             approved_at=None,
+            goal=parsed.goal,
+            duration_days=parsed.days,
+            send_hour=parsed.hour,
+            send_minute=parsed.minute,
+            tasks_per_day=parsed.tasks_per_day,
         )
         db.add(plan)
         db.flush()
@@ -406,12 +427,23 @@ async def cmd_plan(m: Message):
         keyboard = _plan_keyboard(plan)
         await m.answer(preview_text, reply_markup=keyboard)
 
+        goal_text = (parsed.goal or "").replace(";", ",")
         db.add(
             Response(
                 delivery_id=None,
                 user_id=u.id,
                 kind="plan_preview",
-                payload=f"plan_id={plan.id};status={plan.status};steps={len(stored_steps)}",
+                payload=(
+                    "plan_id={plan_id};status={status};steps={steps};goal={goal};days={days};time={time};tasks_per_day={tasks}".format(
+                        plan_id=plan.id,
+                        status=plan.status,
+                        steps=len(stored_steps),
+                        goal=goal_text,
+                        days=parsed.days,
+                        time=parsed.time_str,
+                        tasks=parsed.tasks_per_day,
+                    )
+                ),
             )
         )
         db.commit()
