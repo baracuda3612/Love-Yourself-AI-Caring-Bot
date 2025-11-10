@@ -432,7 +432,20 @@ async def cmd_plan(m: Message):
             await m.answer(f"Помилка генерації плану: {_escape(str(e))}")
             return
 
-        steps_payload = normalize_plan_steps(plan_payload)
+        steps_payload = normalize_plan_steps(
+            plan_payload,
+            goal=parsed.goal or parsed.original_text or "Підтримка добробуту",
+            days=parsed.days,
+            tasks_per_day=parsed.tasks_per_day,
+            preferred_hour=parsed.time_str,
+            tz_name=u.timezone or "Europe/Kyiv",
+        )
+
+        if not steps_payload:
+            await m.answer(
+                "Не вдалося сформувати кроки плану. Спробуй інший запит або іншу годину."
+            )
+            return
 
         # створюємо чернетку: кроки -> pending + proposed_for (UTC), без job_id
         plan_name = None
@@ -461,46 +474,23 @@ async def cmd_plan(m: Message):
 
         stored_steps: List[AIPlanStep] = []
 
-        if not steps_payload:
-            await m.answer("План згенеровано порожнім. Спробуй ще раз.")
-            return
-
-        user_tz = pytz.timezone(u.timezone or "Europe/Kyiv")
-
         for s in steps_payload:
-            msg = s.get("message")
-            when_local = s.get("scheduled_for")  # дата-час у локальній TZ (ISO або HH:MM)
-            if not msg:
+            msg = str(s.get("message") or "").strip()
+            proposed = s.get("proposed_for")
+            if not msg or not isinstance(proposed, datetime):
                 continue
-
-            # перетворимо у aware datetime
-            dt_local = None
-            if isinstance(when_local, str):
-                # спроба HH:MM
-                try:
-                    hh, mm = map(int, when_local.split(":"))
-                    now_local = datetime.now(user_tz)
-                    dt_local = now_local.replace(hour=hh, minute=mm, second=0, microsecond=0)
-                except Exception:
-                    dt_local = None
-            elif isinstance(when_local, datetime):
-                dt_local = when_local
-            # fallback — якщо не змогли розпарсити, штовхаємо на +1 хв від зараз
-            if dt_local is None:
-                dt_local = datetime.now(user_tz) + timedelta(minutes=1)
-            if dt_local.tzinfo is None:
-                dt_local = user_tz.localize(dt_local)
-
-            proposed_utc = dt_local.astimezone(pytz.UTC)
+            if proposed.tzinfo is None:
+                proposed = pytz.UTC.localize(proposed)
 
             step = AIPlanStep(
                 plan_id=plan.id,
                 job_id=None,
                 message=msg,
                 status="pending",
-                proposed_for=proposed_utc,
+                proposed_for=proposed.astimezone(pytz.UTC),
                 scheduled_for=None,
                 is_completed=False,
+                completed_at=None,
             )
             db.add(step)
             stored_steps.append(step)
