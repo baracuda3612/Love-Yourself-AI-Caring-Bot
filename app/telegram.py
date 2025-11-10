@@ -3,6 +3,8 @@
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from sqlalchemy import select
@@ -35,8 +37,9 @@ dp = Dispatcher()
 router = Router()
 dp.include_router(router)
 
-# коли користувач натиснув "змінити час", тут тримаємо очікування вводу HH:MM
-_pending_plan_hour_change: dict[int, int] = {}
+
+class PlanStates(StatesGroup):
+    waiting_new_hour = State()
 
 
 def _escape(value) -> str:
@@ -137,7 +140,7 @@ async def cmd_ask(m: Message):
 
 # Ігноруємо текстові команди на кшталт "/plan" в загальному обробнику
 @router.message(F.text & ~F.via_bot & ~F.text.startswith("/"))
-async def on_text(m: Message):
+async def on_text(m: Message, state: FSMContext):
     # якщо очікуємо HH:MM для зміни часу плану — обробляємо саме це
     with SessionLocal() as db:
         u = db.scalars(select(User).where(User.tg_id == m.from_user.id)).first()
@@ -145,11 +148,11 @@ async def on_text(m: Message):
             await m.answer("Натисни /start")
             return
 
-        if u.id in _pending_plan_hour_change:
-            plan_id = _pending_plan_hour_change[u.id]
-            handled = await _process_plan_hour_response(m, db, u, plan_id)
-            if handled:
-                _pending_plan_hour_change.pop(u.id, None)
+        current_state = await state.get_state()
+        if current_state == PlanStates.waiting_new_hour.state:
+            data = await state.get_data()
+            plan_id = data.get("plan_id")
+            await _process_plan_hour_response(m, state, db, u, plan_id)
             return
 
         # інакше — звичайний Q&A з лімітом
@@ -283,11 +286,23 @@ def _get_latest_plan(db, user_id: int, statuses: tuple[str, ...] | None = None) 
         query = query.filter(AIPlan.status.in_(statuses))
     return query.order_by(AIPlan.created_at.desc()).first()
 
-async def _process_plan_hour_response(message: Message, db, user: User, plan_id: int) -> bool:
+async def _process_plan_hour_response(
+    message: Message,
+    state: FSMContext,
+    db,
+    user: User,
+    plan_id: Optional[int],
+) -> None:
+    if not plan_id:
+        await message.answer("Сталася помилка. Спробуй запустити зміну часу ще раз.")
+        await state.clear()
+        return
+
     parsed = _parse_hour_minute(message.text)
     if not parsed:
         await message.answer("Не вдалося розпізнати час. Напиши у форматі HH:MM, напр. 09:00.")
-        return False
+        await state.clear()
+        return
     hour, minute = parsed
 
     plan = (
@@ -297,7 +312,8 @@ async def _process_plan_hour_response(message: Message, db, user: User, plan_id:
     )
     if not plan:
         await message.answer("План не знайдено або вже завершений.")
-        return True
+        await state.clear()
+        return
 
     steps = (
         db.query(AIPlanStep)
@@ -310,12 +326,12 @@ async def _process_plan_hour_response(message: Message, db, user: User, plan_id:
     )
     if not steps:
         await message.answer("У плані немає кроків для оновлення.")
-        return True
+        await state.clear()
+        return
 
     user_tz = pytz.timezone(user.timezone or "Europe/Kyiv")
     now_local = dtmod.datetime.now(user_tz)
 
-    updated_any = False
     for step in steps:
         base_dt = step.scheduled_for or step.proposed_for or now_local
         if base_dt.tzinfo is None:
@@ -326,22 +342,32 @@ async def _process_plan_hour_response(message: Message, db, user: User, plan_id:
             new_local += timedelta(days=1)
         new_utc = new_local.astimezone(pytz.UTC)
 
-        step.scheduled_for = new_utc
-        step.proposed_for = new_utc
-        step.status = "pending"
         if step.job_id:
             remove_job(step.job_id)
             step.job_id = None
-        updated_any = True
-
-    if not updated_any:
-        await message.answer("Жоден із кроків не потребував оновлення.")
-        return True
+        step.scheduled_for = None
+        step.proposed_for = new_utc
+        step.status = "pending"
 
     plan.status = "pending"
+    plan.approved_at = None
     db.commit()
-    await message.answer(f"Годину плану оновлено на {hour:02d}:{minute:02d}. Кроки позначено як pending і чекають підтвердження.")
-    return True
+
+    await message.answer(
+        f"Годину плану оновлено на {hour:02d}:{minute:02d}. Кроки позначено як pending і чекають підтвердження."
+    )
+
+    all_steps = (
+        db.query(AIPlanStep)
+        .filter(AIPlanStep.plan_id == plan.id)
+        .order_by(AIPlanStep.scheduled_for, AIPlanStep.proposed_for)
+        .all()
+    )
+    preview_text = _format_plan_message(plan, all_steps, user.timezone or "Europe/Kyiv")
+    keyboard = _plan_keyboard(plan)
+    await message.answer(preview_text, reply_markup=keyboard)
+
+    await state.clear()
 
 # ----------------- Команди створення/керування планом -----------------
 
@@ -515,7 +541,7 @@ async def cb_plan_approve(c: CallbackQuery):
     await c.answer("✅ План затверджено!")
 
 @router.callback_query(F.data.startswith("plan:cancel:"))
-async def cb_plan_cancel(c: CallbackQuery):
+async def cb_plan_cancel(c: CallbackQuery, state: FSMContext):
     plan_id = _extract_plan_id(c.data)
     if not plan_id:
         await c.answer("Не вдалося знайти план.", show_alert=True)
@@ -566,10 +592,11 @@ async def cb_plan_cancel(c: CallbackQuery):
         await c.message.edit_text(message_text, reply_markup=keyboard)
     except Exception:
         await c.message.answer(message_text)
+    await state.clear()
     await c.answer("❌ План скасовано")
 
 @router.callback_query(F.data.startswith("plan:change_hour:"))
-async def cb_plan_change_hour(c: CallbackQuery):
+async def cb_plan_change_hour(c: CallbackQuery, state: FSMContext):
     plan_id = _extract_plan_id(c.data)
     if not plan_id:
         await c.answer("Некоректний план.", show_alert=True)
@@ -586,7 +613,9 @@ async def cb_plan_change_hour(c: CallbackQuery):
             await c.answer("План не знайдено", show_alert=True)
             return
 
-        _pending_plan_hour_change[user.id] = plan.id
+    await state.clear()
+    await state.set_state(PlanStates.waiting_new_hour)
+    await state.update_data(plan_id=plan_id)
 
     await c.message.answer("Надішли нову годину у форматі HH:MM для всіх кроків плану.")
     await c.answer()
@@ -712,7 +741,7 @@ async def cmd_plan_resume(m: Message):
     await m.answer("План відновлено. Майбутні кроки повторно заплановано.")
 
 @router.message(Command("plan_cancel"))
-async def cmd_plan_cancel_cmd(m: Message):
+async def cmd_plan_cancel_cmd(m: Message, state: FSMContext):
     with SessionLocal() as db:
         u = db.scalars(select(User).where(User.tg_id == m.from_user.id)).first()
         if not u:
@@ -738,11 +767,9 @@ async def cmd_plan_cancel_cmd(m: Message):
         plan.status = "done"
         plan.completed_at = datetime.now(pytz.UTC)
 
-        if u.id in _pending_plan_hour_change:
-            _pending_plan_hour_change.pop(u.id, None)
-
         db.commit()
 
+    await state.clear()
     await m.answer("План завершено і всі майбутні повідомлення скасовано.")
 
 # ----------------- нагадування -----------------
