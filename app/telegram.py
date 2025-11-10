@@ -400,20 +400,24 @@ async def cmd_plan(m: Message):
             return
 
         # створюємо чернетку: кроки -> pending + proposed_for (UTC), без job_id
-        plan = AIPlan(
-            user_id=u.id,
-            name=plan_payload.get("plan_name", parsed.goal or parsed.original_text or "AI План"),
-            description=parsed.original_text,
-            status="draft",
-            approved_at=None,
-            goal=parsed.goal,
-            duration_days=parsed.days,
-            send_hour=parsed.hour,
-            send_minute=parsed.minute,
-            tasks_per_day=parsed.tasks_per_day,
-        )
-        db.add(plan)
-        db.flush()
+plan_name = None
+if isinstance(plan_payload, dict):
+    plan_name = plan_payload.get("plan_name")
+
+plan = AIPlan(
+    user_id=u.id,
+    name=plan_name or parsed.goal or parsed.original_text or "AI План",
+    description=parsed.original_text,
+    status="draft",
+    approved_at=None,
+    goal=parsed.goal,
+    duration_days=parsed.days,
+    send_hour=parsed.hour,
+    send_minute=parsed.minute,
+    tasks_per_day=parsed.tasks_per_day,
+)
+db.add(plan)
+db.flush()
 
         stored_steps: List[AIPlanStep] = []
         for s in plan_payload.get("entries", []):
