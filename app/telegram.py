@@ -126,7 +126,8 @@ async def cmd_limit(m: Message):
 async def cmd_ask(m: Message):
     await m.answer("Напиши питання наступним повідомленням.")
 
-@router.message(F.text & ~F.via_bot)
+# Ігноруємо текстові команди на кшталт "/plan" в загальному обробнику
+@router.message(F.text & ~F.via_bot & ~F.text.startswith("/"))
 async def on_text(m: Message):
     # якщо очікуємо HH:MM для зміни часу плану — обробляємо саме це
     with SessionLocal() as db:
