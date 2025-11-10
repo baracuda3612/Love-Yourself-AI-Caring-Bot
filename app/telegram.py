@@ -399,85 +399,85 @@ async def cmd_plan(m: Message):
             await m.answer(f"Помилка генерації плану: {_escape(str(e))}")
             return
 
-# створюємо чернетку: кроки -> pending + proposed_for (UTC), без job_id
-plan_name = None
-if isinstance(plan_payload, dict):
-    plan_name = plan_payload.get("plan_name")
+        # створюємо чернетку: кроки -> pending + proposed_for (UTC), без job_id
+        plan_name = None
+        if isinstance(plan_payload, dict):
+            plan_name = plan_payload.get("plan_name")
 
-plan = AIPlan(
-    user_id=u.id,
-    name=plan_name or parsed.goal or parsed.original_text or "AI План",
-    description=parsed.original_text,
-    status="draft",
-    approved_at=None,
-    goal=parsed.goal,
-    duration_days=parsed.days,
-    send_hour=parsed.hour,
-    send_minute=parsed.minute,
-    tasks_per_day=parsed.tasks_per_day,
-)
-db.add(plan)
-db.flush()
+        plan = AIPlan(
+            user_id=u.id,
+            name=plan_name or parsed.goal or parsed.original_text or "AI План",
+            description=parsed.original_text,
+            status="draft",
+            approved_at=None,
+            goal=parsed.goal,
+            duration_days=parsed.days,
+            send_hour=parsed.hour,
+            send_minute=parsed.minute,
+            tasks_per_day=parsed.tasks_per_day,
+        )
+        db.add(plan)
+        db.flush()
 
-stored_steps: List[AIPlanStep] = []
+        stored_steps: List[AIPlanStep] = []
 
-# очікуємо, що generate_ai_plan повертає dict зі списком кроків
-steps_payload = plan_payload.get("steps") if isinstance(plan_payload, dict) else None
-if not steps_payload:
-    await m.answer("План згенеровано порожнім. Спробуй ще раз.")
-    return
+        # очікуємо, що generate_ai_plan повертає dict зі списком кроків
+        steps_payload = plan_payload.get("steps") if isinstance(plan_payload, dict) else None
+        if not steps_payload:
+            await m.answer("План згенеровано порожнім. Спробуй ще раз.")
+            return
 
-user_tz = pytz.timezone(u.timezone or "Europe/Kyiv")
+        user_tz = pytz.timezone(u.timezone or "Europe/Kyiv")
 
-for s in steps_payload:
-    msg = s.get("message")
-    when_local = s.get("scheduled_for")  # дата-час у локальній TZ (ISO або HH:MM)
-    if not msg:
-        continue
+        for s in steps_payload:
+            msg = s.get("message")
+            when_local = s.get("scheduled_for")  # дата-час у локальній TZ (ISO або HH:MM)
+            if not msg:
+                continue
 
-    # перетворимо у aware datetime
-    dt_local = None
-    if isinstance(when_local, str):
-        # спроба HH:MM
-        try:
-            hh, mm = map(int, when_local.split(":"))
-            now_local = datetime.now(user_tz)
-            dt_local = now_local.replace(hour=hh, minute=mm, second=0, microsecond=0)
-        except Exception:
+            # перетворимо у aware datetime
             dt_local = None
-    elif isinstance(when_local, datetime):
-        dt_local = when_local
-    # fallback — якщо не змогли розпарсити, штовхаємо на +1 хв від зараз
-    if dt_local is None:
-        dt_local = datetime.now(user_tz) + timedelta(minutes=1)
-    if dt_local.tzinfo is None:
-        dt_local = user_tz.localize(dt_local)
+            if isinstance(when_local, str):
+                # спроба HH:MM
+                try:
+                    hh, mm = map(int, when_local.split(":"))
+                    now_local = datetime.now(user_tz)
+                    dt_local = now_local.replace(hour=hh, minute=mm, second=0, microsecond=0)
+                except Exception:
+                    dt_local = None
+            elif isinstance(when_local, datetime):
+                dt_local = when_local
+            # fallback — якщо не змогли розпарсити, штовхаємо на +1 хв від зараз
+            if dt_local is None:
+                dt_local = datetime.now(user_tz) + timedelta(minutes=1)
+            if dt_local.tzinfo is None:
+                dt_local = user_tz.localize(dt_local)
 
-    proposed_utc = dt_local.astimezone(pytz.UTC)
+            proposed_utc = dt_local.astimezone(pytz.UTC)
 
-    step = AIPlanStep(
-        plan_id=plan.id,
-        job_id=None,
-        message=msg,
-        status="pending",
-        proposed_for=proposed_utc,
-        scheduled_for=None,
-        is_completed=False,
-    )
-    db.add(step)
-    stored_steps.append(step)
+            step = AIPlanStep(
+                plan_id=plan.id,
+                job_id=None,
+                message=msg,
+                status="pending",
+                proposed_for=proposed_utc,
+                scheduled_for=None,
+                is_completed=False,
+            )
+            db.add(step)
+            stored_steps.append(step)
 
-db.commit()
-db.refresh(plan)
+        db.commit()
+        db.refresh(plan)
 
-preview_text = _format_plan_message(
-    plan,
-    stored_steps,
-    u.timezone or "Europe/Kyiv",
-    limit=PLAN_PREVIEW_STEP_LIMIT,
-)
-keyboard = _plan_keyboard(plan)
-await m.answer(preview_text, reply_markup=keyboard)
+        preview_text = _format_plan_message(
+            plan,
+            stored_steps,
+            u.timezone or "Europe/Kyiv",
+            limit=PLAN_PREVIEW_STEP_LIMIT,
+        )
+        keyboard = _plan_keyboard(plan)
+        await m.answer(preview_text, reply_markup=keyboard)
 
         goal_text = (parsed.goal or "").replace(";", ",")
         db.add(
