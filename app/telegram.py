@@ -8,6 +8,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from sqlalchemy import select
 from datetime import datetime, timedelta
 import datetime as dtmod
+import html
 import pytz
 import traceback
 import parsedatetime as pdt
@@ -35,6 +36,13 @@ dp.include_router(router)
 
 # коли користувач натиснув "змінити час", тут тримаємо очікування вводу HH:MM
 _pending_plan_hour_change: dict[int, int] = {}
+
+
+def _escape(value) -> str:
+    if value is None:
+        return ""
+    return html.escape(str(value))
+
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
@@ -166,10 +174,10 @@ async def on_text(m: Message):
             )
         except Exception as e:
             print("=== GENERATION ERROR ===\n", traceback.format_exc())
-            await m.answer(f"ERR [{e.__class__.__name__}]: {e}")
+            await m.answer(f"ERR [{_escape(e.__class__.__name__)}]: {_escape(str(e))}")
             return
 
-        await m.answer(text)
+        await m.answer(_escape(text))
 
         if not cnt:
             cnt = UsageCounter(user_id=u.id, day=day, ask_count=0, month=mon, month_ask_count=0)
@@ -197,14 +205,14 @@ def _get_timezone(tz_name: Optional[str]) -> pytz.BaseTzInfo:
 def _format_plan_message(plan: AIPlan, steps: List[AIPlanStep], tz_name: Optional[str], *, limit: Optional[int] = PLAN_PREVIEW_STEP_LIMIT, note: Optional[str] = None) -> str:
     tz = _get_timezone(tz_name)
     lines: List[str] = [
-        f"План: {plan.name}",
-        f"Статус: {plan.status}",
+        f"План: {_escape(plan.name or '')}",
+        f"Статус: {_escape(plan.status or '')}",
     ]
     if plan.approved_at:
         lines.append(f"Затверджено: {plan.approved_at.astimezone(tz).strftime('%Y-%m-%d %H:%M')}")
     if note:
         lines.append("")
-        lines.append(note)
+        lines.append(_escape(note))
 
     lines.append("")
 
@@ -215,8 +223,9 @@ def _format_plan_message(plan: AIPlan, steps: List[AIPlanStep], tz_name: Optiona
         if dt_source:
             dt_local = dt_source.astimezone(tz)
             when_str = dt_local.strftime("%Y-%m-%d %H:%M")
-        st = step.status or "pending"
-        lines.append(f"{idx}. [{st}] {when_str}\n{step.message}")
+        status_text = _escape(step.status or "pending")
+        message_text = _escape(step.message or "")
+        lines.append(f"{idx}. [{status_text}] {when_str}\n{message_text}")
 
     total_steps = len(steps)
     if limit is not None and total_steps > limit:
@@ -348,7 +357,7 @@ async def cmd_plan(m: Message):
                 timezone=u.timezone or "Europe/Kyiv",
             )
         except Exception as e:
-            await m.answer(f"Помилка генерації плану: {e}")
+            await m.answer(f"Помилка генерації плану: {_escape(str(e))}")
             return
 
         # створюємо чернетку: кроки -> pending + proposed_for (UTC), без job_id
@@ -571,7 +580,7 @@ def _format_plan_status(plan: AIPlan, steps: list[AIPlanStep], user: User) -> st
             return s.scheduled_for or dtmod.datetime.max.replace(tzinfo=pytz.UTC)
         next_step = min(upcoming, key=_key)
 
-    lines = [f"План: {plan.name}", f"Статус: {plan.status}"]
+    lines = [f"План: {_escape(plan.name or '')}", f"Статус: {_escape(plan.status or '')}"]
     if total:
         lines.append(f"Прогрес: {completed}/{total} кроків виконано.")
     else:
@@ -583,8 +592,10 @@ def _format_plan_status(plan: AIPlan, steps: list[AIPlanStep], user: User) -> st
         preview = (next_step.message or "").strip().split("\n", 1)[0]
         if len(preview) > 120:
             preview = preview[:117] + "..."
-        status_hint = f" [{next_step.status}]" if next_step.status else ""
-        lines.append(f"Наступний крок{status_hint}: {next_local.strftime('%Y-%m-%d %H:%M %Z')} — {preview}")
+        status_hint = f" [{_escape(next_step.status)}]" if next_step.status else ""
+        lines.append(
+            f"Наступний крок{status_hint}: {next_local.strftime('%Y-%m-%d %H:%M %Z')} — {_escape(preview)}"
+        )
     else:
         lines.append("Наступний крок: відсутній.")
     return "\n".join(lines)
@@ -755,7 +766,10 @@ async def cmd_remind(m: Message):
 
     schedule_custom_reminder(reminder)
     scheduled_local = dt_utc.astimezone(pytz.timezone(user_tz))
-    await m.answer(f"Нагадування заплановано на {scheduled_local.strftime('%Y-%m-%d %H:%M %Z')} (job_id={job_id})")
+    scheduled_str = scheduled_local.strftime('%Y-%m-%d %H:%M %Z')
+    await m.answer(
+        f"Нагадування заплановано на {_escape(scheduled_str)} (job_id={_escape(job_id)})"
+    )
 
 @router.message(Command("my_reminders"))
 async def cmd_my_reminders(m: Message):
@@ -776,7 +790,11 @@ async def cmd_my_reminders(m: Message):
                 r.scheduled_at.astimezone(pytz.timezone(u.timezone or "Europe/Kyiv")).strftime('%Y-%m-%d %H:%M')
                 if r.scheduled_at else (r.cron_expression or "?")
             )
-            text += f"- id:{r.id} job:{r.job_id} коли:{when} текст:{r.message}\n"
+            job_display = r.job_id or "?"
+            message_display = r.message or ""
+            text += (
+                f"- id:{r.id} job:{_escape(job_display)} коли:{_escape(when)} текст:{_escape(message_display)}\n"
+            )
         await m.answer(text)
 
 # ----------------- inline кнопки для Q&A -----------------
