@@ -320,7 +320,7 @@ async def _process_plan_hour_response(
         .filter(
             AIPlanStep.plan_id == plan.id,
             AIPlanStep.is_completed == False,
-            (AIPlanStep.status.is_(None)) | (AIPlanStep.status.notin_(["completed", "cancelled"])),
+            (AIPlanStep.status.is_(None)) | (AIPlanStep.status.notin_(["completed", "canceled"])),
         )
         .all()
     )
@@ -503,7 +503,7 @@ async def cb_plan_approve(c: CallbackQuery):
         for step in plan.steps:
             if step.is_completed:
                 continue
-            if step.status in {"completed", "cancelled"}:
+            if step.status in {"completed", "canceled"}:
                 continue
 
             scheduled_for_utc = step.proposed_for or (now_utc + timedelta(minutes=1))
@@ -567,12 +567,12 @@ async def cb_plan_cancel(c: CallbackQuery, state: FSMContext):
                 removed += 1
             step.job_id = None
             if step.status != "completed":
-                step.status = "cancelled"
+                step.status = "canceled"
             step.scheduled_for = None
             step.is_completed = False
             step.completed_at = None
 
-        plan.status = "done"
+        plan.status = "canceled"
         plan.completed_at = datetime.now(pytz.UTC)
 
         db.add(
@@ -630,7 +630,7 @@ def _format_plan_status(plan: AIPlan, steps: list[AIPlanStep], user: User) -> st
 
     upcoming = [
         s for s in steps
-        if not s.is_completed and s.status not in {"completed", "cancelled"}
+        if not s.is_completed and s.status not in {"completed", "canceled"}
     ]
     next_step = None
     if upcoming:
@@ -761,10 +761,10 @@ async def cmd_plan_cancel_cmd(m: Message, state: FSMContext):
         _remove_future_plan_jobs(steps)
         for step in steps:
             if step.status != "completed":
-                step.status = "cancelled"
+                step.status = "canceled"
             step.job_id = None
 
-        plan.status = "done"
+        plan.status = "canceled"
         plan.completed_at = datetime.now(pytz.UTC)
 
         db.commit()
