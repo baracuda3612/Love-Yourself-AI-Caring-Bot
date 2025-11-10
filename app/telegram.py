@@ -352,8 +352,6 @@ async def cmd_plan(m: Message):
         await m.answer("Використання: /plan <опис> (наприклад: план покращення сну на 30 днів)")
         return
 
-    plan_prompt = parsed.goal or parsed.original_text
-
     with SessionLocal() as db:
         u = db.scalars(select(User).where(User.tg_id == m.from_user.id)).first()
         if not u:
@@ -363,14 +361,13 @@ async def cmd_plan(m: Message):
         mp = db.query(UserMemoryProfile).filter(UserMemoryProfile.user_id == u.id).first()
 
         try:
-            plan_name, steps = generate_ai_plan(
-                plan_prompt,
-                mp.profile_data if mp else None,
-                timezone=u.timezone or "Europe/Kyiv",
-                goal=parsed.goal,
-                duration_days=parsed.days,
-                send_time=parsed.time_str,
+            plan_payload = generate_ai_plan(
+                goal=parsed.goal or parsed.original_text,
+                days=parsed.days,
                 tasks_per_day=parsed.tasks_per_day,
+                preferred_hour=parsed.time_str,
+                tz_name=u.timezone or "Europe/Kyiv",
+                memory=mp.profile_data if mp else None,
             )
         except Exception as e:
             await m.answer(f"Помилка генерації плану: {_escape(str(e))}")
@@ -379,7 +376,7 @@ async def cmd_plan(m: Message):
         # створюємо чернетку: кроки -> pending + proposed_for (UTC), без job_id
         plan = AIPlan(
             user_id=u.id,
-            name=plan_name,
+            name=plan_payload.get("plan_name", parsed.goal or parsed.original_text or "AI План"),
             description=parsed.original_text,
             status="draft",
             approved_at=None,
@@ -393,7 +390,7 @@ async def cmd_plan(m: Message):
         db.flush()
 
         stored_steps: List[AIPlanStep] = []
-        for s in steps:
+        for s in plan_payload.get("entries", []):
             msg = s.get("message")
             when = s.get("scheduled_for")
             if not msg:
