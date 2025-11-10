@@ -29,6 +29,7 @@ from app.scheduler import (
 )
 from app.ai_plans import generate_ai_plan
 from app.plan_parser import parse_plan_request
+from app.plan_normalizer import normalize_plan_steps
 
 # ----------------- базові речі -----------------
 
@@ -399,14 +400,21 @@ async def cmd_plan(m: Message):
             await m.answer(f"Помилка генерації плану: {_escape(str(e))}")
             return
 
+        steps_payload = normalize_plan_steps(plan_payload)
+
         # створюємо чернетку: кроки -> pending + proposed_for (UTC), без job_id
         plan_name = None
         if isinstance(plan_payload, dict):
             plan_name = plan_payload.get("plan_name")
+            if isinstance(plan_name, str):
+                plan_name = plan_name.strip() or None
 
         plan = AIPlan(
             user_id=u.id,
-            name=plan_name or parsed.goal or parsed.original_text or "AI План",
+            name=plan_name
+            or parsed.goal
+            or parsed.original_text
+            or "Персональний план турботи",
             description=parsed.original_text,
             status="draft",
             approved_at=None,
@@ -421,8 +429,6 @@ async def cmd_plan(m: Message):
 
         stored_steps: List[AIPlanStep] = []
 
-        # очікуємо, що generate_ai_plan повертає dict зі списком кроків
-        steps_payload = plan_payload.get("steps") if isinstance(plan_payload, dict) else None
         if not steps_payload:
             await m.answer("План згенеровано порожнім. Спробуй ще раз.")
             return
