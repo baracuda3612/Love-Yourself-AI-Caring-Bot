@@ -108,6 +108,11 @@ class AIPlan(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     name = Column(String, nullable=False)
     description = Column(Text)
+    goal = Column(Text)
+    duration_days = Column(Integer)
+    send_hour = Column(Integer)
+    send_minute = Column(Integer)
+    tasks_per_day = Column(Integer)
 
     # Життєвий цикл: draft -> active -> (completed|canceled)
     status = Column(String, default="draft", server_default="draft")
