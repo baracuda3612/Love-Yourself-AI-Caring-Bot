@@ -1,6 +1,16 @@
 # app/telegram.py
 # Версія з підтримкою чернеток, підтвердження плану і керування нагадуваннями
 
+import json
+import re
+from datetime import datetime, timedelta
+import datetime as dtmod
+import html
+import traceback
+from typing import List, Optional
+
+import parsedatetime as pdt
+import pytz
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -8,13 +18,6 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from sqlalchemy import select
-from datetime import datetime, timedelta
-import datetime as dtmod
-import html
-import pytz
-import traceback
-import parsedatetime as pdt
-from typing import List, Optional
 
 from app.config import BOT_TOKEN, ADMIN_IDS, DEFAULT_DAILY_LIMIT
 from app.db import (
@@ -39,6 +42,9 @@ router = Router()
 dp.include_router(router)
 
 
+_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
 class PlanStates(StatesGroup):
     waiting_new_hour = State()
 
@@ -47,6 +53,30 @@ def _escape(value) -> str:
     if value is None:
         return ""
     return html.escape(str(value))
+
+
+def _coerce_plan_payload(value):
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return {}
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            match = _JSON_RE.search(text)
+            if match:
+                try:
+                    parsed = json.loads(match.group(0))
+                    if isinstance(parsed, dict):
+                        return parsed
+                except json.JSONDecodeError:
+                    pass
+        return {}
+    return {}
 
 
 def is_admin(user_id: int) -> bool:
@@ -388,13 +418,15 @@ async def cmd_plan(m: Message):
         mp = db.query(UserMemoryProfile).filter(UserMemoryProfile.user_id == u.id).first()
 
         try:
-            plan_payload = generate_ai_plan(
-                goal=parsed.goal or parsed.original_text,
-                days=parsed.days,
-                tasks_per_day=parsed.tasks_per_day,
-                preferred_hour=parsed.time_str,
-                tz_name=u.timezone or "Europe/Kyiv",
-                memory=mp.profile_data if mp else None,
+            plan_payload = _coerce_plan_payload(
+                generate_ai_plan(
+                    goal=parsed.goal or parsed.original_text,
+                    days=parsed.days,
+                    tasks_per_day=parsed.tasks_per_day,
+                    preferred_hour=parsed.time_str,
+                    tz_name=u.timezone or "Europe/Kyiv",
+                    memory=mp.profile_data if mp else None,
+                )
             )
         except Exception as e:
             await m.answer(f"Помилка генерації плану: {_escape(str(e))}")
