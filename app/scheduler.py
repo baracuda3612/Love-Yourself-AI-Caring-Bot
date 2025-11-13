@@ -11,7 +11,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.ai import generate_daily_message
-from app.config import DB_URL, DEFAULT_SEND_HOUR, MODEL
+from app.config import settings
 from app.db import (
     AIPlan,
     AIPlanStep,
@@ -22,13 +22,15 @@ from app.db import (
 )
 
 # jobstore: окремий sqlite файл поруч із основною БД, або той самий Postgres
-if DB_URL.startswith("sqlite:///"):
-    base_path = DB_URL.replace("sqlite:///", "")
+DATABASE_URL = settings.DATABASE_URL
+
+if DATABASE_URL.startswith("sqlite:///"):
+    base_path = DATABASE_URL.replace("sqlite:///", "")
     base_dir = os.path.dirname(os.path.abspath(base_path)) or "."
     jobs_db_path = os.path.join(base_dir, "jobs.sqlite")
     jobstore_url = f"sqlite:///{jobs_db_path}"
 else:
-    jobstore_url = DB_URL
+    jobstore_url = DATABASE_URL
 
 jobstores = {"default": SQLAlchemyJobStore(url=jobstore_url)}
 scheduler = BackgroundScheduler(jobstores=jobstores, timezone="UTC")
@@ -69,7 +71,7 @@ def reschedule_job(job_id, **trigger_args):
 
 def _cron_for_user(user: User) -> CronTrigger:
     tz = user.timezone or "Europe/Kyiv"
-    hour = user.send_hour if user.send_hour is not None else DEFAULT_SEND_HOUR
+    hour = user.send_hour if user.send_hour is not None else settings.DEFAULT_SEND_HOUR
     return CronTrigger(hour=hour, minute=0, timezone=pytz.timezone(tz))
 
 
@@ -142,7 +144,7 @@ async def _send_daily(user_id: int):
             status="sent" if message else "failed",
             message_id=getattr(message, "message_id", None),
             prompt_snapshot=user.prompt_template,
-            model=MODEL if text else None,
+            model=settings.MODEL if text else None,
             tokens_prompt=usage.get("prompt_tokens", 0),
             tokens_completion=usage.get("completion_tokens", 0),
             tokens_total=usage.get("total_tokens", 0),

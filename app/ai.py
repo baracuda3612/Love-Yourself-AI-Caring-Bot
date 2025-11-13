@@ -1,7 +1,7 @@
 from openai import OpenAI
-from app.config import OPENAI_API_KEY, MODEL, MAX_TOKENS, TEMPERATURE
+from app.config import settings
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
 SYSTEM_PROMPT = (
     "Ти короткий, емпатичний wellbeing-коуч українською. "
@@ -23,10 +23,10 @@ def _call_openai(messages):
     """Єдиний вхід у OpenAI, щоб показати точну причину фейлу всередині чату."""
     try:
         resp = client.chat.completions.create(
-            model=MODEL,
+            model=settings.MODEL,
             messages=messages,
-            max_tokens=MAX_TOKENS,
-            temperature=TEMPERATURE,
+            max_tokens=settings.MAX_TOKENS,
+            temperature=settings.TEMPERATURE,
         )
         return resp.choices[0].message.content, _usage_dict(resp)
     except Exception as e:

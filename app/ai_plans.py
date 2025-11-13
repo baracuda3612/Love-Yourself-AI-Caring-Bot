@@ -9,12 +9,12 @@ from typing import Any, Dict, Iterable, List, Optional
 import pytz
 from openai import OpenAI
 
-from app.config import OPENAI_API_KEY
+from app.config import settings
 
 __all__ = ["generate_ai_plan"]
 
 
-_client = OpenAI(api_key=OPENAI_API_KEY)
+_client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 

@@ -19,7 +19,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from sqlalchemy import select
 
-from app.config import BOT_TOKEN, ADMIN_IDS, DEFAULT_DAILY_LIMIT
+from app.config import settings
 from app.db import (
     SessionLocal, User, Response, UsageCounter,
     UserReminder, AIPlan, AIPlanStep, UserMemoryProfile
@@ -36,7 +36,7 @@ from app.plan_normalizer import normalize_plan_steps
 
 # ----------------- базові речі -----------------
 
-bot = Bot(token=BOT_TOKEN, parse_mode="HTML")
+bot = Bot(token=settings.BOT_TOKEN, parse_mode="HTML")
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)
@@ -80,7 +80,7 @@ def _coerce_plan_payload(value):
 
 
 def is_admin(user_id: int) -> bool:
-    return user_id in ADMIN_IDS
+    return user_id in settings.ADMIN_IDS
 
 def today_str(tz: str = "Europe/Kyiv") -> str:
     import pytz, datetime as dt
@@ -122,7 +122,7 @@ async def cmd_start(m: Message):
                 tg_id=m.from_user.id,
                 first_name=m.from_user.first_name or "",
                 username=m.from_user.username or "",
-                daily_limit=DEFAULT_DAILY_LIMIT,
+                daily_limit=settings.DEFAULT_DAILY_LIMIT,
                 send_hour=9,
             )
             db.add(u)
