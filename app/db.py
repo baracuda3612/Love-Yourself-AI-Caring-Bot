@@ -7,10 +7,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from sqlalchemy.sql import func
-from app.config import DB_URL
+from app.config import settings
 import uuid
 
-engine = create_engine(DB_URL, echo=False, future=True)
+engine = create_engine(settings.DATABASE_URL, echo=False, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 Base = declarative_base()
 
