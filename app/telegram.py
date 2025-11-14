@@ -3,7 +3,7 @@
 
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time
 import datetime as dtmod
 import html
 import traceback
@@ -49,6 +49,18 @@ class PlanStates(StatesGroup):
     waiting_new_hour = State()
 
 
+class Onboarding(StatesGroup):
+    waiting_goal = State()
+    waiting_stress = State()
+    waiting_energy = State()
+    waiting_position = State()
+    waiting_department = State()
+    waiting_style = State()
+    waiting_time = State()
+    waiting_tz_confirm = State()
+    final = State()
+
+
 def _escape(value) -> str:
     if value is None:
         return ""
@@ -77,6 +89,34 @@ def _coerce_plan_payload(value):
                     pass
         return {}
     return {}
+
+
+def _get_or_create_memory_profile(db, user: User) -> UserMemoryProfile:
+    mp = (
+        db.query(UserMemoryProfile)
+        .filter(UserMemoryProfile.user_id == user.id)
+        .first()
+    )
+    if mp:
+        return mp
+
+    mp = UserMemoryProfile(
+        user_id=user.id,
+        profile_data={},
+    )
+    db.add(mp)
+    db.flush()
+    return mp
+
+
+async def _start_onboarding_flow(m: Message, state: FSMContext):
+    await state.clear()
+    await m.answer(
+        "Привіт! Давай підлаштуємо асистента під тебе.\n\n"
+        "Спочатку: на чому хочеш сфокусуватись?\n"
+        "Напиши коротко: наприклад, «сон», «стрес», «продуктивність»."
+    )
+    await state.set_state(Onboarding.waiting_goal)
 
 
 def is_admin(user_id: int) -> bool:
@@ -114,7 +154,8 @@ async def cmd_ping(m: Message):
 # ----------------- старт / help / ліміт -----------------
 
 @router.message(Command("start"))
-async def cmd_start(m: Message):
+async def cmd_start(m: Message, state: FSMContext):
+    should_start_onboarding = False
     with SessionLocal() as db:
         u = db.scalars(select(User).where(User.tg_id == m.from_user.id)).first()
         if not u:
@@ -126,12 +167,22 @@ async def cmd_start(m: Message):
                 send_hour=9,
             )
             db.add(u)
-            db.commit()
-        await m.answer(
-            "Привіт! Я wellbeing-бот Love Yourself 🌿\n"
-            "Щодня надсилатиму коротке повідомлення для самопідтримки.\n"
-            "Використай /plan щоб створити план, або /ask щоб поставити питання."
-        )
+            db.flush()
+
+        mp = _get_or_create_memory_profile(db, u)
+        if not getattr(mp, "onboarding_completed", False):
+            should_start_onboarding = True
+
+        db.commit()
+
+    await m.answer(
+        "Привіт! Я wellbeing-бот Love Yourself 🌿\n"
+        "Щодня надсилатиму коротке повідомлення для самопідтримки.\n"
+        "Використай /plan щоб створити план, або /ask щоб поставити питання."
+    )
+
+    if should_start_onboarding:
+        await _start_onboarding_flow(m, state)
 
 @router.message(Command("help"))
 async def cmd_help(m: Message):
@@ -145,6 +196,22 @@ async def cmd_help(m: Message):
         "/plan_cancel — завершити план\n"
         "/remind <час | текст> — нагадування"
     )
+
+
+@router.message(Command("onboarding"))
+async def cmd_onboarding(m: Message, state: FSMContext):
+    from sqlalchemy import select
+
+    with SessionLocal() as db:
+        u = db.scalars(select(User).where(User.tg_id == m.from_user.id)).first()
+        if not u:
+            await m.answer("Натисни /start спочатку, будь ласка.")
+            return
+
+        _get_or_create_memory_profile(db, u)
+        db.commit()
+
+    await _start_onboarding_flow(m, state)
 
 @router.message(Command("limit"))
 async def cmd_limit(m: Message):
@@ -168,6 +235,171 @@ async def cmd_limit(m: Message):
 @router.message(Command("ask"))
 async def cmd_ask(m: Message):
     await m.answer("Напиши питання наступним повідомленням.")
+
+
+@router.message(Onboarding.waiting_goal)
+async def onboarding_goal(m: Message, state: FSMContext):
+    goal = (m.text or "").strip()
+    if not goal:
+        await m.answer("Напиши, будь ласка, хоча б одне слово про свою ціль 🙃")
+        return
+
+    await state.update_data(main_goal=goal)
+
+    await m.answer(
+        "Ок, сфокусуємось на цьому.\n"
+        "Тепер оціни свій поточний рівень стресу від 1 до 5."
+    )
+    await state.set_state(Onboarding.waiting_stress)
+
+
+@router.message(Onboarding.waiting_stress)
+async def onboarding_stress(m: Message, state: FSMContext):
+    try:
+        value = int((m.text or "").strip())
+    except ValueError:
+        await m.answer("Введи число від 1 до 5 😉")
+        return
+
+    if value < 1 or value > 5:
+        await m.answer("Тільки від 1 до 5, без креативу тут 😅")
+        return
+
+    await state.update_data(base_stress_level=value)
+
+    await m.answer("Дякую. Тепер оціни рівень енергії від 1 до 5.")
+    await state.set_state(Onboarding.waiting_energy)
+
+
+@router.message(Onboarding.waiting_energy)
+async def onboarding_energy(m: Message, state: FSMContext):
+    try:
+        value = int((m.text or "").strip())
+    except ValueError:
+        await m.answer("Знову число від 1 до 5, будь ласка 🙂")
+        return
+
+    if value < 1 or value > 5:
+        await m.answer("Все ще 1–5. Спробуй ще раз.")
+        return
+
+    await state.update_data(base_energy_level=value)
+
+    await m.answer("Чим ти займаєшся? Напиши свою посаду (наприклад, Project Manager).")
+    await state.set_state(Onboarding.waiting_position)
+
+
+@router.message(Onboarding.waiting_position)
+async def onboarding_position(m: Message, state: FSMContext):
+    position = (m.text or "").strip()
+    if not position:
+        await m.answer("Напиши хоча б щось типу «Developer», «HR» тощо.")
+        return
+
+    await state.update_data(position=position)
+
+    await m.answer("А тепер департамент: IT, HR, Finance, Sales чи щось своє.")
+    await state.set_state(Onboarding.waiting_department)
+
+
+@router.message(Onboarding.waiting_department)
+async def onboarding_department(m: Message, state: FSMContext):
+    department = (m.text or "").strip()
+    if not department:
+        await m.answer("Напиши хоча б одне слово – як це називається у вас.")
+        return
+
+    await state.update_data(department=department)
+
+    await m.answer(
+        "Як тобі комфортніше, щоб я з тобою говорив?\n"
+        "Наприклад: «мʼякий», «прямий», «нейтральний»."
+    )
+    await state.set_state(Onboarding.waiting_style)
+
+
+@router.message(Onboarding.waiting_style)
+async def onboarding_style(m: Message, state: FSMContext):
+    style = (m.text or "").strip()
+    if not style:
+        await m.answer("Напиши щось типу «мʼякий», «прямий», «нейтральний».")
+        return
+
+    await state.update_data(communication_style=style)
+
+    await m.answer(
+        "О котрій годині зручно отримувати щоденні кроки?\n"
+        "Формат: HH:MM, наприклад 09:00 або 21:30."
+    )
+    await state.set_state(Onboarding.waiting_time)
+
+
+@router.message(Onboarding.waiting_time)
+async def onboarding_time(m: Message, state: FSMContext):
+    raw = (m.text or "").strip()
+    parts = raw.split(":", 1)
+    if len(parts) != 2:
+        await m.answer("Будь ласка, у форматі HH:MM. Наприклад, 09:00.")
+        return
+
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except ValueError:
+        await m.answer("Година і хвилини мають бути числами. Спробуй ще раз.")
+        return
+
+    if not (0 <= hour < 24 and 0 <= minute < 60):
+        await m.answer("Це не схоже на реальний час 😄 Спробуй ще раз.")
+        return
+
+    await state.update_data(notification_time=dt_time(hour=hour, minute=minute))
+
+    await m.answer(
+        "Ок. Я буду використовувати твій поточний часовий пояс (Europe/Kyiv).\n"
+        "Пізніше можна буде змінити.\n\n"
+        "Зараз збережу налаштування і запущу для тебе персональний режим."
+    )
+    await state.set_state(Onboarding.final)
+    await _finish_onboarding(m, state)
+
+async def _finish_onboarding(m: Message, state: FSMContext):
+    data = await state.get_data()
+
+    with SessionLocal() as db:
+        from sqlalchemy import select
+
+        u = db.scalars(select(User).where(User.tg_id == m.from_user.id)).first()
+        if not u:
+            await m.answer("Щось пішло не так: не знайшов користувача. Спробуй /start.")
+            await state.clear()
+            return
+
+        mp = _get_or_create_memory_profile(db, u)
+
+        mp.main_goal = data.get("main_goal")
+        mp.base_stress_level = data.get("base_stress_level")
+        mp.base_energy_level = data.get("base_energy_level")
+        mp.position = data.get("position")
+        mp.department = data.get("department")
+        mp.communication_style = data.get("communication_style")
+        mp.notification_time = data.get("notification_time")
+        mp.timezone = mp.timezone or (u.timezone or "Europe/Kyiv")
+        mp.onboarding_completed = True
+        mp.consent_given = True
+
+        if data.get("notification_time"):
+            notif_time = data["notification_time"]
+            u.send_hour = notif_time.hour
+
+        db.commit()
+
+    await state.clear()
+    await m.answer(
+        "Готово ✅\n"
+        "Я запамʼятав твою ціль і налаштування.\n"
+        "Тепер план і відповіді будуть більше під тебе."
+    )
 
 # Ігноруємо текстові команди на кшталт "/plan" в загальному обробнику
 @router.message(F.text & ~F.via_bot & ~F.text.startswith("/"))
