@@ -3,7 +3,17 @@
 # статуси кроків, approved_at у плану. Без магії, без рантайм-міграцій.
 
 from sqlalchemy import (
-    create_engine, Column, Integer, String, Boolean, DateTime, Text, ForeignKey, JSON
+    create_engine,
+    Column,
+    Integer,
+    String,
+    Boolean,
+    DateTime,
+    Text,
+    Time,
+    ForeignKey,
+    JSON,
+    text,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from sqlalchemy.sql import func
@@ -77,8 +87,39 @@ class UserMemoryProfile(Base):
     __tablename__ = "user_memory_profiles"
 
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id"),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
     profile_data = Column(JSON, nullable=False)  # структурований JSON профілю пам'яті
+    main_goal = Column(Text, nullable=True)
+    base_stress_level = Column(Integer, nullable=True)
+    base_energy_level = Column(Integer, nullable=True)
+    notification_time = Column(Time, nullable=True)
+    communication_style = Column(Text, nullable=True)
+    position = Column(Text, nullable=True)
+    department = Column(Text, nullable=True)
+    timezone = Column(
+        String,
+        nullable=True,
+        default="Europe/Kyiv",
+        server_default=text("'Europe/Kyiv'"),
+    )
+    onboarding_completed = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("0"),
+    )
+    consent_given = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("0"),
+    )
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
