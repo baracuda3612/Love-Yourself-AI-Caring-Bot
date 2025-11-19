@@ -178,14 +178,14 @@ async def cmd_start(m: Message, state: FSMContext):
 
         db.commit()
 
+    if should_start_onboarding:
+        return await _start_onboarding_flow(m, state)
+
     await m.answer(
         "Привіт! Я wellbeing-бот Love Yourself 🌿\n"
         "Щодня надсилатиму коротке повідомлення для самопідтримки.\n"
         "Використай /plan щоб створити план, або /ask щоб поставити питання."
     )
-
-    if should_start_onboarding:
-        await _start_onboarding_flow(m, state)
 
 
 @router.message(Command("help"))
