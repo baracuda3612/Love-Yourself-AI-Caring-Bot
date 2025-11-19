@@ -109,16 +109,29 @@ def _get_or_create_memory_profile(db, user: User) -> UserMemoryProfile:
     return mp
 
 
+async def _start_onboarding_flow(m: Message, state: FSMContext):
+    await state.clear()
+    await m.answer(
+        "Привіт! Давай підлаштуємо асистента під тебе.\n\n"
+        "Спочатку: на чому хочеш сфокусуватись?\n"
+        "Напиши коротко: наприклад, «сон», «стрес», «продуктивність»."
+    )
+    await state.set_state(Onboarding.waiting_goal)
+
+
 def is_admin(user_id: int) -> bool:
     return user_id in settings.ADMIN_IDS
+
 
 def today_str(tz: str = "Europe/Kyiv") -> str:
     import pytz, datetime as dt
     return dt.datetime.now(pytz.timezone(tz)).strftime("%Y-%m-%d")
 
+
 def month_str(tz: str = "Europe/Kyiv") -> str:
     import pytz, datetime as dt
     return dt.datetime.now(pytz.timezone(tz)).strftime("%Y-%m")
+
 
 async def send_daily_with_buttons(bot: Bot, chat_id: int, text: str):
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -144,7 +157,8 @@ async def cmd_ping(m: Message):
 # ----------------- старт / help / ліміт -----------------
 
 @router.message(Command("start"))
-async def cmd_start(m: Message):
+async def cmd_start(m: Message, state: FSMContext):
+    should_start_onboarding = False
     with SessionLocal() as db:
         u = db.scalars(select(User).where(User.tg_id == m.from_user.id)).first()
         if not u:
@@ -156,12 +170,23 @@ async def cmd_start(m: Message):
                 send_hour=9,
             )
             db.add(u)
-            db.commit()
-        await m.answer(
-            "Привіт! Я wellbeing-бот Love Yourself 🌿\n"
-            "Щодня надсилатиму коротке повідомлення для самопідтримки.\n"
-            "Використай /plan щоб створити план, або /ask щоб поставити питання."
-        )
+            db.flush()
+
+        mp = _get_or_create_memory_profile(db, u)
+        if not getattr(mp, "onboarding_completed", False):
+            should_start_onboarding = True
+
+        db.commit()
+
+    await m.answer(
+        "Привіт! Я wellbeing-бот Love Yourself 🌿\n"
+        "Щодня надсилатиму коротке повідомлення для самопідтримки.\n"
+        "Використай /plan щоб створити план, або /ask щоб поставити питання."
+    )
+
+    if should_start_onboarding:
+        await _start_onboarding_flow(m, state)
+
 
 @router.message(Command("help"))
 async def cmd_help(m: Message):
@@ -190,12 +215,8 @@ async def cmd_onboarding(m: Message, state: FSMContext):
         _get_or_create_memory_profile(db, u)
         db.commit()
 
-    await m.answer(
-        "Привіт! Давай підлаштуємо асистента під тебе.\n\n"
-        "Спочатку: на чому хочеш сфокусуватись?\n"
-        "Напиши коротко: наприклад, «сон», «стрес», «продуктивність»."
-    )
-    await state.set_state(Onboarding.waiting_goal)
+    await _start_onboarding_flow(m, state)
+
 
 @router.message(Command("limit"))
 async def cmd_limit(m: Message):
@@ -347,6 +368,7 @@ async def onboarding_time(m: Message, state: FSMContext):
     await state.set_state(Onboarding.final)
     await _finish_onboarding(m, state)
 
+
 async def _finish_onboarding(m: Message, state: FSMContext):
     data = await state.get_data()
 
@@ -447,11 +469,13 @@ async def on_text(m: Message, state: FSMContext):
 pdt_calendar = pdt.Calendar()
 PLAN_PREVIEW_STEP_LIMIT = 3
 
+
 def _get_timezone(tz_name: Optional[str]) -> pytz.BaseTzInfo:
     try:
         return pytz.timezone(tz_name or "Europe/Kyiv")
     except pytz.UnknownTimeZoneError:
         return pytz.timezone("Europe/Kyiv")
+
 
 def _format_plan_message(plan: AIPlan, steps: List[AIPlanStep], tz_name: Optional[str], *, limit: Optional[int] = PLAN_PREVIEW_STEP_LIMIT, note: Optional[str] = None) -> str:
     tz = _get_timezone(tz_name)
@@ -495,6 +519,7 @@ def _format_plan_message(plan: AIPlan, steps: List[AIPlanStep], tz_name: Optiona
 
     return "\n".join(lines).strip()
 
+
 def _plan_keyboard(plan: AIPlan):
     if plan.status in {"draft", "pending"}:
         return InlineKeyboardMarkup(inline_keyboard=[
@@ -509,6 +534,7 @@ def _plan_keyboard(plan: AIPlan):
             [InlineKeyboardButton(text="❌ Скасувати", callback_data=f"plan:cancel:{plan.id}")]
         ])
     return None
+
 
 def _parse_hour_minute(text: str) -> tuple[int, int] | None:
     cleaned = (text or "").strip().replace(".", ":")
@@ -527,11 +553,13 @@ def _parse_hour_minute(text: str) -> tuple[int, int] | None:
         return hour, minute
     return None
 
+
 def _get_latest_plan(db, user_id: int, statuses: tuple[str, ...] | None = None) -> AIPlan | None:
     query = db.query(AIPlan).filter(AIPlan.user_id == user_id)
     if statuses:
         query = query.filter(AIPlan.status.in_(statuses))
     return query.order_by(AIPlan.created_at.desc()).first()
+
 
 async def _process_plan_hour_response(
     message: Message,
@@ -744,11 +772,13 @@ async def cmd_plan(m: Message):
         )
         db.commit()
 
+
 def _extract_plan_id(data: str) -> Optional[int]:
     try:
         return int(data.split(":")[-1])
     except Exception:
         return None
+
 
 @router.callback_query(F.data.startswith("plan:approve:"))
 async def cb_plan_approve(c: CallbackQuery):
@@ -813,6 +843,7 @@ async def cb_plan_approve(c: CallbackQuery):
         await c.message.answer(message_text)
     await c.answer("✅ План затверджено!")
 
+
 @router.callback_query(F.data.startswith("plan:cancel:"))
 async def cb_plan_cancel(c: CallbackQuery, state: FSMContext):
     plan_id = _extract_plan_id(c.data)
@@ -867,6 +898,7 @@ async def cb_plan_cancel(c: CallbackQuery, state: FSMContext):
         await c.message.answer(message_text)
     await state.clear()
     await c.answer("❌ План скасовано")
+
 
 @router.callback_query(F.data.startswith("plan:change_hour:"))
 async def cb_plan_change_hour(c: CallbackQuery, state: FSMContext):
@@ -931,12 +963,14 @@ def _format_plan_status(plan: AIPlan, steps: list[AIPlanStep], user: User) -> st
         lines.append("Наступний крок: відсутній.")
     return "\n".join(lines)
 
+
 def _remove_future_plan_jobs(steps: list[AIPlanStep]):
     now_utc = datetime.now(pytz.UTC)
     for step in steps:
         if step.job_id and step.scheduled_for and step.scheduled_for > now_utc:
             remove_job(step.job_id)
             step.job_id = None
+
 
 @router.message(Command("plan_status"))
 async def cmd_plan_status(m: Message):
@@ -958,6 +992,7 @@ async def cmd_plan_status(m: Message):
             .all()
         )
         await m.answer(_format_plan_status(plan, steps, u))
+
 
 @router.message(Command("plan_pause"))
 async def cmd_plan_pause(m: Message):
@@ -982,6 +1017,7 @@ async def cmd_plan_pause(m: Message):
         db.commit()
 
     await m.answer("План призупинено. Майбутні повідомлення зупинено.")
+
 
 @router.message(Command("plan_resume"))
 async def cmd_plan_resume(m: Message):
@@ -1012,6 +1048,7 @@ async def cmd_plan_resume(m: Message):
         db.commit()
 
     await m.answer("План відновлено. Майбутні кроки повторно заплановано.")
+
 
 @router.message(Command("plan_cancel"))
 async def cmd_plan_cancel_cmd(m: Message, state: FSMContext):
@@ -1054,6 +1091,7 @@ def parse_natural_time(text: str, user_tz: str = "Europe/Kyiv"):
     if status == 0:
         return None
     return dt_local.astimezone(pytz.UTC)
+
 
 @router.message(Command("remind"))
 async def cmd_remind(m: Message):
@@ -1100,6 +1138,7 @@ async def cmd_remind(m: Message):
         f"Нагадування заплановано на {_escape(scheduled_str)} (job_id={_escape(job_id)})"
     )
 
+
 @router.message(Command("my_reminders"))
 async def cmd_my_reminders(m: Message):
     with SessionLocal() as db:
@@ -1136,6 +1175,7 @@ async def cb_fb(c: CallbackQuery):
             db.add(Response(delivery_id=None, user_id=u.id, kind="button", payload=c.data))
             db.commit()
     await c.answer("Дякую!")
+
 
 @router.callback_query(F.data == "ask:init")
 async def cb_ask(c: CallbackQuery):
