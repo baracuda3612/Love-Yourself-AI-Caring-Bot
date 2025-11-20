@@ -2,6 +2,10 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import sys
+from datetime import datetime
+from pathlib import Path
+
 import pytz
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
@@ -31,6 +35,8 @@ def test_normalize_full_plan_without_dates():
     assert len(steps) == 7
     for idx, step in enumerate(steps, start=1):
         assert step["day"] == idx
+        assert step["day_index"] == idx - 1
+        assert step["slot_index"] == 0
         assert step["status"] == "pending"
         assert step["scheduled_for"] is None
         assert step["job_id"] is None
@@ -63,6 +69,8 @@ def test_normalize_repeats_short_step_list():
         day_steps = steps[day_index * 2: (day_index + 1) * 2]
         assert all(step["day"] == day_index + 1 for step in day_steps)
         assert all(step["message"] == "A" for step in day_steps)
+        assert day_steps[0]["slot_index"] == 0
+        assert day_steps[1]["slot_index"] == 1
 
 
 def test_empty_steps_use_playbook():
@@ -96,6 +104,24 @@ def test_invalid_time_falls_back_to_default():
     assert len(steps) == 1
     local_dt = steps[0]["proposed_for"].astimezone(pytz.timezone("Europe/Kyiv"))
     assert (local_dt.hour, local_dt.minute) == (21, 0)
+
+
+def test_preferred_hours_list_applied():
+    steps = normalize_plan_steps(
+        {"steps": [{"message": "A"}, {"message": "B"}]},
+        goal="звичка",
+        days=1,
+        tasks_per_day=1,
+        preferred_hour="09:00",
+        preferred_hours=["08:00", "14:30"],
+        tz_name="Europe/Kyiv",
+    )
+
+    assert len(steps) == 2
+    first_local = steps[0]["proposed_for"].astimezone(pytz.timezone("Europe/Kyiv"))
+    second_local = steps[1]["proposed_for"].astimezone(pytz.timezone("Europe/Kyiv"))
+    assert (first_local.hour, first_local.minute) == (8, 0)
+    assert (second_local.hour, second_local.minute) == (14, 30)
 
 
 def test_timezone_conversion_to_utc():

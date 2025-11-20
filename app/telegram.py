@@ -501,18 +501,37 @@ def _format_plan_message(plan: AIPlan, steps: List[AIPlanStep], tz_name: Optiona
 
     lines.append("")
 
-    display_steps = steps if limit is None else steps[:limit]
-    for idx, step in enumerate(display_steps, 1):
-        dt_source = step.proposed_for or step.scheduled_for
+    sorted_steps = sorted(
+        steps,
+        key=lambda s: (
+            getattr(s, "day_index", None) if getattr(s, "day_index", None) is not None else getattr(s, "day", 0) - 1,
+            getattr(s, "slot_index", 0),
+            s.scheduled_for or s.proposed_for or datetime.max.replace(tzinfo=pytz.UTC),
+        ),
+    )
+    display_steps = sorted_steps if limit is None else sorted_steps[:limit]
+    current_day = None
+    for step in display_steps:
+        day_idx = getattr(step, "day_index", None)
+        day_number = (day_idx + 1) if day_idx is not None else getattr(step, "day", None) or 1
+        if current_day != day_number:
+            if current_day is not None:
+                lines.append("")
+            lines.append(f"День {day_number}")
+            current_day = day_number
+
+        dt_source = step.scheduled_for or step.proposed_for
         when_str = "?"
         if dt_source:
             dt_local = dt_source.astimezone(tz)
-            when_str = dt_local.strftime("%Y-%m-%d %H:%M")
+            when_str = dt_local.strftime("%H:%M")
+        elif getattr(step, "time", None):
+            when_str = str(getattr(step, "time"))
         status_text = _escape(step.status or "pending")
         message_text = _escape(step.message or "")
-        lines.append(f"{idx}. [{status_text}] {when_str}\n{message_text}")
+        lines.append(f" • {when_str} [{status_text}] — {message_text}")
 
-    total_steps = len(steps)
+    total_steps = len(sorted_steps)
     if limit is not None and total_steps > limit:
         lines.append("")
         lines.append(f"Показано перші {limit} кроки з {total_steps}.")
@@ -635,7 +654,12 @@ async def _process_plan_hour_response(
     all_steps = (
         db.query(AIPlanStep)
         .filter(AIPlanStep.plan_id == plan.id)
-        .order_by(AIPlanStep.scheduled_for, AIPlanStep.proposed_for)
+        .order_by(
+            AIPlanStep.day_index,
+            AIPlanStep.slot_index,
+            AIPlanStep.scheduled_for,
+            AIPlanStep.proposed_for,
+        )
         .all()
     )
     preview_text = _format_plan_message(plan, all_steps, user.timezone or "Europe/Kyiv")
@@ -661,13 +685,16 @@ async def cmd_plan(m: Message):
 
         mp = db.query(UserMemoryProfile).filter(UserMemoryProfile.user_id == u.id).first()
 
+        actual_tasks_per_day = max(parsed.tasks_per_day, len(parsed.hours_list))
+
         try:
             plan_payload = _coerce_plan_payload(
                 generate_ai_plan(
                     goal=parsed.goal or parsed.original_text,
                     days=parsed.days,
-                    tasks_per_day=parsed.tasks_per_day,
+                    tasks_per_day=actual_tasks_per_day,
                     preferred_hour=parsed.time_str,
+                    preferred_hours=parsed.hours_list,
                     tz_name=u.timezone or "Europe/Kyiv",
                     memory=mp.profile_data if mp else None,
                 )
@@ -680,8 +707,9 @@ async def cmd_plan(m: Message):
             plan_payload,
             goal=parsed.goal or parsed.original_text or "Підтримка добробуту",
             days=parsed.days,
-            tasks_per_day=parsed.tasks_per_day,
+            tasks_per_day=actual_tasks_per_day,
             preferred_hour=parsed.time_str,
+            preferred_hours=parsed.hours_list,
             tz_name=u.timezone or "Europe/Kyiv",
         )
 
@@ -711,7 +739,7 @@ async def cmd_plan(m: Message):
             duration_days=parsed.days,
             send_hour=parsed.hour,
             send_minute=parsed.minute,
-            tasks_per_day=parsed.tasks_per_day,
+            tasks_per_day=actual_tasks_per_day,
         )
         db.add(plan)
         db.flush()
@@ -725,6 +753,13 @@ async def cmd_plan(m: Message):
                 continue
             if proposed.tzinfo is None:
                 proposed = pytz.UTC.localize(proposed)
+            day_index = s.get("day_index")
+            if day_index is None:
+                try:
+                    day_index = int(s.get("day", 1)) - 1
+                except Exception:
+                    day_index = 0
+            slot_index = s.get("slot_index") or 0
 
             step = AIPlanStep(
                 plan_id=plan.id,
@@ -733,6 +768,8 @@ async def cmd_plan(m: Message):
                 status="pending",
                 proposed_for=proposed.astimezone(pytz.UTC),
                 scheduled_for=None,
+                day_index=day_index,
+                slot_index=slot_index,
                 is_completed=False,
                 completed_at=None,
             )
@@ -961,6 +998,36 @@ def _format_plan_status(plan: AIPlan, steps: list[AIPlanStep], user: User) -> st
         )
     else:
         lines.append("Наступний крок: відсутній.")
+
+    lines.append("")
+    sorted_steps = sorted(
+        steps,
+        key=lambda s: (
+            getattr(s, "day_index", None) if getattr(s, "day_index", None) is not None else getattr(s, "day", 0) - 1,
+            getattr(s, "slot_index", 0),
+            s.scheduled_for or s.proposed_for or datetime.max.replace(tzinfo=pytz.UTC),
+        ),
+    )
+    current_day = None
+    for step in sorted_steps:
+        day_idx = getattr(step, "day_index", None)
+        day_number = (day_idx + 1) if day_idx is not None else getattr(step, "day", None) or 1
+        if current_day != day_number:
+            if current_day is not None:
+                lines.append("")
+            lines.append(f"День {day_number}")
+            current_day = day_number
+
+        dt_source = step.scheduled_for or step.proposed_for
+        when_str = "?"
+        if dt_source:
+            when_str = dt_source.astimezone(tz).strftime("%H:%M")
+        elif getattr(step, "time", None):
+            when_str = str(getattr(step, "time"))
+        status_text = _escape(step.status or "pending")
+        message_text = _escape(step.message or "")
+        lines.append(f" • {when_str} [{status_text}] — {message_text}")
+
     return "\n".join(lines)
 
 
@@ -988,7 +1055,12 @@ async def cmd_plan_status(m: Message):
         steps = (
             db.query(AIPlanStep)
             .filter(AIPlanStep.plan_id == plan.id)
-            .order_by(AIPlanStep.scheduled_for)
+            .order_by(
+                AIPlanStep.day_index,
+                AIPlanStep.slot_index,
+                AIPlanStep.scheduled_for,
+                AIPlanStep.proposed_for,
+            )
             .all()
         )
         await m.answer(_format_plan_status(plan, steps, u))

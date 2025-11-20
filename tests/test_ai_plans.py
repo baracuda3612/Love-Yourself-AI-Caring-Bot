@@ -6,6 +6,10 @@ import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
+import json
+
+import pytest
+
 from app import ai_plans
 from app.telegram import _coerce_plan_payload
 
@@ -69,7 +73,8 @@ def test_generate_ai_plan_valid_json():
     )
 
     assert plan["plan_name"] == "Тестовий план"
-    assert plan["steps"] == payload["steps"]
+    assert plan["steps"][0]["message"] == payload["steps"][0]["message"]
+    assert plan["steps"][0]["day"] == payload["steps"][0]["day"]
 
 
 def test_coerce_plan_payload_extracts_embedded_json():

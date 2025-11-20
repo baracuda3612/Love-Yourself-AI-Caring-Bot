@@ -173,6 +173,9 @@ class AIPlanStep(Base):
     status = Column(String, default="pending")  # pending/approved/canceled
     message = Column(Text, nullable=False)
 
+    day_index = Column(Integer, default=0)  # 0-based день у межах плану
+    slot_index = Column(Integer, default=0)  # 0-based слот у межах дня
+
     # У чернетці зберігаємо proposed_for (UTC). Після approve — виставляємо scheduled_for + job_id.
     proposed_for = Column(DateTime(timezone=True))                    # може бути NULL у старих
     scheduled_for = Column(DateTime(timezone=True), nullable=True)    # NULL у draft
