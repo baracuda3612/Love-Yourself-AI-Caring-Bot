@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Optional
+from typing import List, Optional
 
 __all__ = ["PlanRequest", "parse_plan_request"]
 
@@ -11,16 +11,19 @@ _DEFAULT_DAYS = 7
 _DEFAULT_HOUR = 21
 _DEFAULT_MINUTE = 0
 _DEFAULT_TASKS_PER_DAY = 1
+_MAX_SLOTS_PER_DAY = 10
 
 _DURATION_PATTERNS = [
     re.compile(r"(?P<num>\d+)\s*[- ]?(?:денн(?:ий|іх|і|я|ого|ому|ими)?)", re.IGNORECASE),
     re.compile(r"(?:на|протягом|у\s*продовж)\s*(?P<num>\d+)\s*(?:дн(?:ів|і|я|ях))", re.IGNORECASE),
     re.compile(r"(?P<num>\d+)\s*(?:дн(?:ів|і|я|ях))", re.IGNORECASE),
     re.compile(r"(?P<num>\d+)\s*(?:тижн(?:ів|евий|еві|і|я|ях))", re.IGNORECASE),
+    re.compile(r"(?P<num>\d+)\s*days?", re.IGNORECASE),
 ]
 
 _TIME_PATTERN = re.compile(
-    r"(?:\b(?:о|в|у)\s*)?(?P<hour>\d{1,2})(?:[:\.](?P<minute>\d{2}))\b", re.IGNORECASE
+    r"(?:@|\b(?:о|в|у)\s*)?(?P<hour>\d{1,2})(?:[:\.](?P<minute>\d{2}))\b",
+    re.IGNORECASE,
 )
 
 _TASKS_PATTERN = re.compile(
@@ -48,11 +51,18 @@ class PlanRequest:
     days: int
     hour: int
     minute: int
+    hours: List[str]
     tasks_per_day: int
 
     @property
     def time_str(self) -> str:
         return f"{self.hour:02d}:{self.minute:02d}"
+
+    @property
+    def hours_list(self) -> List[str]:
+        if self.hours:
+            return self.hours
+        return [self.time_str]
 
 
 def _to_int(value: Optional[str], default: int) -> int:
@@ -82,6 +92,7 @@ def parse_plan_request(text: str | None) -> PlanRequest:
     hour = _DEFAULT_HOUR
     minute = _DEFAULT_MINUTE
     tasks = _DEFAULT_TASKS_PER_DAY
+    hours: List[str] = []
 
     # duration
     duration_match = None
@@ -98,14 +109,18 @@ def parse_plan_request(text: str | None) -> PlanRequest:
         days = max(1, number)
         spans_to_remove.append(duration_match.span())
 
-    # time (only consider first explicit time with minutes)
-    time_match = _TIME_PATTERN.search(body)
-    if time_match:
-        hour_val = _to_int(time_match.group("hour"), _DEFAULT_HOUR)
-        minute_val = _to_int(time_match.group("minute"), _DEFAULT_MINUTE)
+    # time (collect all explicit times)
+    time_matches = list(_TIME_PATTERN.finditer(body))
+    for idx, match in enumerate(time_matches):
+        hour_val = _to_int(match.group("hour"), _DEFAULT_HOUR)
+        minute_val = _to_int(match.group("minute"), _DEFAULT_MINUTE)
         if 0 <= hour_val < 24 and 0 <= minute_val < 60:
-            hour, minute = hour_val, minute_val
-            spans_to_remove.append(time_match.span())
+            time_str = f"{hour_val:02d}:{minute_val:02d}"
+            if len(hours) < _MAX_SLOTS_PER_DAY:
+                hours.append(time_str)
+            if idx == 0:
+                hour, minute = hour_val, minute_val
+            spans_to_remove.append(match.span())
 
     # tasks per day
     tasks_match = _TASKS_PATTERN.search(body)
@@ -113,6 +128,9 @@ def parse_plan_request(text: str | None) -> PlanRequest:
         tasks_val = max(1, _to_int(tasks_match.group("num"), _DEFAULT_TASKS_PER_DAY))
         tasks = tasks_val
         spans_to_remove.append(tasks_match.span())
+
+    if hours and tasks == _DEFAULT_TASKS_PER_DAY:
+        tasks = len(hours)
 
     cleaned_body = body
     if spans_to_remove:
@@ -133,6 +151,7 @@ def parse_plan_request(text: str | None) -> PlanRequest:
         days=days,
         hour=hour,
         minute=minute,
-        tasks_per_day=tasks,
+        hours=hours or [f"{hour:02d}:{minute:02d}"],
+        tasks_per_day=min(max(1, tasks), _MAX_SLOTS_PER_DAY),
     )
 

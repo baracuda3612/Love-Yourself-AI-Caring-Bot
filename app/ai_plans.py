@@ -27,6 +27,8 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "    \"steps\": [\n"
     "        {{\n"
     "            \"day\": <номер дня>,\n"
+    "            \"slot\": <порядковий номер у межах дня>,\n"
+    "            \"time\": \"HH:MM\",\n"
     "            \"message\": \"текст завдання\",\n"
     "            \"scheduled_for\": \"ISO8601 дата (опціонально)\"\n"
     "        }}\n"
@@ -39,7 +41,7 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "Мета: {goal}\n"
     "Тривалість: {days} днів\n"
     "Завдань на день: {tasks_per_day}\n"
-    "Час нагадування: {preferred_hour} ({tz})\n"
+    "Часи нагадувань: {preferred_hours} ({tz})\n"
     "USER_MEMORY: {memory}\n"""
 )
 
@@ -127,25 +129,47 @@ def _coerce_steps(payload: Dict[str, Any], goal: str) -> Optional[Dict[str, Any]
         message = str(item.get("message") or "").strip()
         if not message:
             continue
-        day_value = item.get("day")
+        day_value = item.get("day_index", item.get("day"))
         try:
             day_int = int(day_value)
         except (TypeError, ValueError):
             continue
-        if day_int < 1:
+        if day_int < 0:
             continue
-        step: Dict[str, Any] = {"day": day_int, "message": message}
+        slot_value = item.get("slot_index", item.get("slot"))
+        slot_int: Optional[int] = None
+        try:
+            slot_candidate = int(slot_value)
+        except (TypeError, ValueError):
+            slot_candidate = None
+        else:
+            if slot_candidate >= 0:
+                slot_int = slot_candidate
+
+        step: Dict[str, Any] = {
+            "day": day_int if day_int >= 1 else day_int + 1,
+            "day_index": day_int if day_int >= 0 else None,
+            "slot_index": slot_int,
+            "message": message,
+        }
         scheduled_for = item.get("scheduled_for")
         if isinstance(scheduled_for, str):
             scheduled_str = scheduled_for.strip()
             if scheduled_str:
                 step["scheduled_for"] = scheduled_str
+        time_value = item.get("time")
+        if isinstance(time_value, str) and time_value.strip():
+            step["time"] = time_value.strip()
         steps.append(step)
 
     if not steps:
         return None
 
-    steps.sort(key=lambda x: (x["day"], x.get("scheduled_for", "")))
+    steps.sort(key=lambda x: (
+        x.get("day_index", x.get("day", 0)),
+        x.get("slot_index", 0),
+        x.get("scheduled_for", ""),
+    ))
     plan_name = str(payload.get("plan_name") or "").strip() or f"План для {goal}"
     return {"plan_name": plan_name, "steps": steps}
 
@@ -163,7 +187,7 @@ def _build_fallback_plan(goal: str) -> Dict[str, Any]:
     if not messages:
         messages = _DEFAULT_PLAYBOOK or ["Зроби маленький крок турботи про себе."]
     steps = [
-        {"day": index + 1, "message": message}
+        {"day": index + 1, "day_index": index, "slot_index": 0, "message": message}
         for index, message in enumerate(messages)
     ]
     if not steps:
@@ -198,6 +222,7 @@ def generate_ai_plan(
     tasks_per_day: int,
     preferred_hour: str,
     tz_name: str,
+    preferred_hours: Optional[List[str]] = None,
     memory: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Create an AI plan that always conforms to the strict schema."""
@@ -206,13 +231,15 @@ def generate_ai_plan(
     days = _coerce_positive_int(days, 1)
     tasks_per_day = _coerce_positive_int(tasks_per_day, 1)
     preferred_hour = (preferred_hour or "21:00").strip() or "21:00"
+    preferred_hours_list = preferred_hours or [preferred_hour]
+    preferred_hours_text = ", ".join([h.strip() or preferred_hour for h in preferred_hours_list if h]) or preferred_hour
     tz = _safe_timezone(tz_name)
 
     system_prompt = _SYSTEM_PROMPT_TEMPLATE.format(
         goal=goal,
         days=days,
         tasks_per_day=tasks_per_day,
-        preferred_hour=preferred_hour,
+        preferred_hours=preferred_hours_text,
         tz=tz.zone,
         memory=_format_memory(memory),
     )
