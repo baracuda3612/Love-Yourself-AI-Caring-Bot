@@ -81,6 +81,17 @@ class UsageCounter(Base):
     month = Column(String, index=True)
     month_ask_count = Column(Integer, default=0)
 
+
+class OnboardingEvent(Base):
+    __tablename__ = "onboarding_events"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    state = Column(String, nullable=False)
+    event_type = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    extra = Column(JSON, nullable=True)
+
 # -------------------- НОВІ ТАБЛИЦІ --------------------
 
 class UserMemoryProfile(Base):
