@@ -14,6 +14,7 @@ from sqlalchemy import (
     ForeignKey,
     JSON,
     text,
+    BigInteger,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from sqlalchemy.sql import func
@@ -30,7 +31,7 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True)
-    tg_id = Column(Integer, index=True, unique=True, nullable=False)
+    tg_id = Column(BigInteger, index=True, unique=True, nullable=False)
     first_name = Column(String)
     username = Column(String)
     timezone = Column(String, default="Europe/Kyiv")
