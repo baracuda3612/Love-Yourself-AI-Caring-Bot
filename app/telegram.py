@@ -296,6 +296,7 @@ async def _handle_onboarding_non_answer(m: Message, state: FSMContext):
     if not state_name:
         return
 
+    user_id = None
     with SessionLocal() as db:
         u = db.scalars(select(User).where(User.tg_id == m.from_user.id)).first()
         if not u:
@@ -318,7 +319,9 @@ async def _handle_onboarding_non_answer(m: Message, state: FSMContext):
             await m.answer(f"ERR [{_escape(e.__class__.__name__)}]: {_escape(str(e))}")
             return
 
-    await _send_onboarding_prompt(m, state_name, user_id=u.id)
+        user_id = u.id
+
+    await _send_onboarding_prompt(m, state_name, user_id=user_id)
 
 
 async def _handle_onboarding_distress(m: Message, state: FSMContext):
@@ -384,6 +387,7 @@ async def onboarding_consent_accept(c: CallbackQuery, state: FSMContext):
         except Exception:
             pass
 
+    user_id = None
     with SessionLocal() as db:
         u = db.scalars(select(User).where(User.tg_id == c.from_user.id)).first()
         if not u:
@@ -403,8 +407,10 @@ async def onboarding_consent_accept(c: CallbackQuery, state: FSMContext):
         )
         db.commit()
 
+        user_id = u.id
+
     await state.set_state(Onboarding.waiting_goal)
-    await _send_onboarding_prompt(c.message, Onboarding.waiting_goal.state, chat_id=c.from_user.id, user_id=u.id)
+    await _send_onboarding_prompt(c.message, Onboarding.waiting_goal.state, chat_id=c.from_user.id, user_id=user_id)
 
 
 @router.callback_query(F.data == "consent:decline")
@@ -561,6 +567,7 @@ async def cmd_ping(m: Message):
 async def cmd_start(m: Message, state: FSMContext):
     should_start_onboarding = False
     start_state = Onboarding.waiting_goal
+    user_id = None
     with SessionLocal() as db:
         u = db.scalars(select(User).where(User.tg_id == m.from_user.id)).first()
         if not u:
@@ -582,10 +589,11 @@ async def cmd_start(m: Message, state: FSMContext):
             should_start_onboarding = True
             start_state = Onboarding.waiting_goal
 
+        user_id = u.id
         db.commit()
 
     if should_start_onboarding:
-        return await _start_onboarding_flow(m, state, start_state=start_state, user_id=u.id)
+        return await _start_onboarding_flow(m, state, start_state=start_state, user_id=user_id)
 
     await m.answer(
         "Привіт! Я wellbeing-бот Love Yourself 🌿\n"
@@ -613,6 +621,7 @@ async def cmd_onboarding(m: Message, state: FSMContext):
     from sqlalchemy import select
 
     start_state = Onboarding.waiting_goal
+    user_id = None
     with SessionLocal() as db:
         u = db.scalars(select(User).where(User.tg_id == m.from_user.id)).first()
         if not u:
@@ -624,9 +633,10 @@ async def cmd_onboarding(m: Message, state: FSMContext):
             start_state = Onboarding.waiting_consent
         elif getattr(mp, "onboarding_completed", False):
             start_state = Onboarding.waiting_goal
+        user_id = u.id
         db.commit()
 
-    await _start_onboarding_flow(m, state, start_state=start_state, user_id=u.id)
+    await _start_onboarding_flow(m, state, start_state=start_state, user_id=user_id)
 
 
 @router.message(Command("limit"))
