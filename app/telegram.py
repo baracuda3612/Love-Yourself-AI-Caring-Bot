@@ -22,7 +22,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.db import (
     SessionLocal, User, Response, UsageCounter,
-    UserReminder, AIPlan, AIPlanStep, UserMemoryProfile
+    UserReminder, AIPlan, AIPlanStep, UserMemoryProfile, OnboardingEvent
 )
 from app.ai import (
     OnboardingIntent,
@@ -49,11 +49,31 @@ dp.include_router(router)
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
+CONSENT_TEXT = (
+    "Я — wellbeing-бот Love Yourself.\n"
+    "Щоб працювати, я зберігаю базові дані: імʼя, налаштування, відповіді в онбордингу.\n"
+    "Ці дані використовуються тільки для персоналізації досвіду.\n"
+    "Натискаючи «Погоджуюсь», ти дозволяєш це зберігання."
+)
+
+TIMEZONE_CONFIRM_TEMPLATE = "Твій часовий пояс: {tz}.\nВсе ок?"
+
+QUICK_WIN_TEXT = (
+    "Давай зараз зробимо перший маленький крок 👇\n"
+    "1-хвилинна вправа на заземлення:\n"
+    "• сядь з прямою спиною,\n"
+    "• зроби 5 повільних вдихів через ніс і видихів через рот,\n"
+    "• на кожному видиху помічай, як напруга в тілі падає хоча б на 1%.\n"
+    "Все. Цього вже достатньо, щоб почати."
+)
+
+
 class PlanStates(StatesGroup):
     waiting_new_hour = State()
 
 
 class Onboarding(StatesGroup):
+    waiting_consent = State()
     waiting_goal = State()
     waiting_stress = State()
     waiting_energy = State()
@@ -62,10 +82,12 @@ class Onboarding(StatesGroup):
     waiting_style = State()
     waiting_time = State()
     waiting_tz_confirm = State()
+    waiting_tz_manual = State()
     final = State()
 
 
 ONBOARDING_STATE_NAMES = {
+    Onboarding.waiting_consent.state,
     Onboarding.waiting_goal.state,
     Onboarding.waiting_stress.state,
     Onboarding.waiting_energy.state,
@@ -74,6 +96,7 @@ ONBOARDING_STATE_NAMES = {
     Onboarding.waiting_style.state,
     Onboarding.waiting_time.state,
     Onboarding.waiting_tz_confirm.state,
+    Onboarding.waiting_tz_manual.state,
     Onboarding.final.state,
 }
 
@@ -98,6 +121,9 @@ ONBOARDING_PROMPTS = {
         "О котрій годині зручно отримувати щоденні кроки?\n"
         "Формат: HH:MM, наприклад 09:00 або 21:30."
     ),
+    Onboarding.waiting_tz_manual.state: (
+        "Введи назву часового поясу, наприклад Europe/Kyiv, Europe/Berlin, America/New_York."
+    ),
 }
 
 
@@ -119,15 +145,130 @@ def _skip_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-async def _send_onboarding_prompt(m: Message | None, state_name: str, *, chat_id: int | None = None):
+def _consent_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Погоджуюсь", callback_data="consent:accept")],
+            [InlineKeyboardButton(text="❌ Не погоджуюсь", callback_data="consent:decline")],
+        ]
+    )
+
+
+def _tz_confirm_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Так, все ок", callback_data="tz:ok")],
+            [InlineKeyboardButton(text="🌍 Змінити", callback_data="tz:change")],
+        ]
+    )
+
+
+def _log_onboarding_event(
+    user_id: int | None,
+    state: str,
+    event_type: str,
+    extra: dict | None = None,
+    *,
+    db=None,
+    tg_id: int | None = None,
+):
+    owns_session = db is None
+    session = db or SessionLocal()
+    try:
+        db_user_id = user_id
+        if db_user_id is None and tg_id is not None:
+            db_user = session.scalars(select(User).where(User.tg_id == tg_id)).first()
+            db_user_id = db_user.id if db_user else None
+
+        if db_user_id is None:
+            return
+
+        session.add(
+            OnboardingEvent(
+                user_id=db_user_id,
+                state=state,
+                event_type=event_type,
+                extra=extra,
+            )
+        )
+        if owns_session:
+            session.commit()
+    except Exception:
+        if owns_session:
+            session.rollback()
+        print(f"[onboarding_event_failed] user={user_id} state={state} type={event_type}")
+    finally:
+        if owns_session:
+            session.close()
+
+
+async def _send_onboarding_prompt(
+    m: Message | None,
+    state_name: str,
+    *,
+    chat_id: int | None = None,
+    user_id: int | None = None,
+):
     prompt = ONBOARDING_PROMPTS.get(state_name)
     if not prompt:
         return
+
+    target_user_id = user_id or (m.from_user.id if m else None)
+    if target_user_id:
+        _log_onboarding_event(user_id, state_name, "step_enter", tg_id=target_user_id)
 
     if m:
         await m.answer(prompt, reply_markup=_onboarding_keyboard(state_name))
     elif chat_id:
         await bot.send_message(chat_id, prompt, reply_markup=_onboarding_keyboard(state_name))
+
+
+async def _send_consent_prompt(m: Message | None, *, chat_id: int | None = None):
+    target_user_id = m.from_user.id if m else chat_id
+    if target_user_id:
+        _log_onboarding_event(None, Onboarding.waiting_consent.state, "step_enter", tg_id=target_user_id)
+
+    if m:
+        await m.answer(CONSENT_TEXT, reply_markup=_consent_keyboard())
+    elif chat_id:
+        await bot.send_message(chat_id, CONSENT_TEXT, reply_markup=_consent_keyboard())
+
+
+def _current_timezone_name(u: User | None, mp: UserMemoryProfile | None) -> str:
+    if u and u.timezone:
+        return u.timezone
+    if mp and mp.timezone:
+        return mp.timezone
+    return "Europe/Kyiv"
+
+
+async def _send_timezone_confirm_prompt(
+    m: Message | None,
+    *,
+    chat_id: int | None = None,
+    tz_name: str,
+):
+    target_user_id = m.from_user.id if m else chat_id
+    if target_user_id:
+        _log_onboarding_event(None, Onboarding.waiting_tz_confirm.state, "step_enter", tg_id=target_user_id)
+
+    text = TIMEZONE_CONFIRM_TEMPLATE.format(tz=tz_name)
+    if m:
+        await m.answer(text, reply_markup=_tz_confirm_keyboard())
+    elif chat_id:
+        await bot.send_message(chat_id, text, reply_markup=_tz_confirm_keyboard())
+
+
+async def _send_manual_timezone_prompt(m: Message | None, *, chat_id: int | None = None):
+    target_user_id = m.from_user.id if m else chat_id
+    if target_user_id:
+        _log_onboarding_event(None, Onboarding.waiting_tz_manual.state, "step_enter", tg_id=target_user_id)
+
+    prompt = ONBOARDING_PROMPTS[Onboarding.waiting_tz_manual.state]
+    if m:
+        await m.answer(prompt)
+    elif chat_id:
+        await bot.send_message(chat_id, prompt)
 
 
 def _profile_snapshot_for_ai(u: User, mp: UserMemoryProfile, data: dict) -> str:
@@ -177,7 +318,39 @@ async def _handle_onboarding_non_answer(m: Message, state: FSMContext):
             await m.answer(f"ERR [{_escape(e.__class__.__name__)}]: {_escape(str(e))}")
             return
 
-    await _send_onboarding_prompt(m, state_name)
+    await _send_onboarding_prompt(m, state_name, user_id=u.id)
+
+
+async def _handle_onboarding_distress(m: Message, state: FSMContext):
+    state_name = await state.get_state()
+    if not state_name:
+        return
+
+    data = await state.get_data()
+    user_id = data.get("user_id") if isinstance(data, dict) else None
+    _log_onboarding_event(user_id, state_name, "distress", tg_id=m.from_user.id)
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Написати психологу",
+                    url="https://t.me/veniviciave",
+                )
+            ]
+        ]
+    )
+
+    await m.answer(
+        "Мені дуже шкода, що тобі настільки важко зараз.\n"
+        "Я бот і не можу замінити живу кризову допомогу.\n"
+        "Якщо відчуваєш, що не справляєшся — напиши спеціалісту або в кризову службу.",
+        reply_markup=kb,
+    )
+
+    await m.answer(
+        "Якщо захочеш продовжити налаштування бота — просто відповідай на запитання, які ми обговорювали раніше."
+    )
 
 
 async def _start_onboarding_skip_flow(m: Message | None, *, chat_id: int | None = None):
@@ -195,6 +368,65 @@ async def _start_onboarding_skip_flow(m: Message | None, *, chat_id: int | None 
         await m.answer(text, reply_markup=_skip_keyboard())
     else:
         await bot.send_message(target_chat, text, reply_markup=_skip_keyboard())
+
+
+@router.message(Onboarding.waiting_consent)
+async def onboarding_consent(m: Message, state: FSMContext):
+    await _send_consent_prompt(m)
+
+
+@router.callback_query(F.data == "consent:accept")
+async def onboarding_consent_accept(c: CallbackQuery, state: FSMContext):
+    await c.answer("Дякую за згоду")
+    if c.message:
+        try:
+            await c.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+    with SessionLocal() as db:
+        u = db.scalars(select(User).where(User.tg_id == c.from_user.id)).first()
+        if not u:
+            if c.message:
+                await c.message.answer("Натисни /start")
+            else:
+                await bot.send_message(c.from_user.id, "Натисни /start")
+            return
+
+        mp = _get_or_create_memory_profile(db, u)
+        mp.consent_given = True
+        _log_onboarding_event(
+            u.id,
+            Onboarding.waiting_consent.state,
+            "step_answer",
+            db=db,
+        )
+        db.commit()
+
+    await state.set_state(Onboarding.waiting_goal)
+    await _send_onboarding_prompt(c.message, Onboarding.waiting_goal.state, chat_id=c.from_user.id, user_id=u.id)
+
+
+@router.callback_query(F.data == "consent:decline")
+async def onboarding_consent_decline(c: CallbackQuery, state: FSMContext):
+    await c.answer("Зрозуміло")
+    await state.clear()
+
+    if c.message:
+        try:
+            await c.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+    text = (
+        "Окей, без згоди я не можу підлаштовуватися під тебе.\n"
+        "Якщо передумаєш — надішли /onboarding."
+    )
+
+    if c.message:
+        await c.message.answer(text)
+    else:
+        await bot.send_message(c.from_user.id, text)
 
 
 def _apply_skip_defaults(u: User, mp: UserMemoryProfile, data: dict):
@@ -219,7 +451,6 @@ def _apply_skip_defaults(u: User, mp: UserMemoryProfile, data: dict):
 
     mp.timezone = mp.timezone or u.timezone or "Europe/Kyiv"
     mp.onboarding_completed = True
-    mp.consent_given = True
 
 
 def _escape(value) -> str:
@@ -270,10 +501,23 @@ def _get_or_create_memory_profile(db, user: User) -> UserMemoryProfile:
     return mp
 
 
-async def _start_onboarding_flow(m: Message, state: FSMContext):
+async def _start_onboarding_flow(
+    m: Message,
+    state: FSMContext,
+    *,
+    start_state: State,
+    user_id: int,
+):
     await state.clear()
-    await m.answer(ONBOARDING_PROMPTS[Onboarding.waiting_goal.state])
-    await state.set_state(Onboarding.waiting_goal)
+    await state.update_data(user_id=user_id)
+    _log_onboarding_event(user_id, start_state.state, "start")
+    await state.set_state(start_state)
+
+    if start_state == Onboarding.waiting_consent:
+        await _send_consent_prompt(m)
+        return
+
+    await _send_onboarding_prompt(m, start_state.state, user_id=user_id)
 
 
 def is_admin(user_id: int) -> bool:
@@ -316,6 +560,7 @@ async def cmd_ping(m: Message):
 @router.message(Command("start"))
 async def cmd_start(m: Message, state: FSMContext):
     should_start_onboarding = False
+    start_state = Onboarding.waiting_goal
     with SessionLocal() as db:
         u = db.scalars(select(User).where(User.tg_id == m.from_user.id)).first()
         if not u:
@@ -330,13 +575,17 @@ async def cmd_start(m: Message, state: FSMContext):
             db.flush()
 
         mp = _get_or_create_memory_profile(db, u)
-        if not getattr(mp, "onboarding_completed", False):
+        if not getattr(mp, "consent_given", False):
             should_start_onboarding = True
+            start_state = Onboarding.waiting_consent
+        elif not getattr(mp, "onboarding_completed", False):
+            should_start_onboarding = True
+            start_state = Onboarding.waiting_goal
 
         db.commit()
 
     if should_start_onboarding:
-        return await _start_onboarding_flow(m, state)
+        return await _start_onboarding_flow(m, state, start_state=start_state, user_id=u.id)
 
     await m.answer(
         "Привіт! Я wellbeing-бот Love Yourself 🌿\n"
@@ -363,16 +612,21 @@ async def cmd_help(m: Message):
 async def cmd_onboarding(m: Message, state: FSMContext):
     from sqlalchemy import select
 
+    start_state = Onboarding.waiting_goal
     with SessionLocal() as db:
         u = db.scalars(select(User).where(User.tg_id == m.from_user.id)).first()
         if not u:
             await m.answer("Натисни /start спочатку, будь ласка.")
             return
 
-        _get_or_create_memory_profile(db, u)
+        mp = _get_or_create_memory_profile(db, u)
+        if not getattr(mp, "consent_given", False):
+            start_state = Onboarding.waiting_consent
+        elif getattr(mp, "onboarding_completed", False):
+            start_state = Onboarding.waiting_goal
         db.commit()
 
-    await _start_onboarding_flow(m, state)
+    await _start_onboarding_flow(m, state, start_state=start_state, user_id=u.id)
 
 
 @router.message(Command("limit"))
@@ -402,8 +656,14 @@ async def cmd_ask(m: Message):
 @router.message(Onboarding.waiting_goal)
 async def onboarding_goal(m: Message, state: FSMContext):
     state_name = await state.get_state()
+    data = await state.get_data()
+    user_id = data.get("user_id") if isinstance(data, dict) else None
     intent = classify_onboarding_message(m.text or "", state_name or "", ONBOARDING_PROMPTS.get(state_name))
+    if intent == OnboardingIntent.DISTRESS:
+        await _handle_onboarding_distress(m, state)
+        return
     if intent == OnboardingIntent.SKIP:
+        _log_onboarding_event(user_id, state_name or "waiting_goal", "step_skip_requested", tg_id=m.from_user.id)
         await _start_onboarding_skip_flow(m)
         return
     if intent != OnboardingIntent.ANSWER:
@@ -416,19 +676,23 @@ async def onboarding_goal(m: Message, state: FSMContext):
         return
 
     await state.update_data(main_goal=goal)
+    _log_onboarding_event(user_id, state_name or "waiting_goal", "step_answer", tg_id=m.from_user.id)
 
-    await m.answer(
-        "Ок, сфокусуємось на цьому.\n"
-        "Тепер оціни свій поточний рівень стресу від 1 до 5."
-    )
     await state.set_state(Onboarding.waiting_stress)
+    await _send_onboarding_prompt(m, Onboarding.waiting_stress.state, user_id=user_id)
 
 
 @router.message(Onboarding.waiting_stress)
 async def onboarding_stress(m: Message, state: FSMContext):
     state_name = await state.get_state()
+    data = await state.get_data()
+    user_id = data.get("user_id") if isinstance(data, dict) else None
     intent = classify_onboarding_message(m.text or "", state_name or "", ONBOARDING_PROMPTS.get(state_name))
+    if intent == OnboardingIntent.DISTRESS:
+        await _handle_onboarding_distress(m, state)
+        return
     if intent == OnboardingIntent.SKIP:
+        _log_onboarding_event(user_id, state_name or "waiting_stress", "step_skip_requested", tg_id=m.from_user.id)
         await _start_onboarding_skip_flow(m)
         return
     if intent != OnboardingIntent.ANSWER:
@@ -446,16 +710,23 @@ async def onboarding_stress(m: Message, state: FSMContext):
         return
 
     await state.update_data(base_stress_level=value)
+    _log_onboarding_event(user_id, state_name or "waiting_stress", "step_answer", tg_id=m.from_user.id)
 
-    await m.answer("Дякую. Тепер оціни рівень енергії від 1 до 5.")
     await state.set_state(Onboarding.waiting_energy)
+    await _send_onboarding_prompt(m, Onboarding.waiting_energy.state, user_id=user_id)
 
 
 @router.message(Onboarding.waiting_energy)
 async def onboarding_energy(m: Message, state: FSMContext):
     state_name = await state.get_state()
+    data = await state.get_data()
+    user_id = data.get("user_id") if isinstance(data, dict) else None
     intent = classify_onboarding_message(m.text or "", state_name or "", ONBOARDING_PROMPTS.get(state_name))
+    if intent == OnboardingIntent.DISTRESS:
+        await _handle_onboarding_distress(m, state)
+        return
     if intent == OnboardingIntent.SKIP:
+        _log_onboarding_event(user_id, state_name or "waiting_energy", "step_skip_requested", tg_id=m.from_user.id)
         await _start_onboarding_skip_flow(m)
         return
     if intent != OnboardingIntent.ANSWER:
@@ -473,16 +744,23 @@ async def onboarding_energy(m: Message, state: FSMContext):
         return
 
     await state.update_data(base_energy_level=value)
+    _log_onboarding_event(user_id, state_name or "waiting_energy", "step_answer", tg_id=m.from_user.id)
 
-    await m.answer("Чим ти займаєшся? Напиши свою посаду (наприклад, Project Manager).")
     await state.set_state(Onboarding.waiting_position)
+    await _send_onboarding_prompt(m, Onboarding.waiting_position.state, user_id=user_id)
 
 
 @router.message(Onboarding.waiting_position)
 async def onboarding_position(m: Message, state: FSMContext):
     state_name = await state.get_state()
+    data = await state.get_data()
+    user_id = data.get("user_id") if isinstance(data, dict) else None
     intent = classify_onboarding_message(m.text or "", state_name or "", ONBOARDING_PROMPTS.get(state_name))
+    if intent == OnboardingIntent.DISTRESS:
+        await _handle_onboarding_distress(m, state)
+        return
     if intent == OnboardingIntent.SKIP:
+        _log_onboarding_event(user_id, state_name or "waiting_position", "step_skip_requested", tg_id=m.from_user.id)
         await _start_onboarding_skip_flow(m)
         return
     if intent != OnboardingIntent.ANSWER:
@@ -495,16 +773,23 @@ async def onboarding_position(m: Message, state: FSMContext):
         return
 
     await state.update_data(position=position)
+    _log_onboarding_event(user_id, state_name or "waiting_position", "step_answer", tg_id=m.from_user.id)
 
-    await m.answer("А тепер департамент: IT, HR, Finance, Sales чи щось своє.")
     await state.set_state(Onboarding.waiting_department)
+    await _send_onboarding_prompt(m, Onboarding.waiting_department.state, user_id=user_id)
 
 
 @router.message(Onboarding.waiting_department)
 async def onboarding_department(m: Message, state: FSMContext):
     state_name = await state.get_state()
+    data = await state.get_data()
+    user_id = data.get("user_id") if isinstance(data, dict) else None
     intent = classify_onboarding_message(m.text or "", state_name or "", ONBOARDING_PROMPTS.get(state_name))
+    if intent == OnboardingIntent.DISTRESS:
+        await _handle_onboarding_distress(m, state)
+        return
     if intent == OnboardingIntent.SKIP:
+        _log_onboarding_event(user_id, state_name or "waiting_department", "step_skip_requested", tg_id=m.from_user.id)
         await _start_onboarding_skip_flow(m)
         return
     if intent != OnboardingIntent.ANSWER:
@@ -517,19 +802,23 @@ async def onboarding_department(m: Message, state: FSMContext):
         return
 
     await state.update_data(department=department)
+    _log_onboarding_event(user_id, state_name or "waiting_department", "step_answer", tg_id=m.from_user.id)
 
-    await m.answer(
-        "Як тобі комфортніше, щоб я з тобою говорив?\n"
-        "Наприклад: «мʼякий», «прямий», «нейтральний»."
-    )
     await state.set_state(Onboarding.waiting_style)
+    await _send_onboarding_prompt(m, Onboarding.waiting_style.state, user_id=user_id)
 
 
 @router.message(Onboarding.waiting_style)
 async def onboarding_style(m: Message, state: FSMContext):
     state_name = await state.get_state()
+    data = await state.get_data()
+    user_id = data.get("user_id") if isinstance(data, dict) else None
     intent = classify_onboarding_message(m.text or "", state_name or "", ONBOARDING_PROMPTS.get(state_name))
+    if intent == OnboardingIntent.DISTRESS:
+        await _handle_onboarding_distress(m, state)
+        return
     if intent == OnboardingIntent.SKIP:
+        _log_onboarding_event(user_id, state_name or "waiting_style", "step_skip_requested", tg_id=m.from_user.id)
         await _start_onboarding_skip_flow(m)
         return
     if intent != OnboardingIntent.ANSWER:
@@ -542,19 +831,23 @@ async def onboarding_style(m: Message, state: FSMContext):
         return
 
     await state.update_data(communication_style=style)
+    _log_onboarding_event(user_id, state_name or "waiting_style", "step_answer", tg_id=m.from_user.id)
 
-    await m.answer(
-        "О котрій годині зручно отримувати щоденні кроки?\n"
-        "Формат: HH:MM, наприклад 09:00 або 21:30."
-    )
     await state.set_state(Onboarding.waiting_time)
+    await _send_onboarding_prompt(m, Onboarding.waiting_time.state, user_id=user_id)
 
 
 @router.message(Onboarding.waiting_time)
 async def onboarding_time(m: Message, state: FSMContext):
     state_name = await state.get_state()
+    data = await state.get_data()
+    user_id = data.get("user_id") if isinstance(data, dict) else None
     intent = classify_onboarding_message(m.text or "", state_name or "", ONBOARDING_PROMPTS.get(state_name))
+    if intent == OnboardingIntent.DISTRESS:
+        await _handle_onboarding_distress(m, state)
+        return
     if intent == OnboardingIntent.SKIP:
+        _log_onboarding_event(user_id, state_name or "waiting_time", "step_skip_requested", tg_id=m.from_user.id)
         await _start_onboarding_skip_flow(m)
         return
     if intent != OnboardingIntent.ANSWER:
@@ -579,12 +872,81 @@ async def onboarding_time(m: Message, state: FSMContext):
         return
 
     await state.update_data(notification_time=dt_time(hour=hour, minute=minute))
+    _log_onboarding_event(user_id, state_name or "waiting_time", "step_answer", tg_id=m.from_user.id)
 
-    await m.answer(
-        "Ок. Я буду використовувати твій поточний часовий пояс (Europe/Kyiv).\n"
-        "Пізніше можна буде змінити.\n\n"
-        "Зараз збережу налаштування і запущу для тебе персональний режим."
+    with SessionLocal() as db:
+        u = db.scalars(select(User).where(User.tg_id == m.from_user.id)).first()
+        mp = _get_or_create_memory_profile(db, u) if u else None
+        tz_name = _current_timezone_name(u, mp)
+
+    await state.set_state(Onboarding.waiting_tz_confirm)
+    await _send_timezone_confirm_prompt(m, tz_name=tz_name)
+
+
+@router.callback_query(F.data == "tz:ok")
+async def onboarding_timezone_ok(c: CallbackQuery, state: FSMContext):
+    await c.answer("Зберігаю налаштування")
+    data = await state.get_data()
+    user_id = data.get("user_id") if isinstance(data, dict) else None
+    try:
+        if c.message:
+            await c.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    _log_onboarding_event(user_id, Onboarding.waiting_tz_confirm.state, "step_answer", tg_id=c.from_user.id)
+    await state.set_state(Onboarding.final)
+    if c.message:
+        await _finish_onboarding(c.message, state)
+    else:
+        await bot.send_message(c.from_user.id, "Завершуємо онбординг…")
+
+
+@router.callback_query(F.data == "tz:change")
+async def onboarding_timezone_change(c: CallbackQuery, state: FSMContext):
+    await c.answer("Змінюємо часовий пояс")
+    data = await state.get_data()
+    user_id = data.get("user_id") if isinstance(data, dict) else None
+    try:
+        if c.message:
+            await c.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    _log_onboarding_event(
+        user_id,
+        Onboarding.waiting_tz_confirm.state,
+        "step_answer",
+        extra={"choice": "change"},
+        tg_id=c.from_user.id,
     )
+    await state.set_state(Onboarding.waiting_tz_manual)
+    await _send_manual_timezone_prompt(c.message, chat_id=c.from_user.id)
+
+
+@router.message(Onboarding.waiting_tz_manual)
+async def onboarding_timezone_manual(m: Message, state: FSMContext):
+    state_name = await state.get_state()
+    data = await state.get_data()
+    user_id = data.get("user_id") if isinstance(data, dict) else None
+    intent = classify_onboarding_message(m.text or "", state_name or "", ONBOARDING_PROMPTS.get(state_name))
+    if intent == OnboardingIntent.DISTRESS:
+        await _handle_onboarding_distress(m, state)
+        return
+    if intent == OnboardingIntent.SKIP:
+        _log_onboarding_event(user_id, state_name or "waiting_tz_manual", "step_skip_requested", tg_id=m.from_user.id)
+        await _start_onboarding_skip_flow(m)
+        return
+
+    tz_value = (m.text or "").strip()
+    try:
+        pytz.timezone(tz_value)
+    except pytz.UnknownTimeZoneError:
+        await m.answer("Не знайшов такий часовий пояс. Спробуй ще раз, наприклад Europe/Kyiv.")
+        return
+
+    await state.update_data(timezone=tz_value)
+    _log_onboarding_event(user_id, state_name or "waiting_tz_manual", "step_answer", tg_id=m.from_user.id)
     await state.set_state(Onboarding.final)
     await _finish_onboarding(m, state)
 
@@ -600,12 +962,19 @@ async def onboarding_continue_callback(c: CallbackQuery, state: FSMContext):
             pass
 
     current_state = await state.get_state()
-    await _send_onboarding_prompt(c.message, current_state, chat_id=c.from_user.id)
+    data = await state.get_data()
+    user_id = data.get("user_id") if isinstance(data, dict) else None
+    await _send_onboarding_prompt(c.message, current_state, chat_id=c.from_user.id, user_id=user_id)
 
 
 @router.callback_query(F.data == "onb:skip")
-async def onboarding_skip_callback(c: CallbackQuery):
+async def onboarding_skip_callback(c: CallbackQuery, state: FSMContext):
     await c.answer()
+    state_name = await state.get_state()
+    data = await state.get_data()
+    user_id = data.get("user_id") if isinstance(data, dict) else None
+    if state_name:
+        _log_onboarding_event(user_id, state_name, "step_skip_requested", tg_id=c.from_user.id)
     if c.message:
         try:
             await c.message.edit_reply_markup(reply_markup=None)
@@ -619,6 +988,8 @@ async def onboarding_skip_callback(c: CallbackQuery):
 async def onboarding_skip_cancel(c: CallbackQuery, state: FSMContext):
     await c.answer("Продовжуємо онбординг")
     current_state = await state.get_state()
+    data = await state.get_data()
+    user_id = data.get("user_id") if isinstance(data, dict) else None
     if c.message:
         try:
             await c.message.edit_reply_markup(reply_markup=None)
@@ -630,12 +1001,13 @@ async def onboarding_skip_cancel(c: CallbackQuery, state: FSMContext):
     else:
         await bot.send_message(c.from_user.id, "Окей, тоді продовжуємо з онбордингом.")
 
-    await _send_onboarding_prompt(c.message, current_state, chat_id=c.from_user.id)
+    await _send_onboarding_prompt(c.message, current_state, chat_id=c.from_user.id, user_id=user_id)
 
 
 @router.callback_query(F.data == "onb:skip_confirm")
 async def onboarding_skip_confirm(c: CallbackQuery, state: FSMContext):
     await c.answer("Пропускаємо онбординг")
+    current_state = await state.get_state()
     data = await state.get_data()
 
     with SessionLocal() as db:
@@ -648,7 +1020,10 @@ async def onboarding_skip_confirm(c: CallbackQuery, state: FSMContext):
             return
 
         mp = _get_or_create_memory_profile(db, u)
+        if current_state:
+            _log_onboarding_event(u.id, current_state, "step_skip_confirm", db=db)
         _apply_skip_defaults(u, mp, data)
+        _log_onboarding_event(u.id, current_state or "skip", "skipped", db=db)
         db.commit()
 
     await state.clear()
@@ -666,12 +1041,15 @@ async def onboarding_skip_confirm(c: CallbackQuery, state: FSMContext):
 
     if c.message:
         await c.message.answer(final_text)
+        await c.message.answer(QUICK_WIN_TEXT)
     else:
         await bot.send_message(c.from_user.id, final_text)
+        await bot.send_message(c.from_user.id, QUICK_WIN_TEXT)
 
 
 async def _finish_onboarding(m: Message, state: FSMContext):
     data = await state.get_data()
+    current_state = await state.get_state()
 
     with SessionLocal() as db:
         from sqlalchemy import select
@@ -691,13 +1069,23 @@ async def _finish_onboarding(m: Message, state: FSMContext):
         mp.department = data.get("department")
         mp.communication_style = data.get("communication_style")
         mp.notification_time = data.get("notification_time")
-        mp.timezone = mp.timezone or (u.timezone or "Europe/Kyiv")
+        timezone = data.get("timezone") or mp.timezone or (u.timezone or "Europe/Kyiv")
+        mp.timezone = timezone
         mp.onboarding_completed = True
-        mp.consent_given = True
+
+        if data.get("timezone") or not u.timezone:
+            u.timezone = timezone
 
         if data.get("notification_time"):
             notif_time = data["notification_time"]
             u.send_hour = notif_time.hour
+
+        _log_onboarding_event(
+            u.id,
+            current_state or Onboarding.final.state,
+            "completed",
+            db=db,
+        )
 
         db.commit()
 
@@ -707,6 +1095,7 @@ async def _finish_onboarding(m: Message, state: FSMContext):
         "Я запамʼятав твою ціль і налаштування.\n"
         "Тепер план і відповіді будуть більше під тебе."
     )
+    await m.answer(QUICK_WIN_TEXT)
 
 # Ігноруємо текстові команди на кшталт "/plan" в загальному обробнику
 @router.message(F.text & ~F.via_bot & ~F.text.startswith("/"))
