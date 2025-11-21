@@ -24,7 +24,11 @@ from app.db import (
     SessionLocal, User, Response, UsageCounter,
     UserReminder, AIPlan, AIPlanStep, UserMemoryProfile
 )
-from app.ai import answer_user_question
+from app.ai import (
+    OnboardingIntent,
+    answer_user_question,
+    classify_onboarding_message,
+)
 from app.scheduler import (
     remove_job,
     schedule_custom_reminder,
@@ -59,6 +63,163 @@ class Onboarding(StatesGroup):
     waiting_time = State()
     waiting_tz_confirm = State()
     final = State()
+
+
+ONBOARDING_STATE_NAMES = {
+    Onboarding.waiting_goal.state,
+    Onboarding.waiting_stress.state,
+    Onboarding.waiting_energy.state,
+    Onboarding.waiting_position.state,
+    Onboarding.waiting_department.state,
+    Onboarding.waiting_style.state,
+    Onboarding.waiting_time.state,
+    Onboarding.waiting_tz_confirm.state,
+    Onboarding.final.state,
+}
+
+ONBOARDING_PROMPTS = {
+    Onboarding.waiting_goal.state: (
+        "Привіт! Давай підлаштуємо асистента під тебе.\n\n"
+        "Спочатку: на чому хочеш сфокусуватись?\n"
+        "Напиши коротко: наприклад, «сон», «стрес», «продуктивність»."
+    ),
+    Onboarding.waiting_stress.state: (
+        "Ок, сфокусуємось на цьому.\n"
+        "Тепер оціни свій поточний рівень стресу від 1 до 5."
+    ),
+    Onboarding.waiting_energy.state: "Дякую. Тепер оціни рівень енергії від 1 до 5.",
+    Onboarding.waiting_position.state: "Чим ти займаєшся? Напиши свою посаду (наприклад, Project Manager).",
+    Onboarding.waiting_department.state: "А тепер департамент: IT, HR, Finance, Sales чи щось своє.",
+    Onboarding.waiting_style.state: (
+        "Як тобі комфортніше, щоб я з тобою говорив?\n"
+        "Наприклад: «мʼякий», «прямий», «нейтральний»."
+    ),
+    Onboarding.waiting_time.state: (
+        "О котрій годині зручно отримувати щоденні кроки?\n"
+        "Формат: HH:MM, наприклад 09:00 або 21:30."
+    ),
+}
+
+
+def _onboarding_keyboard(state_name: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="➡️ Продовжити", callback_data=f"onb:continue:{state_name}")],
+            [InlineKeyboardButton(text="⏭️ Пропустити онбординг", callback_data="onb:skip")],
+        ]
+    )
+
+
+def _skip_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Так, пропустити", callback_data="onb:skip_confirm")],
+            [InlineKeyboardButton(text="⬅️ Назад до онбордингу", callback_data="onb:skip_cancel")],
+        ]
+    )
+
+
+async def _send_onboarding_prompt(m: Message | None, state_name: str, *, chat_id: int | None = None):
+    prompt = ONBOARDING_PROMPTS.get(state_name)
+    if not prompt:
+        return
+
+    if m:
+        await m.answer(prompt, reply_markup=_onboarding_keyboard(state_name))
+    elif chat_id:
+        await bot.send_message(chat_id, prompt, reply_markup=_onboarding_keyboard(state_name))
+
+
+def _profile_snapshot_for_ai(u: User, mp: UserMemoryProfile, data: dict) -> str:
+    parts = [f"{u.first_name or ''} @{u.username or ''}".strip()]
+
+    for label, key in [
+        ("goal", "main_goal"),
+        ("stress", "base_stress_level"),
+        ("energy", "base_energy_level"),
+        ("position", "position"),
+        ("department", "department"),
+        ("style", "communication_style"),
+    ]:
+        value = data.get(key, None)
+        if value is None:
+            value = getattr(mp, key, None)
+        if value:
+            parts.append(f"{label}: {value}")
+
+    return "; ".join(p for p in parts if p)
+
+
+async def _handle_onboarding_non_answer(m: Message, state: FSMContext):
+    state_name = await state.get_state()
+    if not state_name:
+        return
+
+    with SessionLocal() as db:
+        u = db.scalars(select(User).where(User.tg_id == m.from_user.id)).first()
+        if not u:
+            await m.answer("Натисни /start")
+            return
+
+        mp = _get_or_create_memory_profile(db, u)
+        data = await state.get_data()
+        profile = _profile_snapshot_for_ai(u, mp, data)
+
+        try:
+            text, _usage = answer_user_question(
+                profile or "Onboarding user",
+                m.text or "",
+                u.prompt_template,
+            )
+            await m.answer(_escape(text))
+        except Exception as e:
+            print("=== ONBOARDING Q&A ERROR ===\n", traceback.format_exc())
+            await m.answer(f"ERR [{_escape(e.__class__.__name__)}]: {_escape(str(e))}")
+            return
+
+    await _send_onboarding_prompt(m, state_name)
+
+
+async def _start_onboarding_skip_flow(m: Message | None, *, chat_id: int | None = None):
+    target_chat = chat_id or (m.chat.id if m else None)
+    if target_chat is None:
+        return
+
+    text = (
+        "Окей, можна пропустити.\n"
+        "Без онбордингу я працюю в базовому режимі — без персоналізації по стресу/енергії/посаді.\n"
+        "Ти впевнений, що хочеш пропустити?"
+    )
+
+    if m:
+        await m.answer(text, reply_markup=_skip_keyboard())
+    else:
+        await bot.send_message(target_chat, text, reply_markup=_skip_keyboard())
+
+
+def _apply_skip_defaults(u: User, mp: UserMemoryProfile, data: dict):
+    mp.main_goal = data.get("main_goal") or mp.main_goal or "wellbeing"
+    mp.base_stress_level = data.get("base_stress_level") or mp.base_stress_level
+    mp.base_energy_level = data.get("base_energy_level") or mp.base_energy_level
+    mp.position = data.get("position") or mp.position
+    mp.department = data.get("department") or mp.department
+    mp.communication_style = (
+        data.get("communication_style")
+        or mp.communication_style
+        or "нейтральний"
+    )
+
+    notification_time = data.get("notification_time") or mp.notification_time
+    if not notification_time:
+        hour = u.send_hour if u.send_hour is not None else settings.DEFAULT_SEND_HOUR
+        notification_time = dt_time(hour=hour, minute=0)
+    mp.notification_time = notification_time
+    if notification_time:
+        u.send_hour = notification_time.hour
+
+    mp.timezone = mp.timezone or u.timezone or "Europe/Kyiv"
+    mp.onboarding_completed = True
+    mp.consent_given = True
 
 
 def _escape(value) -> str:
@@ -111,11 +272,7 @@ def _get_or_create_memory_profile(db, user: User) -> UserMemoryProfile:
 
 async def _start_onboarding_flow(m: Message, state: FSMContext):
     await state.clear()
-    await m.answer(
-        "Привіт! Давай підлаштуємо асистента під тебе.\n\n"
-        "Спочатку: на чому хочеш сфокусуватись?\n"
-        "Напиши коротко: наприклад, «сон», «стрес», «продуктивність»."
-    )
+    await m.answer(ONBOARDING_PROMPTS[Onboarding.waiting_goal.state])
     await state.set_state(Onboarding.waiting_goal)
 
 
@@ -244,6 +401,15 @@ async def cmd_ask(m: Message):
 
 @router.message(Onboarding.waiting_goal)
 async def onboarding_goal(m: Message, state: FSMContext):
+    state_name = await state.get_state()
+    intent = classify_onboarding_message(m.text or "", state_name or "", ONBOARDING_PROMPTS.get(state_name))
+    if intent == OnboardingIntent.SKIP:
+        await _start_onboarding_skip_flow(m)
+        return
+    if intent != OnboardingIntent.ANSWER:
+        await _handle_onboarding_non_answer(m, state)
+        return
+
     goal = (m.text or "").strip()
     if not goal:
         await m.answer("Напиши, будь ласка, хоча б одне слово про свою ціль 🙃")
@@ -260,6 +426,15 @@ async def onboarding_goal(m: Message, state: FSMContext):
 
 @router.message(Onboarding.waiting_stress)
 async def onboarding_stress(m: Message, state: FSMContext):
+    state_name = await state.get_state()
+    intent = classify_onboarding_message(m.text or "", state_name or "", ONBOARDING_PROMPTS.get(state_name))
+    if intent == OnboardingIntent.SKIP:
+        await _start_onboarding_skip_flow(m)
+        return
+    if intent != OnboardingIntent.ANSWER:
+        await _handle_onboarding_non_answer(m, state)
+        return
+
     try:
         value = int((m.text or "").strip())
     except ValueError:
@@ -278,6 +453,15 @@ async def onboarding_stress(m: Message, state: FSMContext):
 
 @router.message(Onboarding.waiting_energy)
 async def onboarding_energy(m: Message, state: FSMContext):
+    state_name = await state.get_state()
+    intent = classify_onboarding_message(m.text or "", state_name or "", ONBOARDING_PROMPTS.get(state_name))
+    if intent == OnboardingIntent.SKIP:
+        await _start_onboarding_skip_flow(m)
+        return
+    if intent != OnboardingIntent.ANSWER:
+        await _handle_onboarding_non_answer(m, state)
+        return
+
     try:
         value = int((m.text or "").strip())
     except ValueError:
@@ -296,6 +480,15 @@ async def onboarding_energy(m: Message, state: FSMContext):
 
 @router.message(Onboarding.waiting_position)
 async def onboarding_position(m: Message, state: FSMContext):
+    state_name = await state.get_state()
+    intent = classify_onboarding_message(m.text or "", state_name or "", ONBOARDING_PROMPTS.get(state_name))
+    if intent == OnboardingIntent.SKIP:
+        await _start_onboarding_skip_flow(m)
+        return
+    if intent != OnboardingIntent.ANSWER:
+        await _handle_onboarding_non_answer(m, state)
+        return
+
     position = (m.text or "").strip()
     if not position:
         await m.answer("Напиши хоча б щось типу «Developer», «HR» тощо.")
@@ -309,6 +502,15 @@ async def onboarding_position(m: Message, state: FSMContext):
 
 @router.message(Onboarding.waiting_department)
 async def onboarding_department(m: Message, state: FSMContext):
+    state_name = await state.get_state()
+    intent = classify_onboarding_message(m.text or "", state_name or "", ONBOARDING_PROMPTS.get(state_name))
+    if intent == OnboardingIntent.SKIP:
+        await _start_onboarding_skip_flow(m)
+        return
+    if intent != OnboardingIntent.ANSWER:
+        await _handle_onboarding_non_answer(m, state)
+        return
+
     department = (m.text or "").strip()
     if not department:
         await m.answer("Напиши хоча б одне слово – як це називається у вас.")
@@ -325,6 +527,15 @@ async def onboarding_department(m: Message, state: FSMContext):
 
 @router.message(Onboarding.waiting_style)
 async def onboarding_style(m: Message, state: FSMContext):
+    state_name = await state.get_state()
+    intent = classify_onboarding_message(m.text or "", state_name or "", ONBOARDING_PROMPTS.get(state_name))
+    if intent == OnboardingIntent.SKIP:
+        await _start_onboarding_skip_flow(m)
+        return
+    if intent != OnboardingIntent.ANSWER:
+        await _handle_onboarding_non_answer(m, state)
+        return
+
     style = (m.text or "").strip()
     if not style:
         await m.answer("Напиши щось типу «мʼякий», «прямий», «нейтральний».")
@@ -341,6 +552,15 @@ async def onboarding_style(m: Message, state: FSMContext):
 
 @router.message(Onboarding.waiting_time)
 async def onboarding_time(m: Message, state: FSMContext):
+    state_name = await state.get_state()
+    intent = classify_onboarding_message(m.text or "", state_name or "", ONBOARDING_PROMPTS.get(state_name))
+    if intent == OnboardingIntent.SKIP:
+        await _start_onboarding_skip_flow(m)
+        return
+    if intent != OnboardingIntent.ANSWER:
+        await _handle_onboarding_non_answer(m, state)
+        return
+
     raw = (m.text or "").strip()
     parts = raw.split(":", 1)
     if len(parts) != 2:
@@ -367,6 +587,87 @@ async def onboarding_time(m: Message, state: FSMContext):
     )
     await state.set_state(Onboarding.final)
     await _finish_onboarding(m, state)
+
+
+@router.callback_query(F.data.startswith("onb:continue"))
+async def onboarding_continue_callback(c: CallbackQuery, state: FSMContext):
+    await c.answer("Продовжуємо онбординг")
+
+    if c.message:
+        try:
+            await c.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+    current_state = await state.get_state()
+    await _send_onboarding_prompt(c.message, current_state, chat_id=c.from_user.id)
+
+
+@router.callback_query(F.data == "onb:skip")
+async def onboarding_skip_callback(c: CallbackQuery):
+    await c.answer()
+    if c.message:
+        try:
+            await c.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+    await _start_onboarding_skip_flow(c.message, chat_id=c.from_user.id)
+
+
+@router.callback_query(F.data == "onb:skip_cancel")
+async def onboarding_skip_cancel(c: CallbackQuery, state: FSMContext):
+    await c.answer("Продовжуємо онбординг")
+    current_state = await state.get_state()
+    if c.message:
+        try:
+            await c.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+    if c.message:
+        await c.message.answer("Окей, тоді продовжуємо з онбордингом.")
+    else:
+        await bot.send_message(c.from_user.id, "Окей, тоді продовжуємо з онбордингом.")
+
+    await _send_onboarding_prompt(c.message, current_state, chat_id=c.from_user.id)
+
+
+@router.callback_query(F.data == "onb:skip_confirm")
+async def onboarding_skip_confirm(c: CallbackQuery, state: FSMContext):
+    await c.answer("Пропускаємо онбординг")
+    data = await state.get_data()
+
+    with SessionLocal() as db:
+        u = db.scalars(select(User).where(User.tg_id == c.from_user.id)).first()
+        if not u:
+            if c.message:
+                await c.message.answer("Натисни /start")
+            else:
+                await bot.send_message(c.from_user.id, "Натисни /start")
+            return
+
+        mp = _get_or_create_memory_profile(db, u)
+        _apply_skip_defaults(u, mp, data)
+        db.commit()
+
+    await state.clear()
+
+    if c.message:
+        try:
+            await c.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+    final_text = (
+        "Готово. Працюємо в базовому режимі без детального онбордингу.\n"
+        "Якщо захочеш — завжди можеш пройти налаштування командою /onboarding."
+    )
+
+    if c.message:
+        await c.message.answer(final_text)
+    else:
+        await bot.send_message(c.from_user.id, final_text)
 
 
 async def _finish_onboarding(m: Message, state: FSMContext):
@@ -422,6 +723,9 @@ async def on_text(m: Message, state: FSMContext):
             data = await state.get_data()
             plan_id = data.get("plan_id")
             await _process_plan_hour_response(m, state, db, u, plan_id)
+            return
+
+        if current_state in ONBOARDING_STATE_NAMES:
             return
 
         # інакше — звичайний Q&A з лімітом
