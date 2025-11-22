@@ -29,6 +29,7 @@ from app.ai import (
     answer_user_question,
     classify_onboarding_message,
 )
+from app.ai_router import route_message
 from app.scheduler import (
     remove_job,
     schedule_custom_reminder,
@@ -126,6 +127,19 @@ ONBOARDING_PROMPTS = {
     ),
 }
 
+ONBOARDING_STATE_LABELS = {
+    Onboarding.waiting_goal.state: "onboarding:waiting_goal",
+    Onboarding.waiting_stress.state: "onboarding:waiting_stress",
+    Onboarding.waiting_energy.state: "onboarding:waiting_energy",
+    Onboarding.waiting_position.state: "onboarding:waiting_position",
+    Onboarding.waiting_department.state: "onboarding:waiting_department",
+    Onboarding.waiting_style.state: "onboarding:waiting_style",
+    Onboarding.waiting_time.state: "onboarding:waiting_time",
+    Onboarding.waiting_tz_confirm.state: "onboarding:waiting_tz_confirm",
+    Onboarding.waiting_tz_manual.state: "onboarding:waiting_tz_manual",
+    Onboarding.final.state: "onboarding:final",
+}
+
 
 def _onboarding_keyboard(state_name: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -134,6 +148,16 @@ def _onboarding_keyboard(state_name: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="⏭️ Пропустити онбординг", callback_data="onb:skip")],
         ]
     )
+
+
+def get_current_state_label(state_name: str | None) -> str:
+    if not state_name:
+        return "idle"
+    if state_name in ONBOARDING_STATE_LABELS:
+        return ONBOARDING_STATE_LABELS[state_name]
+    if state_name == PlanStates.waiting_new_hour.state:
+        return "plan:waiting_new_hour"
+    return state_name
 
 
 def _skip_keyboard() -> InlineKeyboardMarkup:
@@ -152,6 +176,29 @@ def _consent_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="❌ Не погоджуюсь", callback_data="consent:decline")],
         ]
     )
+
+
+def _ui_keyboard(suggested_ui: str | None) -> InlineKeyboardMarkup | None:
+    if suggested_ui == "psychologist":
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="Написати психологу",
+                        url="https://t.me/veniviciave",
+                    )
+                ]
+            ]
+        )
+    if suggested_ui == "settings":
+        return InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="Налаштувати час", callback_data="ui:settings")]]
+        )
+    if suggested_ui == "plan_adjustment":
+        return InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="Підлаштувати план", callback_data="ui:plan_adjustment")]]
+        )
+    return None
 
 
 def _tz_confirm_keyboard() -> InlineKeyboardMarkup:
@@ -291,12 +338,40 @@ def _profile_snapshot_for_ai(u: User, mp: UserMemoryProfile, data: dict) -> str:
     return "; ".join(p for p in parts if p)
 
 
+def _profile_dict_for_router(mp: UserMemoryProfile | None, data: dict | None) -> dict:
+    data = data or {}
+    profile: dict = {}
+    for key in [
+        "main_goal",
+        "base_stress_level",
+        "base_energy_level",
+        "position",
+        "department",
+        "communication_style",
+        "notification_time",
+        "timezone",
+    ]:
+        if data.get(key) is not None:
+            value = data.get(key)
+        else:
+            value = getattr(mp, key, None) if mp else None
+        if value is None:
+            continue
+        if isinstance(value, dt_time):
+            profile[key] = value.strftime("%H:%M")
+        else:
+            profile[key] = value
+    return profile
+
+
 async def _handle_onboarding_non_answer(m: Message, state: FSMContext):
     state_name = await state.get_state()
     if not state_name:
         return
 
     user_id = None
+    router_result = None
+    profile_for_ai = ""
     with SessionLocal() as db:
         u = db.scalars(select(User).where(User.tg_id == m.from_user.id)).first()
         if not u:
@@ -305,22 +380,48 @@ async def _handle_onboarding_non_answer(m: Message, state: FSMContext):
 
         mp = _get_or_create_memory_profile(db, u)
         data = await state.get_data()
-        profile = _profile_snapshot_for_ai(u, mp, data)
+        profile_for_ai = _profile_snapshot_for_ai(u, mp, data)
+        router_context = {
+            "user_id": u.id,
+            "tg_id": m.from_user.id,
+            "current_state": get_current_state_label(state_name),
+            "last_bot_message": ONBOARDING_PROMPTS.get(state_name),
+            "recent_messages": [],
+            "message_text": m.text or "",
+            "message_type": "text",
+            "user_profile": _profile_dict_for_router(mp, data),
+        }
 
+        router_result = await route_message(router_context)
+        user_id = u.id
+
+    intent = (router_result or {}).get("intent")
+    if intent == "safety_alert":
+        await _handle_onboarding_distress(m, state)
+        return
+
+    if intent in {"coach_dialog", "onboarding_interruption"}:
+        short_prompt = (
+            "Ти відповідаєш українською під час онбордингу. Будь лаконічним, 1–2 речення, дружньо, без зустрічних питань."
+        )
         try:
             text, _usage = answer_user_question(
-                profile or "Onboarding user",
+                profile_for_ai or "Onboarding user",
                 m.text or "",
-                u.prompt_template,
+                short_prompt,
             )
             await m.answer(_escape(text))
         except Exception as e:
-            print("=== ONBOARDING Q&A ERROR ===\n", traceback.format_exc())
+            print("=== ONBOARDING ROUTER ANSWER ERROR ===\n", traceback.format_exc())
             await m.answer(f"ERR [{_escape(e.__class__.__name__)}]: {_escape(str(e))}")
             return
 
-        user_id = u.id
+        await _send_onboarding_prompt(m, state_name, user_id=user_id)
+        return
 
+    await m.answer(
+        "Не зовсім зрозумів відповідь. Відповідай, будь ласка, у потрібному форматі, щоб продовжити налаштування."
+    )
     await _send_onboarding_prompt(m, state_name, user_id=user_id)
 
 
@@ -1110,7 +1211,6 @@ async def _finish_onboarding(m: Message, state: FSMContext):
 # Ігноруємо текстові команди на кшталт "/plan" в загальному обробнику
 @router.message(F.text & ~F.via_bot & ~F.text.startswith("/"))
 async def on_text(m: Message, state: FSMContext):
-    # якщо очікуємо HH:MM для зміни часу плану — обробляємо саме це
     with SessionLocal() as db:
         u = db.scalars(select(User).where(User.tg_id == m.from_user.id)).first()
         if not u:
@@ -1127,7 +1227,41 @@ async def on_text(m: Message, state: FSMContext):
         if current_state in ONBOARDING_STATE_NAMES:
             return
 
-        # інакше — звичайний Q&A з лімітом
+        data = await state.get_data()
+        mp = _get_or_create_memory_profile(db, u)
+        profile_snapshot = _profile_snapshot_for_ai(u, mp, data)
+        router_context = {
+            "user_id": u.id,
+            "tg_id": m.from_user.id,
+            "current_state": get_current_state_label(current_state),
+            "last_bot_message": data.get("last_bot_message") if isinstance(data, dict) else None,
+            "recent_messages": [],
+            "message_text": m.text or "",
+            "message_type": "text",
+            "user_profile": _profile_dict_for_router(mp, data),
+        }
+
+        router_result = await route_message(router_context)
+        intent = router_result.get("intent")
+        suggested_ui = router_result.get("suggested_ui")
+
+        if intent == "safety_alert":
+            await _handle_onboarding_distress(m, state)
+            return
+
+        if intent == "manager_flow":
+            reply_text = (
+                "Я запамʼятав, що ти хочеш налаштувати бот. "
+                "У наступних версіях зʼявиться зручне меню, а поки що я просто беру це до уваги."
+            )
+            kb = _ui_keyboard(suggested_ui)
+            if kb:
+                await m.answer(reply_text, reply_markup=kb)
+            else:
+                await m.answer(reply_text)
+            return
+
+        # за замовчуванням працюємо як Coach
         day = today_str(u.timezone or "Europe/Kyiv")
         mon = month_str(u.timezone or "Europe/Kyiv")
 
@@ -1144,7 +1278,7 @@ async def on_text(m: Message, state: FSMContext):
 
         try:
             text, _usage = answer_user_question(
-                f"{u.first_name or ''} @{u.username or ''}",
+                profile_snapshot or f"{u.first_name or ''} @{u.username or ''}",
                 m.text,
                 u.prompt_template
             )
@@ -1153,7 +1287,11 @@ async def on_text(m: Message, state: FSMContext):
             await m.answer(f"ERR [{_escape(e.__class__.__name__)}]: {_escape(str(e))}")
             return
 
-        await m.answer(_escape(text))
+        kb = _ui_keyboard(suggested_ui)
+        if kb:
+            await m.answer(_escape(text), reply_markup=kb)
+        else:
+            await m.answer(_escape(text))
 
         if not cnt:
             cnt = UsageCounter(user_id=u.id, day=day, ask_count=0, month=mon, month_ask_count=0)
@@ -1956,3 +2094,19 @@ async def cb_fb(c: CallbackQuery):
 async def cb_ask(c: CallbackQuery):
     await c.message.answer("Напиши питання наступним повідомленням.")
     await c.answer()
+
+
+@router.callback_query(F.data == "ui:settings")
+async def cb_ui_settings(c: CallbackQuery):
+    await c.answer()
+    await c.message.answer(
+        "Я занотував, що хочеш змінити налаштування. Це скоро буде доступно прямо в боті."
+    )
+
+
+@router.callback_query(F.data == "ui:plan_adjustment")
+async def cb_ui_plan_adjustment(c: CallbackQuery):
+    await c.answer()
+    await c.message.answer(
+        "Я врахую, що план треба підлаштувати. Скоро додамо зручний вибір складності."
+    )

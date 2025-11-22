@@ -1,0 +1,162 @@
+import asyncio
+import json
+import re
+from typing import Any, Dict
+
+from openai import OpenAI
+
+from app.config import settings
+
+client = OpenAI(api_key=settings.OPENAI_API_KEY)
+
+ROUTER_SYSTEM_PROMPT = (
+    "You are an intent router for a mental wellbeing bot in Telegram. "
+    "Classify the latest user message using the dialogue history and current bot state. "
+    "You must always consider: current_state, last_bot_message, recent_messages, message_text, user_profile. "
+    "Intents: \"manager_flow\" (settings, buttons, commands, short factual answers to bot prompts), "
+    "\"coach_dialog\" (empathetic conversation and emotional sharing), "
+    "\"onboarding_interruption\" (user goes off-script or asks about the bot during onboarding), "
+    "\"safety_alert\" (self-harm, suicide, or severe crisis language). "
+    "If the bot just asked a structured onboarding question (stress 1-5, notification time, job title, etc.) "
+    "and the user responds briefly with a number, time, or short label, treat it as manager_flow. "
+    "If current_state starts with \"onboarding\" and the user asks about the bot, privacy, or writes emotional text "
+    "instead of answering the prompt, classify as onboarding_interruption. "
+    "If you see clear suicidal ideation or self-harm intent, return safety_alert. "
+    "Suggested UI: \"psychologist\" (user asks for a human specialist or describes being on the edge), "
+    "\"settings\" (user wants to change notification time/frequency or turn off messages), "
+    "\"plan_adjustment\" (tasks/plan feel too hard or need to be changed), \"none\" otherwise. "
+    "Always return ONLY a valid JSON object with the exact keys: intent, manager, coach, safety, complexity_level, "
+    "sentiment, suggested_ui, user_intent_summary, reasoning."
+)
+
+_ALLOWED_INTENTS = {
+    "manager_flow",
+    "coach_dialog",
+    "onboarding_interruption",
+    "safety_alert",
+}
+
+_ALLOWED_SENTIMENTS = {"neutral", "positive", "negative", "mixed"}
+_ALLOWED_UI = {"none", "psychologist", "settings", "plan_adjustment"}
+
+
+def _default_router_output(message_text: str | None) -> Dict[str, Any]:
+    text = (message_text or "").strip()
+    fallback_intent = "manager_flow" if text.startswith("/") else "coach_dialog"
+    return {
+        "intent": fallback_intent,
+        "manager": 0.0,
+        "coach": 0.0,
+        "safety": 0.0,
+        "complexity_level": 1,
+        "sentiment": "neutral",
+        "suggested_ui": "none",
+        "user_intent_summary": "",
+        "reasoning": "",
+    }
+
+
+def _extract_json_block(raw: str) -> str:
+    match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+    return match.group(0) if match else raw
+
+
+def _merge_validated(base: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
+    intent = data.get("intent")
+    if intent in _ALLOWED_INTENTS:
+        base["intent"] = intent
+
+    try:
+        manager = float(data.get("manager", base["manager"]))
+        base["manager"] = max(0.0, min(1.0, manager))
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        coach = float(data.get("coach", base["coach"]))
+        base["coach"] = max(0.0, min(1.0, coach))
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        safety = float(data.get("safety", base["safety"]))
+        base["safety"] = max(0.0, min(1.0, safety))
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        level = int(data.get("complexity_level", base["complexity_level"]))
+        if level in {1, 2, 3}:
+            base["complexity_level"] = level
+    except (TypeError, ValueError):
+        pass
+
+    sentiment = data.get("sentiment")
+    if isinstance(sentiment, str) and sentiment in _ALLOWED_SENTIMENTS:
+        base["sentiment"] = sentiment
+
+    suggested_ui = data.get("suggested_ui")
+    if isinstance(suggested_ui, str) and suggested_ui in _ALLOWED_UI:
+        base["suggested_ui"] = suggested_ui
+
+    summary = data.get("user_intent_summary")
+    if isinstance(summary, str):
+        base["user_intent_summary"] = summary
+
+    reasoning = data.get("reasoning")
+    if isinstance(reasoning, str):
+        base["reasoning"] = reasoning
+
+    return base
+
+
+async def route_message(context: dict) -> Dict[str, Any]:
+    base = _default_router_output(context.get("message_text"))
+
+    payload = {
+        "current_state": context.get("current_state"),
+        "last_bot_message": context.get("last_bot_message"),
+        "recent_messages": context.get("recent_messages", []),
+        "message_text": context.get("message_text"),
+        "message_type": context.get("message_type"),
+        "user_profile": context.get("user_profile"),
+        "tg_id": context.get("tg_id"),
+        "user_id": context.get("user_id"),
+    }
+
+    messages = [
+        {"role": "system", "content": ROUTER_SYSTEM_PROMPT},
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+    ]
+
+    try:
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                temperature=0.2,
+                max_tokens=200,
+            ),
+        )
+        content = response.choices[0].message.content if response else None
+    except Exception as e:
+        print(f"[router_error] {e.__class__.__name__}: {e}")
+        return base
+
+    if not content:
+        return base
+
+    try:
+        parsed = json.loads(_extract_json_block(content))
+    except Exception:
+        return base
+
+    if not isinstance(parsed, dict):
+        return base
+
+    if parsed.get("intent") not in _ALLOWED_INTENTS:
+        return base
+
+    return _merge_validated(base, parsed)
