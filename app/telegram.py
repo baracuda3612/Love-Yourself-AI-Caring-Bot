@@ -50,6 +50,9 @@ dp.include_router(router)
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
+RECENT_MESSAGES_LIMIT = 6
+
+
 CONSENT_TEXT = (
     "Я — wellbeing-бот Love Yourself.\n"
     "Щоб працювати, я зберігаю базові дані: імʼя, налаштування, відповіді в онбордингу.\n"
@@ -364,6 +367,20 @@ def _profile_dict_for_router(mp: UserMemoryProfile | None, data: dict | None) ->
     return profile
 
 
+async def _append_recent_message(state: FSMContext, role: str, text: str):
+    data = await state.get_data()
+    messages = list(data.get("recent_messages", [])) if isinstance(data, dict) else []
+    messages.append({"role": role, "text": text})
+    if len(messages) > RECENT_MESSAGES_LIMIT:
+        messages = messages[-RECENT_MESSAGES_LIMIT:]
+
+    update_payload = {"recent_messages": messages}
+    if role == "bot":
+        update_payload["last_bot_message"] = text
+
+    await state.update_data(**update_payload)
+
+
 async def _handle_onboarding_non_answer(m: Message, state: FSMContext):
     state_name = await state.get_state()
     if not state_name:
@@ -385,8 +402,8 @@ async def _handle_onboarding_non_answer(m: Message, state: FSMContext):
             "user_id": u.id,
             "tg_id": m.from_user.id,
             "current_state": get_current_state_label(state_name),
-            "last_bot_message": ONBOARDING_PROMPTS.get(state_name),
-            "recent_messages": [],
+            "last_bot_message": (data or {}).get("last_bot_message") or ONBOARDING_PROMPTS.get(state_name),
+            "recent_messages": (data or {}).get("recent_messages", []),
             "message_text": m.text or "",
             "message_type": "text",
             "user_profile": _profile_dict_for_router(mp, data),
@@ -397,7 +414,7 @@ async def _handle_onboarding_non_answer(m: Message, state: FSMContext):
 
     intent = (router_result or {}).get("intent")
     if intent == "safety_alert":
-        await _handle_onboarding_distress(m, state)
+        await _handle_safety_alert(m, state, source="router_onboarding")
         return
 
     if intent in {"coach_dialog", "onboarding_interruption"}:
@@ -425,14 +442,24 @@ async def _handle_onboarding_non_answer(m: Message, state: FSMContext):
     await _send_onboarding_prompt(m, state_name, user_id=user_id)
 
 
-async def _handle_onboarding_distress(m: Message, state: FSMContext):
-    state_name = await state.get_state()
-    if not state_name:
-        return
-
+async def _handle_safety_alert(m: Message, state: FSMContext, source: str | None = None):
+    current_state = await state.get_state()
     data = await state.get_data()
+
     user_id = data.get("user_id") if isinstance(data, dict) else None
-    _log_onboarding_event(user_id, state_name, "distress", tg_id=m.from_user.id)
+    if user_id is None:
+        with SessionLocal() as db:
+            u = db.scalars(select(User).where(User.tg_id == m.from_user.id)).first()
+            if u:
+                user_id = u.id
+
+    _log_onboarding_event(
+        user_id,
+        current_state or "idle",
+        "safety_alert",
+        tg_id=m.from_user.id,
+        extra={"source": source or "router", "state": current_state},
+    )
 
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -445,16 +472,17 @@ async def _handle_onboarding_distress(m: Message, state: FSMContext):
         ]
     )
 
-    await m.answer(
-        "Мені дуже шкода, що тобі настільки важко зараз.\n"
-        "Я бот і не можу замінити живу кризову допомогу.\n"
-        "Якщо відчуваєш, що не справляєшся — напиши спеціалісту або в кризову службу.",
-        reply_markup=kb,
+    reply_text = (
+        "Мені дуже шкода, що тобі зараз настільки важко. Я поряд і хочу підтримати.\n"
+        "Я лише бот і не можу замінити кризову допомогу. Якщо відчуваєш, що не справляєшся — напиши спеціалісту або звернись до лікаря/гарячої лінії."
     )
 
-    await m.answer(
-        "Якщо захочеш продовжити налаштування бота — просто відповідай на запитання, які ми обговорювали раніше."
-    )
+    await m.answer(reply_text, reply_markup=kb)
+    await _append_recent_message(state, "bot", reply_text)
+
+
+async def _handle_onboarding_distress(m: Message, state: FSMContext):
+    await _handle_safety_alert(m, state, source="onboarding")
 
 
 async def _start_onboarding_skip_flow(m: Message | None, *, chat_id: int | None = None):
@@ -1217,6 +1245,8 @@ async def on_text(m: Message, state: FSMContext):
             await m.answer("Натисни /start")
             return
 
+        await _append_recent_message(state, "user", m.text or "")
+
         current_state = await state.get_state()
         if current_state == PlanStates.waiting_new_hour.state:
             data = await state.get_data()
@@ -1235,7 +1265,7 @@ async def on_text(m: Message, state: FSMContext):
             "tg_id": m.from_user.id,
             "current_state": get_current_state_label(current_state),
             "last_bot_message": data.get("last_bot_message") if isinstance(data, dict) else None,
-            "recent_messages": [],
+            "recent_messages": data.get("recent_messages", []) if isinstance(data, dict) else [],
             "message_text": m.text or "",
             "message_type": "text",
             "user_profile": _profile_dict_for_router(mp, data),
@@ -1246,7 +1276,7 @@ async def on_text(m: Message, state: FSMContext):
         suggested_ui = router_result.get("suggested_ui")
 
         if intent == "safety_alert":
-            await _handle_onboarding_distress(m, state)
+            await _handle_safety_alert(m, state, source="router_general")
             return
 
         if intent == "manager_flow":
@@ -1259,6 +1289,7 @@ async def on_text(m: Message, state: FSMContext):
                 await m.answer(reply_text, reply_markup=kb)
             else:
                 await m.answer(reply_text)
+            await _append_recent_message(state, "bot", reply_text)
             return
 
         # за замовчуванням працюємо як Coach
@@ -1292,6 +1323,7 @@ async def on_text(m: Message, state: FSMContext):
             await m.answer(_escape(text), reply_markup=kb)
         else:
             await m.answer(_escape(text))
+        await _append_recent_message(state, "bot", text)
 
         if not cnt:
             cnt = UsageCounter(user_id=u.id, day=day, ask_count=0, month=mon, month_ask_count=0)
