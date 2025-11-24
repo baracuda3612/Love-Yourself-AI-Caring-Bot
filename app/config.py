@@ -58,6 +58,7 @@ class Settings:
     TEMPERATURE: float = 0.7
     DEFAULT_DAILY_LIMIT: int = 10
     DEFAULT_SEND_HOUR: int = 9
+    REDIS_URL: str = ""
     ENVIRONMENT: str = "dev"
     IS_DEV: bool = True
     IS_STAGING: bool = False
@@ -88,6 +89,7 @@ class Settings:
         self.TEMPERATURE = _as_float(os.getenv("TEMPERATURE"), 0.7)
         self.DEFAULT_DAILY_LIMIT = _as_int(os.getenv("DEFAULT_DAILY_LIMIT"), 10)
         self.DEFAULT_SEND_HOUR = _as_int(os.getenv("DEFAULT_SEND_HOUR"), 9)
+        self.REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
         self.ENVIRONMENT = environment_normalized
         self.IS_DEV = environment_normalized == "dev"
         self.IS_STAGING = environment_normalized == "staging"
@@ -112,3 +114,4 @@ ENVIRONMENT = settings.ENVIRONMENT
 IS_DEV = settings.IS_DEV
 IS_STAGING = settings.IS_STAGING
 IS_PROD = settings.IS_PROD
+REDIS_URL = settings.REDIS_URL

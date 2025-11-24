@@ -15,6 +15,7 @@ from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from sqlalchemy import select
@@ -30,6 +31,7 @@ from app.ai import (
     classify_onboarding_message,
 )
 from app.ai_router import route_message
+from app.redis_client import create_fsm_storage, create_redis_client
 from app.scheduler import (
     remove_job,
     schedule_custom_reminder,
@@ -38,13 +40,17 @@ from app.scheduler import (
 from app.ai_plans import generate_ai_plan
 from app.plan_parser import parse_plan_request
 from app.plan_normalizer import normalize_plan_steps
+from app.session_memory import SessionMemory
 
 # ----------------- базові речі -----------------
 
 bot = Bot(token=settings.BOT_TOKEN, parse_mode="HTML")
-dp = Dispatcher()
+redis_client = create_redis_client()
+storage = create_fsm_storage(redis_client) or MemoryStorage()
+dp = Dispatcher(storage=storage)
 router = Router()
 dp.include_router(router)
+session_memory = SessionMemory(redis_client=redis_client)
 
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
@@ -367,7 +373,9 @@ def _profile_dict_for_router(mp: UserMemoryProfile | None, data: dict | None) ->
     return profile
 
 
-async def _append_recent_message(state: FSMContext, role: str, text: str):
+async def _append_recent_message(
+    state: FSMContext, role: str, text: str, *, user_id: int | None = None
+):
     data = await state.get_data()
     messages = list(data.get("recent_messages", [])) if isinstance(data, dict) else []
     messages.append({"role": role, "text": text})
@@ -379,6 +387,7 @@ async def _append_recent_message(state: FSMContext, role: str, text: str):
         update_payload["last_bot_message"] = text
 
     await state.update_data(**update_payload)
+    await session_memory.append_message(user_id, role, text)
 
 
 async def _handle_onboarding_non_answer(m: Message, state: FSMContext):
@@ -396,14 +405,20 @@ async def _handle_onboarding_non_answer(m: Message, state: FSMContext):
             return
 
         mp = _get_or_create_memory_profile(db, u)
+        await _append_recent_message(state, "user", m.text or "", user_id=u.id)
         data = await state.get_data()
+        recent_messages = await session_memory.get_recent_messages(u.id)
+        last_bot_message = await session_memory.get_last_bot_message(u.id)
         profile_for_ai = _profile_snapshot_for_ai(u, mp, data)
         router_context = {
             "user_id": u.id,
             "tg_id": m.from_user.id,
             "current_state": get_current_state_label(state_name),
-            "last_bot_message": (data or {}).get("last_bot_message") or ONBOARDING_PROMPTS.get(state_name),
-            "recent_messages": (data or {}).get("recent_messages", []),
+            "last_bot_message": last_bot_message
+            or (data or {}).get("last_bot_message")
+            or ONBOARDING_PROMPTS.get(state_name),
+            "recent_messages": recent_messages
+            or (data or {}).get("recent_messages", []),
             "message_text": m.text or "",
             "message_type": "text",
             "user_profile": _profile_dict_for_router(mp, data),
@@ -428,6 +443,7 @@ async def _handle_onboarding_non_answer(m: Message, state: FSMContext):
                 short_prompt,
             )
             await m.answer(_escape(text))
+            await _append_recent_message(state, "bot", text, user_id=user_id)
         except Exception as e:
             print("=== ONBOARDING ROUTER ANSWER ERROR ===\n", traceback.format_exc())
             await m.answer(f"ERR [{_escape(e.__class__.__name__)}]: {_escape(str(e))}")
@@ -438,6 +454,12 @@ async def _handle_onboarding_non_answer(m: Message, state: FSMContext):
 
     await m.answer(
         "Не зовсім зрозумів відповідь. Відповідай, будь ласка, у потрібному форматі, щоб продовжити налаштування."
+    )
+    await _append_recent_message(
+        state,
+        "bot",
+        "Не зовсім зрозумів відповідь. Відповідай, будь ласка, у потрібному форматі, щоб продовжити налаштування.",
+        user_id=user_id,
     )
     await _send_onboarding_prompt(m, state_name, user_id=user_id)
 
@@ -478,7 +500,7 @@ async def _handle_safety_alert(m: Message, state: FSMContext, source: str | None
     )
 
     await m.answer(reply_text, reply_markup=kb)
-    await _append_recent_message(state, "bot", reply_text)
+    await _append_recent_message(state, "bot", reply_text, user_id=user_id)
 
 
 async def _handle_onboarding_distress(m: Message, state: FSMContext):
@@ -1245,7 +1267,7 @@ async def on_text(m: Message, state: FSMContext):
             await m.answer("Натисни /start")
             return
 
-        await _append_recent_message(state, "user", m.text or "")
+        await _append_recent_message(state, "user", m.text or "", user_id=u.id)
 
         current_state = await state.get_state()
         if current_state == PlanStates.waiting_new_hour.state:
@@ -1260,12 +1282,19 @@ async def on_text(m: Message, state: FSMContext):
         data = await state.get_data()
         mp = _get_or_create_memory_profile(db, u)
         profile_snapshot = _profile_snapshot_for_ai(u, mp, data)
+        recent_messages = await session_memory.get_recent_messages(u.id)
+        last_bot_message = await session_memory.get_last_bot_message(u.id)
+        if isinstance(data, dict):
+            last_bot_message = last_bot_message or data.get("last_bot_message")
+            fallback_recent_messages = data.get("recent_messages", [])
+        else:
+            fallback_recent_messages = []
         router_context = {
             "user_id": u.id,
             "tg_id": m.from_user.id,
             "current_state": get_current_state_label(current_state),
-            "last_bot_message": data.get("last_bot_message") if isinstance(data, dict) else None,
-            "recent_messages": data.get("recent_messages", []) if isinstance(data, dict) else [],
+            "last_bot_message": last_bot_message,
+            "recent_messages": recent_messages or fallback_recent_messages,
             "message_text": m.text or "",
             "message_type": "text",
             "user_profile": _profile_dict_for_router(mp, data),
@@ -1289,7 +1318,7 @@ async def on_text(m: Message, state: FSMContext):
                 await m.answer(reply_text, reply_markup=kb)
             else:
                 await m.answer(reply_text)
-            await _append_recent_message(state, "bot", reply_text)
+            await _append_recent_message(state, "bot", reply_text, user_id=u.id)
             return
 
         # за замовчуванням працюємо як Coach
@@ -1305,6 +1334,7 @@ async def on_text(m: Message, state: FSMContext):
         used = cnt.ask_count if cnt else 0
         if used >= (u.daily_limit or 10):
             await m.answer("Ліміт на сьогодні вичерпано.")
+            await _append_recent_message(state, "bot", "Ліміт на сьогодні вичерпано.", user_id=u.id)
             return
 
         try:
@@ -1316,6 +1346,11 @@ async def on_text(m: Message, state: FSMContext):
         except Exception as e:
             print("=== GENERATION ERROR ===\n", traceback.format_exc())
             await m.answer(f"ERR [{_escape(e.__class__.__name__)}]: {_escape(str(e))}")
+            await session_memory.append_message(
+                u.id,
+                "bot",
+                f"ERR [{_escape(e.__class__.__name__)}]: {_escape(str(e))}",
+            )
             return
 
         kb = _ui_keyboard(suggested_ui)
@@ -1323,7 +1358,7 @@ async def on_text(m: Message, state: FSMContext):
             await m.answer(_escape(text), reply_markup=kb)
         else:
             await m.answer(_escape(text))
-        await _append_recent_message(state, "bot", text)
+        await _append_recent_message(state, "bot", text, user_id=u.id)
 
         if not cnt:
             cnt = UsageCounter(user_id=u.id, day=day, ask_count=0, month=mon, month_ask_count=0)
