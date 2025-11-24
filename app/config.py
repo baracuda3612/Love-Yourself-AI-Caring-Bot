@@ -89,7 +89,8 @@ class Settings:
         self.TEMPERATURE = _as_float(os.getenv("TEMPERATURE"), 0.7)
         self.DEFAULT_DAILY_LIMIT = _as_int(os.getenv("DEFAULT_DAILY_LIMIT"), 10)
         self.DEFAULT_SEND_HOUR = _as_int(os.getenv("DEFAULT_SEND_HOUR"), 9)
-        self.REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        # Empty ``REDIS_URL`` disables Redis-backed features (FSM, session memory).
+        self.REDIS_URL = os.getenv("REDIS_URL") or ""
         self.ENVIRONMENT = environment_normalized
         self.IS_DEV = environment_normalized == "dev"
         self.IS_STAGING = environment_normalized == "staging"
