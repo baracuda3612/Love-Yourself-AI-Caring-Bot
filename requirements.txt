@@ -11,3 +11,4 @@ pydantic-core==2.14.6
 parsedatetime==2.6
 python-dateutil
 psycopg2-binary
+redis==5.0.7
