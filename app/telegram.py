@@ -54,6 +54,8 @@ session_memory = SessionMemory(redis_client=redis_client)
 
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+_TIME_COLON_RE = re.compile(r"(\d{1,2}):(\d{2})")
+_TIME_DIGITS_RE = re.compile(r"\b(\d{3,4})\b")
 
 
 RECENT_MESSAGES_LIMIT = 6
@@ -148,6 +150,39 @@ ONBOARDING_STATE_LABELS = {
     Onboarding.waiting_tz_manual.state: "onboarding:waiting_tz_manual",
     Onboarding.final.state: "onboarding:final",
 }
+
+
+def _parse_time_input(raw: str | None) -> str | None:
+    if not raw:
+        return None
+
+    raw = raw.strip()
+    match = _TIME_COLON_RE.search(raw)
+    hours: int | None
+    minutes: int | None
+    hours = minutes = None
+
+    if match:
+        hours = int(match.group(1))
+        minutes = int(match.group(2))
+    else:
+        digits_match = _TIME_DIGITS_RE.search(raw)
+        if digits_match:
+            digits = digits_match.group(1)
+            if len(digits) == 4:
+                hours = int(digits[:2])
+                minutes = int(digits[2:])
+            elif len(digits) == 3:
+                hours = int(digits[0])
+                minutes = int(digits[1:])
+
+    if hours is None or minutes is None:
+        return None
+
+    if 0 <= hours <= 23 and 0 <= minutes <= 59:
+        return f"{hours:02d}:{minutes:02d}"
+
+    return None
 
 
 def _onboarding_keyboard(state_name: str) -> InlineKeyboardMarkup:
@@ -1015,22 +1050,14 @@ async def onboarding_time(m: Message, state: FSMContext):
         await _handle_onboarding_non_answer(m, state)
         return
 
-    raw = (m.text or "").strip()
-    parts = raw.split(":", 1)
-    if len(parts) != 2:
-        await m.answer("Будь ласка, у форматі HH:MM. Наприклад, 09:00.")
+    parsed = _parse_time_input(m.text or "")
+    if not parsed:
+        await m.answer(
+            "Будь ласка, надішли час у форматі HH:MM або як числа, наприклад 09:00, 21:30 чи 900."
+        )
         return
 
-    try:
-        hour = int(parts[0])
-        minute = int(parts[1])
-    except ValueError:
-        await m.answer("Година і хвилини мають бути числами. Спробуй ще раз.")
-        return
-
-    if not (0 <= hour < 24 and 0 <= minute < 60):
-        await m.answer("Це не схоже на реальний час 😄 Спробуй ще раз.")
-        return
+    hour, minute = map(int, parsed.split(":"))
 
     await state.update_data(notification_time=dt_time(hour=hour, minute=minute))
     _log_onboarding_event(user_id, state_name or "waiting_time", "step_answer", tg_id=m.from_user.id)
