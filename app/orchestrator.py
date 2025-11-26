@@ -87,46 +87,23 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
     log_router_decision(log_payload)
 
     target_agent = router_result.get("target_agent") or "coach"
-    priority = router_result.get("priority")
-    agent_instruction = router_result.get("agent_instruction")
+    worker_payload = {
+        "user_id": user_id,
+        "message_text": message_text,
+        "agent_instruction": router_result.get("agent_instruction"),
+        "priority": router_result.get("priority"),
+        "router_result": router_result,
+    }
 
     if target_agent == "safety":
-        return await mock_safety_agent(
-            user_id=user_id,
-            message_text=message_text,
-            agent_instruction=agent_instruction,
-            priority=priority,
-            router_result=router_result,
-        )
-    if target_agent == "onboarding":
-        return await mock_onboarding_agent(
-            user_id=user_id,
-            message_text=message_text,
-            agent_instruction=agent_instruction,
-            priority=priority,
-            router_result=router_result,
-        )
-    if target_agent == "manager":
-        return await mock_manager_agent(
-            user_id=user_id,
-            message_text=message_text,
-            agent_instruction=agent_instruction,
-            priority=priority,
-            router_result=router_result,
-        )
-    if target_agent == "plan":
-        return await mock_plan_agent(
-            user_id=user_id,
-            message_text=message_text,
-            agent_instruction=agent_instruction,
-            priority=priority,
-            router_result=router_result,
-        )
+        worker_result = await mock_safety_agent(worker_payload)
+    elif target_agent == "onboarding":
+        worker_result = await mock_onboarding_agent(worker_payload)
+    elif target_agent == "manager":
+        worker_result = await mock_manager_agent(worker_payload)
+    elif target_agent == "plan":
+        worker_result = await mock_plan_agent(worker_payload)
+    else:
+        worker_result = await mock_coach_agent(worker_payload)
 
-    return await mock_coach_agent(
-        user_id=user_id,
-        message_text=message_text,
-        agent_instruction=agent_instruction,
-        priority=priority,
-        router_result=router_result,
-    )
+    return worker_result.get("reply_text") or ""
