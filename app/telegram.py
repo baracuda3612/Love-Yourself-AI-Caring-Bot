@@ -2,6 +2,7 @@
 # Версія з підтримкою чернеток, підтвердження плану і керування нагадуваннями
 
 import json
+import logging
 import re
 from datetime import datetime, timedelta, time as dt_time
 import datetime as dtmod
@@ -51,6 +52,7 @@ dp = Dispatcher(storage=storage)
 router = Router()
 dp.include_router(router)
 session_memory = SessionMemory(redis_client=redis_client)
+logger = logging.getLogger(__name__)
 
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
@@ -1062,10 +1064,17 @@ async def onboarding_time(m: Message, state: FSMContext):
     await state.update_data(notification_time=dt_time(hour=hour, minute=minute))
     _log_onboarding_event(user_id, state_name or "waiting_time", "step_answer", tg_id=m.from_user.id)
 
-    with SessionLocal() as db:
-        u = db.scalars(select(User).where(User.tg_id == m.from_user.id)).first()
-        mp = _get_or_create_memory_profile(db, u) if u else None
-        tz_name = _current_timezone_name(u, mp)
+    tz_name = "Europe/Kyiv"
+    try:
+        with SessionLocal() as db:
+            u = db.scalars(select(User).where(User.tg_id == m.from_user.id)).first()
+            if not u:
+                logger.warning("User not found during onboarding_time; tg_id=%s", m.from_user.id)
+            else:
+                mp = _get_or_create_memory_profile(db, u)
+                tz_name = _current_timezone_name(u, mp)
+    except Exception:
+        logger.warning("Failed to determine timezone during onboarding_time", exc_info=True)
 
     await state.set_state(Onboarding.waiting_tz_confirm)
     await _send_timezone_confirm_prompt(m, tz_name=tz_name)
