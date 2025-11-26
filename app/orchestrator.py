@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 
-from app.ai_router import route_message
+from app.ai_router import cognitive_route_message
 from app.workers.mock_workers import (
     mock_coach_agent,
     mock_manager_agent,
@@ -43,7 +43,7 @@ async def call_router(user_id: int, message_text: str) -> Dict[str, Any]:
         "current_state": fsm_state,
     }
 
-    router_result = await route_message(router_input)
+    router_result = await cognitive_route_message(router_input)
     return router_result
 
 
