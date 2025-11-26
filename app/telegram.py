@@ -1076,6 +1076,7 @@ async def onboarding_time(m: Message, state: FSMContext):
     except Exception:
         logger.warning("Failed to determine timezone during onboarding_time", exc_info=True)
 
+    await state.update_data(timezone=tz_name)
     await state.set_state(Onboarding.waiting_tz_confirm)
     await _send_timezone_confirm_prompt(m, tz_name=tz_name)
 
