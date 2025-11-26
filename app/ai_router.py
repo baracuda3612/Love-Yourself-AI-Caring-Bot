@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+import time
 from typing import Any, Dict
 
 from openai import OpenAI
@@ -286,9 +287,16 @@ async def cognitive_route_message(payload: dict) -> dict:
 
     Returns:
       {
-        "target_agent": "safety" | "onboarding" | "manager" | "plan" | "coach",
-        "priority": "high" | "normal",
-        "agent_instruction": str
+        "router_result": {
+          "target_agent": "safety" | "onboarding" | "manager" | "plan" | "coach",
+          "priority": "high" | "normal",
+          "agent_instruction": str
+        },
+        "router_meta": {
+          "llm_prompt_tokens": int | None,
+          "llm_response_tokens": int | None,
+          "router_latency_ms": float | None
+        }
       }
     """
 
@@ -296,6 +304,12 @@ async def cognitive_route_message(payload: dict) -> dict:
         "target_agent": "coach",
         "priority": "normal",
         "agent_instruction": "Handle user message according to platform rules.",
+    }
+
+    router_meta = {
+        "llm_prompt_tokens": None,
+        "llm_response_tokens": None,
+        "router_latency_ms": None,
     }
 
     user_content = {
@@ -312,6 +326,7 @@ async def cognitive_route_message(payload: dict) -> dict:
     ]
 
     try:
+        t_start = time.monotonic()
         loop = asyncio.get_running_loop()
         response = await loop.run_in_executor(
             None,
@@ -322,17 +337,25 @@ async def cognitive_route_message(payload: dict) -> dict:
                 response_format={"type": "json_object"},
             ),
         )
+        t_end = time.monotonic()
+
+        if response is not None:
+            usage = getattr(response, "usage", None)
+            router_meta["llm_prompt_tokens"] = getattr(usage, "prompt_tokens", None)
+            router_meta["llm_response_tokens"] = getattr(usage, "completion_tokens", None)
+
+        router_meta["router_latency_ms"] = (t_end - t_start) * 1000
         content = response.choices[0].message.content if response else None
     except Exception:
-        return base
+        return {"router_result": base, "router_meta": router_meta}
 
     if not content:
-        return base
+        return {"router_result": base, "router_meta": router_meta}
 
     try:
         output = json.loads(content)
     except Exception:
-        return base
+        return {"router_result": base, "router_meta": router_meta}
 
     target_agent = output.get("target_agent")
     priority = output.get("priority")
@@ -348,7 +371,10 @@ async def cognitive_route_message(payload: dict) -> dict:
         agent_instruction = base["agent_instruction"]
 
     return {
-        "target_agent": target_agent,
-        "priority": priority,
-        "agent_instruction": agent_instruction,
+        "router_result": {
+            "target_agent": target_agent,
+            "priority": priority,
+            "agent_instruction": agent_instruction,
+        },
+        "router_meta": router_meta,
     }

@@ -1,6 +1,8 @@
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from app.ai_router import cognitive_route_message
+from app.logging.router_logging import log_router_decision
 from app.workers.mock_workers import (
     mock_coach_agent,
     mock_manager_agent,
@@ -43,8 +45,14 @@ async def call_router(user_id: int, message_text: str) -> Dict[str, Any]:
         "current_state": fsm_state,
     }
 
-    router_result = await cognitive_route_message(router_input)
-    return router_result
+    router_output = await cognitive_route_message(router_input)
+    return {
+        "router_result": router_output.get("router_result", {}),
+        "router_meta": router_output.get("router_meta", {}),
+        "fsm_state": fsm_state,
+        "session_id": None,
+        "input_message": message_text,
+    }
 
 
 async def handle_incoming_message(user_id: int, message_text: str) -> str:
@@ -56,7 +64,27 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
     - повертає text-відповідь для користувача
     """
 
-    router_result = await call_router(user_id, message_text)
+    router_output = await call_router(user_id, message_text)
+
+    router_result = router_output.get("router_result", {})
+    router_meta = router_output.get("router_meta", {})
+
+    log_payload = {
+        "event_type": "router_decision",
+        "timestamp": datetime.utcnow().isoformat(),
+        "user_id": user_id,
+        "session_id": router_output.get("session_id"),
+        "input_message": router_output.get("input_message", message_text),
+        "fsm_state": router_output.get("fsm_state"),
+        "target_agent": router_result.get("target_agent"),
+        "priority": router_result.get("priority"),
+        "agent_instruction": router_result.get("agent_instruction"),
+        "llm_prompt_tokens": router_meta.get("llm_prompt_tokens"),
+        "llm_response_tokens": router_meta.get("llm_response_tokens"),
+        "router_latency_ms": router_meta.get("router_latency_ms"),
+    }
+
+    log_router_decision(log_payload)
 
     target_agent = router_result.get("target_agent") or "coach"
     priority = router_result.get("priority")
