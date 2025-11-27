@@ -187,6 +187,9 @@ async def schedule_daily_loop():
     - кроки планів зі статусом approved (і з проставленим scheduled_for),
       ігноруючи paused/pending/canceled.
     """
+    # Тимчасово повністю вимикаємо відновлення задач
+    return
+
     global _scheduler_started, _event_loop
 
     if _scheduler_started:
