@@ -144,10 +144,18 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
     Додає job для кроку плану.
     Повертає True, якщо щойно видали новий job_id (було None).
     """
+    if not hasattr(step, "scheduled_for"):
+        logger.info(
+            "Plan step scheduling skipped for plan %s step %s: missing scheduled_for field",
+            getattr(step, "plan_id", "?"),
+            getattr(step, "id", "?"),
+        )
+        return False
+
     if step.is_completed:
         return False
     # лише approved кроки шедулимо
-    if step.status and step.status != "approved":
+    if getattr(step, "status", None) and step.status != "approved":
         return False
     if not user or not user.is_active:
         return False
@@ -205,20 +213,24 @@ async def schedule_daily_loop():
             schedule_daily_delivery(user)
 
         # 2) Планові кроки (approved + майбутні + не completed) для активних юзерів і не paused планів
-        now_utc = datetime.now(pytz.UTC)
-        plan_rows = (
-            db.query(AIPlanStep, AIPlan, User)
-            .join(AIPlan, AIPlan.id == AIPlanStep.plan_id)
-            .join(User, User.id == AIPlan.user_id)
-            .filter(
-                AIPlan.status.in_(["active", "draft"]),  # draft не шедулимо, але нормалізуємо статуси
-                AIPlanStep.is_completed == False,
-                AIPlanStep.scheduled_for != None,
-                AIPlanStep.scheduled_for > now_utc,
-                User.is_active == True,
+        if not hasattr(AIPlanStep, "scheduled_for"):
+            logger.info("Plan step scheduling is disabled: AIPlanStep.scheduled_for is absent")
+            plan_rows = []
+        else:
+            now_utc = datetime.now(pytz.UTC)
+            plan_rows = (
+                db.query(AIPlanStep, AIPlan, User)
+                .join(AIPlan, AIPlan.id == AIPlanStep.plan_id)
+                .join(User, User.id == AIPlan.user_id)
+                .filter(
+                    AIPlan.status.in_(["active", "draft"]),  # draft не шедулимо, але нормалізуємо статуси
+                    AIPlanStep.is_completed == False,
+                    AIPlanStep.scheduled_for != None,
+                    AIPlanStep.scheduled_for > now_utc,
+                    User.is_active == True,
+                )
+                .all()
             )
-            .all()
-        )
 
         dirty = False
         for step, plan, user in plan_rows:
