@@ -23,7 +23,12 @@ from sqlalchemy.sql import func
 from app.config import settings
 
 engine = create_engine(settings.DATABASE_URL, echo=False, future=True)
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine,
+    expire_on_commit=False,
+)
 Base = declarative_base()
 
 
