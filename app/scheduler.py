@@ -2,7 +2,7 @@
 import asyncio
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time
 from typing import Optional
 
 import pytz
@@ -10,16 +10,8 @@ from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from app.ai import generate_daily_message
 from app.config import settings
-from app.db import (
-    AIPlan,
-    AIPlanStep,
-    Delivery,
-    SessionLocal,
-    User,
-    UserReminder,
-)
+from app.db import AIPlan, AIPlanStep, SessionLocal, User
 
 # jobstore: окремий sqlite файл поруч із основною БД, або той самий Postgres
 DATABASE_URL = settings.DATABASE_URL
@@ -39,6 +31,13 @@ logger = logging.getLogger(__name__)
 
 _scheduler_started = False
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
+
+
+def _generate_step_job_id(user: User, step: AIPlanStep) -> str:
+    """Генерує job_id, сумісний із попередньою логікою."""
+    if hasattr(AIPlanStep, "generate_job_id"):
+        return AIPlanStep.generate_job_id(user.id, step.plan_id)
+    return f"plan_step_{user.id}_{step.plan_id or 'plan'}_{step.id or 'step'}"
 
 
 def init_scheduler():
@@ -71,8 +70,10 @@ def reschedule_job(job_id, **trigger_args):
 
 def _cron_for_user(user: User) -> CronTrigger:
     tz = user.timezone or "Europe/Kyiv"
-    hour = user.send_hour if user.send_hour is not None else settings.DEFAULT_SEND_HOUR
-    return CronTrigger(hour=hour, minute=0, timezone=pytz.timezone(tz))
+    notification_time: dt_time | None = user.notification_time
+    hour = notification_time.hour if notification_time else settings.DEFAULT_SEND_HOUR
+    minute = notification_time.minute if notification_time else 0
+    return CronTrigger(hour=hour, minute=minute, timezone=pytz.timezone(tz))
 
 
 def _submit_coroutine(coro):
@@ -117,59 +118,8 @@ def send_scheduled_message(chat_id: int, text: str, step_id: int | None = None):
 
 
 async def _send_daily(user_id: int):
-    """Щоденне повідомлення (з кнопками) для користувача."""
-    from app.telegram import bot as tg_bot, send_daily_with_buttons
-
-    with SessionLocal() as db:
-        user = db.query(User).filter(User.id == user_id, User.active == True).first()
-        if not user:
-            return
-
-        profile = f"{user.first_name or ''} @{user.username or ''}".strip()
-        usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-        message = None
-        text = ""
-
-        try:
-            text, usage = generate_daily_message(profile or "Користувач", user.prompt_template)
-            message = await send_daily_with_buttons(tg_bot, user.tg_id, text)
-        except Exception:
-            pass
-
-        now_utc = datetime.now(pytz.UTC)
-        delivery = Delivery(
-            user_id=user.id,
-            scheduled_for=now_utc,
-            sent_at=now_utc if message else None,
-            status="sent" if message else "failed",
-            message_id=getattr(message, "message_id", None),
-            prompt_snapshot=user.prompt_template,
-            model=settings.MODEL if text else None,
-            tokens_prompt=usage.get("prompt_tokens", 0),
-            tokens_completion=usage.get("completion_tokens", 0),
-            tokens_total=usage.get("total_tokens", 0),
-        )
-        db.add(delivery)
-        db.commit()
-
-
-async def _send_custom_reminder(reminder_id: int):
-    with SessionLocal() as db:
-        reminder = db.query(UserReminder).filter(UserReminder.id == reminder_id).first()
-        if not reminder or not reminder.active:
-            return
-
-        user = db.query(User).filter(User.id == reminder.user_id).first()
-        if not user:
-            return
-
-        message = await _send_message_async(user.tg_id, reminder.message)
-
-        if not reminder.cron_expression:
-            # one-shot — деактивуємо після відправки
-            reminder.active = False
-
-        db.commit()
+    """Щоденне повідомлення (тимчасово вимкнено до Plan Agent)."""
+    logger.info("Daily message skipped (Agent WIP) for user %s", user_id)
 
 
 # ——— топ-рівневі callable для APScheduler (жодних замикань/лямбд) ———
@@ -179,91 +129,14 @@ def run_daily_job(user_id: int):
     _submit_coroutine(_send_daily(user_id))
 
 
-def run_custom_reminder_job(reminder_id: int):
-    """Sync wrapper для custom reminder."""
-    _submit_coroutine(_send_custom_reminder(reminder_id))
-
-
 # ——— API реєстрації задач ———
 
 def schedule_daily_delivery(user: User):
-    """Щоденне повідомлення за user.send_hour / timezone."""
-    if not user.active:
+    """Щоденне повідомлення за notification_time / timezone (тимчасово вимкнено)."""
+    if not user.is_active:
         return
 
-    job_id = f"daily_{user.id}"
-    trigger = _cron_for_user(user)
-
-    logger.info("Ensuring daily job %s for user %s", job_id, user.id)
-    scheduler.add_job(
-        "app.scheduler:run_daily_job",
-        trigger,
-        id=job_id,
-        kwargs={"user_id": user.id},
-        replace_existing=True,
-        misfire_grace_time=3600,
-        coalesce=True,
-        max_instances=1,
-    )
-
-
-def schedule_custom_reminder(reminder: UserReminder):
-    """Одинарне чи cron-нагадування користувачу."""
-    if not reminder.active:
-        return
-
-    job_id = reminder.job_id
-
-    if reminder.cron_expression:
-        try:
-            trigger = CronTrigger.from_crontab(
-                reminder.cron_expression,
-                timezone=pytz.timezone(reminder.timezone or "UTC"),
-            )
-        except ValueError:
-            logger.warning(
-                "Skipping reminder %s for user %s due to invalid cron '%s'",
-                reminder.id,
-                reminder.user_id,
-                reminder.cron_expression,
-            )
-            return
-
-        logger.info("Restoring cron reminder job %s for user %s", job_id, reminder.user_id)
-        scheduler.add_job(
-            "app.scheduler:run_custom_reminder_job",
-            trigger,
-            id=job_id,
-            kwargs={"reminder_id": reminder.id},
-            replace_existing=True,
-            misfire_grace_time=3600,
-            coalesce=True,
-            max_instances=1,
-        )
-
-    elif reminder.scheduled_at:
-        scheduled_utc = reminder.scheduled_at.astimezone(pytz.UTC)
-        if scheduled_utc <= datetime.now(pytz.UTC):
-            _submit_coroutine(_send_custom_reminder(reminder.id))
-            return
-
-        logger.info(
-            "Restoring one-shot reminder job %s for user %s at %s",
-            job_id,
-            reminder.user_id,
-            scheduled_utc.isoformat(),
-        )
-        scheduler.add_job(
-            "app.scheduler:run_custom_reminder_job",
-            "date",
-            id=job_id,
-            run_date=scheduled_utc,
-            kwargs={"reminder_id": reminder.id},
-            replace_existing=True,
-            misfire_grace_time=3600,
-            coalesce=True,
-            max_instances=1,
-        )
+    logger.info("Daily delivery scheduling skipped (Agent WIP) for user %s", user.id)
 
 
 def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
@@ -276,14 +149,14 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
     # лише approved кроки шедулимо
     if step.status and step.status != "approved":
         return False
-    if not user or not user.active:
+    if not user or not user.is_active:
         return False
     if not step.scheduled_for:
         return False
 
     new_job_id_assigned = False
     if not step.job_id:
-        step.job_id = AIPlanStep.generate_job_id(user.id, step.plan_id)
+        step.job_id = _generate_step_job_id(user, step)
         new_job_id_assigned = True
 
     run_date = step.scheduled_for.astimezone(pytz.UTC)
@@ -326,17 +199,12 @@ async def schedule_daily_loop():
     init_scheduler()
 
     with SessionLocal() as db:
-        # 1) Daily
-        users = db.query(User).filter(User.active == True).all()
+        # 1) Daily — тимчасово вимкнено
+        users = db.query(User).filter(User.is_active == True).all()
         for user in users:
             schedule_daily_delivery(user)
 
-        # 2) Custom reminders
-        reminders = db.query(UserReminder).filter(UserReminder.active == True).all()
-        for reminder in reminders:
-            schedule_custom_reminder(reminder)
-
-        # 3) Планові кроки (approved + майбутні + не completed) для активних юзерів і не paused планів
+        # 2) Планові кроки (approved + майбутні + не completed) для активних юзерів і не paused планів
         now_utc = datetime.now(pytz.UTC)
         plan_rows = (
             db.query(AIPlanStep, AIPlan, User)
@@ -347,7 +215,7 @@ async def schedule_daily_loop():
                 AIPlanStep.is_completed == False,
                 AIPlanStep.scheduled_for != None,
                 AIPlanStep.scheduled_for > now_utc,
-                User.active == True,
+                User.is_active == True,
             )
             .all()
         )
@@ -404,7 +272,7 @@ async def schedule_daily_loop():
 
             # якщо job_id відсутній — згенерувати
             if not step.job_id:
-                step.job_id = AIPlanStep.generate_job_id(user.id, plan.id)
+                step.job_id = _generate_step_job_id(user, step)
                 dirty = True
                 logger.info(
                     "Generated job id %s for plan %s step %s",

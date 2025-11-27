@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from app.ai_router import cognitive_route_message
+from app.db import ChatHistory, SessionLocal, SenderRole, User, UserProfile
 from app.logging.router_logging import log_router_decision
 from app.workers.mock_workers import (
     mock_coach_agent,
@@ -13,18 +14,46 @@ from app.workers.mock_workers import (
 
 
 async def get_stm_history(user_id: int) -> List[Dict[str, str]]:
-    """Short-term memory: last N сообщений (role/text). For now: return empty list."""
-    return []
+    """Short-term memory: останні 10 повідомлень користувача та бота."""
+    with SessionLocal() as db:
+        rows = (
+            db.query(ChatHistory)
+            .filter(ChatHistory.user_id == user_id)
+            .order_by(ChatHistory.created_at.desc())
+            .limit(10)
+            .all()
+        )
+
+    history = list(reversed(rows))
+    return [
+        {"role": row.role.value if isinstance(row.role, SenderRole) else str(row.role), "content": row.content}
+        for row in history
+    ]
 
 
 async def get_ltm_snapshot(user_id: int) -> Dict[str, Any]:
-    """Long-term snapshot: compressed user profile. For now: return empty dict."""
-    return {}
+    """Long-term snapshot: поля профілю користувача."""
+    with SessionLocal() as db:
+        profile: Optional[UserProfile] = (
+            db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+        )
+
+    if not profile:
+        return {}
+
+    return {
+        "main_goal": profile.main_goal,
+        "communication_style": profile.communication_style,
+        "name_preference": profile.name_preference,
+    }
 
 
 async def get_fsm_state(user_id: int) -> Optional[str]:
-    """Return current FSM state label for this user (e.g. 'onboarding:stress'). For now: return None."""
-    return None
+    """Повертає поточний FSM-стан користувача."""
+    with SessionLocal() as db:
+        user: Optional[User] = db.query(User).filter(User.id == user_id).first()
+
+    return user.current_state if user else None
 
 
 async def call_router(user_id: int, message_text: str) -> Dict[str, Any]:
@@ -106,4 +135,4 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
     else:
         worker_result = await mock_coach_agent(worker_payload)
 
-    return worker_result.get("reply_text") or ""
+    return str(worker_result.get("reply_text") or "")
