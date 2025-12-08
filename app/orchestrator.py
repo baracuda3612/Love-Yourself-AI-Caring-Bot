@@ -49,15 +49,16 @@ async def get_ltm_snapshot(user_id: int) -> Dict[str, Any]:
             db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
         )
 
-    if not profile:
-        return {}
+        if profile:
+            # Access all relationship data while the session is active
+            return {
+                "main_goal": profile.main_goal,
+                "communication_style": profile.communication_style,
+                "name_preference": profile.name_preference,
+                "timezone": profile.user.timezone if profile.user else None,
+            }
 
-    return {
-        "main_goal": profile.main_goal,
-        "communication_style": profile.communication_style,
-        "name_preference": profile.name_preference,
-        "timezone": profile.user.timezone if profile.user else None,
-    }
+    return {}
 
 
 async def get_temporal_context(user_id: int) -> Optional[str]:
