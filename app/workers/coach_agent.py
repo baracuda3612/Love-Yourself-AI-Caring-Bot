@@ -574,6 +574,9 @@ def _compose_messages(payload: Dict[str, Any]) -> List[Dict[str, str]]:
         {"role": "system", "content": _context_message(payload)},
     ]
 
+    print(">>> COACH SYSTEM PROMPT START >>>")
+    print(COACH_SYSTEM_PROMPT)
+
     messages.extend(_prepare_history(payload.get("short_term_history")))
 
     user_text = payload.get("message_text")
@@ -582,10 +585,8 @@ def _compose_messages(payload: Dict[str, Any]) -> List[Dict[str, str]]:
             messages.append({"role": "user", "content": str(user_text)})
 
     system_prompt_log = messages[0].get("content", "")
-    logger.info(
-        "Coach system prompt (truncated to 3000 chars): %s",
-        system_prompt_log[:3000],
-    )
+    print(">>> COACH SYSTEM PROMPT (TRUNCATED TO 3000 CHARS) >>>")
+    print(system_prompt_log[:3000])
 
     return messages
 
@@ -622,7 +623,14 @@ def _normalize_content(content: Any) -> str:
 
 
 async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
+    print(">>> CALLING COACH COMPOSE_MESSAGES")
     messages = _compose_messages(payload)
+
+    print(">>> FINAL MESSAGES SENT TO OPENAI >>>")
+    for m in messages:
+        role = m.get("role")
+        content = m.get("content", "")
+        print(role, ":", str(content)[:500])
 
     response = await async_client.chat.completions.create(
         model=settings.MODEL,

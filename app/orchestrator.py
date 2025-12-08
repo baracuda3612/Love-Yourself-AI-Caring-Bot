@@ -176,6 +176,10 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
         **context_payload,
     }
 
+    if target_agent == "coach":
+        print(">>> ROUTER → COACH PAYLOAD >>>")
+        print(json.dumps(worker_payload, ensure_ascii=False)[:2000])
+
     worker_result = await _invoke_agent(target_agent, worker_payload)
 
     reroute_target = _extract_reroute_target(worker_result)
