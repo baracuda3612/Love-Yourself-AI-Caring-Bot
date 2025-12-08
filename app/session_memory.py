@@ -74,7 +74,7 @@ class SessionMemory:
 
         recent = await self.get_recent_messages(user_id)
         for msg in reversed(recent):
-            if msg.get("role") == "bot":
+            if msg.get("role") == "assistant":
                 text = msg.get("text")
                 if isinstance(text, str):
                     return text

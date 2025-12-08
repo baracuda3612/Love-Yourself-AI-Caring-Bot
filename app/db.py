@@ -5,6 +5,7 @@ from enum import Enum as PyEnum
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     Date,
     DateTime,
@@ -30,13 +31,6 @@ SessionLocal = sessionmaker(
     expire_on_commit=False,
 )
 Base = declarative_base()
-
-
-# -------------------- ENUMS --------------------
-class SenderRole(PyEnum):
-    USER = "user"
-    ASSISTANT = "assistant"
-    SYSTEM = "system"
 
 
 class PlanStatus(PyEnum):
@@ -82,10 +76,13 @@ class ChatHistory(Base):
 
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
-    role = Column(Enum(SenderRole), nullable=False)
-    content = Column(Text, nullable=False)
-    agent_used = Column(String, nullable=True)
+    role = Column(Text, nullable=False)
+    text = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("role in ('user','assistant')", name="ck_chat_history_role"),
+    )
 
     user = relationship("User", back_populates="chat_history")
 

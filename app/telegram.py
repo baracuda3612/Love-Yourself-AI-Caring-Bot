@@ -10,7 +10,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Message
 
 from app.config import settings
-from app.db import ChatHistory, SenderRole, SessionLocal, User, UserProfile
+from app.db import ChatHistory, SessionLocal, User, UserProfile
 from app.orchestrator import handle_incoming_message
 from app.redis_client import create_fsm_storage, create_redis_client
 
@@ -63,18 +63,14 @@ async def on_text(message: Message):
     text = message.text or ""
     with SessionLocal() as db:
         user = _ensure_user(db, message.from_user)
-        db.add(
-            ChatHistory(user_id=user.id, role=SenderRole.USER, content=text)
-        )
+        db.add(ChatHistory(user_id=user.id, role="user", text=text))
         db.commit()
 
     reply_text = await handle_incoming_message(user.id, text)
     await message.answer(reply_text)
 
     with SessionLocal() as db:
-        db.add(
-            ChatHistory(user_id=user.id, role=SenderRole.ASSISTANT, content=reply_text)
-        )
+        db.add(ChatHistory(user_id=user.id, role="assistant", text=reply_text))
         db.commit()
 
 

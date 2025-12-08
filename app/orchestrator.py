@@ -2,11 +2,12 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import json
+import logging
 
 import pytz
 
 from app.ai_router import cognitive_route_message
-from app.db import ChatHistory, SessionLocal, SenderRole, User, UserProfile
+from app.db import ChatHistory, SessionLocal, User, UserProfile
 from app.logging.router_logging import log_router_decision
 from app.session_memory import SessionMemory
 from app.workers.coach_agent import coach_agent
@@ -18,6 +19,7 @@ from app.workers.mock_workers import (
 )
 
 session_memory = SessionMemory(limit=20)
+logger = logging.getLogger(__name__)
 
 
 def _safe_timezone(name: Optional[str]) -> pytz.BaseTzInfo:
@@ -28,18 +30,36 @@ def _safe_timezone(name: Optional[str]) -> pytz.BaseTzInfo:
 
 
 async def get_stm_history(user_id: int) -> List[Dict[str, str]]:
-    """Short-term memory: останні 10 пар повідомлень користувача та бота (Redis)."""
+    """Short-term memory with Redis primary and Postgres fallback."""
+
     history = await session_memory.get_recent_messages(user_id)
-    normalized: List[Dict[str, str]] = []
-    for item in history:
-        role = item.get("role") or "user"
-        content = item.get("text")
-        if role not in {"user", "assistant"}:
-            continue
-        if not isinstance(content, str):
-            continue
-        normalized.append({"role": role, "content": content})
-    return normalized
+    if history:
+        logger.info("[STM] Redis memory OK (%s messages)", len(history))
+        return [
+            {"role": item.get("role"), "content": item.get("text")}
+            for item in history
+            if isinstance(item, dict)
+        ]
+
+    with SessionLocal() as db:
+        rows = (
+            db.query(ChatHistory.role, ChatHistory.text, ChatHistory.created_at)
+            .filter(ChatHistory.user_id == user_id)
+            .order_by(ChatHistory.created_at.desc())
+            .limit(session_memory.limit)
+            .all()
+        )
+
+    if rows:
+        logger.warning(
+            "[STM_FALLBACK] Using Postgres STM for user_id=%s (Redis unavailable)",
+            user_id,
+        )
+
+    return [
+        {"role": row.role, "content": row.text}
+        for row in reversed(rows)
+    ]
 
 
 async def get_ltm_snapshot(user_id: int) -> Dict[str, Any]:
