@@ -1,8 +1,8 @@
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 from app.config import settings
 
-client = OpenAI(api_key=settings.OPENAI_API_KEY)
+async_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 
 
 def _usage_dict(resp):
@@ -16,9 +16,9 @@ def _usage_dict(resp):
     }
 
 
-def _call_openai(messages):
+async def _call_openai(messages):
     """Базовий виклик OpenAI; залишається для сумісності клієнта."""
-    resp = client.chat.completions.create(
+    resp = await async_client.chat.completions.create(
         model=settings.MODEL,
         messages=messages,
         max_tokens=settings.MAX_TOKENS,
@@ -27,4 +27,4 @@ def _call_openai(messages):
     return resp.choices[0].message.content, _usage_dict(resp)
 
 
-__all__ = ["client", "_call_openai"]
+__all__ = ["async_client", "_call_openai"]
