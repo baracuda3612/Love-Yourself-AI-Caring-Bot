@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Dict, List, Optional
 
 from app.ai import _usage_dict, async_client
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 COACH_SYSTEM_PROMPT = """# Identity & Personality
 You are Love Yourself Coach – the primary coaching agent inside the Love Yourself system.
@@ -548,7 +551,7 @@ def _prepare_history(history: Optional[List[Dict[str, Any]]]) -> List[Dict[str, 
         content = item.get("content")
         if not content:
             continue
-        if role not in {"user", "assistant", "system"}:
+        if role not in {"user", "assistant"}:
             role = "user"
         messages.append({"role": role, "content": str(content)})
     return messages
@@ -577,6 +580,12 @@ def _compose_messages(payload: Dict[str, Any]) -> List[Dict[str, str]]:
     if user_text:
         if not messages or messages[-1].get("content") != user_text or messages[-1].get("role") != "user":
             messages.append({"role": "user", "content": str(user_text)})
+
+    system_prompt_log = messages[0].get("content", "")
+    logger.info(
+        "Coach system prompt (truncated to 3000 chars): %s",
+        system_prompt_log[:3000],
+    )
 
     return messages
 
