@@ -11,6 +11,13 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+FORBIDDEN_INSTRUCTION_SNIPPETS = [
+    "you are",
+    "as an ai",
+    "assistant is a helpful",
+    "friendly ai assistant",
+]
+
 COACH_SYSTEM_PROMPT = """# Identity & Personality
 You are Love Yourself Coach – the primary coaching agent inside the Love Yourself system.
 
@@ -551,10 +558,12 @@ def _prepare_history(history: Optional[List[Dict[str, Any]]]) -> List[Dict[str, 
         content = item.get("content")
         if not content:
             continue
+        if role == "system":
+            continue
         if role not in {"user", "assistant"}:
-            role = "user"
+            continue
         messages.append({"role": role, "content": str(content)})
-    return messages
+    return messages[-20:]
 
 
 def _context_message(payload: Dict[str, Any]) -> str:
@@ -591,6 +600,20 @@ def _compose_messages(payload: Dict[str, Any]) -> List[Dict[str, str]]:
             messages.append({"role": "user", "content": str(user_text)})
 
     return messages
+
+
+def _detect_foreign_instructions(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    flagged: List[Dict[str, str]] = []
+    for idx, message in enumerate(messages):
+        role = message.get("role")
+        content = str(message.get("content", ""))
+        if role == "system" and idx in {0, 1}:
+            continue
+        lowered = content.lower()
+        for snippet in FORBIDDEN_INSTRUCTION_SNIPPETS:
+            if snippet in lowered:
+                flagged.append({"index": idx, "role": role, "snippet": snippet})
+    return flagged
 
 
 def _normalize_tool_calls(raw_calls: Optional[Any]) -> List[Dict[str, Any]]:
@@ -641,18 +664,44 @@ async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
         content = m.get("content", "")
         print(role, ":", str(content)[:500])
 
-    response = await async_client.chat.completions.create(
-        model=settings.MODEL,
-        messages=messages,
-        max_tokens=settings.MAX_TOKENS,
-        temperature=settings.TEMPERATURE,
-        tools=[REROUTE_TOOL],
-        tool_choice="auto",
-    )
+    foreign_flags = _detect_foreign_instructions(messages)
+    if foreign_flags:
+        logger.error("[coach_prompt_validation_error] Foreign instructions detected: %s", foreign_flags)
+
+    try:
+        response = await async_client.chat.completions.create(
+            model=settings.MODEL,
+            messages=messages,
+            max_tokens=settings.MAX_TOKENS,
+            temperature=settings.TEMPERATURE,
+            tools=[REROUTE_TOOL],
+            tool_choice="auto",
+        )
+    except Exception as exc:
+        logger.error("[coach_model_unavailable] %s: %s", exc.__class__.__name__, exc, exc_info=True)
+        return {
+            "agent_name": "coach_agent",
+            "reply_type": "error",
+            "reply_text": "",
+            "tool_calls": [],
+            "usage": _usage_dict(None),
+            "debug": {
+                "note": "Coach agent unavailable",
+                "status": "temporary_unavailable",
+                "error": str(exc),
+                "model": settings.MODEL,
+            },
+        }
 
     choice = response.choices[0].message
     content = _normalize_content(choice.content)
     tool_calls = _normalize_tool_calls(choice.tool_calls)
+
+    logger.info(
+        "[coach_response] reply_preview=%s tool_calls=%s",
+        content[:500],
+        json.dumps(tool_calls, ensure_ascii=False)[:500],
+    )
 
     return {
         "agent_name": "coach_agent",
