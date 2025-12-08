@@ -8,6 +8,7 @@ import pytz
 from app.ai_router import cognitive_route_message
 from app.db import ChatHistory, SessionLocal, SenderRole, User, UserProfile
 from app.logging.router_logging import log_router_decision
+from app.session_memory import SessionMemory
 from app.workers.coach_agent import coach_agent
 from app.workers.mock_workers import (
     mock_manager_agent,
@@ -15,6 +16,8 @@ from app.workers.mock_workers import (
     mock_plan_agent,
     mock_safety_agent,
 )
+
+session_memory = SessionMemory(limit=20)
 
 
 def _safe_timezone(name: Optional[str]) -> pytz.BaseTzInfo:
@@ -25,21 +28,18 @@ def _safe_timezone(name: Optional[str]) -> pytz.BaseTzInfo:
 
 
 async def get_stm_history(user_id: int) -> List[Dict[str, str]]:
-    """Short-term memory: останні 10 повідомлень користувача та бота."""
-    with SessionLocal() as db:
-        rows = (
-            db.query(ChatHistory)
-            .filter(ChatHistory.user_id == user_id)
-            .order_by(ChatHistory.created_at.desc())
-            .limit(10)
-            .all()
-        )
-
-    history = list(reversed(rows))
-    return [
-        {"role": row.role.value if isinstance(row.role, SenderRole) else str(row.role), "content": row.content}
-        for row in history
-    ]
+    """Short-term memory: останні 10 пар повідомлень користувача та бота (Redis)."""
+    history = await session_memory.get_recent_messages(user_id)
+    normalized: List[Dict[str, str]] = []
+    for item in history:
+        role = item.get("role") or "user"
+        content = item.get("text")
+        if role not in {"user", "assistant"}:
+            continue
+        if not isinstance(content, str):
+            continue
+        normalized.append({"role": role, "content": content})
+    return normalized
 
 
 async def get_ltm_snapshot(user_id: int) -> Dict[str, Any]:
@@ -110,7 +110,7 @@ async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
 async def call_router(user_id: int, message_text: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Сервісний хелпер: збирає контекст, формує payload для Router'а,
-    викликає router і повертає JSON-відповідь (target_agent, priority, agent_instruction).
+    викликає router і повертає JSON-відповідь (target_agent, priority).
     """
 
     context_payload = context or await build_user_context(user_id, message_text)
@@ -144,6 +144,8 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
     - повертає text-відповідь для користувача
     """
 
+    await session_memory.append_message(user_id, "user", message_text)
+
     context_payload = await build_user_context(user_id, message_text)
     router_output = await call_router(user_id, message_text, context_payload)
 
@@ -159,7 +161,6 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
         "fsm_state": router_output.get("fsm_state"),
         "target_agent": router_result.get("target_agent"),
         "priority": router_result.get("priority"),
-        "agent_instruction": router_result.get("agent_instruction"),
         "llm_prompt_tokens": router_meta.get("llm_prompt_tokens"),
         "llm_response_tokens": router_meta.get("llm_response_tokens"),
         "router_latency_ms": router_meta.get("router_latency_ms"),
@@ -170,7 +171,6 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
     target_agent = router_result.get("target_agent") or "coach"
     worker_payload = {
         "user_id": user_id,
-        "agent_instruction": router_result.get("agent_instruction"),
         "priority": router_result.get("priority"),
         "router_result": router_result,
         **context_payload,
@@ -184,10 +184,12 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
 
     reroute_target = _extract_reroute_target(worker_result)
     if reroute_target:
-        worker_payload["agent_instruction"] = f"Logic override: reroute to {reroute_target}"
         worker_result = await _invoke_agent(reroute_target, worker_payload)
 
-    return str(worker_result.get("reply_text") or "")
+    reply_text = str(worker_result.get("reply_text") or "")
+    await session_memory.append_message(user_id, "assistant", reply_text)
+
+    return reply_text
 
 
 def _extract_reroute_target(worker_result: Dict[str, Any]) -> Optional[str]:
