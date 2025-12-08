@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from app.ai import _usage_dict, client
+from app.ai import _usage_dict, async_client
 from app.config import settings
 
 COACH_SYSTEM_PROMPT = """# Identity & Personality
@@ -615,7 +615,7 @@ def _normalize_content(content: Any) -> str:
 async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
     messages = _compose_messages(payload)
 
-    response = client.chat.completions.create(
+    response = await async_client.chat.completions.create(
         model=settings.MODEL,
         messages=messages,
         max_tokens=settings.MAX_TOKENS,
