@@ -569,24 +569,26 @@ def _context_message(payload: Dict[str, Any]) -> str:
 
 
 def _compose_messages(payload: Dict[str, Any]) -> List[Dict[str, str]]:
+    context_message = _context_message(payload)
     messages: List[Dict[str, str]] = [
         {"role": "system", "content": COACH_SYSTEM_PROMPT},
-        {"role": "system", "content": _context_message(payload)},
+        {"role": "system", "content": context_message},
     ]
 
-    print(">>> COACH SYSTEM PROMPT START >>>")
-    print(COACH_SYSTEM_PROMPT)
+    print(">>> CONTEXT MESSAGE >>>")
+    print(context_message)
 
-    messages.extend(_prepare_history(payload.get("short_term_history")))
+    history_messages = _prepare_history(payload.get("short_term_history"))
+
+    print(">>> HISTORY >>>")
+    print(json.dumps(history_messages, ensure_ascii=False))
+
+    messages.extend(history_messages)
 
     user_text = payload.get("message_text")
     if user_text:
         if not messages or messages[-1].get("content") != user_text or messages[-1].get("role") != "user":
             messages.append({"role": "user", "content": str(user_text)})
-
-    system_prompt_log = messages[0].get("content", "")
-    print(">>> COACH SYSTEM PROMPT (TRUNCATED TO 3000 CHARS) >>>")
-    print(system_prompt_log[:3000])
 
     return messages
 
@@ -623,6 +625,13 @@ def _normalize_content(content: Any) -> str:
 
 
 async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
+    print(">>> RAW PAYLOAD RECEIVED BY COACH_AGENT >>>")
+    raw_payload = json.dumps(payload, ensure_ascii=False)
+    print(raw_payload[:2000])
+
+    print(">>> COACH SYSTEM PROMPT (TRUNCATED TO 3000 CHARS) >>>")
+    print(COACH_SYSTEM_PROMPT[:3000])
+
     print(">>> CALLING COACH COMPOSE_MESSAGES")
     messages = _compose_messages(payload)
 
