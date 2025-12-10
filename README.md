@@ -6,6 +6,6 @@ Minimal MVP:
 - APScheduler daily message
 - /ask with daily limit
 - token usage logging
-- SQLite (swap to Postgres later)
+- PostgreSQL database (set `DATABASE_URL` or `DB_URL`)
 
 See `.env.example` for config.
