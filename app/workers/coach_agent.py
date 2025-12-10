@@ -568,12 +568,13 @@ def _prepare_history(history: Optional[List[Dict[str, Any]]]) -> List[Dict[str, 
 
 def _context_message(payload: Dict[str, Any]) -> str:
     context = {
-        "profile_snapshot": payload.get("profile_snapshot"),
-        "current_state": payload.get("current_state"),
-        "temporal_context": payload.get("temporal_context"),
+        "user_profile": payload.get("profile_snapshot"),
+        "current_time": payload.get("temporal_context"),
+        "fsm_state": payload.get("current_state"),
     }
-    return "Context to keep in mind (treat as if you remember it):\n" + json.dumps(
-        context, ensure_ascii=False
+    return (
+        "Context block (treat as remembered facts; do not expose directly):\n"
+        + json.dumps(context, ensure_ascii=False, indent=2)
     )
 
 
@@ -658,6 +659,9 @@ async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
     print(">>> CALLING COACH COMPOSE_MESSAGES")
     messages = _compose_messages(payload)
 
+    print(">>> COACH MODEL SELECTED >>>")
+    print(settings.COACH_MODEL)
+
     print(">>> FINAL MESSAGES SENT TO OPENAI >>>")
     for m in messages:
         role = m.get("role")
@@ -670,7 +674,7 @@ async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     try:
         response = await async_client.chat.completions.create(
-            model=settings.MODEL,
+            model=settings.COACH_MODEL,
             messages=messages,
             max_tokens=settings.MAX_TOKENS,
             temperature=settings.TEMPERATURE,
@@ -689,7 +693,7 @@ async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "note": "Coach agent unavailable",
                 "status": "temporary_unavailable",
                 "error": str(exc),
-                "model": settings.MODEL,
+                "model": settings.COACH_MODEL,
             },
         }
 
@@ -711,7 +715,7 @@ async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
         "usage": _usage_dict(response),
         "debug": {
             "note": "Coach agent response",
-            "model": settings.MODEL,
+            "model": settings.COACH_MODEL,
         },
     }
 

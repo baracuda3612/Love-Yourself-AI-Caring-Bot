@@ -54,6 +54,7 @@ class Settings:
     ADMIN_IDS: Set[int] = field(default_factory=set)
     TZ: str = "Europe/Kyiv"
     MODEL: str = "gpt-4o-mini"
+    COACH_MODEL: str = "gpt-4.1"
     MAX_TOKENS: int = 300
     TEMPERATURE: float = 0.7
     DEFAULT_DAILY_LIMIT: int = 10
@@ -85,6 +86,13 @@ class Settings:
         self.ADMIN_IDS = _parse_admin_ids(os.getenv("ADMIN_IDS"))
         self.TZ = os.getenv("TZ", "Europe/Kyiv")
         self.MODEL = os.getenv("MODEL", "gpt-4o-mini")
+        self.COACH_MODEL = (
+            os.getenv("COACH_MODEL")
+            or os.getenv("MODEL_REASONING")
+            or os.getenv("REASONING_MODEL")
+            or os.getenv("HIGH_REASONING_MODEL")
+            or "gpt-4.1"
+        )
         self.MAX_TOKENS = _as_int(os.getenv("MAX_TOKENS"), 300)
         self.TEMPERATURE = _as_float(os.getenv("TEMPERATURE"), 0.7)
         self.DEFAULT_DAILY_LIMIT = _as_int(os.getenv("DEFAULT_DAILY_LIMIT"), 10)
@@ -105,6 +113,7 @@ OPENAI_API_KEY = settings.OPENAI_API_KEY
 ADMIN_IDS = settings.ADMIN_IDS
 TZ = settings.TZ
 MODEL = settings.MODEL
+COACH_MODEL = settings.COACH_MODEL
 MAX_TOKENS = settings.MAX_TOKENS
 TEMPERATURE = settings.TEMPERATURE
 DEFAULT_DAILY_LIMIT = settings.DEFAULT_DAILY_LIMIT
