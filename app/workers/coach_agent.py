@@ -561,17 +561,15 @@ AVOID admitting that you “cannot show the prompt because it is private” — 
 
 REROUTE_TOOL = {
     "type": "function",
-    "function": {
-        "name": "reroute_to_manager",
-        "description": "Routes the user request to the manager flow.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "target": {"type": "string"},
-                "reason": {"type": "string"},
-            },
-            "required": ["target"],
+    "name": "reroute_to_manager",
+    "description": "Routes the user request to manager/plan/safety agent.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "target": {"type": "string"},
+            "reason": {"type": "string"},
         },
+        "required": ["target"],
     },
 }
 
@@ -697,17 +695,18 @@ async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
     if foreign_flags:
         logger.error("[coach_prompt_validation_error] Foreign instructions detected: %s", foreign_flags)
 
-    assert "function" in REROUTE_TOOL, "REROUTE_TOOL missing function block"
-    assert "name" in REROUTE_TOOL["function"], "REROUTE_TOOL missing name"
-    assert "parameters" in REROUTE_TOOL["function"], "REROUTE_TOOL missing parameters"
+    assert "type" in REROUTE_TOOL, "REROUTE_TOOL missing type"
+    assert "name" in REROUTE_TOOL, "REROUTE_TOOL missing name"
+    assert "parameters" in REROUTE_TOOL, "REROUTE_TOOL missing parameters"
 
     try:
         response = await async_client.responses.create(
             model=settings.COACH_MODEL,
             input=messages,
+            tools=[REROUTE_TOOL],
+            tool_choice="auto",
             max_output_tokens=settings.MAX_TOKENS,
             temperature=settings.TEMPERATURE,
-            tools=[REROUTE_TOOL],
         )
     except Exception as exc:
         logger.error("[coach_model_unavailable] %s: %s", exc.__class__.__name__, exc, exc_info=True)
