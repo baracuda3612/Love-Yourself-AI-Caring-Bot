@@ -209,36 +209,10 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
 
     worker_result = await _invoke_agent(target_agent, worker_payload)
 
-    reroute_target = _extract_reroute_target(worker_result)
-    if reroute_target:
-        worker_result = await _invoke_agent(reroute_target, worker_payload)
-
     reply_text = str(worker_result.get("reply_text") or "")
     await session_memory.append_message(user_id, "assistant", reply_text)
 
     return reply_text
-
-
-def _extract_reroute_target(worker_result: Dict[str, Any]) -> Optional[str]:
-    tool_calls = worker_result.get("tool_calls") or []
-    for call in tool_calls:
-        function_data = call.get("function") or {}
-        if function_data.get("name") not in {"reroute_to_manager", "reroute_request"}:
-            continue
-        arguments = function_data.get("arguments")
-        if isinstance(arguments, str):
-            try:
-                arguments = json.loads(arguments)
-            except json.JSONDecodeError:
-                continue
-        if not isinstance(arguments, dict):
-            continue
-        target_agent = arguments.get("target") or arguments.get("target_agent")
-        if target_agent in {"plan", "manager", "safety"}:
-            return target_agent
-    return None
-
-
 async def _invoke_agent(target_agent: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     if target_agent == "safety":
         return await mock_safety_agent(payload)
