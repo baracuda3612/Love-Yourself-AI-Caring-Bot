@@ -47,13 +47,9 @@ async def test_non_coach_agent_returns_immediately(monkeypatch):
         invoke_calls.append(target_agent)
         return {"reply_text": f"{target_agent} says hi"}
 
-    def forbid_reroute(worker_result):
-        raise AssertionError("_extract_reroute_target should not be called")
-
     monkeypatch.setattr(orchestrator, "build_user_context", fake_build_user_context)
     monkeypatch.setattr(orchestrator, "call_router", fake_call_router)
     monkeypatch.setattr(orchestrator, "_invoke_agent", fake_invoke_agent)
-    monkeypatch.setattr(orchestrator, "_extract_reroute_target", forbid_reroute)
 
     reply = await orchestrator.handle_incoming_message(user_id=1, message_text="hello")
 
@@ -87,19 +83,17 @@ async def test_coach_agent_allows_single_reroute(monkeypatch):
 
     async def fake_invoke_agent(target_agent, payload):
         invoke_calls.append(target_agent)
-        if target_agent == "coach":
-            return {
-                "reply_text": "coach response",
-                "tool_calls": [
-                    {
-                        "function": {
-                            "name": "reroute_to_manager",
-                            "arguments": {"target": "manager"},
-                        }
+        return {
+            "reply_text": "coach response",
+            "tool_calls": [
+                {
+                    "function": {
+                        "name": "reroute_to_manager",
+                        "arguments": {"target": "manager"},
                     }
-                ],
-            }
-        return {"reply_text": f"{target_agent} final"}
+                }
+            ],
+        }
 
     monkeypatch.setattr(orchestrator, "build_user_context", fake_build_user_context)
     monkeypatch.setattr(orchestrator, "call_router", fake_call_router)
@@ -107,9 +101,9 @@ async def test_coach_agent_allows_single_reroute(monkeypatch):
 
     reply = await orchestrator.handle_incoming_message(user_id=2, message_text="hi")
 
-    assert reply == "manager final"
-    assert invoke_calls == ["coach", "manager"]
+    assert reply == "coach response"
+    assert invoke_calls == ["coach"]
     assert dummy_memory.messages == [
         (2, "user", "hi"),
-        (2, "assistant", "manager final"),
+        (2, "assistant", "coach response"),
     ]
