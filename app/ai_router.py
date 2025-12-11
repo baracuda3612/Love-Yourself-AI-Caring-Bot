@@ -187,7 +187,7 @@ async def route_message(context: dict) -> Dict[str, Any]:
 
     try:
         response = await async_client.responses.create(
-            model=settings.MODEL,
+            model=settings.ROUTER_MODEL,
             input=messages,
             temperature=0.2,
             max_output_tokens=settings.MAX_TOKENS,
@@ -313,7 +313,7 @@ async def cognitive_route_message(payload: dict) -> dict:
     try:
         t_start = time.monotonic()
         response = await async_client.responses.create(
-            model=settings.MODEL,
+            model=settings.ROUTER_MODEL,
             input=messages,
             temperature=0,
             response_format={"type": "json_object"},
@@ -331,7 +331,6 @@ async def cognitive_route_message(payload: dict) -> dict:
             )
 
         router_meta["router_latency_ms"] = (t_end - t_start) * 1000
-        content = extract_output_text(response)
     except Exception as exc:  # noqa: PERF203
         log_router_decision(
             {
@@ -345,7 +344,38 @@ async def cognitive_route_message(payload: dict) -> dict:
         )
         return {"router_result": base, "router_meta": router_meta}
 
-    if not content:
+    output = None
+    try:
+        output_list = getattr(response, "output", None)
+        if output_list:
+            content_blocks = getattr(output_list[0], "content", None)
+            if content_blocks:
+                output = getattr(content_blocks[0], "parsed", None) or getattr(
+                    content_blocks[0], "input_json", None
+                )
+    except Exception:
+        output = None
+
+    if output is None:
+        output_text = getattr(response, "output_text", None) or ""
+        if output_text:
+            try:
+                output = json.loads(output_text)
+            except Exception:
+                log_router_decision(
+                    {
+                        "event_type": "cognitive_router_decision",
+                        "status": "parse_error",
+                        "user_id": payload.get("user_id"),
+                        "current_state": payload.get("current_state"),
+                        "decision": base,
+                        "raw_output": output_text,
+                        "router_meta": router_meta,
+                    }
+                )
+                return {"router_result": base, "router_meta": router_meta}
+
+    if output is None:
         log_router_decision(
             {
                 "event_type": "cognitive_router_decision",
@@ -358,9 +388,7 @@ async def cognitive_route_message(payload: dict) -> dict:
         )
         return {"router_result": base, "router_meta": router_meta}
 
-    try:
-        output = json.loads(content)
-    except Exception:
+    if not isinstance(output, dict):
         log_router_decision(
             {
                 "event_type": "cognitive_router_decision",
@@ -368,7 +396,7 @@ async def cognitive_route_message(payload: dict) -> dict:
                 "user_id": payload.get("user_id"),
                 "current_state": payload.get("current_state"),
                 "decision": base,
-                "raw_output": content,
+                "raw_output": output,
                 "router_meta": router_meta,
             }
         )
