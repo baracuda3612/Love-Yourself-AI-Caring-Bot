@@ -196,9 +196,16 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
         **context_payload,
     }
 
-    if target_agent == "coach":
-        print(">>> ROUTER → COACH PAYLOAD >>>")
-        print(json.dumps(worker_payload, ensure_ascii=False)[:2000])
+    if target_agent != "coach":
+        worker_result = await _invoke_agent(target_agent, worker_payload)
+
+        reply_text = str(worker_result.get("reply_text") or "")
+        await session_memory.append_message(user_id, "assistant", reply_text)
+
+        return reply_text
+
+    print(">>> ROUTER → COACH PAYLOAD >>>")
+    print(json.dumps(worker_payload, ensure_ascii=False)[:2000])
 
     worker_result = await _invoke_agent(target_agent, worker_payload)
 
