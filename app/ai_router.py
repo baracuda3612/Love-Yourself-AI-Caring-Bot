@@ -1,14 +1,10 @@
-import asyncio
 import json
 import re
 import time
 from typing import Any, Dict
 
-from openai import OpenAI
-
 from app.config import settings
-
-client = OpenAI(api_key=settings.OPENAI_API_KEY)
+from app.ai import async_client
 
 ROUTER_SYSTEM_PROMPT = (
     "You are an intent router for a mental wellbeing bot in Telegram. "
@@ -188,17 +184,13 @@ async def route_message(context: dict) -> Dict[str, Any]:
     ]
 
     try:
-        loop = asyncio.get_running_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages,
-                temperature=0.2,
-                max_completion_tokens=200,
-            ),
+        response = await async_client.responses.create(
+            model=settings.MODEL,
+            input=messages,
+            temperature=0.2,
+            max_output_tokens=settings.MAX_TOKENS,
         )
-        content = response.choices[0].message.content if response else None
+        content = response.output_text or ""
     except Exception as e:
         print(f"[router_error] {e.__class__.__name__}: {e}")
         return base
@@ -273,25 +265,26 @@ async def cognitive_route_message(payload: dict) -> dict:
 
     try:
         t_start = time.monotonic()
-        loop = asyncio.get_running_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: client.chat.completions.create(
-                model=settings.MODEL,
-                messages=messages,
-                temperature=0,
-                response_format={"type": "json_object"},
-            ),
+        response = await async_client.responses.create(
+            model=settings.MODEL,
+            input=messages,
+            temperature=0,
+            response_format={"type": "json_object"},
+            max_output_tokens=settings.MAX_TOKENS,
         )
         t_end = time.monotonic()
 
         if response is not None:
             usage = getattr(response, "usage", None)
-            router_meta["llm_prompt_tokens"] = getattr(usage, "prompt_tokens", None)
-            router_meta["llm_response_tokens"] = getattr(usage, "completion_tokens", None)
+            router_meta["llm_prompt_tokens"] = getattr(
+                usage, "prompt_tokens", getattr(usage, "input_tokens", None)
+            )
+            router_meta["llm_response_tokens"] = getattr(
+                usage, "completion_tokens", getattr(usage, "output_tokens", None)
+            )
 
         router_meta["router_latency_ms"] = (t_end - t_start) * 1000
-        content = response.choices[0].message.content if response else None
+        content = response.output_text or ""
     except Exception:
         return {"router_result": base, "router_meta": router_meta}
 

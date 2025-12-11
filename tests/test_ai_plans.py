@@ -6,52 +6,37 @@ import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-import json
-
-import pytest
-
 from app import ai_plans
-from app.telegram import _coerce_plan_payload
-
-
-class DummyMessage:
-    def __init__(self, content: str):
-        self.content = content
-
-
-class DummyChoice:
-    def __init__(self, content: str):
-        self.message = DummyMessage(content)
+from app.ai_plans import _extract_json_object
 
 
 class DummyResponse:
     def __init__(self, content: str):
-        self.choices = [DummyChoice(content)]
+        self.output_text = content
 
 
-class DummyCompletions:
+class DummyResponses:
     def __init__(self, content: str):
         self._content = content
 
-    def create(self, *args, **kwargs):
+    async def create(self, *args, **kwargs):
         return DummyResponse(self._content)
 
 
-class DummyChat:
+class DummyAsyncClient:
     def __init__(self, content: str):
-        self.completions = DummyCompletions(content)
+        self.responses = DummyResponses(content)
 
 
-class DummyClient:
-    def __init__(self, content: str):
-        self.chat = DummyChat(content)
+def _coerce_plan_payload(raw: str):
+    return _extract_json_object(raw) or {}
 
 
 @pytest.fixture(autouse=True)
 def restore_client():
-    original = ai_plans._client
+    original = ai_plans.async_client
     yield
-    ai_plans._client = original
+    ai_plans.async_client = original
 
 
 def test_generate_ai_plan_valid_json():
@@ -61,7 +46,7 @@ def test_generate_ai_plan_valid_json():
             {"day": 1, "message": "Крок один", "scheduled_for": "2024-01-01T10:00:00"}
         ],
     }
-    ai_plans._client = DummyClient(json.dumps(payload, ensure_ascii=False))
+    ai_plans.async_client = DummyAsyncClient(json.dumps(payload, ensure_ascii=False))
 
     plan = ai_plans.generate_ai_plan(
         goal="Покращити сон",
@@ -85,7 +70,7 @@ def test_coerce_plan_payload_extracts_embedded_json():
 
 
 def test_generate_ai_plan_fallback_used_when_invalid_response():
-    ai_plans._client = DummyClient("Невдала відповідь без JSON")
+    ai_plans.async_client = DummyAsyncClient("Невдала відповідь без JSON")
 
     plan = ai_plans.generate_ai_plan(
         goal="Покращити сон",

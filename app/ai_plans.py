@@ -6,15 +6,14 @@ import json
 import re
 from typing import Any, Dict, Iterable, List, Optional
 
+import asyncio
 import pytz
-from openai import OpenAI
 
 from app.config import settings
+from app.ai import async_client
 
 __all__ = ["generate_ai_plan"]
 
-
-_client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
@@ -195,22 +194,26 @@ def _build_fallback_plan(goal: str) -> Dict[str, Any]:
     return {"plan_name": f"План для {goal}", "steps": steps}
 
 
+async def _request_plan_async(messages: List[Dict[str, str]]):
+    return await async_client.responses.create(
+        model=settings.MODEL,
+        input=messages,
+        response_format={"type": "json_object"},
+        temperature=0.2,
+        max_output_tokens=settings.MAX_TOKENS,
+    )
+
+
 def _request_plan(messages: List[Dict[str, str]]) -> Optional[Dict[str, Any]]:
     try:
-        response = _client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            response_format={"type": "json_object"},
-            temperature=0.2,
-            max_completion_tokens=1200,
-        )
+        response = asyncio.run(_request_plan_async(messages))
     except Exception:
         return None
 
-    if not getattr(response, "choices", None):
+    if response is None:
         return None
 
-    content = response.choices[0].message.content if response.choices else None
+    content = response.output_text or ""
     if not isinstance(content, str):
         return None
     return _extract_json_object(content)
