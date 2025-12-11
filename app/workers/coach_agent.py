@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
-from app.ai import _usage_dict, async_client
+from app.ai import _usage_dict, async_client, extract_output_text
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -724,7 +724,7 @@ async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
             },
         }
 
-    content = response.output_text or ""
+    content = extract_output_text(response)
     # Collect tool calls from ALL content blocks
     tool_calls_raw: list[Any] = []
     try:
