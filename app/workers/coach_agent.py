@@ -701,13 +701,12 @@ async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.error("[coach_prompt_validation_error] Foreign instructions detected: %s", foreign_flags)
 
     try:
-        response = await async_client.chat.completions.create(
+        response = await async_client.responses.create(
             model=settings.COACH_MODEL,
-            messages=messages,
-            max_completion_tokens=settings.MAX_TOKENS,
+            input=messages,
+            max_output_tokens=settings.MAX_TOKENS,
             temperature=settings.TEMPERATURE,
             tools=[REROUTE_TOOL],
-            tool_choice="auto",
         )
     except Exception as exc:
         logger.error("[coach_model_unavailable] %s: %s", exc.__class__.__name__, exc, exc_info=True)
@@ -725,9 +724,15 @@ async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
             },
         }
 
-    choice = response.choices[0].message
-    content = _normalize_content(choice.content)
-    tool_calls = _normalize_tool_calls(choice.tool_calls)
+    content = response.output_text or ""
+    try:
+        tool_calls_raw = response.output[0].content[0].tool_calls or []
+    except Exception:
+        tool_calls_raw = (
+            getattr(getattr(getattr(response, "output", [None])[0], "content", [None])[0], "tool_calls", [])
+            or []
+        )
+    tool_calls = _normalize_tool_calls(tool_calls_raw)
 
     logger.info(
         "[coach_response] reply_preview=%s tool_calls=%s",
