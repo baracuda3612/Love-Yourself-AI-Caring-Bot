@@ -95,6 +95,13 @@ ALLOWED_TARGET_AGENTS = {"safety", "onboarding", "manager", "plan", "coach"}
 ALLOWED_PRIORITIES = {"high", "normal"}
 
 
+def _safe_repr(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, default=str)
+    except Exception:
+        return str(value)
+
+
 def _default_router_output(message_text: str | None) -> Dict[str, Any]:
     text = (message_text or "").strip()
     fallback_intent = "manager_flow" if text.startswith("/") else "coach_dialog"
@@ -310,6 +317,17 @@ async def cognitive_route_message(payload: dict) -> dict:
         {"role": "user", "content": json.dumps(user_content, ensure_ascii=False)},
     ]
 
+    log_router_decision(
+        {
+            "event_type": "cognitive_router_model_input",
+            "user_id": payload.get("user_id"),
+            "current_state": payload.get("current_state"),
+            "system_prompt": SYSTEM_PROMPT_COGNITIVE_ROUTER,
+            "user_payload": user_content,
+            "messages": messages,
+        }
+    )
+
     try:
         t_start = time.monotonic()
         response = await async_client.responses.create(
@@ -344,7 +362,37 @@ async def cognitive_route_message(payload: dict) -> dict:
         )
         return {"router_result": base, "router_meta": router_meta}
 
+    first_output = None
+    first_content_block = None
+    try:
+        outputs = getattr(response, "output", None)
+        if outputs:
+            first_output = outputs[0]
+            first_content_block = getattr(first_output, "content", None)
+    except Exception:
+        first_output = None
+        first_content_block = None
+
+    log_router_decision(
+        {
+            "event_type": "cognitive_router_raw_response",
+            "user_id": payload.get("user_id"),
+            "current_state": payload.get("current_state"),
+            "response_repr": _safe_repr(response),
+            "response_dir": sorted(dir(response)),
+            "output_field": _safe_repr(first_output),
+            "output_text": getattr(response, "output_text", None),
+            "content_field": _safe_repr(first_content_block),
+            "parsed_field": _safe_repr(
+                getattr(first_content_block[0], "parsed", None)
+                if first_content_block
+                else None
+            ),
+        }
+    )
+
     output = None
+    raw_output_text = None
     try:
         output_list = getattr(response, "output", None)
         if output_list:
@@ -353,23 +401,38 @@ async def cognitive_route_message(payload: dict) -> dict:
                 output = getattr(content_blocks[0], "parsed", None) or getattr(
                     content_blocks[0], "input_json", None
                 )
-    except Exception:
+    except Exception as exc:
+        raw_output_text = getattr(response, "output_text", None) or ""
+        log_router_decision(
+            {
+                "event_type": "cognitive_router_decision",
+                "status": "parse_error",
+                "stage": "output_block_parsing",
+                "error": str(exc),
+                "user_id": payload.get("user_id"),
+                "current_state": payload.get("current_state"),
+                "decision": base,
+                "raw_output": raw_output_text or _safe_repr(getattr(response, "output", None)),
+                "router_meta": router_meta,
+            }
+        )
         output = None
 
     if output is None:
-        output_text = getattr(response, "output_text", None) or ""
-        if output_text:
+        raw_output_text = getattr(response, "output_text", None) or raw_output_text or ""
+        if raw_output_text:
             try:
-                output = json.loads(output_text)
+                output = json.loads(raw_output_text)
             except Exception:
                 log_router_decision(
                     {
                         "event_type": "cognitive_router_decision",
                         "status": "parse_error",
+                        "stage": "output_text_json_loads",
                         "user_id": payload.get("user_id"),
                         "current_state": payload.get("current_state"),
                         "decision": base,
-                        "raw_output": output_text,
+                        "raw_output": raw_output_text,
                         "router_meta": router_meta,
                     }
                 )
@@ -380,9 +443,11 @@ async def cognitive_route_message(payload: dict) -> dict:
             {
                 "event_type": "cognitive_router_decision",
                 "status": "empty_response",
+                "stage": "no_output_received",
                 "user_id": payload.get("user_id"),
                 "current_state": payload.get("current_state"),
                 "decision": base,
+                "raw_output": raw_output_text,
                 "router_meta": router_meta,
             }
         )
@@ -393,10 +458,11 @@ async def cognitive_route_message(payload: dict) -> dict:
             {
                 "event_type": "cognitive_router_decision",
                 "status": "parse_error",
+                "stage": "non_dict_output",
                 "user_id": payload.get("user_id"),
                 "current_state": payload.get("current_state"),
                 "decision": base,
-                "raw_output": output,
+                "raw_output": _safe_repr(output),
                 "router_meta": router_meta,
             }
         )
