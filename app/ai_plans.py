@@ -10,7 +10,7 @@ import asyncio
 import pytz
 
 from app.config import settings
-from app.ai import async_client
+from app.ai import async_client, extract_output_text
 
 __all__ = ["generate_ai_plan"]
 
@@ -213,7 +213,7 @@ def _request_plan(messages: List[Dict[str, str]]) -> Optional[Dict[str, Any]]:
     if response is None:
         return None
 
-    content = response.output_text or ""
+    content = extract_output_text(response)
     if not isinstance(content, str):
         return None
     return _extract_json_object(content)

@@ -3,7 +3,7 @@ import re
 import time
 from typing import Any, Dict
 
-from app.ai import async_client
+from app.ai import async_client, extract_output_text
 from app.config import settings
 from app.logging.router_logging import log_router_decision
 
@@ -192,7 +192,7 @@ async def route_message(context: dict) -> Dict[str, Any]:
             temperature=0.2,
             max_output_tokens=settings.MAX_TOKENS,
         )
-        content = response.output_text or ""
+        content = extract_output_text(response)
     except Exception as e:
         log_router_decision(
             {
@@ -331,7 +331,7 @@ async def cognitive_route_message(payload: dict) -> dict:
             )
 
         router_meta["router_latency_ms"] = (t_end - t_start) * 1000
-        content = response.output_text or ""
+        content = extract_output_text(response)
     except Exception as exc:  # noqa: PERF203
         log_router_decision(
             {
