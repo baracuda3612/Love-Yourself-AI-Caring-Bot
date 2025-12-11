@@ -21,7 +21,7 @@ async def _call_openai(messages):
     resp = await async_client.chat.completions.create(
         model=settings.MODEL,
         messages=messages,
-        max_tokens=settings.MAX_TOKENS,
+        max_completion_tokens=settings.MAX_TOKENS,
         temperature=settings.TEMPERATURE,
     )
     return resp.choices[0].message.content, _usage_dict(resp)

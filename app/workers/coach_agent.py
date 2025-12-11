@@ -704,7 +704,7 @@ async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
         response = await async_client.chat.completions.create(
             model=settings.COACH_MODEL,
             messages=messages,
-            max_tokens=settings.MAX_TOKENS,
+            max_completion_tokens=settings.MAX_TOKENS,
             temperature=settings.TEMPERATURE,
             tools=[REROUTE_TOOL],
             tool_choice="auto",
