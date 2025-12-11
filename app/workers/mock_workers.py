@@ -13,10 +13,14 @@ def _log_agent_call(agent_name: str, payload: Dict[str, Any]) -> None:
 
 
 def _build_response(agent_name: str, reply_text: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    safe_reply_text = reply_text.strip() or "Мок-агент підготував тестову відповідь."
+
     return {
         "agent_name": agent_name,
         "reply_type": "text",
-        "reply_text": reply_text,
+        "reply_text": safe_reply_text,
+        "tool_calls": [],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         "debug": {
             "agent_instruction": payload.get("agent_instruction"),
             "note": "This is a mock agent response."
