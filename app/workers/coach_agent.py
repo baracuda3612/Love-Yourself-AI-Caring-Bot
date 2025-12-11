@@ -725,13 +725,15 @@ async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     content = response.output_text or ""
+    # Collect tool calls from ALL content blocks
+    tool_calls_raw: list[Any] = []
     try:
-        tool_calls_raw = response.output[0].content[0].tool_calls or []
+        output_blocks = getattr(response.output[0], "content", [])
+        for block in output_blocks:
+            if hasattr(block, "tool_calls") and block.tool_calls:
+                tool_calls_raw.extend(block.tool_calls)
     except Exception:
-        tool_calls_raw = (
-            getattr(getattr(getattr(response, "output", [None])[0], "content", [None])[0], "tool_calls", [])
-            or []
-        )
+        tool_calls_raw = []
     tool_calls = _normalize_tool_calls(tool_calls_raw)
 
     logger.info(
