@@ -3,8 +3,9 @@ import re
 import time
 from typing import Any, Dict
 
-from app.config import settings
 from app.ai import async_client
+from app.config import settings
+from app.logging.router_logging import log_router_decision
 
 ROUTER_SYSTEM_PROMPT = (
     "You are an intent router for a mental wellbeing bot in Telegram. "
@@ -166,6 +167,7 @@ def _merge_validated(base: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, An
 
 async def route_message(context: dict) -> Dict[str, Any]:
     base = _default_router_output(context.get("message_text"))
+    decision = base.copy()
 
     payload = {
         "current_state": context.get("current_state"),
@@ -192,24 +194,69 @@ async def route_message(context: dict) -> Dict[str, Any]:
         )
         content = response.output_text or ""
     except Exception as e:
-        print(f"[router_error] {e.__class__.__name__}: {e}")
-        return base
+        log_router_decision(
+            {
+                "event_type": "router_decision",
+                "status": "llm_error",
+                "error": str(e),
+                "tg_id": context.get("tg_id"),
+                "user_id": context.get("user_id"),
+                "decision": decision,
+            }
+        )
+        return decision
 
     if not content:
-        return base
+        log_router_decision(
+            {
+                "event_type": "router_decision",
+                "status": "empty_response",
+                "tg_id": context.get("tg_id"),
+                "user_id": context.get("user_id"),
+                "decision": decision,
+            }
+        )
+        return decision
 
     try:
         parsed = json.loads(_extract_json_block(content))
     except Exception:
-        return base
+        log_router_decision(
+            {
+                "event_type": "router_decision",
+                "status": "parse_error",
+                "tg_id": context.get("tg_id"),
+                "user_id": context.get("user_id"),
+                "decision": decision,
+            }
+        )
+        return decision
 
-    if not isinstance(parsed, dict):
-        return base
+    if not isinstance(parsed, dict) or parsed.get("intent") not in _ALLOWED_INTENTS:
+        log_router_decision(
+            {
+                "event_type": "router_decision",
+                "status": "invalid_payload",
+                "tg_id": context.get("tg_id"),
+                "user_id": context.get("user_id"),
+                "raw_output": parsed,
+                "decision": decision,
+            }
+        )
+        return decision
 
-    if parsed.get("intent") not in _ALLOWED_INTENTS:
-        return base
+    decision = _merge_validated(base, parsed)
+    log_router_decision(
+        {
+            "event_type": "router_decision",
+            "status": "success",
+            "tg_id": context.get("tg_id"),
+            "user_id": context.get("user_id"),
+            "decision": decision,
+        }
+    )
 
-    return _merge_validated(base, parsed)
+    return decision
 
 
 async def cognitive_route_message(payload: dict) -> dict:
@@ -285,15 +332,46 @@ async def cognitive_route_message(payload: dict) -> dict:
 
         router_meta["router_latency_ms"] = (t_end - t_start) * 1000
         content = response.output_text or ""
-    except Exception:
+    except Exception as exc:  # noqa: PERF203
+        log_router_decision(
+            {
+                "event_type": "cognitive_router_decision",
+                "status": "llm_error",
+                "error": str(exc),
+                "user_id": payload.get("user_id"),
+                "current_state": payload.get("current_state"),
+                "decision": base,
+            }
+        )
         return {"router_result": base, "router_meta": router_meta}
 
     if not content:
+        log_router_decision(
+            {
+                "event_type": "cognitive_router_decision",
+                "status": "empty_response",
+                "user_id": payload.get("user_id"),
+                "current_state": payload.get("current_state"),
+                "decision": base,
+                "router_meta": router_meta,
+            }
+        )
         return {"router_result": base, "router_meta": router_meta}
 
     try:
         output = json.loads(content)
     except Exception:
+        log_router_decision(
+            {
+                "event_type": "cognitive_router_decision",
+                "status": "parse_error",
+                "user_id": payload.get("user_id"),
+                "current_state": payload.get("current_state"),
+                "decision": base,
+                "raw_output": content,
+                "router_meta": router_meta,
+            }
+        )
         return {"router_result": base, "router_meta": router_meta}
 
     target_agent = output.get("target_agent")
@@ -304,6 +382,17 @@ async def cognitive_route_message(payload: dict) -> dict:
 
     if priority not in ALLOWED_PRIORITIES:
         priority = base["priority"]
+
+    decision_payload = {
+        "event_type": "cognitive_router_decision",
+        "status": "success",
+        "user_id": payload.get("user_id"),
+        "current_state": payload.get("current_state"),
+        "target_agent": target_agent,
+        "priority": priority,
+        "router_meta": router_meta,
+    }
+    log_router_decision(decision_payload)
 
     return {
         "router_result": {
