@@ -1,497 +1,175 @@
 import json
-import re
+import logging
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from app.ai import async_client, extract_output_text
+from app.ai import async_client
 from app.config import settings
 from app.logging.router_logging import log_router_decision
 
-ROUTER_SYSTEM_PROMPT = (
-    "You are an intent router for a mental wellbeing bot in Telegram. "
-    "Classify the latest user message using the dialogue history and current bot state. "
-    "You must always consider: current_state, last_bot_message, recent_messages, message_text, user_profile. "
-    "Intents: \"manager_flow\" (settings, buttons, commands, short factual answers to bot prompts), "
-    "\"coach_dialog\" (empathetic conversation and emotional sharing), "
-    "\"onboarding_interruption\" (user goes off-script or asks about the bot during onboarding), "
-    "\"safety_alert\" (self-harm, suicide, or severe crisis language). "
-    "If the bot just asked a structured onboarding question (stress 1-5, notification time, job title, etc.) "
-    "and the user responds briefly with a number, time, or short label, treat it as manager_flow. "
-    "If current_state starts with \"onboarding\" and the user asks about the bot, privacy, or writes emotional text "
-    "instead of answering the prompt, classify as onboarding_interruption. "
-    "If you see clear suicidal ideation or self-harm intent, return safety_alert. "
-    "Suggested UI: \"psychologist\" (user asks for a human specialist or describes being on the edge), "
-    "\"settings\" (user wants to change notification time/frequency or turn off messages), "
-    "\"plan_adjustment\" (tasks/plan feel too hard or need to be changed), \"none\" otherwise. "
-    "Always return ONLY a valid JSON object with the exact keys: intent, manager, coach, safety, complexity_level, "
-    "sentiment, suggested_ui, user_intent_summary, reasoning."
-)
+logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT_COGNITIVE_ROUTER = """
-### ROLE
-You are the Cognitive Router for "Love Yourself". You only classify which specialist agent should respond.
-
-CONSTRAINTS:
-- NEVER speak to the user.
-- NEVER add instructions for other agents.
-- Output MUST be strict JSON.
-
----
-
-### AVAILABLE AGENTS (STRICT ENUM)
-`target_agent` MUST be one of:
-- "safety" (crisis protocol)
-- "onboarding" (profile setup flow)
-- "manager" (settings & admin)
-- "plan" (content & exercises)
-- "coach" (empathy & support)
-
----
-
-### PRIORITY HIERARCHY (LOGIC FLOW)
-Evaluate rules in this order and stop at the first match.
-
-1) SAFETY OVERRIDE
-   Trigger: explicit or implied self-harm, suicide, severe crisis.
-   Action: target_agent="safety", priority="high".
-
-2) LOCKED STATES
-   Trigger: current_state starts with "onboarding:" → target_agent="onboarding", priority="high";
-            current_state starts with "plan_setup:" → target_agent="plan", priority="high".
-
-3) MANAGER
-   Trigger: commands about settings/admin (reminders, schedule, profile updates).
-   Action: target_agent="manager", priority="normal".
-
-4) PLAN
-   Trigger: requests about exercises/tasks/plan adjustments.
-   Action: target_agent="plan", priority="normal".
-
-5) COACH DEFAULT
-   Trigger: everything else.
-   Action: target_agent="coach", priority="normal".
-
----
-
-### OUTPUT FORMAT
-Return ONLY this JSON structure (no markdown, no extra text):
-{
-  "target_agent": "safety | onboarding | manager | plan | coach",
-  "priority": "high | normal"
-}
-"""
-
-_ALLOWED_INTENTS = {
-    "manager_flow",
-    "coach_dialog",
-    "onboarding_interruption",
-    "safety_alert",
-}
-
-_ALLOWED_SENTIMENTS = {"neutral", "positive", "negative", "mixed"}
-_ALLOWED_UI = {"none", "psychologist", "settings", "plan_adjustment"}
+# --- CONFIGURATION ---
 
 ALLOWED_TARGET_AGENTS = {"safety", "onboarding", "manager", "plan", "coach"}
 ALLOWED_PRIORITIES = {"high", "normal"}
 
+ROUTER_SYSTEM_PROMPT = """
+### ROLE
+You are the Cognitive Router for the "Love Yourself" app.
+Your ONLY job is to analyze the user's message and current state to determine which specialized agent should handle the response.
 
-def _safe_repr(value: Any) -> str:
-    try:
-        return json.dumps(value, ensure_ascii=False, default=str)
-    except Exception:
-        return str(value)
+### OUTPUT FORMAT
+You must return a valid JSON object in the following format:
+{
+  "target_agent": "safety" | "onboarding" | "manager" | "plan" | "coach",
+  "priority": "high" | "normal"
+}
 
+### AGENT DEFINITIONS & ROUTING LOGIC
 
-def _default_router_output(message_text: str | None) -> Dict[str, Any]:
-    text = (message_text or "").strip()
-    fallback_intent = "manager_flow" if text.startswith("/") else "coach_dialog"
-    return {
-        "intent": fallback_intent,
-        "manager": 0.0,
-        "coach": 0.0,
-        "safety": 0.0,
-        "complexity_level": 1,
-        "sentiment": "neutral",
-        "suggested_ui": "none",
-        "user_intent_summary": "",
-        "reasoning": "",
-    }
+1. **safety** (Crisis Protocol) [PRIORITY: HIGH]
+   - TRIGGER: User mentions suicide, self-harm, extreme hopelessness, acute psychological crisis, or physical danger.
+   - EXAMPLES: "I want to die", "I'm cutting myself", "There is no point in living".
+   - ACTION: Immediate reroute to safety.
 
+2. **onboarding** (Profile Setup) [PRIORITY: HIGH]
+   - TRIGGER: The `current_state` provided in input starts with "onboarding:".
+   - EXAMPLES: User answering setup questions (name, age, goals) while in onboarding mode.
+   - EXCEPTION: If user signals crisis during onboarding -> Route to **safety**.
 
-def _extract_json_block(raw: str) -> str:
-    match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
-    return match.group(0) if match else raw
+3. **manager** (System & Admin) [PRIORITY: NORMAL]
+   - TRIGGER: User asks to change settings, set reminders, adjust schedules, change notification times, or delete data.
+   - EXAMPLES: "Change notification time to 9 AM", "Delete my profile", "Turn off reminders", "Stop messaging me".
 
+4. **plan** (Content & Exercises) [PRIORITY: NORMAL]
+   - TRIGGER: User asks to CREATE a plan, MODIFY a routine, or asks for specific exercises/techniques (breathing, CBT logs).
+   - EXAMPLES: "Create a sleep plan", "Give me a breathing exercise", "I want to change my morning routine", "Add meditation to my plan".
 
-def _merge_validated(base: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
-    intent = data.get("intent")
-    if intent in _ALLOWED_INTENTS:
-        base["intent"] = intent
+5. **coach** (Empathy & Support) [PRIORITY: NORMAL] - **DEFAULT**
+   - TRIGGER: General conversation, emotional venting, asking for advice, feeling lonely, casual chat, or vague requests.
+   - EXAMPLES: "I feel sad", "Hello", "What should I do?", "I'm tired", "Tell me a joke".
+   - NOTE: If the request is ambiguous, default to **coach**.
 
-    try:
-        manager = float(data.get("manager", base["manager"]))
-        base["manager"] = max(0.0, min(1.0, manager))
-    except (TypeError, ValueError):
-        pass
-
-    try:
-        coach = float(data.get("coach", base["coach"]))
-        base["coach"] = max(0.0, min(1.0, coach))
-    except (TypeError, ValueError):
-        pass
-
-    try:
-        safety = float(data.get("safety", base["safety"]))
-        base["safety"] = max(0.0, min(1.0, safety))
-    except (TypeError, ValueError):
-        pass
-
-    try:
-        level = int(data.get("complexity_level", base["complexity_level"]))
-        if level in {1, 2, 3}:
-            base["complexity_level"] = level
-    except (TypeError, ValueError):
-        pass
-
-    sentiment = data.get("sentiment")
-    if isinstance(sentiment, str) and sentiment in _ALLOWED_SENTIMENTS:
-        base["sentiment"] = sentiment
-
-    suggested_ui = data.get("suggested_ui")
-    if isinstance(suggested_ui, str) and suggested_ui in _ALLOWED_UI:
-        base["suggested_ui"] = suggested_ui
-
-    summary = data.get("user_intent_summary")
-    if isinstance(summary, str):
-        base["user_intent_summary"] = summary
-
-    reasoning = data.get("reasoning")
-    if isinstance(reasoning, str):
-        base["reasoning"] = reasoning
-
-    return base
-
-
-async def route_message(context: dict) -> Dict[str, Any]:
-    base = _default_router_output(context.get("message_text"))
-    decision = base.copy()
-
-    payload = {
-        "current_state": context.get("current_state"),
-        "last_bot_message": context.get("last_bot_message"),
-        "recent_messages": context.get("recent_messages", []),
-        "message_text": context.get("message_text"),
-        "message_type": context.get("message_type"),
-        "user_profile": context.get("user_profile"),
-        "tg_id": context.get("tg_id"),
-        "user_id": context.get("user_id"),
-    }
-
-    messages = [
-        {"role": "system", "content": ROUTER_SYSTEM_PROMPT},
-        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-    ]
-
-    try:
-        response = await async_client.responses.create(
-            model=settings.ROUTER_MODEL,
-            input=messages,
-            temperature=0.2,
-            max_output_tokens=settings.MAX_TOKENS,
-        )
-        content = extract_output_text(response)
-    except Exception as e:
-        log_router_decision(
-            {
-                "event_type": "router_decision",
-                "status": "llm_error",
-                "error": str(e),
-                "tg_id": context.get("tg_id"),
-                "user_id": context.get("user_id"),
-                "decision": decision,
-            }
-        )
-        return decision
-
-    if not content:
-        log_router_decision(
-            {
-                "event_type": "router_decision",
-                "status": "empty_response",
-                "tg_id": context.get("tg_id"),
-                "user_id": context.get("user_id"),
-                "decision": decision,
-            }
-        )
-        return decision
-
-    try:
-        parsed = json.loads(_extract_json_block(content))
-    except Exception:
-        log_router_decision(
-            {
-                "event_type": "router_decision",
-                "status": "parse_error",
-                "tg_id": context.get("tg_id"),
-                "user_id": context.get("user_id"),
-                "decision": decision,
-            }
-        )
-        return decision
-
-    if not isinstance(parsed, dict) or parsed.get("intent") not in _ALLOWED_INTENTS:
-        log_router_decision(
-            {
-                "event_type": "router_decision",
-                "status": "invalid_payload",
-                "tg_id": context.get("tg_id"),
-                "user_id": context.get("user_id"),
-                "raw_output": parsed,
-                "decision": decision,
-            }
-        )
-        return decision
-
-    decision = _merge_validated(base, parsed)
-    log_router_decision(
-        {
-            "event_type": "router_decision",
-            "status": "success",
-            "tg_id": context.get("tg_id"),
-            "user_id": context.get("user_id"),
-            "decision": decision,
-        }
-    )
-
-    return decision
-
+### IMPORTANT RULES
+- DO NOT output markdown blocks (like ```json). Just the raw JSON object.
+- DO NOT answer the user's question. Just classify it.
+- Prioritize SAFETY above all else.
+"""
 
 async def cognitive_route_message(payload: dict) -> dict:
     """
-    New cognitive router (v2).
-
-    Expected payload from orchestrator:
-      {
-        "user_id": int,
-        "message_text": str,
-        "short_term_history": list[dict],   # [{"role": "user"|"bot", "text": "..."}]
-        "profile_snapshot": dict,           # compressed user profile
-        "current_state": str | None         # e.g. "onboarding:stress" or None
-      }
-
-    Returns:
-      {
-        "router_result": {
-          "target_agent": "safety" | "onboarding" | "manager" | "plan" | "coach",
-          "priority": "high" | "normal"
-        },
-        "router_meta": {
-          "llm_prompt_tokens": int | None,
-          "llm_response_tokens": int | None,
-          "router_latency_ms": float | None
-        }
-      }
+    Main routing function.
+    Accepts payload from Orchestrator and returns decision + meta data.
     """
-
-    base = {
-        "target_agent": "coach",
-        "priority": "normal",
+    
+    # 1. Prepare Data
+    user_id = payload.get("user_id")
+    message_text = payload.get("message_text", "")
+    current_state = payload.get("current_state")
+    
+    # Build a clean context for the LLM
+    routing_input = {
+        "user_id": user_id,
+        "current_state": current_state,
+        "last_messages": _format_short_history(payload.get("short_term_history")),
+        "latest_user_message": message_text
     }
 
-    router_meta = {
-        "llm_prompt_tokens": None,
-        "llm_response_tokens": None,
-        "router_latency_ms": None,
-    }
-
-    user_content = {
-        "user_id": payload.get("user_id"),
-        "message_text": payload.get("message_text") or "",
-        "short_term_history": payload.get("short_term_history") or [],
-        "profile_snapshot": payload.get("profile_snapshot") or {},
-        "current_state": payload.get("current_state") or None,
-    }
-
+    # 2. Prepare Messages
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT_COGNITIVE_ROUTER},
-        {"role": "user", "content": json.dumps(user_content, ensure_ascii=False)},
+        {"role": "system", "content": ROUTER_SYSTEM_PROMPT},
+        {"role": "user", "content": json.dumps(routing_input, ensure_ascii=False)}
     ]
 
-    log_router_decision(
-        {
-            "event_type": "cognitive_router_model_input",
-            "user_id": payload.get("user_id"),
-            "current_state": payload.get("current_state"),
-            "system_prompt": SYSTEM_PROMPT_COGNITIVE_ROUTER,
-            "user_payload": user_content,
-            "messages": messages,
-        }
-    )
+    # Initialize tracking variables
+    router_meta = {
+        "llm_prompt_tokens": 0,
+        "llm_response_tokens": 0,
+        "router_latency_ms": 0.0,
+    }
+    
+    # Default fallback decision
+    decision = {
+        "target_agent": "coach",
+        "priority": "normal"
+    }
 
     try:
         t_start = time.monotonic()
-        response = await async_client.responses.create(
-            model=settings.ROUTER_MODEL,
-            input=messages,
-            temperature=0,
-            response_format={"type": "json_object"},
-            max_output_tokens=settings.MAX_TOKENS,
+        
+        # 3. Call OpenAI (using Chat Completions, NOT Responses)
+        # We use a cheaper model for routing (e.g. gpt-4o-mini) defined in settings
+        response = await async_client.chat.completions.create(
+            model=settings.ROUTER_MODEL,  # Ensure this is set in config (e.g., "gpt-4o-mini")
+            messages=messages,
+            temperature=0.0,  # Deterministic for routing
+            max_tokens=100,
+            response_format={"type": "json_object"}  # Force JSON output
         )
+        
         t_end = time.monotonic()
-
-        if response is not None:
-            usage = getattr(response, "usage", None)
-            router_meta["llm_prompt_tokens"] = getattr(
-                usage, "prompt_tokens", getattr(usage, "input_tokens", None)
-            )
-            router_meta["llm_response_tokens"] = getattr(
-                usage, "completion_tokens", getattr(usage, "output_tokens", None)
-            )
-
         router_meta["router_latency_ms"] = (t_end - t_start) * 1000
-    except Exception as exc:  # noqa: PERF203
-        log_router_decision(
-            {
-                "event_type": "cognitive_router_decision",
-                "status": "llm_error",
-                "error": str(exc),
-                "user_id": payload.get("user_id"),
-                "current_state": payload.get("current_state"),
-                "decision": base,
-            }
-        )
-        return {"router_result": base, "router_meta": router_meta}
 
-    first_output = None
-    first_content_block = None
-    try:
-        outputs = getattr(response, "output", None)
-        if outputs:
-            first_output = outputs[0]
-            first_content_block = getattr(first_output, "content", None)
-    except Exception:
-        first_output = None
-        first_content_block = None
+        # 4. Extract Usage Stats
+        if response.usage:
+            router_meta["llm_prompt_tokens"] = response.usage.prompt_tokens
+            router_meta["llm_response_tokens"] = response.usage.completion_tokens
 
-    log_router_decision(
-        {
-            "event_type": "cognitive_router_raw_response",
-            "user_id": payload.get("user_id"),
-            "current_state": payload.get("current_state"),
-            "response_repr": _safe_repr(response),
-            "response_dir": sorted(dir(response)),
-            "output_field": _safe_repr(first_output),
-            "output_text": getattr(response, "output_text", None),
-            "content_field": _safe_repr(first_content_block),
-            "parsed_field": _safe_repr(
-                getattr(first_content_block[0], "parsed", None)
-                if first_content_block
-                else None
-            ),
-        }
-    )
+        # 5. Parse Output
+        content = response.choices[0].message.content
+        if not content:
+            raise ValueError("Empty response from Router LLM")
 
-    output = None
-    raw_output_text = None
-    try:
-        output_list = getattr(response, "output", None)
-        if output_list:
-            content_blocks = getattr(output_list[0], "content", None)
-            if content_blocks:
-                output = getattr(content_blocks[0], "parsed", None) or getattr(
-                    content_blocks[0], "input_json", None
-                )
-    except Exception as exc:
-        raw_output_text = getattr(response, "output_text", None) or ""
-        log_router_decision(
-            {
-                "event_type": "cognitive_router_decision",
-                "status": "parse_error",
-                "stage": "output_block_parsing",
-                "error": str(exc),
-                "user_id": payload.get("user_id"),
-                "current_state": payload.get("current_state"),
-                "decision": base,
-                "raw_output": raw_output_text or _safe_repr(getattr(response, "output", None)),
-                "router_meta": router_meta,
-            }
-        )
-        output = None
+        parsed_data = json.loads(content)
+        
+        # Validate output against allowed enums
+        target = parsed_data.get("target_agent")
+        priority = parsed_data.get("priority")
 
-    if output is None:
-        raw_output_text = getattr(response, "output_text", None) or raw_output_text or ""
-        if raw_output_text:
-            try:
-                output = json.loads(raw_output_text)
-            except Exception:
-                log_router_decision(
-                    {
-                        "event_type": "cognitive_router_decision",
-                        "status": "parse_error",
-                        "stage": "output_text_json_loads",
-                        "user_id": payload.get("user_id"),
-                        "current_state": payload.get("current_state"),
-                        "decision": base,
-                        "raw_output": raw_output_text,
-                        "router_meta": router_meta,
-                    }
-                )
-                return {"router_result": base, "router_meta": router_meta}
+        if target in ALLOWED_TARGET_AGENTS:
+            decision["target_agent"] = target
+        
+        if priority in ALLOWED_PRIORITIES:
+            decision["priority"] = priority
 
-    if output is None:
-        log_router_decision(
-            {
-                "event_type": "cognitive_router_decision",
-                "status": "empty_response",
-                "stage": "no_output_received",
-                "user_id": payload.get("user_id"),
-                "current_state": payload.get("current_state"),
-                "decision": base,
-                "raw_output": raw_output_text,
-                "router_meta": router_meta,
-            }
-        )
-        return {"router_result": base, "router_meta": router_meta}
+        # Log success
+        log_router_decision({
+            "event_type": "router_decision",
+            "status": "success",
+            "user_id": user_id,
+            "input_message": message_text,
+            "decision": decision,
+            "latency": router_meta["router_latency_ms"]
+        })
 
-    if not isinstance(output, dict):
-        log_router_decision(
-            {
-                "event_type": "cognitive_router_decision",
-                "status": "parse_error",
-                "stage": "non_dict_output",
-                "user_id": payload.get("user_id"),
-                "current_state": payload.get("current_state"),
-                "decision": base,
-                "raw_output": _safe_repr(output),
-                "router_meta": router_meta,
-            }
-        )
-        return {"router_result": base, "router_meta": router_meta}
-
-    target_agent = output.get("target_agent")
-    priority = output.get("priority")
-
-    if target_agent not in ALLOWED_TARGET_AGENTS:
-        target_agent = base["target_agent"]
-
-    if priority not in ALLOWED_PRIORITIES:
-        priority = base["priority"]
-
-    decision_payload = {
-        "event_type": "cognitive_router_decision",
-        "status": "success",
-        "user_id": payload.get("user_id"),
-        "current_state": payload.get("current_state"),
-        "target_agent": target_agent,
-        "priority": priority,
-        "router_meta": router_meta,
-    }
-    log_router_decision(decision_payload)
+    except Exception as e:
+        logger.error(f"[ROUTER ERROR] Failed to route message: {e}", exc_info=True)
+        # Log failure but return default 'coach' so the bot doesn't crash
+        log_router_decision({
+            "event_type": "router_failure",
+            "status": "error",
+            "error": str(e),
+            "user_id": user_id,
+            "fallback": decision
+        })
 
     return {
-        "router_result": {
-            "target_agent": target_agent,
-            "priority": priority,
-        },
-        "router_meta": router_meta,
+        "router_result": decision,
+        "router_meta": router_meta
     }
+
+
+def _format_short_history(history: Optional[list]) -> list:
+    """Helper to simplify history for the router (save tokens)."""
+    if not history:
+        return []
+    
+    simplified = []
+    # Take only last 4 messages for routing context to save costs/latency
+    for msg in history[-4:]: 
+        role = msg.get("role")
+        content = msg.get("content")
+        if role and content:
+            simplified.append(f"{role}: {content[:200]}") # Truncate long messages
+    return simplified
