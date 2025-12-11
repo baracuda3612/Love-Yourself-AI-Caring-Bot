@@ -216,7 +216,7 @@ def _extract_reroute_target(worker_result: Dict[str, Any]) -> Optional[str]:
     tool_calls = worker_result.get("tool_calls") or []
     for call in tool_calls:
         function_data = call.get("function") or {}
-        if function_data.get("name") != "reroute_request":
+        if function_data.get("name") not in {"reroute_to_manager", "reroute_request"}:
             continue
         arguments = function_data.get("arguments")
         if isinstance(arguments, str):
@@ -226,7 +226,7 @@ def _extract_reroute_target(worker_result: Dict[str, Any]) -> Optional[str]:
                 continue
         if not isinstance(arguments, dict):
             continue
-        target_agent = arguments.get("target_agent")
+        target_agent = arguments.get("target") or arguments.get("target_agent")
         if target_agent in {"plan", "manager", "safety"}:
             return target_agent
     return None
