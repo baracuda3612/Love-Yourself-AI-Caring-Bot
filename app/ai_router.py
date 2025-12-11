@@ -195,7 +195,7 @@ async def route_message(context: dict) -> Dict[str, Any]:
                 model="gpt-4o-mini",
                 messages=messages,
                 temperature=0.2,
-                max_tokens=200,
+                max_completion_tokens=200,
             ),
         )
         content = response.choices[0].message.content if response else None

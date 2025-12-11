@@ -202,7 +202,7 @@ def _request_plan(messages: List[Dict[str, str]]) -> Optional[Dict[str, Any]]:
             messages=messages,
             response_format={"type": "json_object"},
             temperature=0.2,
-            max_tokens=1200,
+            max_completion_tokens=1200,
         )
     except Exception:
         return None
