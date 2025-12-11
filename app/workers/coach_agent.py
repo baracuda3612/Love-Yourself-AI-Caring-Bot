@@ -593,13 +593,7 @@ def _compose_messages(payload: Dict[str, Any]) -> List[Dict[str, str]]:
         {"role": "system", "content": context_message},
     ]
 
-    print(">>> CONTEXT MESSAGE >>>")
-    print(context_message)
-
     history_messages = _prepare_history(payload.get("short_term_history"))
-
-    print(">>> HISTORY >>>")
-    print(json.dumps(history_messages, ensure_ascii=False))
 
     messages.extend(history_messages)
 
@@ -637,28 +631,7 @@ def _normalize_content(content: Any) -> str:
 
 
 async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
-    print(">>> RAW PAYLOAD RECEIVED BY COACH_AGENT >>>")
-    raw_payload = json.dumps(payload, ensure_ascii=False)
-    print(raw_payload[:2000])
-
-    print(">>> COACH SYSTEM PROMPT (TRUNCATED TO 3000 CHARS) >>>")
-    print(COACH_SYSTEM_PROMPT[:3000])
-
-    print(">>> CALLING COACH COMPOSE_MESSAGES")
     messages = _compose_messages(payload)
-
-    print(">>> COACH MODEL SELECTED >>>")
-    print(settings.COACH_MODEL)
-
-    print(">>> FINAL MESSAGES SENT TO OPENAI >>>")
-    for m in messages:
-        role = m.get("role")
-        content = m.get("content", "")
-        print(role, ":", str(content)[:500])
-
-    foreign_flags = _detect_foreign_instructions(messages)
-    if foreign_flags:
-        logger.error("[coach_prompt_validation_error] Foreign instructions detected: %s", foreign_flags)
 
     try:
         response = await async_client.responses.create(

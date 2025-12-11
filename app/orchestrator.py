@@ -1,7 +1,6 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-import json
 import logging
 
 import pytz
@@ -34,7 +33,6 @@ async def get_stm_history(user_id: int) -> List[Dict[str, str]]:
 
     history = await session_memory.get_recent_messages(user_id)
     if history:
-        logger.info("[STM] Redis memory OK (%s messages)", len(history))
         return [
             {"role": item.get("role"), "content": item.get("text")}
             for item in history
@@ -48,12 +46,6 @@ async def get_stm_history(user_id: int) -> List[Dict[str, str]]:
             .order_by(ChatHistory.created_at.desc())
             .limit(session_memory.limit)
             .all()
-        )
-
-    if rows:
-        logger.warning(
-            "[STM_FALLBACK] Using Postgres STM for user_id=%s (Redis unavailable)",
-            user_id,
         )
 
     return [
@@ -189,6 +181,7 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
     log_router_decision(log_payload)
 
     target_agent = router_result.get("target_agent") or "coach"
+    fallback_to_coach = router_result.get("target_agent") is None
     worker_payload = {
         "user_id": user_id,
         "priority": router_result.get("priority"),
@@ -196,16 +189,27 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
         **context_payload,
     }
 
-    if target_agent != "coach":
-        worker_result = await _invoke_agent(target_agent, worker_payload)
+    log_router_decision(
+        {
+            "event_type": "router_routing_decision",
+            "timestamp": datetime.utcnow().isoformat(),
+            "user_id": user_id,
+            "target_agent": target_agent,
+            "priority": router_result.get("priority"),
+            "fallback_to_coach": fallback_to_coach,
+            "router_result": router_result,
+            "router_meta": router_meta,
+        }
+    )
 
-        reply_text = str(worker_result.get("reply_text") or "")
-        await session_memory.append_message(user_id, "assistant", reply_text)
-
-        return reply_text
-
-    print(">>> ROUTER → COACH PAYLOAD >>>")
-    print(json.dumps(worker_payload, ensure_ascii=False)[:2000])
+    log_router_decision(
+        {
+            "event_type": "agent_invocation",
+            "timestamp": datetime.utcnow().isoformat(),
+            "agent_name": target_agent,
+            "payload": worker_payload,
+        }
+    )
 
     worker_result = await _invoke_agent(target_agent, worker_payload)
 
