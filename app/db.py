@@ -7,7 +7,6 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Column,
-    Date,
     DateTime,
     Enum,
     ForeignKey,
@@ -22,6 +21,7 @@ from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from sqlalchemy.sql import func
 
 from app.config import settings
+from app.schemas.planner import PlanModule, StepType, DifficultyLevel
 
 engine = create_engine(settings.DATABASE_URL, echo=False, future=True)
 SessionLocal = sessionmaker(
@@ -118,33 +118,65 @@ class AIPlan(Base):
     __tablename__ = "ai_plans"
 
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    
+    # Metadata
     title = Column(String, nullable=False)
-    description = Column(Text)
-    goal = Column(Text)
-    status = Column(Enum(PlanStatus), default=PlanStatus.DRAFT)
-    start_date = Column(Date)
-    end_date = Column(Date)
+    module_id = Column(Enum(PlanModule), nullable=False, default=PlanModule.BURNOUT_RECOVERY)
+    goal_description = Column(Text) 
+    
+    # Status & Lifecycle
+    status = Column(Enum("active", "completed", "paused", "abandoned", name="plan_status_enum"), default="active")
+    start_date = Column(DateTime(timezone=True), server_default=func.now())
+    end_date = Column(DateTime(timezone=True), nullable=True)
+    
+    # Versioning for Adaptation
+    adaptation_version = Column(Integer, default=1) 
+    
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     user = relationship("User", back_populates="plans")
-    steps = relationship("AIPlanStep", back_populates="plan", cascade="all, delete-orphan")
+    days = relationship("AIPlanDay", back_populates="plan", cascade="all, delete-orphan", order_by="AIPlanDay.day_number")
+
+
+class AIPlanDay(Base):
+    __tablename__ = "ai_plan_days"
+    
+    id = Column(Integer, primary_key=True)
+    plan_id = Column(Integer, ForeignKey("ai_plans.id"), nullable=False, index=True)
+    
+    day_number = Column(Integer, nullable=False) # 1, 2, 3...
+    focus_theme = Column(String, nullable=True)
+    
+    is_completed = Column(Boolean, default=False)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    
+    plan = relationship("AIPlan", back_populates="days")
+    steps = relationship("AIPlanStep", back_populates="day", cascade="all, delete-orphan", order_by="AIPlanStep.order_in_day")
 
 
 class AIPlanStep(Base):
     __tablename__ = "ai_plan_steps"
 
     id = Column(Integer, primary_key=True)
-    plan_id = Column(Integer, ForeignKey("ai_plans.id"), nullable=False)
-    day_number = Column(Integer, nullable=False)
-    time_slot = Column(String, nullable=True)
-    content = Column(Text, nullable=False)
-    content_type = Column(String)
+    day_id = Column(Integer, ForeignKey("ai_plan_days.id"), nullable=False, index=True)
+    
+    # Content
+    title = Column(String, nullable=False)
+    description = Column(Text)
+    step_type = Column(Enum(StepType), default=StepType.ACTION)
+    difficulty = Column(Enum(DifficultyLevel), default=DifficultyLevel.EASY)
+    
+    # Scheduling
+    order_in_day = Column(Integer, default=0) 
+    time_of_day = Column(String, default="any") 
+    
+    # Execution State
     is_completed = Column(Boolean, default=False)
-    job_id = Column(String)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    plan = relationship("AIPlan", back_populates="steps")
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    skipped = Column(Boolean, default=False)
+    
+    day = relationship("AIPlanDay", back_populates="steps")
 
 
 # -------------------- ANALYTICS --------------------
