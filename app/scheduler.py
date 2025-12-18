@@ -11,11 +11,10 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.config import settings
-from app.db import AIPlan, AIPlanStep, SessionLocal, User
+from app.db import AIPlan, AIPlanDay, AIPlanStep, SessionLocal, User
 
-# jobstore: окремий sqlite файл поруч із основною БД, або той самий Postgres
+# Configure JobStore
 DATABASE_URL = settings.DATABASE_URL
-
 if DATABASE_URL.startswith("sqlite:///"):
     base_path = DATABASE_URL.replace("sqlite:///", "")
     base_dir = os.path.dirname(os.path.abspath(base_path)) or "."
@@ -33,47 +32,32 @@ _scheduler_started = False
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
-def _generate_step_job_id(user: User, step: AIPlanStep) -> str:
-    """Генерує job_id, сумісний із попередньою логікою."""
-    if hasattr(AIPlanStep, "generate_job_id"):
-        return AIPlanStep.generate_job_id(user.id, step.plan_id)
-    return f"plan_step_{user.id}_{step.plan_id or 'plan'}_{step.id or 'step'}"
+def _generate_step_job_id(user_id: int, step: AIPlanStep) -> str:
+    """Generate a unique Job ID based on the new hierarchy."""
+    # Safety check if step is detached
+    plan_id = "unknown"
+    if step.day and step.day.plan_id:
+        plan_id = step.day.plan_id
+    
+    return f"plan_{plan_id}_day_{step.day_id}_step_{step.id}"
 
 
 def init_scheduler():
-    scheduler.start()
+    if not scheduler.running:
+        scheduler.start()
 
 
 def shutdown_scheduler():
     scheduler.shutdown(wait=True)
 
 
-# ——— утиліти ———
-
-def add_job(func, trigger, id=None, **kwargs):
-    return scheduler.add_job(func, trigger, id=id, **kwargs)
-
+# ——— Utilities ———
 
 def remove_job(job_id):
     try:
         scheduler.remove_job(job_id)
     except Exception:
         pass
-
-
-def reschedule_job(job_id, **trigger_args):
-    try:
-        scheduler.reschedule_job(job_id, **trigger_args)
-    except Exception:
-        raise
-
-
-def _cron_for_user(user: User) -> CronTrigger:
-    tz = user.timezone or "Europe/Kyiv"
-    notification_time: dt_time | None = user.notification_time
-    hour = notification_time.hour if notification_time else settings.DEFAULT_SEND_HOUR
-    minute = notification_time.minute if notification_time else 0
-    return CronTrigger(hour=hour, minute=minute, timezone=pytz.timezone(tz))
 
 
 def _submit_coroutine(coro):
@@ -83,93 +67,86 @@ def _submit_coroutine(coro):
 
 
 async def _send_message_async(chat_id: int, text: str):
-    """Надсилання повідомлення з контексту job-а."""
+    """Async wrapper to send Telegram message."""
     from app.telegram import bot as tg_bot
     try:
         return await tg_bot.send_message(chat_id, text)
-    except Exception:
+    except Exception as e:
+        logger.error(f"Failed to send scheduled message to {chat_id}: {e}")
         return None
 
 
 def send_scheduled_message(chat_id: int, text: str, step_id: int | None = None):
     """
-    Топ-рівневий callable (серіалізується як 'module:function').
-    Якщо переданий step_id — відмічаємо крок виконаним і за потреби закриваємо план.
+    Callback function executed by APScheduler.
     """
-    result = _submit_coroutine(_send_message_async(chat_id, text))
+    _submit_coroutine(_send_message_async(chat_id, text))
 
     if step_id is not None:
         with SessionLocal() as db:
             step = db.query(AIPlanStep).filter(AIPlanStep.id == step_id).first()
-            if step:
+            if step and not step.is_completed:
+                # 1. Mark step as completed (trigger logic)
                 step.is_completed = True
-                step.status = "completed"
                 step.completed_at = datetime.now(pytz.UTC)
                 step.job_id = None
-
-                if step.plan:
-                    all_done = all(s.is_completed or s.status == "completed" for s in step.plan.steps)
+                
+                # 2. Check for Plan Completion (Hierarchy Traversal)
+                # step -> day -> plan
+                if step.day and step.day.plan:
+                    plan = step.day.plan
+                    
+                    # Check if ALL steps in ALL days are completed
+                    # (This is an MVP check; optimization possible later)
+                    all_done = True
+                    for day in plan.days:
+                        for s in day.steps:
+                            if not s.is_completed:
+                                all_done = False
+                                break
+                        if not all_done:
+                            break
+                    
                     if all_done:
-                        step.plan.status = "completed"
-                        step.plan.completed_at = datetime.now(pytz.UTC)
+                        plan.status = "completed"
+                        # plan.completed_at = datetime.now(pytz.UTC) # Add column later if needed
+                        
                 db.commit()
-
-    return result
-
-
-async def _send_daily(user_id: int):
-    """Щоденне повідомлення (тимчасово вимкнено до Plan Agent)."""
-    logger.info("Daily message skipped (Agent WIP) for user %s", user_id)
-
-
-# ——— топ-рівневі callable для APScheduler (жодних замикань/лямбд) ———
-
-def run_daily_job(user_id: int):
-    """Sync wrapper — викликається з jobstore; запускає корутину у головному loop."""
-    _submit_coroutine(_send_daily(user_id))
-
-
-# ——— API реєстрації задач ———
-
-def schedule_daily_delivery(user: User):
-    """Щоденне повідомлення за notification_time / timezone (тимчасово вимкнено)."""
-    if not user.is_active:
-        return
-
-    logger.info("Daily delivery scheduling skipped (Agent WIP) for user %s", user.id)
 
 
 def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
     """
-    Додає job для кроку плану.
-    Повертає True, якщо щойно видали новий job_id (було None).
+    Schedules a single step. Returns True if a NEW job was created.
     """
-    if step.is_completed:
+    if step.is_completed or step.skipped:
         return False
-    # лише approved кроки шедулимо
-    if step.status and step.status != "approved":
-        return False
-    if not user or not user.is_active:
-        return False
+    
+    # We only schedule if we have a concrete time
     if not step.scheduled_for:
+        return False
+        
+    if not user or not user.is_active:
         return False
 
     new_job_id_assigned = False
     if not step.job_id:
-        step.job_id = _generate_step_job_id(user, step)
+        step.job_id = _generate_step_job_id(user.id, step)
         new_job_id_assigned = True
 
+    # Ensure run_date is in the future
     run_date = step.scheduled_for.astimezone(pytz.UTC)
     now_utc = datetime.now(pytz.UTC)
     if run_date <= now_utc:
+        # If passed, schedule for 1 minute from now (catch-up)
         run_date = now_utc + timedelta(minutes=1)
 
+    # Use replace_existing=True to avoid conflicts
     scheduler.add_job(
         "app.scheduler:send_scheduled_message",
         "date",
         id=step.job_id,
         run_date=run_date,
-        args=[user.tg_id, step.message, step.id],
+        args=[user.tg_id, f"🔔 {step.title}\n\n{step.description}", step.id],
         replace_existing=True,
         misfire_grace_time=3600,
         coalesce=True,
@@ -181,15 +158,9 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
 
 async def schedule_daily_loop():
     """
-    Ініціалізує scheduler, піднімає loop-проксі і реєструє всі актуальні job-и:
-    - daily для активних користувачів,
-    - custom reminders,
-    - кроки планів зі статусом approved (і з проставленим scheduled_for),
-      ігноруючи paused/pending/canceled.
+    Restores jobs on startup.
+    Handles the 3-level hierarchy join: Step -> Day -> Plan.
     """
-    # Тимчасово повністю вимикаємо відновлення задач
-    return
-
     global _scheduler_started, _event_loop
 
     if _scheduler_started:
@@ -198,104 +169,38 @@ async def schedule_daily_loop():
     _scheduler_started = True
     _event_loop = asyncio.get_running_loop()
 
-    logger.info("Starting scheduler restoration loop")
+    logger.info("Starting scheduler restoration loop...")
     init_scheduler()
 
     with SessionLocal() as db:
-        # 1) Daily — тимчасово вимкнено
-        users = db.query(User).filter(User.is_active == True).all()
-        for user in users:
-            schedule_daily_delivery(user)
-
-        # 2) Планові кроки (approved + майбутні + не completed) для активних юзерів і не paused планів
         now_utc = datetime.now(pytz.UTC)
-        plan_rows = (
-            db.query(AIPlanStep, AIPlan, User)
-            .join(AIPlan, AIPlan.id == AIPlanStep.plan_id)
+        
+        # JOIN: Step -> Day -> Plan -> User
+        # Filter: Active User + Active Plan + Future Step + Not Completed
+        pending_steps = (
+            db.query(AIPlanStep, AIPlanDay, AIPlan, User)
+            .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+            .join(AIPlan, AIPlan.id == AIPlanDay.plan_id)
             .join(User, User.id == AIPlan.user_id)
             .filter(
-                AIPlan.status.in_(["active", "draft"]),  # draft не шедулимо, але нормалізуємо статуси
-                AIPlanStep.is_completed == False,
-                AIPlanStep.scheduled_for != None,
-                AIPlanStep.scheduled_for > now_utc,
+                AIPlan.status == "active",
                 User.is_active == True,
+                AIPlanStep.is_completed == False,
+                AIPlanStep.scheduled_for != None, # Only schedule if time is set
+                AIPlanStep.scheduled_for > now_utc
             )
             .all()
         )
 
-        dirty = False
-        for step, plan, user in plan_rows:
-            # нормалізація статусу: None -> pending (щоб не шедулити)
-            if step.status is None:
-                step.status = "pending"
-                dirty = True
-
-            # пропускаємо paused плани — і чистимо застарілі job-и
-            if plan.status == "paused":
-                if step.job_id:
-                    existing = scheduler.get_job(step.job_id)
-                    if existing:
-                        logger.info(
-                            "Removing job %s for paused plan %s step %s",
-                            step.job_id, plan.id, step.id,
-                        )
-                        remove_job(step.job_id)
-                    else:
-                        logger.info(
-                            "Plan %s step %s paused with missing job %s",
-                            plan.id, step.id, step.job_id,
-                        )
-                    step.job_id = None
-                    dirty = True
-                logger.info("Skipping plan %s step %s because plan is paused", plan.id, step.id)
-                continue
-
-            # шедулимо тільки approved
-            if step.status != "approved":
-                if step.job_id:
-                    existing = scheduler.get_job(step.job_id)
-                    if existing:
-                        logger.info(
-                            "Removing job %s for plan %s step %s due to status %s",
-                            step.job_id, plan.id, step.id, step.status,
-                        )
-                        remove_job(step.job_id)
-                    else:
-                        logger.info(
-                            "Clearing stale job %s for plan %s step %s with status %s",
-                            step.job_id, plan.id, step.id, step.status,
-                        )
-                    step.job_id = None
-                    dirty = True
-                logger.info(
-                    "Skipping scheduling for plan %s step %s with status %s",
-                    plan.id, step.id, step.status,
-                )
-                continue
-
-            # якщо job_id відсутній — згенерувати
-            if not step.job_id:
-                step.job_id = _generate_step_job_id(user, step)
-                dirty = True
-                logger.info(
-                    "Generated job id %s for plan %s step %s",
-                    step.job_id, plan.id, step.id,
-                )
-
-            existing_job = scheduler.get_job(step.job_id)
-            if not existing_job:
-                logger.info(
-                    "Plan %s step %s job %s missing in scheduler, re-adding",
-                    plan.id, step.id, step.job_id,
-                )
-
-            # віддати на універсальний шедулер (він ще раз перевірить дані)
+        count = 0
+        for step, day, plan, user in pending_steps:
             assigned = schedule_plan_step(step, user)
             if assigned:
-                dirty = True
-
-        if dirty:
+                count += 1
+        
+        if count > 0:
             db.commit()
+            logger.info(f"Restored {count} scheduled plan steps.")
 
-    # Тримаємо процес живим
+    # Keep the loop alive
     await asyncio.Event().wait()
