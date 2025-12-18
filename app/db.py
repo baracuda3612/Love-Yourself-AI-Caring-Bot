@@ -168,8 +168,10 @@ class AIPlanStep(Base):
     difficulty = Column(Enum(DifficultyLevel), default=DifficultyLevel.EASY)
     
     # Scheduling
-    order_in_day = Column(Integer, default=0) 
-    time_of_day = Column(String, default="any") 
+    order_in_day = Column(Integer, default=0)
+    time_of_day = Column(String, default="any")
+    # Concrete timestamp for the scheduler (calculated by Manager Agent based on time_of_day)
+    scheduled_for = Column(DateTime(timezone=True), nullable=True)
     
     # Execution State
     is_completed = Column(Boolean, default=False)
