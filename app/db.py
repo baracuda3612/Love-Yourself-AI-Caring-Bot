@@ -132,6 +132,9 @@ class AIPlan(Base):
     
     # Versioning for Adaptation
     adaptation_version = Column(Integer, default=1) 
+
+    current_mode = Column(String, default="standard")
+    milestone_status = Column(String, default="pending")
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
