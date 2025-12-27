@@ -8,8 +8,6 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 import pytz
 
-from app.ai_plans import PLAYBOOKS, _DEFAULT_PLAYBOOK
-
 __all__ = ["normalize_plan_steps"]
 
 
@@ -61,14 +59,6 @@ def _parse_preferred_hours(values: Sequence[str] | None) -> List[time]:
     return [fallback] if fallback else []
 
 
-def _choose_playbook(goal: str) -> List[str]:
-    goal_lower = (goal or "").lower()
-    for keyword, messages in PLAYBOOKS.items():
-        if keyword in goal_lower:
-            return list(messages)
-    return list(_DEFAULT_PLAYBOOK)
-
-
 def _extract_messages(raw_steps: Iterable[Any]) -> List[str]:
     messages: List[str] = []
     for item in raw_steps:
@@ -81,10 +71,7 @@ def _extract_messages(raw_steps: Iterable[Any]) -> List[str]:
 
 
 def _ensure_messages(messages: List[str]) -> List[str]:
-    cleaned = [str(msg).strip() for msg in messages if str(msg).strip()]
-    if cleaned:
-        return cleaned
-    return ["Зроби маленький крок турботи про себе."]
+    return [str(msg).strip() for msg in messages if str(msg).strip()]
 
 
 def normalize_plan_steps(
@@ -97,7 +84,7 @@ def normalize_plan_steps(
     preferred_hours: Optional[List[str]] = None,
     tz_name: str,
 ) -> List[Dict[str, Any]]:
-    """Normalize raw plan steps into draft-ready payloads."""
+    """Normalize raw plan steps into draft-ready payloads (deprecated legacy logic)."""
 
     payload = plan_payload or {}
 
@@ -115,10 +102,9 @@ def normalize_plan_steps(
     if not isinstance(raw_steps, list):
         raw_steps = []
 
-    messages = _extract_messages(raw_steps)
+    messages = _ensure_messages(_extract_messages(raw_steps))
     if not messages:
-        messages = _choose_playbook(goal or "Підтримка добробуту")
-    messages = _ensure_messages(messages)
+        return []
 
     repeated_messages = list(islice(cycle(messages), total_steps))
 
@@ -176,4 +162,3 @@ def normalize_plan_steps(
             )
 
     return normalized
-
