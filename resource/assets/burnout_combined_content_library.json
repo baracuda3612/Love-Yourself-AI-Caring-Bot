@@ -1,0 +1,759 @@
+{
+  "inventory": [
+    {
+      "id": "BR_SOM_L1_01",
+      "internal_name": "4-7-8 Breathing",
+      "logic_tags": {
+        "difficulty": 1,
+        "energy_cost": "LOW",
+        "category": "somatic",
+        "impact_areas": [
+          "parasympathetic",
+          "anxiety",
+          "stress"
+        ],
+        "priority_tier": "CORE",
+        "min_plan_duration": 1
+      },
+      "balancing": {
+        "base_weight": 1.0,
+        "is_active": true,
+        "cooldown_days": 2
+      },
+      "content_payload": {
+        "title_uk": "Дихання 4-7-8",
+        "card_description": "Швидке заспокоєння через дихання.",
+        "full_instruction": "Вдихніть носом 4с, затримайте дихання на 7с, повільно видихніть ротом на 8с. Повторіть кілька циклів.",
+        "scientific_rationale": "Активація блукаючого нерва сприяє заспокоєнню [cite: https://www.massgeneral.org/news/article/vagus-nerve]",
+        "resource": {
+          "type": "external_link",
+          "url": "https://www.massgeneral.org/news/article/vagus-nerve",
+          "button_text": "Читати: Як це працює"
+        }
+      }
+    },
+    {
+      "id": "BR_SOM_L2_01",
+      "internal_name": "Progressive Muscle Relaxation",
+      "logic_tags": {
+        "difficulty": 2,
+        "energy_cost": "MED",
+        "category": "somatic",
+        "impact_areas": [
+          "stress",
+          "tension",
+          "burnout"
+        ],
+        "priority_tier": "CORE",
+        "min_plan_duration": 1
+      },
+      "balancing": {
+        "base_weight": 1.0,
+        "is_active": true,
+        "cooldown_days": 3
+      },
+      "content_payload": {
+        "title_uk": "Прогресивна м'язова релаксація",
+        "card_description": "Зниження м'язової напруги через поступове розслаблення.",
+        "full_instruction": "Напружуйте й розслаблюйте кожну групу м'язів від стоп до обличчя. Звертайте увагу на відчуття після розслаблення.",
+        "scientific_rationale": "Метод активує фізіологічну реакцію релаксації, що знижує прояви вигорання [cite: https://www.psychiatryjournal.in/.../burnout-among-non-nationalized-bank-employees...]",
+        "resource": {
+          "type": "external_link",
+          "url": "https://www.psychiatryjournal.in/archives/2025.v7.i2.B.111/a-study-to-evaluate-the-effectiveness-of-jacobsonrsquos-progressive-muscle-relaxation-technique-to-reduce-level-of-burnout-among-non-nationalized-bank-employees-in-selected-area-of-city",
+          "button_text": "Читати: Як це працює"
+        }
+      }
+    },
+    {
+      "id": "BR_SOM_L1_02",
+      "internal_name": "5-4-3-2-1 Grounding",
+      "logic_tags": {
+        "difficulty": 1,
+        "energy_cost": "LOW",
+        "category": "somatic",
+        "impact_areas": [
+          "anxiety",
+          "dissociation",
+          "panic"
+        ],
+        "priority_tier": "SUPPORT",
+        "min_plan_duration": 1
+      },
+      "balancing": {
+        "base_weight": 1.2,
+        "is_active": true,
+        "cooldown_days": 1
+      },
+      "content_payload": {
+        "title_uk": "Граундінг 5-4-3-2-1",
+        "card_description": "Приземлення у поточний момент через п’ять відчуттів.",
+        "full_instruction": "Назвіть 5 речей, які бачите, 4 — що можете торкнутися, 3 — які чуєте, 2 — які відчуваєте на запах, і 1 — на смак.",
+        "scientific_rationale": "Фокус на теперішньому моменті знижує реакцію стресу [cite: https://www.healthline.com/health/grounding-techniques]",
+        "resource": {
+          "type": "external_link",
+          "url": "https://www.healthline.com/health/grounding-techniques",
+          "button_text": "Читати: Як це працює"
+        }
+      }
+    },
+    {
+      "id": "BR_SOM_L2_02",
+      "internal_name": "Mindfulness Meditation",
+      "logic_tags": {
+        "difficulty": 2,
+        "energy_cost": "MED",
+        "category": "somatic",
+        "impact_areas": [
+          "emotional_regulation",
+          "burnout",
+          "anxiety"
+        ],
+        "priority_tier": "SUPPORT",
+        "min_plan_duration": 2
+      },
+      "balancing": {
+        "base_weight": 1.0,
+        "is_active": true,
+        "cooldown_days": 2
+      },
+      "content_payload": {
+        "title_uk": "Медитація усвідомленості",
+        "card_description": "Спокій через фокус на диханні.",
+        "full_instruction": "Сидіть спокійно та спостерігайте за диханням. Коли увага зникає, лагідно поверніть її до відчуттів тіла.",
+        "scientific_rationale": "Усвідомленість знижує емоційне виснаження при вигоранні [cite: https://doi.org/10.3389/fpubh.2024.1381373]",
+        "resource": {
+          "type": "external_link",
+          "url": "https://doi.org/10.3389/fpubh.2024.1381373",
+          "button_text": "Читати: Як це працює"
+        }
+      }
+    },
+    {
+      "id": "BR_SOM_L3_01",
+      "internal_name": "Brisk Walk Break",
+      "logic_tags": {
+        "difficulty": 3,
+        "energy_cost": "HIGH",
+        "category": "somatic",
+        "impact_areas": [
+          "stress",
+          "recovery",
+          "energy_boost"
+        ],
+        "priority_tier": "SUPPORT",
+        "min_plan_duration": 3
+      },
+      "balancing": {
+        "base_weight": 0.8,
+        "is_active": true,
+        "cooldown_days": 3
+      },
+      "content_payload": {
+        "title_uk": "Швидка прогулянка",
+        "card_description": "Фізичне перезавантаження через рух.",
+        "full_instruction": "Прогуляйтесь 10 хвилин в середньому темпі. Звертайте увагу на своє тіло та простір довкола.",
+        "scientific_rationale": "Фізична активність підвищує тонус блукаючого нерва [cite: https://www.massgeneral.org/news/article/vagus-nerve]",
+        "resource": {
+          "type": "external_link",
+          "url": "https://www.massgeneral.org/news/article/vagus-nerve",
+          "button_text": "Читати: Як це працює"
+        }
+      }
+    },
+    {
+      "id": "BR_COG_L2_01",
+      "internal_name": "Thought Reframing",
+      "logic_tags": {
+        "difficulty": 2,
+        "energy_cost": "MED",
+        "category": "cognitive",
+        "impact_areas": [
+          "perfectionism",
+          "stress",
+          "distorted_thinking"
+        ],
+        "priority_tier": "CORE",
+        "min_plan_duration": 2
+      },
+      "balancing": {
+        "base_weight": 1.0,
+        "is_active": true,
+        "cooldown_days": 3
+      },
+      "content_payload": {
+        "title_uk": "Переформулювання думок",
+        "card_description": "Зміна негативних думок на реалістичні.",
+        "full_instruction": "Запишіть тривожну думку. Задайте 3 питання: це правда? що найгірше? що б сказали другові?",
+        "scientific_rationale": "Рефреймінг допомагає змінювати шкідливі патерни мислення [cite: https://www.inspirethemind.org/post/eight-evidence-based-approaches-to-beat-burnout]",
+        "resource": {
+          "type": "external_link",
+          "url": "https://www.inspirethemind.org/post/eight-evidence-based-approaches-to-beat-burnout",
+          "button_text": "Читати: Як це працює"
+        }
+      }
+    },
+    {
+      "id": "BR_COG_L2_02",
+      "internal_name": "Good Enough Experiment",
+      "logic_tags": {
+        "difficulty": 2,
+        "energy_cost": "MED",
+        "category": "cognitive",
+        "impact_areas": [
+          "perfectionism",
+          "control",
+          "performance"
+        ],
+        "priority_tier": "SUPPORT",
+        "min_plan_duration": 2
+      },
+      "balancing": {
+        "base_weight": 1.0,
+        "is_active": true,
+        "cooldown_days": 3
+      },
+      "content_payload": {
+        "title_uk": "Експеримент \"Достатньо добре\"",
+        "card_description": "Практика недосконалості як експеримент.",
+        "full_instruction": "Спробуйте зробити задачу на 80%. Прослідкуйте, чи справді трапиться щось страшне.",
+        "scientific_rationale": "Допомагає зменшити страх помилок через поступове розширення зони дозволеного [cite: https://www.drolsonmadden.com/post/coping-techniques-for-perfectionism]",
+        "resource": {
+          "type": "external_link",
+          "url": "https://www.drolsonmadden.com/post/coping-techniques-for-perfectionism",
+          "button_text": "Читати: Як це працює"
+        }
+      }
+    },
+    {
+      "id": "BR_COG_L1_01",
+      "internal_name": "Leaves on a Stream",
+      "logic_tags": {
+        "difficulty": 1,
+        "energy_cost": "LOW",
+        "category": "cognitive",
+        "impact_areas": [
+          "overthinking",
+          "rumination",
+          "distancing"
+        ],
+        "priority_tier": "SUPPORT",
+        "min_plan_duration": 1
+      },
+      "balancing": {
+        "base_weight": 1.0,
+        "is_active": true,
+        "cooldown_days": 2
+      },
+      "content_payload": {
+        "title_uk": "Листочки на потоці",
+        "card_description": "Метод роз’єднання з думками.",
+        "full_instruction": "Уявляйте, що кожна думка — листок, який пливе по струмку. Не чіпляйтесь, просто спостерігайте.",
+        "scientific_rationale": "Створює дистанцію між особистістю та думками [cite: https://www.drolsonmadden.com/post/coping-techniques-for-perfectionism]",
+        "resource": {
+          "type": "external_link",
+          "url": "https://www.drolsonmadden.com/post/coping-techniques-for-perfectionism",
+          "button_text": "Читати: Як це працює"
+        }
+      }
+    },
+    {
+      "id": "BR_COG_L1_02",
+      "internal_name": "Self-Compassion Break",
+      "logic_tags": {
+        "difficulty": 1,
+        "energy_cost": "LOW",
+        "category": "cognitive",
+        "impact_areas": [
+          "shame",
+          "guilt",
+          "emotional_pain"
+        ],
+        "priority_tier": "CORE",
+        "min_plan_duration": 1
+      },
+      "balancing": {
+        "base_weight": 1.2,
+        "is_active": true,
+        "cooldown_days": 2
+      },
+      "content_payload": {
+        "title_uk": "Хвилинка самоспівчуття",
+        "card_description": "Невелика пауза для доброти до себе.",
+        "full_instruction": "Покладіть руку на серце й скажіть: «Це важко… Я не один… Хай я буду добрим до себе».",
+        "scientific_rationale": "Формує внутрішню підтримку замість критики [cite: https://www.drolsonmadden.com/post/coping-techniques-for-perfectionism]",
+        "resource": {
+          "type": "external_link",
+          "url": "https://www.drolsonmadden.com/post/coping-techniques-for-perfectionism",
+          "button_text": "Читати: Як це працює"
+        }
+      }
+    },
+    {
+      "id": "BR_BOU_L3_01",
+      "internal_name": "Assertive \"No\"",
+      "logic_tags": {
+        "difficulty": 3,
+        "energy_cost": "HIGH",
+        "category": "boundaries",
+        "impact_areas": [
+          "overload",
+          "people_pleasing",
+          "stress"
+        ],
+        "priority_tier": "CORE",
+        "min_plan_duration": 4
+      },
+      "balancing": {
+        "base_weight": 1.0,
+        "is_active": true,
+        "cooldown_days": 4
+      },
+      "content_payload": {
+        "title_uk": "Ассертивне «Ні»",
+        "card_description": "Навичка м’яко, але твердо відмовляти.",
+        "full_instruction": "Визначте одне неважливе прохання та відмовте ввічливо, без вибачень.",
+        "scientific_rationale": "Ассертивність знижує перевантаження та ризик вигорання [cite: https://www.researchgate.net/publication/285370047_Effect_of_Assertiveness_Skills_on_Job_Burnout]",
+        "resource": {
+          "type": "external_link",
+          "url": "https://www.researchgate.net/publication/285370047_Effect_of_Assertiveness_Skills_on_Job_Burnout",
+          "button_text": "Читати: Як це працює"
+        }
+      }
+    },
+    {
+      "id": "BR_BOU_L2_01",
+      "internal_name": "Task Prioritization",
+      "logic_tags": {
+        "difficulty": 2,
+        "energy_cost": "MED",
+        "category": "boundaries",
+        "impact_areas": [
+          "time_management",
+          "overwhelm",
+          "focus"
+        ],
+        "priority_tier": "CORE",
+        "min_plan_duration": 2
+      },
+      "balancing": {
+        "base_weight": 1.0,
+        "is_active": true,
+        "cooldown_days": 2
+      },
+      "content_payload": {
+        "title_uk": "Пріоритизація задач",
+        "card_description": "Метод сортування справ за важливістю.",
+        "full_instruction": "Розбий завдання на 4 категорії: термінові, важливі, делеговані, сміття.",
+        "scientific_rationale": "Ясне структурування зменшує когнітивне навантаження [cite: https://niceday.app/en/library/burn-out/exercises-en/exercises-for-time-management-burnout/]",
+        "resource": {
+          "type": "external_link",
+          "url": "https://niceday.app/en/library/burn-out/exercises-en/exercises-for-time-management-burnout/",
+          "button_text": "Читати: Як це працює"
+        }
+      }
+    },
+    {
+      "id": "BR_BOU_L2_02",
+      "internal_name": "Work Detachment",
+      "logic_tags": {
+        "difficulty": 2,
+        "energy_cost": "MED",
+        "category": "boundaries",
+        "impact_areas": [
+          "mental_recovery",
+          "exhaustion",
+          "work_life_balance"
+        ],
+        "priority_tier": "SUPPORT",
+        "min_plan_duration": 2
+      },
+      "balancing": {
+        "base_weight": 0.9,
+        "is_active": true,
+        "cooldown_days": 3
+      },
+      "content_payload": {
+        "title_uk": "Відключення від роботи",
+        "card_description": "Час без месенджерів і задач.",
+        "full_instruction": "Встанови «м’який кордон»: не перевіряй пошту після 19:00.",
+        "scientific_rationale": "Дистанціювання від роботи в неробочий час знижує емоційне виснаження [cite: https://doi.org/10.3389/fpsyg.2020.00824]",
+        "resource": {
+          "type": "external_link",
+          "url": "https://doi.org/10.3389/fpsyg.2020.00824",
+          "button_text": "Читати: Як це працює"
+        }
+      }
+    },
+    {
+      "id": "BR_BOU_L2_03",
+      "internal_name": "Delegation/Help",
+      "logic_tags": {
+        "difficulty": 2,
+        "energy_cost": "MED",
+        "category": "boundaries",
+        "impact_areas": [
+          "support",
+          "overload",
+          "collaboration"
+        ],
+        "priority_tier": "SUPPORT",
+        "min_plan_duration": 2
+      },
+      "balancing": {
+        "base_weight": 1.1,
+        "is_active": true,
+        "cooldown_days": 3
+      },
+      "content_payload": {
+        "title_uk": "Делегування / Допомога",
+        "card_description": "Запросити допомогу — теж скіл.",
+        "full_instruction": "Знайди одну задачу, яку можна передати іншому, і зроби це.",
+        "scientific_rationale": "Спільна відповідальність знижує навантаження та вигорання [cite: https://www.mdpi.com/2076-328X/14/8/727]",
+        "resource": {
+          "type": "external_link",
+          "url": "https://www.mdpi.com/2076-328X/14/8/727",
+          "button_text": "Читати: Як це працює"
+        }
+      }
+    },
+    {
+      "id": "BR_RES_L3_01",
+      "internal_name": "Values Journal",
+      "logic_tags": {
+        "difficulty": 3,
+        "energy_cost": "HIGH",
+        "category": "rest",
+        "impact_areas": [
+          "meaning",
+          "motivation",
+          "identity"
+        ],
+        "priority_tier": "CORE",
+        "min_plan_duration": 4
+      },
+      "balancing": {
+        "base_weight": 1.0,
+        "is_active": true,
+        "cooldown_days": 4
+      },
+      "content_payload": {
+        "title_uk": "Щоденник цінностей",
+        "card_description": "Пошук відповідей на питання «Хто я?»",
+        "full_instruction": "3 рази на тиждень: «Що для мене важливо?», «Ким я хочу бути?»",
+        "scientific_rationale": "Рефлексія допомагає знайти сенс і знижує вигорання [cite: https://www.psychologytoday.com/us/blog/anger-in-the-age-of-entitlement/202505/to-avoid-burnout-act-on-your-deeper-values]",
+        "resource": {
+          "type": "external_link",
+          "url": "https://www.psychologytoday.com/us/blog/anger-in-the-age-of-entitlement/202505/to-avoid-burnout-act-on-your-deeper-values",
+          "button_text": "Читати: Як це працює"
+        }
+      }
+    },
+    {
+      "id": "BR_RES_L1_01",
+      "internal_name": "Ten-Minute Recharge",
+      "logic_tags": {
+        "difficulty": 1,
+        "energy_cost": "LOW",
+        "category": "rest",
+        "impact_areas": [
+          "restoration",
+          "autonomy",
+          "value_alignment"
+        ],
+        "priority_tier": "SUPPORT",
+        "min_plan_duration": 1
+      },
+      "balancing": {
+        "base_weight": 1.2,
+        "is_active": true,
+        "cooldown_days": 2
+      },
+      "content_payload": {
+        "title_uk": "Перезарядка на 10 хвилин",
+        "card_description": "Маленька пауза, що має значення.",
+        "full_instruction": "Виділи 10 хв. на приємну активність без багатозадачності.",
+        "scientific_rationale": "Навіть короткі дії, пов'язані з цінностями, піднімають енергію [cite: https://www.drolsonmadden.com/post/act-specific-exercises-to-help-with-burnout-recovery]",
+        "resource": {
+          "type": "external_link",
+          "url": "https://www.drolsonmadden.com/post/act-specific-exercises-to-help-with-burnout-recovery",
+          "button_text": "Читати: Як це працює"
+        }
+      }
+    },
+    {
+      "id": "BR_RES_L1_02",
+      "internal_name": "Nature Break",
+      "logic_tags": {
+        "difficulty": 1,
+        "energy_cost": "LOW",
+        "category": "rest",
+        "impact_areas": [
+          "nature",
+          "mood_boost",
+          "recovery"
+        ],
+        "priority_tier": "SUPPORT",
+        "min_plan_duration": 1
+      },
+      "balancing": {
+        "base_weight": 1.1,
+        "is_active": true,
+        "cooldown_days": 2
+      },
+      "content_payload": {
+        "title_uk": "Природна перерва",
+        "card_description": "10 хвилин на природі — не розкіш.",
+        "full_instruction": "Прогуляйся чи просто посидь на вулиці, звертаючи увагу на деталі.",
+        "scientific_rationale": "Контакт із природою знижує стрес і покращує настрій [cite: https://uofuhealth.utah.edu/notes/2025/06/recreation-nature-cures-burnout]",
+        "resource": {
+          "type": "external_link",
+          "url": "https://uofuhealth.utah.edu/notes/2025/06/recreation-nature-cures-burnout",
+          "button_text": "Читати: Як це працює"
+        }
+      }
+    },
+    {
+      "id": "BR_RES_L1_03",
+      "internal_name": "Social Connection",
+      "logic_tags": {
+        "difficulty": 1,
+        "energy_cost": "LOW",
+        "category": "rest",
+        "impact_areas": [
+          "connection",
+          "support",
+          "belonging"
+        ],
+        "priority_tier": "CORE",
+        "min_plan_duration": 1
+      },
+      "balancing": {
+        "base_weight": 1.2,
+        "is_active": true,
+        "cooldown_days": 1
+      },
+      "content_payload": {
+        "title_uk": "Соціальний контакт",
+        "card_description": "Короткий зв’язок із близькою людиною.",
+        "full_instruction": "Напиши або подзвони другу. Контакт — це ресурс.",
+        "scientific_rationale": "Емоційна підтримка знижує рівень тривоги та вигорання [cite: https://uofuhealth.utah.edu/notes/2025/06/recreation-nature-cures-burnout]",
+        "resource": {
+          "type": "external_link",
+          "url": "https://uofuhealth.utah.edu/notes/2025/06/recreation-nature-cures-burnout",
+          "button_text": "Читати: Як це працює"
+        }
+      }
+    },
+    {
+      "id": "BR_RES_L1_04",
+      "internal_name": "Gratitude Journal",
+      "logic_tags": {
+        "difficulty": 1,
+        "energy_cost": "LOW",
+        "category": "rest",
+        "impact_areas": [
+          "positive_focus",
+          "resilience",
+          "mental_hygiene"
+        ],
+        "priority_tier": "SUPPORT",
+        "min_plan_duration": 1
+      },
+      "balancing": {
+        "base_weight": 1.0,
+        "is_active": true,
+        "cooldown_days": 2
+      },
+      "content_payload": {
+        "title_uk": "Щоденник подяки",
+        "card_description": "Фіксація хорошого — як щит.",
+        "full_instruction": "Щовечора запиши 3 речі, за які вдячний, і чому саме.",
+        "scientific_rationale": "Практика вдячності знижує рівень стресу [cite: https://ojin.nursingworld.org/table-of-contents/volume-28-2023/number-3-september-2023/articles-on-previously-published-topics/gratitude-practice-to-decrease-stress/]",
+        "resource": {
+          "type": "external_link",
+          "url": "https://ojin.nursingworld.org/table-of-contents/volume-28-2023/number-3-september-2023/articles-on-previously-published-topics/gratitude-practice-to-decrease-stress/",
+          "button_text": "Читати: Як це працює"
+        }
+      }
+    }
+  ],
+  "blueprints": [
+    {
+      "id": "PLAN_SOMATIC_RESET_MASTER",
+      "internal_name": "Somatic Reset Protocol (Multi-Duration)",
+      "target_module": "BURNOUT_PHYSICAL",
+      "stats": {
+        "popularity_score": 100,
+        "completion_rate": 0.0
+      },
+      "display_info": {
+        "title_uk": "Соматичне Відновлення",
+        "description": "Повертаємо зв'язок з тілом. Оберіть темп, який вам підходить.",
+        "difficulty_label": "Адаптивний"
+      },
+      "duration_variants": {
+        "SHORT": {
+          "total_days": 7,
+          "display_tag": "Швидка допомога",
+          "schedule_rules": [
+            {
+              "phase_name": "Інтенсивна стабілізація",
+              "days_range": [
+                1,
+                7
+              ],
+              "slots": [
+                {
+                  "slot_id": "daily_SOS",
+                  "slot_type": "ANYTIME",
+                  "min_intensity_mode": "LITE",
+                  "query_criteria": {
+                    "category": "somatic",
+                    "impact_areas": [
+                      "parasympathetic"
+                    ],
+                    "energy_cost": [
+                      "LOW"
+                    ],
+                    "priority_tier": "CORE"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "STANDARD": {
+          "total_days": 21,
+          "display_tag": "Формування звички",
+          "schedule_rules": [
+            {
+              "phase_name": "Тиждень 1: Вхід",
+              "days_range": [
+                1,
+                7
+              ],
+              "slots": [
+                {
+                  "slot_id": "daily_intro",
+                  "slot_type": "ANYTIME",
+                  "min_intensity_mode": "LITE",
+                  "query_criteria": {
+                    "category": "somatic",
+                    "energy_cost": [
+                      "LOW"
+                    ],
+                    "priority_tier": "CORE"
+                  }
+                }
+              ]
+            },
+            {
+              "phase_name": "Тиждень 2-3: Поглиблення",
+              "days_range": [
+                8,
+                21
+              ],
+              "slots": [
+                {
+                  "slot_id": "morning_routine",
+                  "slot_type": "MORNING",
+                  "min_intensity_mode": "LITE",
+                  "query_criteria": {
+                    "category": "somatic",
+                    "priority_tier": "CORE"
+                  }
+                }
+              ]
+            },
+            {
+              "phase_name": "Тиждень 2-3: Когнітивне Підсилення",
+              "days_range": [
+                8,
+                21
+              ],
+              "slots": [
+                {
+                  "slot_id": "cognitive_activation",
+                  "slot_type": "AFTERNOON",
+                  "min_intensity_mode": "MID",
+                  "query_criteria": {
+                    "category": "cognitive",
+                    "priority_tier": "CORE"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "LONG": {
+          "total_days": 90,
+          "display_tag": "Зміна способу життя",
+          "schedule_rules": [
+            {
+              "phase_name": "Місяць 1: Фундамент",
+              "days_range": [
+                1,
+                30
+              ],
+              "slots": [
+                {
+                  "slot_id": "daily_base",
+                  "slot_type": "MORNING",
+                  "min_intensity_mode": "LITE",
+                  "query_criteria": {
+                    "category": "somatic",
+                    "energy_cost": [
+                      "LOW"
+                    ],
+                    "priority_tier": "CORE"
+                  }
+                }
+              ]
+            },
+            {
+              "phase_name": "Місяць 2: Інтеграція та Ускладнення",
+              "days_range": [
+                31,
+                60
+              ],
+              "slots": [
+                {
+                  "slot_id": "advanced_practice",
+                  "slot_type": "MORNING",
+                  "min_intensity_mode": "MID",
+                  "query_criteria": {
+                    "category": "somatic",
+                    "energy_cost": [
+                      "MED"
+                    ],
+                    "priority_tier": "SUPPORT"
+                  }
+                }
+              ]
+            },
+            {
+              "phase_name": "Місяць 3: Автономність (Maintenance)",
+              "days_range": [
+                61,
+                90
+              ],
+              "slots": [
+                {
+                  "slot_id": "maintenance_check",
+                  "slot_type": "ANYTIME",
+                  "min_intensity_mode": "LITE",
+                  "query_criteria": {
+                    "category": "somatic",
+                    "impact_areas": [
+                      "resilience"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
