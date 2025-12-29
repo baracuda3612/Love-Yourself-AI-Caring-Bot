@@ -19,6 +19,7 @@ from sqlalchemy import (
     Time,
     create_engine,
 )
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from sqlalchemy.sql import func
 
@@ -199,14 +200,14 @@ class AIPlanStep(Base):
 class ContentLibrary(Base):
     __tablename__ = "content_library"
 
-    id = Column(String, primary_key=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     content_version = Column(Integer, default=1, nullable=False)
     internal_name = Column(String, nullable=False)
     category = Column(String, nullable=False)
     difficulty = Column(Integer, nullable=False)
     energy_cost = Column(String, nullable=False)
-    logic_tags = Column(JSON, default=dict)
-    content_payload = Column(JSON, default=dict)
+    logic_tags = Column(JSONB, default=dict)
+    content_payload = Column(JSONB, default=dict)
     is_active = Column(Boolean, default=True, nullable=False)
 
 
@@ -214,10 +215,10 @@ class ContentLibrary(Base):
 class PlanInstance(Base):
     __tablename__ = "plan_instances"
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     blueprint_id = Column(String)
-    initial_parameters = Column(JSON, default=dict)
+    initial_parameters = Column(JSONB, default=dict)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     user = relationship("User", back_populates="plan_instances")
@@ -231,8 +232,8 @@ class PlanInstance(Base):
 class PlanExecutionWindow(Base):
     __tablename__ = "plan_execution_windows"
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
-    instance_id = Column(String, ForeignKey("plan_instances.id"), nullable=False, index=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    instance_id = Column(UUID(as_uuid=True), ForeignKey("plan_instances.id"), nullable=False, index=True)
     engagement_status = Column(Enum(EngagementStatus), nullable=False, default=EngagementStatus.ACTIVE)
     start_date = Column(DateTime(timezone=True), server_default=func.now())
     end_date = Column(DateTime(timezone=True), nullable=True)
@@ -248,19 +249,19 @@ class PlanExecutionWindow(Base):
 class UserEvent(Base):
     __tablename__ = "user_events"
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     event_type = Column(String, nullable=False)
     timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     plan_execution_id = Column(
-        String,
+        UUID(as_uuid=True),
         ForeignKey("plan_execution_windows.id"),
         nullable=False,
         index=True,
     )
-    step_id = Column(String, ForeignKey("content_library.id"), nullable=True)
+    step_id = Column(UUID(as_uuid=True), ForeignKey("content_library.id"), nullable=True)
     time_of_day_bucket = Column(String, nullable=False)
-    context = Column(JSON, default=dict)
+    context = Column(JSONB, default=dict)
 
     user = relationship("User", back_populates="events")
     plan_execution_window = relationship("PlanExecutionWindow", back_populates="events")
@@ -270,7 +271,7 @@ class TaskStats(Base):
     __tablename__ = "task_stats"
 
     user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
-    step_id = Column(String, ForeignKey("content_library.id"), primary_key=True)
+    step_id = Column(UUID(as_uuid=True), ForeignKey("content_library.id"), primary_key=True)
     attempts_total = Column(Integer, default=0)
     completed_total = Column(Integer, default=0)
     skipped_total = Column(Integer, default=0)
@@ -283,15 +284,15 @@ class TaskStats(Base):
 class FailureSignal(Base):
     __tablename__ = "failure_signals"
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     plan_execution_id = Column(
-        String,
+        UUID(as_uuid=True),
         ForeignKey("plan_execution_windows.id"),
         nullable=False,
         index=True,
     )
-    step_id = Column(String, ForeignKey("content_library.id"), nullable=False)
+    step_id = Column(UUID(as_uuid=True), ForeignKey("content_library.id"), nullable=False)
     trigger_event = Column(String, nullable=False)
     failure_context_tag = Column(String)
     detected_at = Column(DateTime(timezone=True), server_default=func.now())

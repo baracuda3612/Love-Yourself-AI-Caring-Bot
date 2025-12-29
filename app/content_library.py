@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Iterable
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
@@ -17,6 +18,12 @@ def _normalize_payload(raw: dict) -> dict:
     return payload
 
 
+def _coerce_uuid(value: str | UUID) -> UUID:
+    if isinstance(value, UUID):
+        return value
+    return UUID(str(value))
+
+
 def load_content_library(db: Session, source_path: str | Path) -> int:
     """Load or refresh the content library entries from JSON."""
     path = Path(source_path)
@@ -25,7 +32,7 @@ def load_content_library(db: Session, source_path: str | Path) -> int:
     updated = 0
 
     for entry in inventory:
-        content_id = entry["id"]
+        content_id = _coerce_uuid(entry["id"])
         existing = db.get(ContentLibrary, content_id)
         payload = _normalize_payload(entry)
 
@@ -43,7 +50,7 @@ def load_content_library(db: Session, source_path: str | Path) -> int:
                 ContentLibrary(
                     id=content_id,
                     content_version=int(entry.get("content_version") or 1),
-                    internal_name=entry.get("internal_name", content_id),
+                    internal_name=entry.get("internal_name", str(content_id)),
                     category=entry.get("category", "somatic"),
                     difficulty=int(entry.get("difficulty") or 1),
                     energy_cost=entry.get("energy_cost", "LOW"),
