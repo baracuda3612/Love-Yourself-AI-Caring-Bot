@@ -1,6 +1,7 @@
 """Database models and session management for the multi-agent architecture."""
 
 from enum import Enum as PyEnum
+from uuid import uuid4
 
 from sqlalchemy import (
     BigInteger,
@@ -10,6 +11,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Float,
     Integer,
     JSON,
     String,
@@ -49,6 +51,13 @@ class FactCategory(PyEnum):
     INSIGHT = "insight"
 
 
+class EngagementStatus(PyEnum):
+    ACTIVE = "ACTIVE"
+    SPORADIC = "SPORADIC"
+    RETURNING = "RETURNING"
+    DORMANT = "DORMANT"
+
+
 # -------------------- CORE --------------------
 class User(Base):
     __tablename__ = "users"
@@ -68,6 +77,8 @@ class User(Base):
     facts = relationship("UserFact", back_populates="user", cascade="all, delete-orphan")
     plans = relationship("AIPlan", back_populates="user", cascade="all, delete-orphan")
     daily_logs = relationship("UserDailyLog", back_populates="user", cascade="all, delete-orphan")
+    plan_instances = relationship("PlanInstance", back_populates="user", cascade="all, delete-orphan")
+    events = relationship("UserEvent", back_populates="user", cascade="all, delete-orphan")
 
 
 # -------------------- MEMORY --------------------
@@ -182,6 +193,108 @@ class AIPlanStep(Base):
     skipped = Column(Boolean, default=False)
     
     day = relationship("AIPlanDay", back_populates="steps")
+
+
+# -------------------- CONTENT LIBRARY --------------------
+class ContentLibrary(Base):
+    __tablename__ = "content_library"
+
+    id = Column(String, primary_key=True)
+    content_version = Column(Integer, default=1, nullable=False)
+    internal_name = Column(String, nullable=False)
+    category = Column(String, nullable=False)
+    difficulty = Column(Integer, nullable=False)
+    energy_cost = Column(String, nullable=False)
+    logic_tags = Column(JSON, default=dict)
+    content_payload = Column(JSON, default=dict)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+
+# -------------------- TELEMETRY --------------------
+class PlanInstance(Base):
+    __tablename__ = "plan_instances"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    blueprint_id = Column(String)
+    initial_parameters = Column(JSON, default=dict)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", back_populates="plan_instances")
+    execution_windows = relationship(
+        "PlanExecutionWindow",
+        back_populates="instance",
+        cascade="all, delete-orphan",
+    )
+
+
+class PlanExecutionWindow(Base):
+    __tablename__ = "plan_execution_windows"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    instance_id = Column(String, ForeignKey("plan_instances.id"), nullable=False, index=True)
+    engagement_status = Column(Enum(EngagementStatus), nullable=False, default=EngagementStatus.ACTIVE)
+    start_date = Column(DateTime(timezone=True), server_default=func.now())
+    end_date = Column(DateTime(timezone=True), nullable=True)
+    current_load_mode = Column(String, default="LITE")
+    adaptation_requests_count = Column(Integer, default=0)
+    batch_completion_count = Column(Integer, default=0)
+    hidden_compensation_score = Column(Float, default=0.0)
+
+    instance = relationship("PlanInstance", back_populates="execution_windows")
+    events = relationship("UserEvent", back_populates="plan_execution_window")
+
+
+class UserEvent(Base):
+    __tablename__ = "user_events"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    event_type = Column(String, nullable=False)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    plan_execution_id = Column(
+        String,
+        ForeignKey("plan_execution_windows.id"),
+        nullable=False,
+        index=True,
+    )
+    step_id = Column(String, ForeignKey("content_library.id"), nullable=True)
+    time_of_day_bucket = Column(String, nullable=False)
+    context = Column(JSON, default=dict)
+
+    user = relationship("User", back_populates="events")
+    plan_execution_window = relationship("PlanExecutionWindow", back_populates="events")
+
+
+class TaskStats(Base):
+    __tablename__ = "task_stats"
+
+    user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    step_id = Column(String, ForeignKey("content_library.id"), primary_key=True)
+    attempts_total = Column(Integer, default=0)
+    completed_total = Column(Integer, default=0)
+    skipped_total = Column(Integer, default=0)
+    avg_reaction_sec = Column(Float, default=0.0)
+    completed_edge_of_day = Column(Integer, default=0)
+    last_failure_reason = Column(String)
+    history_ref = Column(Boolean, default=False)
+
+
+class FailureSignal(Base):
+    __tablename__ = "failure_signals"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    plan_execution_id = Column(
+        String,
+        ForeignKey("plan_execution_windows.id"),
+        nullable=False,
+        index=True,
+    )
+    step_id = Column(String, ForeignKey("content_library.id"), nullable=False)
+    trigger_event = Column(String, nullable=False)
+    failure_context_tag = Column(String)
+    detected_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 # -------------------- ANALYTICS --------------------
