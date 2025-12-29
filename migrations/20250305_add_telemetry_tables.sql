@@ -1,7 +1,7 @@
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 CREATE TABLE IF NOT EXISTS content_library (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id TEXT PRIMARY KEY,
     content_version INTEGER NOT NULL DEFAULT 1,
     internal_name TEXT NOT NULL,
     category TEXT NOT NULL,
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS user_events (
     timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     user_id INTEGER NOT NULL REFERENCES users(id),
     plan_execution_id UUID NOT NULL REFERENCES plan_execution_windows(id),
-    step_id UUID REFERENCES content_library(id),
+    step_id TEXT REFERENCES content_library(id),
     time_of_day_bucket TEXT NOT NULL,
     context JSONB
 );
@@ -51,7 +51,7 @@ CREATE INDEX IF NOT EXISTS idx_user_events_context_gin ON user_events USING GIN 
 
 CREATE TABLE IF NOT EXISTS task_stats (
     user_id INTEGER NOT NULL REFERENCES users(id),
-    step_id UUID NOT NULL REFERENCES content_library(id),
+    step_id TEXT NOT NULL REFERENCES content_library(id),
     attempts_total INTEGER DEFAULT 0,
     completed_total INTEGER DEFAULT 0,
     skipped_total INTEGER DEFAULT 0,
@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS failure_signals (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id INTEGER NOT NULL REFERENCES users(id),
     plan_execution_id UUID NOT NULL REFERENCES plan_execution_windows(id),
-    step_id UUID NOT NULL REFERENCES content_library(id),
+    step_id TEXT NOT NULL REFERENCES content_library(id),
     trigger_event TEXT NOT NULL,
     failure_context_tag TEXT,
     detected_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP

@@ -12,6 +12,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Float,
+    Index,
     Integer,
     JSON,
     String,
@@ -200,7 +201,7 @@ class AIPlanStep(Base):
 class ContentLibrary(Base):
     __tablename__ = "content_library"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    id = Column(Text, primary_key=True)
     content_version = Column(Integer, default=1, nullable=False)
     internal_name = Column(String, nullable=False)
     category = Column(String, nullable=False)
@@ -248,6 +249,7 @@ class PlanExecutionWindow(Base):
 
 class UserEvent(Base):
     __tablename__ = "user_events"
+    __table_args__ = (Index("idx_user_events_context_gin", "context", postgresql_using="gin"),)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     event_type = Column(String, nullable=False)
@@ -259,7 +261,7 @@ class UserEvent(Base):
         nullable=False,
         index=True,
     )
-    step_id = Column(UUID(as_uuid=True), ForeignKey("content_library.id"), nullable=True)
+    step_id = Column(Text, ForeignKey("content_library.id"), nullable=True)
     time_of_day_bucket = Column(String, nullable=False)
     context = Column(JSONB, default=dict)
 
@@ -271,7 +273,7 @@ class TaskStats(Base):
     __tablename__ = "task_stats"
 
     user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
-    step_id = Column(UUID(as_uuid=True), ForeignKey("content_library.id"), primary_key=True)
+    step_id = Column(Text, ForeignKey("content_library.id"), primary_key=True)
     attempts_total = Column(Integer, default=0)
     completed_total = Column(Integer, default=0)
     skipped_total = Column(Integer, default=0)
@@ -292,7 +294,7 @@ class FailureSignal(Base):
         nullable=False,
         index=True,
     )
-    step_id = Column(UUID(as_uuid=True), ForeignKey("content_library.id"), nullable=False)
+    step_id = Column(Text, ForeignKey("content_library.id"), nullable=False)
     trigger_event = Column(String, nullable=False)
     failure_context_tag = Column(String)
     detected_at = Column(DateTime(timezone=True), server_default=func.now())
