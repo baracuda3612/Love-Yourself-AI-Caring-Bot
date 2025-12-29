@@ -66,7 +66,7 @@ def _ensure_plan_instance(
         instance = db.get(PlanInstance, instance_id)
         if instance:
             if instance.user_id != user_id:
-                raise ValueError("Security Violation")
+                raise ValueError("Security Violation: Instance does not belong to user")
             return instance
 
     instance = (
@@ -354,24 +354,16 @@ def update_hidden_compensation_scores(db: Session) -> int:
             updated += 1
             continue
 
+        completed_events = db.query(func.count(UserEvent.id)).filter(
+            UserEvent.plan_execution_id == window.id,
+            UserEvent.event_type == "task_completed",
+        )
         night_total = (
-            db.query(func.count(UserEvent.id))
-            .filter(
-                UserEvent.plan_execution_id == window.id,
-                UserEvent.event_type == "task_completed",
-                UserEvent.time_of_day_bucket == "night",
-            )
-            .scalar()
+            completed_events.filter(UserEvent.time_of_day_bucket == "night").scalar()
             or 0
         )
         edge_total = (
-            db.query(func.count(UserEvent.id))
-            .filter(
-                UserEvent.plan_execution_id == window.id,
-                UserEvent.event_type == "task_completed",
-                UserEvent.context["is_edge_of_day"].astext == "true",
-            )
-            .scalar()
+            completed_events.filter(UserEvent.context["is_edge_of_day"].astext == "true").scalar()
             or 0
         )
         score = (night_total + edge_total + window.batch_completion_count) / completed_total
