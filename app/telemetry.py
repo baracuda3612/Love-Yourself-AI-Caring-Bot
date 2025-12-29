@@ -135,7 +135,7 @@ def _record_plan_resumed_event(
     )
 
 
-def _get_or_create_task_stats(db: Session, user_id: int, step_id: UUID) -> TaskStats:
+def _get_or_create_task_stats(db: Session, user_id: int, step_id: str) -> TaskStats:
     stats = db.get(TaskStats, {"user_id": user_id, "step_id": step_id})
     if stats:
         return stats
@@ -179,7 +179,7 @@ def _maybe_create_failure_signal(
     db: Session,
     user_id: int,
     window: PlanExecutionWindow,
-    step_id: UUID,
+    step_id: str,
     event_type: str,
     context: dict[str, Any],
     server_now: datetime,
@@ -256,9 +256,9 @@ def log_user_event(
             server_now,
         )
 
-    step_uuid = _coerce_uuid(step_id)
-    if step_uuid:
-        content = db.get(ContentLibrary, step_uuid)
+    step_value = str(step_id) if step_id is not None else None
+    if step_value:
+        content = db.get(ContentLibrary, step_value)
         if content:
             event_context.setdefault("content_version", content.content_version)
 
@@ -274,14 +274,14 @@ def log_user_event(
         timestamp=server_now,
         user_id=user_id,
         plan_execution_id=window.id,
-        step_id=step_uuid,
+        step_id=step_value,
         time_of_day_bucket=bucket,
         context=event_context,
     )
     db.add(event)
 
-    if step_uuid and event_type in TASK_EVENT_TYPES:
-        stats = _get_or_create_task_stats(db, user_id, step_uuid)
+    if step_value and event_type in TASK_EVENT_TYPES:
+        stats = _get_or_create_task_stats(db, user_id, step_value)
         _update_task_stats(stats, event_type, bucket, event_context)
         if event_type in {"task_skipped", "task_ignored"}:
             stats.last_failure_reason = event_context.get("skip_reason") or stats.last_failure_reason
@@ -290,7 +290,7 @@ def log_user_event(
                 db,
                 user_id,
                 window,
-                step_uuid,
+                step_value,
                 event_type,
                 event_context,
                 server_now,
@@ -368,6 +368,7 @@ def update_hidden_compensation_scores(db: Session) -> int:
             db.query(func.count(UserEvent.id))
             .filter(
                 UserEvent.plan_execution_id == window.id,
+                UserEvent.event_type == "task_completed",
                 UserEvent.context["is_edge_of_day"].astext == "true",
             )
             .scalar()
