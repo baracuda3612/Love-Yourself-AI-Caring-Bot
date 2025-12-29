@@ -68,7 +68,7 @@ class Settings:
 
     def __post_init__(self) -> None:
         bot_token = os.getenv("BOT_TOKEN")
-        database_url = os.getenv("DATABASE_URL") or os.getenv("DB_URL")
+        database_url = os.getenv("DATABASE_URL")
         openai_api_key = os.getenv("OPENAI_API_KEY")
 
         if not bot_token:
@@ -122,7 +122,6 @@ TEMPERATURE = settings.TEMPERATURE
 DEFAULT_DAILY_LIMIT = settings.DEFAULT_DAILY_LIMIT
 DEFAULT_SEND_HOUR = settings.DEFAULT_SEND_HOUR
 DATABASE_URL = settings.DATABASE_URL
-DB_URL = settings.DATABASE_URL
 ENVIRONMENT = settings.ENVIRONMENT
 IS_DEV = settings.IS_DEV
 IS_STAGING = settings.IS_STAGING

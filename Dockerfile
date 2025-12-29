@@ -1,8 +1,8 @@
 FROM python:3.11-slim
 
-# Встановлюємо залежності для SQLite
+# Встановлюємо залежності для PostgreSQL
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libsqlite3-0 \
+    libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
 # Створюємо робочу директорію
