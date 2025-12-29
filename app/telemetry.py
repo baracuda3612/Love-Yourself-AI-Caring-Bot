@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from uuid import UUID
 
 import pytz
 from sqlalchemy import desc, func
@@ -22,6 +23,12 @@ from app.db import (
 
 EDGE_OF_DAY_BUCKETS = {"night", "morning"}
 TASK_EVENT_TYPES = {"task_delivered", "task_completed", "task_skipped", "task_ignored"}
+
+
+def _coerce_uuid(value: str | UUID | None) -> UUID | None:
+    if value is None or isinstance(value, UUID):
+        return value
+    return UUID(str(value))
 
 
 def _utc_now() -> datetime:
@@ -50,13 +57,16 @@ def _time_bucket(local_dt: datetime) -> str:
 def _ensure_plan_instance(
     db: Session,
     user_id: int,
-    plan_instance_id: str | None = None,
+    plan_instance_id: str | UUID | None = None,
     blueprint_id: str | None = None,
     initial_parameters: dict[str, Any] | None = None,
 ) -> PlanInstance:
     if plan_instance_id:
-        instance = db.get(PlanInstance, plan_instance_id)
+        instance_id = _coerce_uuid(plan_instance_id)
+        instance = db.get(PlanInstance, instance_id)
         if instance:
+            if instance.user_id != user_id:
+                raise ValueError("Security Violation")
             return instance
 
     instance = (
@@ -125,7 +135,7 @@ def _record_plan_resumed_event(
     )
 
 
-def _get_or_create_task_stats(db: Session, user_id: int, step_id: str) -> TaskStats:
+def _get_or_create_task_stats(db: Session, user_id: int, step_id: UUID) -> TaskStats:
     stats = db.get(TaskStats, {"user_id": user_id, "step_id": step_id})
     if stats:
         return stats
@@ -169,7 +179,7 @@ def _maybe_create_failure_signal(
     db: Session,
     user_id: int,
     window: PlanExecutionWindow,
-    step_id: str,
+    step_id: UUID,
     event_type: str,
     context: dict[str, Any],
     server_now: datetime,
@@ -217,9 +227,9 @@ def log_user_event(
     db: Session,
     user_id: int,
     event_type: str,
-    step_id: str | None = None,
+    step_id: str | UUID | None = None,
     context: dict[str, Any] | None = None,
-    plan_instance_id: str | None = None,
+    plan_instance_id: str | UUID | None = None,
 ) -> UserEvent:
     server_now = _utc_now()
     user = db.get(User, user_id)
@@ -246,8 +256,9 @@ def log_user_event(
             server_now,
         )
 
-    if step_id:
-        content = db.get(ContentLibrary, step_id)
+    step_uuid = _coerce_uuid(step_id)
+    if step_uuid:
+        content = db.get(ContentLibrary, step_uuid)
         if content:
             event_context.setdefault("content_version", content.content_version)
 
@@ -263,14 +274,14 @@ def log_user_event(
         timestamp=server_now,
         user_id=user_id,
         plan_execution_id=window.id,
-        step_id=step_id,
+        step_id=step_uuid,
         time_of_day_bucket=bucket,
         context=event_context,
     )
     db.add(event)
 
-    if step_id and event_type in TASK_EVENT_TYPES:
-        stats = _get_or_create_task_stats(db, user_id, step_id)
+    if step_uuid and event_type in TASK_EVENT_TYPES:
+        stats = _get_or_create_task_stats(db, user_id, step_uuid)
         _update_task_stats(stats, event_type, bucket, event_context)
         if event_type in {"task_skipped", "task_ignored"}:
             stats.last_failure_reason = event_context.get("skip_reason") or stats.last_failure_reason
@@ -279,7 +290,7 @@ def log_user_event(
                 db,
                 user_id,
                 window,
-                step_id,
+                step_uuid,
                 event_type,
                 event_context,
                 server_now,
@@ -354,12 +365,11 @@ def update_hidden_compensation_scores(db: Session) -> int:
             or 0
         )
         edge_total = (
-            db.query(func.sum(TaskStats.completed_edge_of_day))
-            .join(
-                ContentLibrary,
-                TaskStats.step_id == ContentLibrary.id,
+            db.query(func.count(UserEvent.id))
+            .filter(
+                UserEvent.plan_execution_id == window.id,
+                UserEvent.context["is_edge_of_day"].astext == "true",
             )
-            .filter(TaskStats.user_id == window.instance.user_id)
             .scalar()
             or 0
         )
