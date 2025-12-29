@@ -201,14 +201,14 @@ class AIPlanStep(Base):
 class ContentLibrary(Base):
     __tablename__ = "content_library"
 
-    id = Column(Text, primary_key=True)
+    id = Column(String, primary_key=True)
     content_version = Column(Integer, default=1, nullable=False)
     internal_name = Column(String, nullable=False)
     category = Column(String, nullable=False)
     difficulty = Column(Integer, nullable=False)
     energy_cost = Column(String, nullable=False)
-    logic_tags = Column(JSONB, default=dict)
-    content_payload = Column(JSONB, default=dict)
+    logic_tags = Column(JSONB, nullable=False, default=dict)
+    content_payload = Column(JSONB, nullable=False, default=dict)
     is_active = Column(Boolean, default=True, nullable=False)
 
 
@@ -219,7 +219,7 @@ class PlanInstance(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     blueprint_id = Column(String)
-    initial_parameters = Column(JSONB, default=dict)
+    initial_parameters = Column(JSONB, nullable=False, default=dict)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     user = relationship("User", back_populates="plan_instances")
@@ -263,7 +263,7 @@ class UserEvent(Base):
     )
     step_id = Column(Text, ForeignKey("content_library.id"), nullable=True)
     time_of_day_bucket = Column(String, nullable=False)
-    context = Column(JSONB, default=dict)
+    context = Column(JSONB, nullable=False, default=dict)
 
     user = relationship("User", back_populates="events")
     plan_execution_window = relationship("PlanExecutionWindow", back_populates="events")
