@@ -1,7 +1,6 @@
 # app/scheduler.py
 import asyncio
 import logging
-import os
 from datetime import datetime, timedelta, time as dt_time
 from typing import Optional
 
@@ -15,13 +14,7 @@ from app.db import AIPlan, AIPlanDay, AIPlanStep, SessionLocal, User
 
 # Configure JobStore
 DATABASE_URL = settings.DATABASE_URL
-if DATABASE_URL.startswith("sqlite:///"):
-    base_path = DATABASE_URL.replace("sqlite:///", "")
-    base_dir = os.path.dirname(os.path.abspath(base_path)) or "."
-    jobs_db_path = os.path.join(base_dir, "jobs.sqlite")
-    jobstore_url = f"sqlite:///{jobs_db_path}"
-else:
-    jobstore_url = DATABASE_URL
+jobstore_url = DATABASE_URL
 
 jobstores = {"default": SQLAlchemyJobStore(url=jobstore_url)}
 scheduler = BackgroundScheduler(jobstores=jobstores, timezone="UTC")

@@ -5,7 +5,10 @@ import sys
 import pytest
 
 os.environ.setdefault("BOT_TOKEN", "test-token")
-os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+os.environ.setdefault(
+    "DATABASE_URL",
+    "postgresql://test-user:test-pass@localhost:5432/test-db",
+)
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
