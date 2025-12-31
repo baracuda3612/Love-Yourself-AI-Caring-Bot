@@ -64,11 +64,33 @@ class EngagementStatus(PyEnum):
 class User(Base):
     __tablename__ = "users"
 
+    __table_args__ = (
+        CheckConstraint(
+            "current_state IN ("
+            "'IDLE_NEW','IDLE_FINISHED','IDLE_DROPPED',"
+            "'PLAN_FLOW:DATA_COLLECTION','PLAN_FLOW:CONFIRMATION_PENDING',"
+            "'PLAN_FLOW:FINALIZATION','ACTIVE','ADAPTATION_FLOW'"
+            ") OR current_state LIKE 'ONBOARDING:%'",
+            name="ck_users_current_state",
+        ),
+        CheckConstraint(
+            "execution_policy IN ('EXECUTION','OBSERVATION')",
+            name="ck_users_execution_policy",
+        ),
+        CheckConstraint(
+            "current_load IN ('LITE','MID','INTENSIVE')",
+            name="ck_users_current_load",
+        ),
+    )
+
     id = Column(Integer, primary_key=True)
     tg_id = Column(BigInteger, unique=True, nullable=False, index=True)
     username = Column(String)
     first_name = Column(String)
-    current_state = Column(String, default="onboarding:start", index=True)
+    current_state = Column(String, default="IDLE_NEW", index=True)
+    execution_policy = Column(String, default="EXECUTION", nullable=False)
+    current_load = Column(String, default="LITE", nullable=False)
+    last_active_at = Column(DateTime(timezone=True), nullable=True)
 
     timezone = Column(String, default="Europe/Kyiv")
     notification_time = Column(Time, nullable=True)
