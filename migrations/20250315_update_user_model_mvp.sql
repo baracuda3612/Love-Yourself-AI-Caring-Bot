@@ -1,3 +1,23 @@
+-- 1. Normalize existing 'idle' users to 'IDLE_NEW'
+UPDATE users
+SET current_state = 'IDLE_NEW'
+WHERE current_state = 'idle' OR current_state IS NULL;
+
+-- 2. Normalize 'active' users to 'ACTIVE'
+UPDATE users
+SET current_state = 'ACTIVE'
+WHERE current_state = 'active';
+
+-- 3. Uppercase all ONBOARDING states (e.g. 'onboarding:start' -> 'ONBOARDING:START')
+UPDATE users
+SET current_state = UPPER(current_state)
+WHERE current_state LIKE 'onboarding:%';
+
+-- 4. Uppercase all PLAN_FLOW states if any exist
+UPDATE users
+SET current_state = UPPER(current_state)
+WHERE current_state LIKE 'plan_flow:%';
+
 ALTER TABLE users
     ADD COLUMN IF NOT EXISTS execution_policy TEXT NOT NULL DEFAULT 'EXECUTION',
     ADD COLUMN IF NOT EXISTS current_load TEXT NOT NULL DEFAULT 'LITE',

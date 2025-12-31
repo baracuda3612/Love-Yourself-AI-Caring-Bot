@@ -30,7 +30,7 @@ def _ensure_user(db, tg_user) -> User:
             tg_id=tg_user.id,
             username=tg_user.username,
             first_name=tg_user.first_name,
-            current_state="onboarding:start",
+            current_state="ONBOARDING:START",
         )
         db.add(user)
         db.commit()
@@ -41,8 +41,6 @@ def _ensure_user(db, tg_user) -> User:
     if not user.profile:
         profile = UserProfile(user_id=user.id)
         db.add(profile)
-    if user.current_state != "idle":
-        user.current_state = "idle"
     db.commit()
     db.refresh(user)
     return user
@@ -52,10 +50,13 @@ def _ensure_user(db, tg_user) -> User:
 async def cmd_start(message: Message):
     with SessionLocal() as db:
         user = _ensure_user(db, message.from_user)
-    await message.answer(
-        "Привіт! Я LoveYourself бот. Напиши повідомлення, і я відповім у новому форматі."
-    )
-    logger.info("User %s started the bot", user.id)
+        if user.current_state == "IDLE_NEW":
+            user.current_state = "ONBOARDING:START"
+            db.commit()
+            await message.answer("Привіт! Я LoveYourself бот. Давай познайомимось.")
+        else:
+            await message.answer("З поверненням! Продовжуємо твій шлях.")
+    logger.info("User %s started the bot (State: %s)", user.id, user.current_state)
 
 
 @router.message(F.text)
