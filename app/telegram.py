@@ -23,8 +23,9 @@ dp.include_router(router)
 logger = logging.getLogger(__name__)
 
 
-def _ensure_user(db, tg_user) -> User:
+def _ensure_user(db, tg_user) -> tuple[User, bool]:
     user: Optional[User] = db.query(User).filter(User.tg_id == tg_user.id).first()
+    is_created = False
     if not user:
         user = User(
             tg_id=tg_user.id,
@@ -35,6 +36,7 @@ def _ensure_user(db, tg_user) -> User:
         db.add(user)
         db.commit()
         db.refresh(user)
+        is_created = True
     else:
         user.username = tg_user.username
         user.first_name = tg_user.first_name
@@ -43,27 +45,33 @@ def _ensure_user(db, tg_user) -> User:
         db.add(profile)
     db.commit()
     db.refresh(user)
-    return user
+    return user, is_created
 
 
 @router.message(Command("start"))
 async def cmd_start(message: Message):
     with SessionLocal() as db:
-        user = _ensure_user(db, message.from_user)
-        if user.current_state == "IDLE_NEW":
-            user.current_state = "ONBOARDING:START"
-            db.commit()
+        user, is_created = _ensure_user(db, message.from_user)
+        if is_created or user.current_state == "IDLE_NEW":
+            if user.current_state == "IDLE_NEW":
+                user.current_state = "ONBOARDING:START"
+                db.commit()
             await message.answer("Привіт! Я LoveYourself бот. Давай познайомимось.")
         else:
-            await message.answer("З поверненням! Продовжуємо твій шлях.")
-    logger.info("User %s started the bot (State: %s)", user.id, user.current_state)
+            await message.answer("З поверненням! Продовжуємо.")
+    logger.info(
+        "User %s started. Created: %s, State: %s",
+        user.id,
+        is_created,
+        user.current_state,
+    )
 
 
 @router.message(F.text)
 async def on_text(message: Message):
     text = message.text or ""
     with SessionLocal() as db:
-        user = _ensure_user(db, message.from_user)
+        user, _ = _ensure_user(db, message.from_user)
         db.add(ChatHistory(user_id=user.id, role="user", text=text))
         db.commit()
 
