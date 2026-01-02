@@ -262,10 +262,40 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
 
     worker_result = await _invoke_agent(target_agent, worker_payload)
 
+    transition_signal = worker_result.get("transition_signal")
+    if transition_signal is not None:
+        previous_state: Optional[str] = None
+        with SessionLocal() as db:
+            user: Optional[User] = db.query(User).filter(User.id == user_id).first()
+            if user:
+                previous_state = user.current_state
+                user.current_state = transition_signal
+                db.commit()
+
+        if previous_state is not None:
+            logger.info(
+                "[FSM] User %s state transition: %s → %s (agent=%s)",
+                user_id,
+                previous_state,
+                transition_signal,
+                target_agent,
+            )
+            log_router_decision(
+                {
+                    "event_type": "fsm_transition",
+                    "user_id": user_id,
+                    "agent": target_agent,
+                    "from_state": previous_state,
+                    "to_state": transition_signal,
+                }
+            )
+
     reply_text = str(worker_result.get("reply_text") or "")
     await session_memory.append_message(user_id, "assistant", reply_text)
 
     return reply_text
+
+
 async def _invoke_agent(target_agent: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     if target_agent == "safety":
         return await mock_safety_agent(payload)
