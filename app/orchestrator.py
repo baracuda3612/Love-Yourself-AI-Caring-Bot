@@ -521,22 +521,18 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                     target_agent,
                 )
                 return reply_text
+            if normalized_state == "ACTIVE" and previous_state == "IDLE_FINISHED":
+                logger.warning(
+                    "[FSM] Restore blocked — plan is fully finished for user %s (agent=%s)",
+                    user_id,
+                    target_agent,
+                )
+                return reply_text
             if normalized_state == "ACTIVE" and previous_state in {
                 "IDLE_DROPPED",
                 "ACTIVE_PAUSED",
                 "IDLE_PLAN_ABORTED",
-                "IDLE_FINISHED",
             }:
-                plan_times = _plan_end_date_status(user.plan_end_date)
-                if plan_times:
-                    plan_end_date, now = plan_times
-                    if plan_end_date < now:
-                        logger.warning(
-                            "[FSM] Restore rejected — plan already finished for user %s (agent=%s)",
-                            user_id,
-                            target_agent,
-                        )
-                        return reply_text
                 user.execution_policy = "EXECUTION"
             if normalized_state == "ACTIVE" and previous_state.startswith("PLAN_FLOW"):
                 if not _has_complete_plan_metadata(user):
