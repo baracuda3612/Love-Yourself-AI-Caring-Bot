@@ -33,7 +33,7 @@ def _violates_tunnel_exit(current_state: Optional[str], new_state: str) -> bool:
     current_state = current_state.strip()
     if not current_state:
         return False
-    if current_state.startswith("PLAN_FLOW") and new_state not in {"ACTIVE"}:
+    if current_state.startswith("PLAN_FLOW") and new_state not in {"ACTIVE", "IDLE_NEW"}:
         return True
     if current_state.startswith("ONBOARDING") and new_state not in {"IDLE_NEW"}:
         return True
@@ -97,13 +97,46 @@ def _is_forbidden_transition(previous_state: Optional[str], next_state: str) -> 
         return False
     if previous_state.startswith("ONBOARDING") and next_state == "ACTIVE":
         return True
-    if previous_state.startswith("PLAN_FLOW") and next_state == "IDLE_NEW":
-        return True
     if previous_state.startswith("PLAN_FLOW") and next_state == "COACH":
+        return True
+    if previous_state.startswith("PLAN_FLOW") and next_state == "IDLE_FINISHED":
+        return True
+    if previous_state.startswith("PLAN_FLOW") and next_state.startswith("ONBOARDING"):
+        return True
+    if previous_state.startswith("PLAN_FLOW") and next_state.startswith("PLAN_FLOW"):
+        allowed_plan_flow = {
+            ("PLAN_FLOW:DATA_COLLECTION", "PLAN_FLOW:CONFIRMATION_PENDING"),
+            ("PLAN_FLOW:CONFIRMATION_PENDING", "PLAN_FLOW:FINALIZATION"),
+        }
+        if previous_state != next_state and (previous_state, next_state) not in allowed_plan_flow:
+            return True
+    if previous_state.startswith("PLAN_FLOW") and next_state == "ACTIVE":
+        return previous_state != "PLAN_FLOW:FINALIZATION"
+    if not previous_state.startswith("ONBOARDING") and next_state.startswith("ONBOARDING"):
         return True
     if previous_state == "ACTIVE" and next_state.startswith("ONBOARDING"):
         return True
+    if previous_state == "IDLE_NEW" and next_state == "ACTIVE":
+        return True
     return False
+
+
+def _has_complete_plan_metadata(user: User) -> bool:
+    return bool(user.plan_end_date and user.current_load and user.execution_policy)
+
+
+def _can_restore_plan(user: User) -> bool:
+    if not _has_complete_plan_metadata(user):
+        return False
+    plan_times = _plan_end_date_status(user.plan_end_date)
+    if not plan_times:
+        return False
+    plan_end_date, now = plan_times
+    if plan_end_date < now:
+        return False
+    if user.execution_policy == "OBSERVATION":
+        return False
+    return True
 
 
 def _plan_end_date_status(plan_end_date: Optional[datetime]) -> Optional[Tuple[datetime, datetime]]:
@@ -484,12 +517,27 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                     target_agent,
                 )
                 return reply_text
-            if normalized_state == "ACTIVE" and user.plan_end_date is None:
-                logger.warning(
-                    "[FSM] Transition ignored for user %s: plan_end_date required for ACTIVE (agent=%s)",
-                    user_id,
-                    target_agent,
-                )
+            if previous_state == "IDLE_DROPPED" and normalized_state == "ACTIVE":
+                if not _can_restore_plan(user):
+                    user.current_state = "PLAN_FLOW:DATA_COLLECTION"
+                    try:
+                        db.commit()
+                    except IntegrityError:
+                        db.rollback()
+                        logger.error(
+                            "[FSM] Failed to redirect restore for user %s (agent=%s)",
+                            user_id,
+                            target_agent,
+                        )
+                    else:
+                        logger.info(
+                            "[FSM] Restore requires reconfiguration for user %s: IDLE_DROPPED → PLAN_FLOW:DATA_COLLECTION (agent=%s)",
+                            user_id,
+                            target_agent,
+                        )
+                    return reply_text
+            if normalized_state == "ACTIVE" and not _has_complete_plan_metadata(user):
+                logger.warning("[FSM] Transition rejected — incomplete plan metadata")
                 return reply_text
             user.current_state = normalized_state
             try:
