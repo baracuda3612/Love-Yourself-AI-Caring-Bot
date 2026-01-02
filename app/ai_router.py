@@ -138,12 +138,8 @@ def _apply_hard_coded_rules(current_state: Optional[str], latest_message: str, s
     if current_state_str == "ADAPTATION_FLOW":
         return {"target_agent": "plan", "priority": "normal"}
     
-    # ONBOARDING tunnel (manager can override, but PLAN_FLOW/ADAPTATION_FLOW cannot)
+    # ONBOARDING tunnel
     if current_state_str.startswith("ONBOARDING"):
-        # Manager is allowed in ONBOARDING
-        if _detect_manager_intent(latest_message_str):
-            return {"target_agent": "manager", "priority": "normal"}
-        # Otherwise stay in onboarding
         return {"target_agent": "onboarding", "priority": "high"}
     
     # 3. ACTIVE (Open World)

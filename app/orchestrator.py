@@ -27,7 +27,20 @@ ALLOWED_BASE_STATES = {"IDLE_NEW", "IDLE_FINISHED", "IDLE_DROPPED", "ACTIVE", "A
 PREFIXED_STATES = {"ONBOARDING", "PLAN_FLOW"}
 
 
-def _normalize_fsm_state(raw_state: Optional[str]) -> Optional[str]:
+def _violates_tunnel_exit(current_state: Optional[str], new_state: str) -> bool:
+    if not current_state:
+        return False
+    current_state = current_state.strip()
+    if not current_state:
+        return False
+    if current_state.startswith("PLAN_FLOW") and new_state not in {"ACTIVE"}:
+        return True
+    if current_state.startswith("ONBOARDING") and new_state not in {"IDLE_NEW"}:
+        return True
+    return False
+
+
+def _normalize_fsm_state(raw_state: Optional[str], current_state: Optional[str] = None) -> Optional[str]:
     if not raw_state:
         return None
 
@@ -49,10 +62,13 @@ def _normalize_fsm_state(raw_state: Optional[str]) -> Optional[str]:
     elif prefix not in PREFIXED_STATES:
         return None
 
+    if _violates_tunnel_exit(current_state, normalized):
+        return None
+
     return normalized
 
 
-def _get_fsm_rejection_reason(raw_state: Any) -> Optional[str]:
+def _get_fsm_rejection_reason(raw_state: Any, current_state: Optional[str] = None) -> Optional[str]:
     if raw_state is None:
         return "missing"
     if not isinstance(raw_state, str):
@@ -61,14 +77,33 @@ def _get_fsm_rejection_reason(raw_state: Any) -> Optional[str]:
     if not state:
         return "empty"
     if ":" in state:
-        prefix, _ = state.split(":", 1)
+        prefix, suffix = state.split(":", 1)
         prefix = prefix.upper()
         if prefix not in PREFIXED_STATES:
             return "invalid_prefix"
+        normalized = f"{prefix}:{suffix}"
+        if _violates_tunnel_exit(current_state, normalized):
+            return "tunnel_exit_rejected"
         return None
     if state.upper() not in ALLOWED_BASE_STATES:
         return "not_allowed"
+    if _violates_tunnel_exit(current_state, state.upper()):
+        return "tunnel_exit_rejected"
     return None
+
+
+def _is_forbidden_transition(previous_state: Optional[str], next_state: str) -> bool:
+    if not previous_state:
+        return False
+    if previous_state.startswith("ONBOARDING") and next_state == "ACTIVE":
+        return True
+    if previous_state.startswith("PLAN_FLOW") and next_state == "IDLE_NEW":
+        return True
+    if previous_state.startswith("PLAN_FLOW") and next_state == "COACH":
+        return True
+    if previous_state == "ACTIVE" and next_state.startswith("ONBOARDING"):
+        return True
+    return False
 
 
 def _plan_end_date_status(plan_end_date: Optional[datetime]) -> Optional[Tuple[datetime, datetime]]:
@@ -296,6 +331,19 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
     router_result = router_output.get("router_result", {})
     router_meta = router_output.get("router_meta", {})
 
+    current_state = context_payload.get("current_state") or ""
+    forced_agent: Optional[str] = None
+    if current_state.startswith("PLAN_FLOW") or current_state == "ADAPTATION_FLOW":
+        forced_agent = "plan"
+    elif current_state.startswith("ONBOARDING"):
+        forced_agent = "onboarding"
+
+    if router_result.get("target_agent") == "safety":
+        forced_agent = None
+
+    if forced_agent:
+        router_result["target_agent"] = forced_agent
+
     log_payload = {
         "event_type": "router_decision",
         "timestamp": datetime.utcnow().isoformat(),
@@ -394,9 +442,19 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                 )
 
     transition_signal = worker_result.get("transition_signal")
-    normalized_state = _normalize_fsm_state(transition_signal) if isinstance(transition_signal, str) else None
+    normalized_state = (
+        _normalize_fsm_state(transition_signal, current_state=context_payload.get("current_state"))
+        if isinstance(transition_signal, str)
+        else None
+    )
     if transition_signal is not None and normalized_state is None:
-        reason = _get_fsm_rejection_reason(transition_signal) or "invalid_state"
+        reason = (
+            _get_fsm_rejection_reason(
+                transition_signal,
+                current_state=context_payload.get("current_state"),
+            )
+            or "invalid_state"
+        )
         logger.warning(
             "[FSM] Ignoring transition_signal for user %s: %s (reason=%s, agent=%s)",
             user_id,
@@ -417,6 +475,22 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                 )
                 return reply_text
             previous_state = user.current_state
+            if _is_forbidden_transition(previous_state, normalized_state):
+                logger.warning(
+                    "[FSM] Forbidden transition ignored for user %s: %s → %s (agent=%s)",
+                    user_id,
+                    previous_state,
+                    normalized_state,
+                    target_agent,
+                )
+                return reply_text
+            if normalized_state == "ACTIVE" and user.plan_end_date is None:
+                logger.warning(
+                    "[FSM] Transition ignored for user %s: plan_end_date required for ACTIVE (agent=%s)",
+                    user_id,
+                    target_agent,
+                )
+                return reply_text
             user.current_state = normalized_state
             try:
                 db.commit()
