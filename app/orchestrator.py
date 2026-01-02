@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import logging
 
@@ -50,6 +50,64 @@ def _normalize_fsm_state(raw_state: Optional[str]) -> Optional[str]:
         return None
 
     return normalized
+
+
+def _get_fsm_rejection_reason(raw_state: Any) -> Optional[str]:
+    if raw_state is None:
+        return "missing"
+    if not isinstance(raw_state, str):
+        return "non_string"
+    state = raw_state.strip()
+    if not state:
+        return "empty"
+    if ":" in state:
+        prefix, _ = state.split(":", 1)
+        prefix = prefix.upper()
+        if prefix not in PREFIXED_STATES:
+            return "invalid_prefix"
+        return None
+    if state.upper() not in ALLOWED_BASE_STATES:
+        return "not_allowed"
+    return None
+
+
+def _plan_end_date_status(plan_end_date: Optional[datetime]) -> Optional[Tuple[datetime, datetime]]:
+    if not plan_end_date:
+        return None
+    if plan_end_date.tzinfo is None:
+        return plan_end_date, datetime.utcnow()
+    return plan_end_date.astimezone(pytz.UTC), datetime.now(pytz.UTC)
+
+
+def _auto_complete_plan_if_needed(user_id: int) -> None:
+    with SessionLocal() as db:
+        user: Optional[User] = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            return
+        if user.current_state != "ACTIVE":
+            return
+        plan_times = _plan_end_date_status(user.plan_end_date)
+        if not plan_times:
+            return
+        plan_end_date, now = plan_times
+        if plan_end_date >= now:
+            return
+        user.current_state = "IDLE_FINISHED"
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            logger.error(
+                "[FSM] Failed to auto-complete plan for user %s (plan_end_date=%s)",
+                user_id,
+                plan_end_date,
+            )
+        else:
+            logger.info(
+                "[FSM] Auto-completed plan for user %s: ACTIVE → IDLE_FINISHED (plan_end_date=%s)",
+                user_id,
+                plan_end_date,
+            )
 
 
 def _get_skip_streak(db: Session, user_id: int) -> int:
@@ -230,6 +288,8 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
 
     await session_memory.append_message(user_id, "user", message_text)
 
+    _auto_complete_plan_if_needed(user_id)
+
     context_payload = await build_user_context(user_id, message_text)
     router_output = await call_router(user_id, message_text, context_payload)
 
@@ -291,13 +351,57 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
 
     worker_result = await _invoke_agent(target_agent, worker_payload)
 
+    reply_text = str(worker_result.get("reply_text") or "")
+    await session_memory.append_message(user_id, "assistant", reply_text)
+
+    plan_updates = worker_result.get("plan_updates")
+    if plan_updates and isinstance(plan_updates, dict):
+        with SessionLocal() as db:
+            user: Optional[User] = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                logger.warning(
+                    "[PLAN] Updates ignored — user %s not found (agent=%s)",
+                    user_id,
+                    target_agent,
+                )
+                return reply_text
+            try:
+                if "plan_end_date" in plan_updates:
+                    raw_end_date = plan_updates.get("plan_end_date")
+                    if raw_end_date:
+                        user.plan_end_date = datetime.fromisoformat(str(raw_end_date))
+                    else:
+                        user.plan_end_date = None
+                if "current_load" in plan_updates:
+                    user.current_load = plan_updates.get("current_load")
+                if "execution_policy" in plan_updates:
+                    user.execution_policy = plan_updates.get("execution_policy")
+                db.commit()
+            except (ValueError, IntegrityError):
+                db.rollback()
+                logger.error(
+                    "[PLAN] Failed to persist updates for user %s (agent=%s)",
+                    user_id,
+                    target_agent,
+                )
+            else:
+                logger.info(
+                    "[PLAN] User %s updated: end=%s load=%s policy=%s",
+                    user_id,
+                    user.plan_end_date,
+                    user.current_load,
+                    user.execution_policy,
+                )
+
     transition_signal = worker_result.get("transition_signal")
-    normalized_state = _normalize_fsm_state(transition_signal)
+    normalized_state = _normalize_fsm_state(transition_signal) if isinstance(transition_signal, str) else None
     if transition_signal is not None and normalized_state is None:
+        reason = _get_fsm_rejection_reason(transition_signal) or "invalid_state"
         logger.warning(
-            "[FSM] Ignoring invalid transition_signal for user %s: %s (agent=%s)",
+            "[FSM] Ignoring transition_signal for user %s: %s (reason=%s, agent=%s)",
             user_id,
             transition_signal,
+            reason,
             target_agent,
         )
     elif normalized_state is not None:
@@ -344,9 +448,6 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                     "to_state": normalized_state,
                 }
             )
-
-    reply_text = str(worker_result.get("reply_text") or "")
-    await session_memory.append_message(user_id, "assistant", reply_text)
 
     return reply_text
 
