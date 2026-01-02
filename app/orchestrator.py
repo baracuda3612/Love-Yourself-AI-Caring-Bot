@@ -171,13 +171,12 @@ async def call_router(user_id: int, message_text: str, context: Optional[Dict[st
 
     context_payload = context or await build_user_context(user_id, message_text)
 
+    # STRICT: Router only reads user_id, current_state, latest_user_message, short_term_history
     router_input = {
         "user_id": user_id,
-        "message_text": context_payload.get("message_text", message_text),
+        "latest_user_message": context_payload.get("message_text", message_text),
         "short_term_history": context_payload.get("short_term_history"),
-        "profile_snapshot": context_payload.get("profile_snapshot"),
         "current_state": context_payload.get("current_state"),
-        "temporal_context": context_payload.get("temporal_context"),
     }
 
     router_output = await cognitive_route_message(router_input)

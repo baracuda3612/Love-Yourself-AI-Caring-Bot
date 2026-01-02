@@ -55,7 +55,7 @@ class Settings:
     TZ: str = "Europe/Kyiv"
     MODEL: str = "gpt-4.1"
     COACH_MODEL: str = "gpt-5.1"
-    ROUTER_MODEL: str = "gpt-4.1-mini"
+    ROUTER_MODEL: str = "gpt-5-mini"
     MAX_TOKENS: int = 300
     TEMPERATURE: float = 0.7
     DEFAULT_DAILY_LIMIT: int = 10
@@ -94,7 +94,7 @@ class Settings:
             or os.getenv("HIGH_REASONING_MODEL")
             or "gpt-4.1"
         )
-        self.ROUTER_MODEL = os.getenv("ROUTER_MODEL", "gpt-4.1-mini")
+        self.ROUTER_MODEL = os.getenv("ROUTER_MODEL", "gpt-5-mini")
         self.MAX_TOKENS = _as_int(os.getenv("MAX_TOKENS"), 300)
         self.TEMPERATURE = _as_float(os.getenv("TEMPERATURE"), 0.7)
         self.DEFAULT_DAILY_LIMIT = _as_int(os.getenv("DEFAULT_DAILY_LIMIT"), 10)
