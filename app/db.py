@@ -67,9 +67,9 @@ class User(Base):
     __table_args__ = (
         CheckConstraint(
             "current_state IN ("
-            "'IDLE_NEW','IDLE_FINISHED','IDLE_DROPPED',"
+            "'IDLE_NEW','IDLE_ONBOARDED','IDLE_PLAN_ABORTED','IDLE_FINISHED','IDLE_DROPPED',"
             "'PLAN_FLOW:DATA_COLLECTION','PLAN_FLOW:CONFIRMATION_PENDING',"
-            "'PLAN_FLOW:FINALIZATION','ACTIVE','ADAPTATION_FLOW'"
+            "'PLAN_FLOW:FINALIZATION','ACTIVE','ACTIVE_PAUSED','ADAPTATION_FLOW'"
             ") OR current_state LIKE 'ONBOARDING:%'",
             name="ck_users_current_state",
         ),

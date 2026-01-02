@@ -133,7 +133,7 @@ def _apply_hard_coded_rules(current_state: Optional[str], latest_message: str, s
     # PLAN_FLOW tunnel
     if current_state_str.startswith("PLAN_FLOW"):
         return {"target_agent": "plan", "priority": "normal"}
-    
+
     # ADAPTATION_FLOW tunnel
     if current_state_str == "ADAPTATION_FLOW":
         return {"target_agent": "plan", "priority": "normal"}
@@ -154,29 +154,18 @@ def _apply_hard_coded_rules(current_state: Optional[str], latest_message: str, s
         return {"target_agent": "coach", "priority": "normal"}
     
     # 4. IDLE STATES
-    if current_state_str == "IDLE_NEW":
+    if current_state_str in {"IDLE_NEW", "IDLE_ONBOARDED"}:
         # Manager allowed in IDLE states
         if _detect_manager_intent(latest_message_str):
             return {"target_agent": "manager", "priority": "normal"}
         # Default: plan start (coach NOT used as default)
         if _detect_plan_intent(latest_message_str):
             return {"target_agent": "plan", "priority": "normal"}
-        return {"target_agent": "plan", "priority": "normal"}
-    
-    if current_state_str == "IDLE_FINISHED":
-        # Manager allowed in IDLE states
-        if _detect_manager_intent(latest_message_str):
-            return {"target_agent": "manager", "priority": "normal"}
-        # Default: coach (reflection)
-        if _detect_plan_intent(latest_message_str):
-            return {"target_agent": "plan", "priority": "normal"}
         return {"target_agent": "coach", "priority": "normal"}
-    
-    if current_state_str == "IDLE_DROPPED":
-        # Manager allowed in IDLE states
+
+    if current_state_str in {"IDLE_FINISHED", "IDLE_DROPPED", "IDLE_PLAN_ABORTED", "ACTIVE_PAUSED"}:
         if _detect_manager_intent(latest_message_str):
             return {"target_agent": "manager", "priority": "normal"}
-        # Default: coach (soft return)
         if _detect_plan_intent(latest_message_str):
             return {"target_agent": "plan", "priority": "normal"}
         return {"target_agent": "coach", "priority": "normal"}

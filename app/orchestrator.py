@@ -23,7 +23,16 @@ from app.workers.mock_workers import (
 session_memory = SessionMemory(limit=20)
 logger = logging.getLogger(__name__)
 
-ALLOWED_BASE_STATES = {"IDLE_NEW", "IDLE_FINISHED", "IDLE_DROPPED", "ACTIVE", "ADAPTATION_FLOW"}
+ALLOWED_BASE_STATES = {
+    "IDLE_NEW",
+    "IDLE_ONBOARDED",
+    "IDLE_PLAN_ABORTED",
+    "IDLE_FINISHED",
+    "IDLE_DROPPED",
+    "ACTIVE",
+    "ACTIVE_PAUSED",
+    "ADAPTATION_FLOW",
+}
 PREFIXED_STATES = {"ONBOARDING", "PLAN_FLOW"}
 
 
@@ -33,9 +42,13 @@ def _violates_tunnel_exit(current_state: Optional[str], new_state: str) -> bool:
     current_state = current_state.strip()
     if not current_state:
         return False
-    if current_state.startswith("PLAN_FLOW") and new_state not in {"ACTIVE", "IDLE_NEW"}:
+    if current_state.startswith("PLAN_FLOW") and not (
+        new_state.startswith("PLAN_FLOW") or new_state in {"ACTIVE", "IDLE_PLAN_ABORTED"}
+    ):
         return True
-    if current_state.startswith("ONBOARDING") and new_state not in {"IDLE_NEW"}:
+    if current_state.startswith("ONBOARDING") and not (
+        new_state.startswith("ONBOARDING") or new_state == "IDLE_ONBOARDED"
+    ):
         return True
     return False
 
@@ -95,11 +108,12 @@ def _get_fsm_rejection_reason(raw_state: Any, current_state: Optional[str] = Non
 def _is_forbidden_transition(previous_state: Optional[str], next_state: str) -> bool:
     if not previous_state:
         return False
-    if previous_state.startswith("ONBOARDING") and next_state == "ACTIVE":
+    if previous_state.startswith("ONBOARDING"):
+        if not (next_state.startswith("ONBOARDING") or next_state == "IDLE_ONBOARDED"):
+            return True
+    if next_state == "IDLE_ONBOARDED" and not previous_state.startswith("ONBOARDING"):
         return True
-    if previous_state.startswith("PLAN_FLOW") and next_state == "COACH":
-        return True
-    if previous_state.startswith("PLAN_FLOW") and next_state == "IDLE_FINISHED":
+    if previous_state.startswith("PLAN_FLOW") and next_state in {"IDLE_NEW", "IDLE_FINISHED"}:
         return True
     if previous_state.startswith("PLAN_FLOW") and next_state.startswith("ONBOARDING"):
         return True
@@ -112,31 +126,21 @@ def _is_forbidden_transition(previous_state: Optional[str], next_state: str) -> 
             return True
     if previous_state.startswith("PLAN_FLOW") and next_state == "ACTIVE":
         return previous_state != "PLAN_FLOW:FINALIZATION"
+    if next_state == "IDLE_PLAN_ABORTED" and not previous_state.startswith("PLAN_FLOW"):
+        return previous_state != next_state
     if not previous_state.startswith("ONBOARDING") and next_state.startswith("ONBOARDING"):
         return True
-    if previous_state == "ACTIVE" and next_state.startswith("ONBOARDING"):
-        return True
     if previous_state == "IDLE_NEW" and next_state == "ACTIVE":
+        return True
+    if previous_state == "IDLE_ONBOARDED" and next_state == "ACTIVE":
+        return True
+    if next_state == "ACTIVE_PAUSED" and previous_state not in {"ACTIVE", "ADAPTATION_FLOW"}:
         return True
     return False
 
 
 def _has_complete_plan_metadata(user: User) -> bool:
     return bool(user.plan_end_date and user.current_load and user.execution_policy)
-
-
-def _can_restore_plan(user: User) -> bool:
-    if not _has_complete_plan_metadata(user):
-        return False
-    plan_times = _plan_end_date_status(user.plan_end_date)
-    if not plan_times:
-        return False
-    plan_end_date, now = plan_times
-    if plan_end_date < now:
-        return False
-    if user.execution_policy == "OBSERVATION":
-        return False
-    return True
 
 
 def _plan_end_date_status(plan_end_date: Optional[datetime]) -> Optional[Tuple[datetime, datetime]]:
@@ -517,28 +521,27 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                     target_agent,
                 )
                 return reply_text
-            if previous_state == "IDLE_DROPPED" and normalized_state == "ACTIVE":
-                if not _can_restore_plan(user):
-                    user.current_state = "PLAN_FLOW:DATA_COLLECTION"
-                    try:
-                        db.commit()
-                    except IntegrityError:
-                        db.rollback()
-                        logger.error(
-                            "[FSM] Failed to redirect restore for user %s (agent=%s)",
+            if normalized_state == "ACTIVE" and previous_state in {
+                "IDLE_DROPPED",
+                "ACTIVE_PAUSED",
+                "IDLE_PLAN_ABORTED",
+                "IDLE_FINISHED",
+            }:
+                plan_times = _plan_end_date_status(user.plan_end_date)
+                if plan_times:
+                    plan_end_date, now = plan_times
+                    if plan_end_date < now:
+                        logger.warning(
+                            "[FSM] Restore rejected — plan already finished for user %s (agent=%s)",
                             user_id,
                             target_agent,
                         )
-                    else:
-                        logger.info(
-                            "[FSM] Restore requires reconfiguration for user %s: IDLE_DROPPED → PLAN_FLOW:DATA_COLLECTION (agent=%s)",
-                            user_id,
-                            target_agent,
-                        )
+                        return reply_text
+                user.execution_policy = "EXECUTION"
+            if normalized_state == "ACTIVE" and previous_state.startswith("PLAN_FLOW"):
+                if not _has_complete_plan_metadata(user):
+                    logger.warning("[FSM] Transition rejected — incomplete plan metadata")
                     return reply_text
-            if normalized_state == "ACTIVE" and not _has_complete_plan_metadata(user):
-                logger.warning("[FSM] Transition rejected — incomplete plan metadata")
-                return reply_text
             user.current_state = normalized_state
             try:
                 db.commit()
