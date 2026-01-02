@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 import logging
 
 import pytz
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.ai_router import cognitive_route_message
@@ -21,6 +22,34 @@ from app.workers.mock_workers import (
 
 session_memory = SessionMemory(limit=20)
 logger = logging.getLogger(__name__)
+
+ALLOWED_BASE_STATES = {"IDLE_NEW", "IDLE_FINISHED", "IDLE_DROPPED", "ACTIVE", "ADAPTATION_FLOW"}
+PREFIXED_STATES = {"ONBOARDING", "PLAN_FLOW"}
+
+
+def _normalize_fsm_state(raw_state: Optional[str]) -> Optional[str]:
+    if not raw_state:
+        return None
+
+    state = raw_state.strip()
+    if not state:
+        return None
+
+    if ":" in state:
+        prefix, suffix = state.split(":", 1)
+    else:
+        prefix, suffix = state, None
+
+    prefix = prefix.upper()
+    normalized = prefix if suffix is None else f"{prefix}:{suffix}"
+
+    if suffix is None:
+        if normalized not in ALLOWED_BASE_STATES:
+            return None
+    elif prefix not in PREFIXED_STATES:
+        return None
+
+    return normalized
 
 
 def _get_skip_streak(db: Session, user_id: int) -> int:
@@ -263,21 +292,47 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
     worker_result = await _invoke_agent(target_agent, worker_payload)
 
     transition_signal = worker_result.get("transition_signal")
-    if transition_signal is not None:
+    normalized_state = _normalize_fsm_state(transition_signal)
+    if transition_signal is not None and normalized_state is None:
+        logger.warning(
+            "[FSM] Ignoring invalid transition_signal for user %s: %s (agent=%s)",
+            user_id,
+            transition_signal,
+            target_agent,
+        )
+    elif normalized_state is not None:
         previous_state: Optional[str] = None
+        did_commit = False
         with SessionLocal() as db:
             user: Optional[User] = db.query(User).filter(User.id == user_id).first()
-            if user:
-                previous_state = user.current_state
-                user.current_state = transition_signal
+            if not user:
+                logger.warning(
+                    "[FSM] transition_signal ignored — user %s not found (agent=%s)",
+                    user_id,
+                    target_agent,
+                )
+                return reply_text
+            previous_state = user.current_state
+            user.current_state = normalized_state
+            try:
                 db.commit()
+            except IntegrityError:
+                db.rollback()
+                logger.error(
+                    "[FSM] Failed to persist transition for user %s: %s (agent=%s)",
+                    user_id,
+                    normalized_state,
+                    target_agent,
+                )
+            else:
+                did_commit = True
 
-        if previous_state is not None:
+        if did_commit and previous_state is not None:
             logger.info(
                 "[FSM] User %s state transition: %s → %s (agent=%s)",
                 user_id,
                 previous_state,
-                transition_signal,
+                normalized_state,
                 target_agent,
             )
             log_router_decision(
@@ -286,7 +341,7 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                     "user_id": user_id,
                     "agent": target_agent,
                     "from_state": previous_state,
-                    "to_state": transition_signal,
+                    "to_state": normalized_state,
                 }
             )
 
