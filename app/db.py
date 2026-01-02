@@ -91,6 +91,7 @@ class User(Base):
     execution_policy = Column(String, default="EXECUTION", nullable=False)
     current_load = Column(String, default="LITE", nullable=False)
     last_active_at = Column(DateTime(timezone=True), nullable=True)
+    plan_end_date = Column(DateTime(timezone=True), nullable=True)
 
     timezone = Column(String, default="Europe/Kyiv")
     notification_time = Column(Time, nullable=True)
