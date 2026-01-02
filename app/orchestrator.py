@@ -4,9 +4,11 @@ from typing import Any, Dict, List, Optional
 import logging
 
 import pytz
+from sqlalchemy.orm import Session
 
 from app.ai_router import cognitive_route_message
-from app.db import ChatHistory, SessionLocal, User, UserProfile
+from app.db import ChatHistory, SessionLocal, User, UserEvent, UserProfile
+from app.logic.rule_engine import RuleEngine
 from app.logging.router_logging import log_router_decision
 from app.session_memory import SessionMemory
 from app.workers.coach_agent import coach_agent
@@ -19,6 +21,48 @@ from app.workers.mock_workers import (
 
 session_memory = SessionMemory(limit=20)
 logger = logging.getLogger(__name__)
+
+
+def _get_skip_streak(db: Session, user_id: int) -> int:
+    failure_event_types = {"task_skipped", "task_ignored", "task_failed"}
+    events = (
+        db.query(UserEvent.event_type)
+        .filter(UserEvent.user_id == user_id)
+        .order_by(UserEvent.timestamp.desc())
+        .limit(RuleEngine.MAX_SKIP_THRESHOLD)
+        .all()
+    )
+
+    skip_streak = 0
+    for (event_type,) in events:
+        if event_type not in failure_event_types:
+            break
+        skip_streak += 1
+
+    return skip_streak
+
+
+def _evaluate_adaptation_signal(user_id: int) -> Optional[str]:
+    with SessionLocal() as db:
+        user: Optional[User] = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            return None
+        if user.current_state != "ACTIVE":
+            return None
+
+        skip_streak = _get_skip_streak(db, user_id)
+
+    return RuleEngine().evaluate(current_load=user.current_load, skip_streak=skip_streak)
+
+
+def _inject_adaptation_metadata(context_payload: Dict[str, Any], signal: str) -> None:
+    planner_context = context_payload.get("planner_context")
+    if not isinstance(planner_context, dict):
+        planner_context = {}
+    planner_context["ADAPTATION_METADATA"] = (
+        f"System suggests: {signal}. (Use this info only if contextually appropriate, do not spam)"
+    )
+    context_payload["planner_context"] = planner_context
 
 
 def _safe_timezone(name: Optional[str]) -> pytz.BaseTzInfo:
@@ -182,6 +226,12 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
 
     target_agent = router_result.get("target_agent") or "coach"
     fallback_to_coach = router_result.get("target_agent") is None
+
+    if context_payload.get("current_state") == "ACTIVE":
+        signal = _evaluate_adaptation_signal(user_id)
+        if signal:
+            _inject_adaptation_metadata(context_payload, signal)
+
     worker_payload = {
         "user_id": user_id,
         "priority": router_result.get("priority"),
