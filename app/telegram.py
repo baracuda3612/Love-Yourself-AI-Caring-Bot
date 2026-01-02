@@ -52,10 +52,7 @@ def _ensure_user(db, tg_user) -> tuple[User, bool]:
 async def cmd_start(message: Message):
     with SessionLocal() as db:
         user, is_created = _ensure_user(db, message.from_user)
-        if is_created or user.current_state == "IDLE_NEW":
-            if user.current_state == "IDLE_NEW":
-                user.current_state = "ONBOARDING:START"
-                db.commit()
+        if is_created:
             await message.answer("Привіт! Я LoveYourself бот. Давай познайомимось.")
         else:
             await message.answer("З поверненням! Продовжуємо.")

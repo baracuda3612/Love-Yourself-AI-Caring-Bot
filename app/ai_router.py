@@ -158,11 +158,10 @@ def _apply_hard_coded_rules(current_state: Optional[str], latest_message: str, s
         # Manager allowed in IDLE states
         if _detect_manager_intent(latest_message_str):
             return {"target_agent": "manager", "priority": "normal"}
-        # Default: onboarding/plan start (coach NOT used as default)
+        # Default: plan start (coach NOT used as default)
         if _detect_plan_intent(latest_message_str):
             return {"target_agent": "plan", "priority": "normal"}
-        # Default to onboarding for new users
-        return {"target_agent": "onboarding", "priority": "high"}
+        return {"target_agent": "plan", "priority": "normal"}
     
     if current_state_str == "IDLE_FINISHED":
         # Manager allowed in IDLE states
