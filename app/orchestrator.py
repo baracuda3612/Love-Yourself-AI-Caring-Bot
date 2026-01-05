@@ -1,14 +1,26 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 import logging
 
 import pytz
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.ai_plans import PlanAgentEnvelopeError, plan_agent
 from app.ai_router import cognitive_route_message
-from app.db import ChatHistory, SessionLocal, User, UserEvent, UserProfile
+from app.db import (
+    AIPlan,
+    AIPlanDay,
+    AIPlanStep,
+    ChatHistory,
+    PlanInstance,
+    SessionLocal,
+    User,
+    UserEvent,
+    UserProfile,
+)
 from app.logic.rule_engine import RuleEngine
 from app.logging.router_logging import log_router_decision
 from app.session_memory import SessionMemory
@@ -16,24 +28,23 @@ from app.workers.coach_agent import coach_agent
 from app.workers.mock_workers import (
     mock_manager_agent,
     mock_onboarding_agent,
-    mock_plan_agent,
     mock_safety_agent,
 )
+from app.schemas.planner import GeneratedPlan
 
 session_memory = SessionMemory(limit=20)
 logger = logging.getLogger(__name__)
 
 ALLOWED_BASE_STATES = {
-    "IDLE_NEW",
     "IDLE_ONBOARDED",
     "IDLE_PLAN_ABORTED",
     "IDLE_FINISHED",
     "IDLE_DROPPED",
     "ACTIVE",
-    "ACTIVE_PAUSED",
+    "ACTIVE_CONFIRMATION",
     "ADAPTATION_FLOW",
 }
-PREFIXED_STATES = {"ONBOARDING", "PLAN_FLOW"}
+PREFIXED_STATES = {"PLAN_FLOW"}
 
 
 def _violates_tunnel_exit(current_state: Optional[str], new_state: str) -> bool:
@@ -44,10 +55,6 @@ def _violates_tunnel_exit(current_state: Optional[str], new_state: str) -> bool:
         return False
     if current_state.startswith("PLAN_FLOW") and not (
         new_state.startswith("PLAN_FLOW") or new_state in {"ACTIVE", "IDLE_PLAN_ABORTED"}
-    ):
-        return True
-    if current_state.startswith("ONBOARDING") and not (
-        new_state.startswith("ONBOARDING") or new_state == "IDLE_ONBOARDED"
     ):
         return True
     return False
@@ -108,14 +115,7 @@ def _get_fsm_rejection_reason(raw_state: Any, current_state: Optional[str] = Non
 def _is_forbidden_transition(previous_state: Optional[str], next_state: str) -> bool:
     if not previous_state:
         return False
-    if previous_state.startswith("ONBOARDING"):
-        if not (next_state.startswith("ONBOARDING") or next_state == "IDLE_ONBOARDED"):
-            return True
-    if next_state == "IDLE_ONBOARDED" and not previous_state.startswith("ONBOARDING"):
-        return True
-    if previous_state.startswith("PLAN_FLOW") and next_state in {"IDLE_NEW", "IDLE_FINISHED"}:
-        return True
-    if previous_state.startswith("PLAN_FLOW") and next_state.startswith("ONBOARDING"):
+    if previous_state.startswith("PLAN_FLOW") and next_state == "IDLE_FINISHED":
         return True
     if previous_state.startswith("PLAN_FLOW") and next_state.startswith("PLAN_FLOW"):
         allowed_plan_flow = {
@@ -128,13 +128,9 @@ def _is_forbidden_transition(previous_state: Optional[str], next_state: str) -> 
         return previous_state != "PLAN_FLOW:FINALIZATION"
     if next_state == "IDLE_PLAN_ABORTED" and not previous_state.startswith("PLAN_FLOW"):
         return previous_state != next_state
-    if not previous_state.startswith("ONBOARDING") and next_state.startswith("ONBOARDING"):
-        return True
-    if previous_state == "IDLE_NEW" and next_state == "ACTIVE":
-        return True
     if previous_state == "IDLE_ONBOARDED" and next_state == "ACTIVE":
         return True
-    if next_state == "ACTIVE_PAUSED" and previous_state not in {"ACTIVE", "ADAPTATION_FLOW"}:
+    if next_state == "ACTIVE_CONFIRMATION" and previous_state != "ADAPTATION_FLOW":
         return True
     return False
 
@@ -229,6 +225,76 @@ def _safe_timezone(name: Optional[str]) -> pytz.BaseTzInfo:
         return pytz.timezone(name or "Europe/Kyiv")
     except pytz.UnknownTimeZoneError:
         return pytz.timezone("Europe/Kyiv")
+
+
+def _derive_plan_end_date(plan: GeneratedPlan, tz: pytz.BaseTzInfo) -> Optional[datetime]:
+    duration_days = plan.duration_days or len(plan.schedule)
+    if duration_days <= 0:
+        return None
+    now_local = datetime.now(tz)
+    end_local = now_local + timedelta(days=duration_days)
+    return end_local.astimezone(pytz.UTC)
+
+
+def _persist_generated_plan(db: Session, user: User, plan_payload: Dict[str, Any]) -> AIPlan:
+    try:
+        parsed_plan = GeneratedPlan.parse_obj(plan_payload)
+    except ValidationError as exc:
+        raise PlanAgentEnvelopeError("invalid_generated_plan_object") from exc
+
+    latest_plan = (
+        db.query(AIPlan)
+        .filter(AIPlan.user_id == user.id)
+        .order_by(AIPlan.created_at.desc())
+        .first()
+    )
+    adaptation_version = (latest_plan.adaptation_version + 1) if latest_plan else 1
+    if latest_plan and latest_plan.status == "active":
+        latest_plan.status = "abandoned"
+
+    ai_plan = AIPlan(
+        user_id=user.id,
+        title=parsed_plan.title,
+        module_id=parsed_plan.module_id,
+        goal_description=parsed_plan.reasoning,
+        status="active",
+        adaptation_version=adaptation_version,
+    )
+    db.add(ai_plan)
+    db.flush()
+
+    for day in parsed_plan.schedule:
+        day_record = AIPlanDay(
+            plan_id=ai_plan.id,
+            day_number=day.day_number,
+            focus_theme=day.focus_theme,
+        )
+        db.add(day_record)
+        db.flush()
+        for index, step in enumerate(day.steps):
+            db.add(
+                AIPlanStep(
+                    day_id=day_record.id,
+                    title=step.title,
+                    description=step.description,
+                    step_type=step.step_type,
+                    difficulty=step.difficulty,
+                    order_in_day=index,
+                    time_of_day=step.time_of_day,
+                )
+            )
+
+    db.add(
+        PlanInstance(
+            user_id=user.id,
+            blueprint_id=str(parsed_plan.module_id),
+            initial_parameters=plan_payload,
+        )
+    )
+
+    tz = _safe_timezone(user.timezone)
+    user.plan_end_date = _derive_plan_end_date(parsed_plan, tz)
+    return ai_plan
 
 
 async def get_stm_history(user_id: int) -> List[Dict[str, str]]:
@@ -439,6 +505,55 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
     reply_text = str(worker_result.get("reply_text") or "")
     await session_memory.append_message(user_id, "assistant", reply_text)
 
+    error_payload = worker_result.get("error")
+    if error_payload is not None:
+        log_router_decision(
+            {
+                "event_type": "plan_agent_error",
+                "timestamp": datetime.utcnow().isoformat(),
+                "user_id": user_id,
+                "agent": target_agent,
+                "error": error_payload,
+            }
+        )
+        logger.warning(
+            "[PLAN_AGENT] Error payload received for user %s (agent=%s): %s",
+            user_id,
+            target_agent,
+            error_payload,
+        )
+        return reply_text
+
+    generated_plan_object = worker_result.get("generated_plan_object")
+    if generated_plan_object is not None:
+        with SessionLocal() as db:
+            user: Optional[User] = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                logger.warning(
+                    "[PLAN] Generated plan ignored — user %s not found (agent=%s)",
+                    user_id,
+                    target_agent,
+                )
+                return reply_text
+            try:
+                _persist_generated_plan(db, user, generated_plan_object)
+                db.commit()
+            except (IntegrityError, PlanAgentEnvelopeError) as exc:
+                db.rollback()
+                logger.error(
+                    "[PLAN] Failed to persist generated plan for user %s (agent=%s)",
+                    user_id,
+                    target_agent,
+                    exc_info=exc,
+                )
+                raise
+            else:
+                logger.info(
+                    "[PLAN] Generated plan persisted for user %s (agent=%s)",
+                    user_id,
+                    target_agent,
+                )
+
     plan_updates = worker_result.get("plan_updates")
     if plan_updates and isinstance(plan_updates, dict):
         with SessionLocal() as db:
@@ -479,9 +594,12 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                 )
 
     transition_signal = worker_result.get("transition_signal")
+    effective_signal = transition_signal
+    if transition_signal == "ACTIVE_CONFIRMATION":
+        effective_signal = "ACTIVE"
     normalized_state = (
-        _normalize_fsm_state(transition_signal, current_state=context_payload.get("current_state"))
-        if isinstance(transition_signal, str)
+        _normalize_fsm_state(effective_signal, current_state=context_payload.get("current_state"))
+        if isinstance(effective_signal, str)
         else None
     )
     if transition_signal is not None and normalized_state is None:
@@ -581,5 +699,5 @@ async def _invoke_agent(target_agent: str, payload: Dict[str, Any]) -> Dict[str,
     if target_agent == "manager":
         return await mock_manager_agent(payload)
     if target_agent == "plan":
-        return await mock_plan_agent(payload)
+        return await plan_agent(payload)
     return await coach_agent(payload)
