@@ -105,6 +105,10 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
         if now_utc - scheduled_for > _DELIVERY_LATE_GRACE:
             return
 
+        content_id = (
+            getattr(step, "content_id", None)
+            or getattr(step, "content_library_id", None)
+        )
         user_id = user.id
         send_chat_id = user.tg_id
 
@@ -123,13 +127,13 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
     with SessionLocal() as db:
         try:
             if delivery_error is None:
-                log_user_event(db, user_id, "task_delivered", step_id=step_id)
+                log_user_event(db, user_id, "task_delivered", step_id=content_id)
             else:
                 log_user_event(
                     db,
                     user_id,
                     "task_delivery_failed",
-                    step_id=step_id,
+                    step_id=content_id,
                     context={"error": delivery_error},
                 )
             db.commit()
