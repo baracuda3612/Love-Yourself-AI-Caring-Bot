@@ -1,16 +1,16 @@
 # app/scheduler.py
 import asyncio
 import logging
-from datetime import datetime, timedelta, time as dt_time
+from datetime import datetime, timedelta
 from typing import Optional
 
 import pytz
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
 
 from app.config import settings
 from app.db import AIPlan, AIPlanDay, AIPlanStep, SessionLocal, User
+from app.telemetry import log_user_event
 
 # Configure JobStore
 DATABASE_URL = settings.DATABASE_URL
@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 
 _scheduler_started = False
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
+_ALLOWED_USER_STATES = {"ACTIVE", "ADAPTATION_FLOW", "ACTIVE_CONFIRMATION"}
+
+_DELIVERY_LATE_GRACE = timedelta(minutes=1)
 
 
 def _generate_step_job_id(user_id: int, step: AIPlanStep) -> str:
@@ -69,42 +72,69 @@ async def _send_message_async(chat_id: int, text: str):
         return None
 
 
-def send_scheduled_message(chat_id: int, text: str, step_id: int | None = None):
+def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None):
     """
     Callback function executed by APScheduler.
     """
-    _submit_coroutine(_send_message_async(chat_id, text))
+    if step_id is None:
+        return
 
-    if step_id is not None:
-        with SessionLocal() as db:
-            step = db.query(AIPlanStep).filter(AIPlanStep.id == step_id).first()
-            if step and not step.is_completed:
-                # 1. Mark step as completed (trigger logic)
-                step.is_completed = True
-                step.completed_at = datetime.now(pytz.UTC)
-                step.job_id = None
-                
-                # 2. Check for Plan Completion (Hierarchy Traversal)
-                # step -> day -> plan
-                if step.day and step.day.plan:
-                    plan = step.day.plan
-                    
-                    # Check if ALL steps in ALL days are completed
-                    # (This is an MVP check; optimization possible later)
-                    all_done = True
-                    for day in plan.days:
-                        for s in day.steps:
-                            if not s.is_completed:
-                                all_done = False
-                                break
-                        if not all_done:
-                            break
-                    
-                    if all_done:
-                        plan.status = "completed"
-                        # plan.completed_at = datetime.now(pytz.UTC) # Add column later if needed
-                        
-                db.commit()
+    with SessionLocal() as db:
+        step = db.query(AIPlanStep).filter(AIPlanStep.id == step_id).first()
+        if not step or not step.day or not step.day.plan:
+            return
+
+        plan = step.day.plan
+        user = plan.user
+        if not user or not user.is_active:
+            return
+        if user.current_state not in _ALLOWED_USER_STATES:
+            return
+
+        if plan.status != "active":
+            return
+        if step.is_completed or step.skipped:
+            return
+        if not step.scheduled_for:
+            return
+
+        scheduled_for = step.scheduled_for.astimezone(pytz.UTC)
+        now_utc = datetime.now(pytz.UTC)
+        if now_utc < scheduled_for:
+            return
+        if now_utc - scheduled_for > _DELIVERY_LATE_GRACE:
+            return
+
+        user_id = user.id
+        send_chat_id = user.tg_id
+
+    future = _submit_coroutine(_send_message_async(send_chat_id, text))
+    if not future:
+        return
+
+    delivery_error = None
+    try:
+        result = future.result(timeout=10)
+        if result is None:
+            delivery_error = "send_failed"
+    except Exception as exc:
+        delivery_error = str(exc)
+
+    with SessionLocal() as db:
+        try:
+            if delivery_error is None:
+                log_user_event(db, user_id, "task_delivered", step_id=step_id)
+            else:
+                log_user_event(
+                    db,
+                    user_id,
+                    "task_delivery_failed",
+                    step_id=step_id,
+                    context={"error": delivery_error},
+                )
+            db.commit()
+        except Exception:
+            logger.exception("Failed to log scheduler telemetry.")
 
 
 def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
@@ -120,6 +150,13 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
         
     if not user or not user.is_active:
         return False
+    if user.current_state not in _ALLOWED_USER_STATES:
+        return False
+
+    if not step.day or not step.day.plan:
+        return False
+    if step.day.plan.status != "active":
+        return False
 
     new_job_id_assigned = False
     if not step.job_id:
@@ -130,8 +167,7 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
     run_date = step.scheduled_for.astimezone(pytz.UTC)
     now_utc = datetime.now(pytz.UTC)
     if run_date <= now_utc:
-        # If passed, schedule for 1 minute from now (catch-up)
-        run_date = now_utc + timedelta(minutes=1)
+        return False
 
     # Use replace_existing=True to avoid conflicts
     scheduler.add_job(
@@ -141,8 +177,8 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
         run_date=run_date,
         args=[user.tg_id, f"🔔 {step.title}\n\n{step.description}", step.id],
         replace_existing=True,
-        misfire_grace_time=3600,
-        coalesce=True,
+        misfire_grace_time=1,
+        coalesce=False,
         max_instances=1,
     )
 
@@ -178,7 +214,9 @@ async def schedule_daily_loop():
             .filter(
                 AIPlan.status == "active",
                 User.is_active == True,
+                User.current_state.in_(_ALLOWED_USER_STATES),
                 AIPlanStep.is_completed == False,
+                AIPlanStep.skipped == False,
                 AIPlanStep.scheduled_for != None, # Only schedule if time is set
                 AIPlanStep.scheduled_for > now_utc
             )
