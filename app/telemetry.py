@@ -47,6 +47,45 @@ def _coerce_uuid(value: str | UUID | None) -> UUID | None:
     return UUID(str(value))
 
 
+def _resolve_step_id(
+    step_id: str | UUID | None,
+    content_id: str | UUID | None,
+    plan_step_id: str | int | UUID | None,
+) -> str:
+    if content_id is not None:
+        return str(content_id)
+    if step_id is not None:
+        return str(step_id)
+    if plan_step_id is not None:
+        return str(plan_step_id)
+    raise ValueError("Telemetry events require a step identifier.")
+
+
+def _ensure_content_stub(db: Session, step_id: str, context: dict[str, Any]) -> None:
+    if db.get(ContentLibrary, step_id):
+        return
+    title = context.get("plan_step_title") or context.get("title")
+    description = context.get("plan_step_description") or context.get("description")
+    payload = {
+        "title": title,
+        "description": description,
+        "source": "plan_step_fallback",
+    }
+    db.add(
+        ContentLibrary(
+            id=step_id,
+            content_version=1,
+            internal_name=title or f"plan_step_{step_id}",
+            category="plan_step",
+            difficulty=1,
+            energy_cost="LOW",
+            logic_tags={},
+            content_payload=payload,
+            is_active=False,
+        )
+    )
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -255,6 +294,8 @@ def log_user_event(
     user_id: int,
     event_type: str,
     step_id: str | UUID | None = None,
+    content_id: str | UUID | None = None,
+    plan_step_id: str | int | UUID | None = None,
     context: dict[str, Any] | None = None,
     plan_instance_id: str | UUID | None = None,
 ) -> UserEvent:
@@ -267,6 +308,10 @@ def log_user_event(
     bucket = _time_bucket(local_dt)
 
     event_context = dict(context or {})
+    if content_id is not None:
+        event_context.setdefault("content_id", str(content_id))
+    if plan_step_id is not None:
+        event_context.setdefault("plan_step_id", str(plan_step_id))
     event_context.setdefault("timezone_source", "user_profile")
 
     instance = _ensure_plan_instance(db, user_id, plan_instance_id)
@@ -283,11 +328,13 @@ def log_user_event(
             server_now,
         )
 
-    step_value = str(step_id) if step_id is not None else None
-    if step_value:
-        content = db.get(ContentLibrary, step_value)
-        if content:
-            event_context.setdefault("content_version", content.content_version)
+    step_value = _resolve_step_id(step_id, content_id, plan_step_id)
+    if content_id is None and not db.get(ContentLibrary, step_value):
+        _ensure_content_stub(db, step_value, event_context)
+    content_lookup_id = str(content_id) if content_id is not None else step_value
+    content = db.get(ContentLibrary, content_lookup_id)
+    if content:
+        event_context.setdefault("content_version", content.content_version)
 
     if event_type == "parameter_set":
         if event_context.get("parameter") == "load_mode":
@@ -307,7 +354,7 @@ def log_user_event(
     )
     db.add(event)
 
-    if step_value and event_type in TASK_EVENT_TYPES:
+    if event_type in TASK_EVENT_TYPES:
         stats = _get_or_create_task_stats(db, user_id, step_value)
         _update_task_stats(stats, event_type, bucket, event_context)
         if event_type in FRICTION_EVENT_TYPES:
