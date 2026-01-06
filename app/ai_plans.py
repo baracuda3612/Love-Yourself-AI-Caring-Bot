@@ -8,6 +8,11 @@ from typing import Any, Dict, Optional
 
 from app.ai import async_client, extract_output_text
 from app.config import settings
+from app.fsm.states import (
+    ACTIVE_CONFIRMATION_ENTRYPOINTS,
+    ADAPTATION_STATES,
+    FSM_ALLOWED_STATES,
+)
 from app.logging.router_logging import log_metric
 
 __all__ = ["PlanAgentEnvelopeError", "generate_plan_agent_response", "plan_agent"]
@@ -1094,18 +1099,7 @@ DO NOT:
 - modify constraints or plan structure
 """
 
-_ALLOWED_TRANSITION_SIGNALS = {
-    "PLAN_FLOW:DATA_COLLECTION",
-    "PLAN_FLOW:CONFIRMATION_PENDING",
-    "PLAN_FLOW:FINALIZATION",
-    "ACTIVE",
-    "ACTIVE_CONFIRMATION",
-    "ADAPTATION_FLOW",
-    "IDLE_ONBOARDED",
-    "IDLE_FINISHED",
-    "IDLE_DROPPED",
-    "IDLE_PLAN_ABORTED",
-}
+_ALLOWED_TRANSITION_SIGNALS = set(FSM_ALLOWED_STATES)
 
 
 class PlanAgentEnvelopeError(ValueError):
@@ -1155,12 +1149,12 @@ def _validate_envelope(envelope: Dict[str, Any], payload: Dict[str, Any]) -> Non
             raise PlanAgentEnvelopeError("error_with_payload_updates")
 
     if generated_plan_object is not None:
-        if current_state not in {"PLAN_FLOW:FINALIZATION", "ADAPTATION_FLOW"}:
+        if current_state not in ACTIVE_CONFIRMATION_ENTRYPOINTS:
             raise PlanAgentEnvelopeError("plan_object_outside_finalization")
         if plan_updates is not None:
             raise PlanAgentEnvelopeError("plan_object_with_updates")
 
-    if plan_updates is not None and current_state not in {"ADAPTATION_FLOW", "ACTIVE_CONFIRMATION"}:
+    if plan_updates is not None and current_state not in (ADAPTATION_STATES | {"ACTIVE_CONFIRMATION"}):
         raise PlanAgentEnvelopeError("plan_updates_outside_adaptation")
 
 

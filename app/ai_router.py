@@ -5,6 +5,12 @@ from typing import Any, Dict, Optional
 
 from app.ai import async_client
 from app.config import settings
+from app.fsm.states import (
+    ADAPTATION_STATES,
+    IDLE_STATES,
+    PAUSE_STATES,
+    PLAN_FLOW_STATES,
+)
 from app.logging.router_logging import log_router_decision
 
 logger = logging.getLogger(__name__)
@@ -131,11 +137,11 @@ def _apply_hard_coded_rules(current_state: Optional[str], latest_message: str, s
     
     # 2. FSM TUNNELS (LOCK-IN)
     # PLAN_FLOW tunnel
-    if current_state_str.startswith("PLAN_FLOW"):
+    if current_state_str in PLAN_FLOW_STATES:
         return {"target_agent": "plan", "priority": "normal"}
 
     # ADAPTATION_FLOW tunnel
-    if current_state_str == "ADAPTATION_FLOW":
+    if current_state_str in ADAPTATION_STATES:
         return {"target_agent": "plan", "priority": "normal"}
     
     # ONBOARDING tunnel
@@ -163,7 +169,7 @@ def _apply_hard_coded_rules(current_state: Optional[str], latest_message: str, s
             return {"target_agent": "plan", "priority": "normal"}
         return {"target_agent": "coach", "priority": "normal"}
 
-    if current_state_str in {"IDLE_FINISHED", "IDLE_DROPPED", "IDLE_PLAN_ABORTED", "ACTIVE_PAUSED"}:
+    if current_state_str in (IDLE_STATES - {"IDLE_NEW", "IDLE_ONBOARDED"}) | PAUSE_STATES:
         if _detect_manager_intent(latest_message_str):
             return {"target_agent": "manager", "priority": "normal"}
         if _detect_plan_intent(latest_message_str):
