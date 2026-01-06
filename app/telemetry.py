@@ -22,7 +22,23 @@ from app.db import (
 )
 
 EDGE_OF_DAY_BUCKETS = {"night", "morning"}
-TASK_EVENT_TYPES = {"task_delivered", "task_completed", "task_skipped", "task_ignored"}
+TASK_EVENT_TYPES = {
+    "task_delivered",
+    "task_completed",
+    "task_skipped",
+    "task_ignored",
+    "task_delayed",
+}
+RESOURCE_EVENT_TYPES = {"task_viewed_resource"}
+FRICTION_EVENT_TYPES = {"task_skipped", "task_ignored", "task_delayed", "task_failed"}
+SKIP_STREAK_EVENT_TYPES = {"task_skipped", "task_ignored", "task_failed"}
+COMPLETION_EVENT_TYPES = {
+    "task_completed",
+    "task_skipped",
+    "task_ignored",
+    "task_delayed",
+    "task_failed",
+}
 
 
 def _coerce_uuid(value: str | UUID | None) -> UUID | None:
@@ -177,6 +193,10 @@ def _update_task_stats(
 
     if event_type == "task_skipped":
         stats.skipped_total += 1
+        return
+
+    if event_type == "task_delayed":
+        return
 
 
 def _maybe_create_failure_signal(
@@ -188,9 +208,12 @@ def _maybe_create_failure_signal(
     context: dict[str, Any],
     server_now: datetime,
 ) -> None:
-    if event_type not in {"task_skipped", "task_ignored"}:
+    if event_type not in {"task_skipped", "task_ignored", "task_delayed"}:
         return
-    trigger_event = "ignore" if event_type == "task_ignored" else "skip"
+    if event_type == "task_delayed":
+        trigger_event = "delay"
+    else:
+        trigger_event = "ignore" if event_type == "task_ignored" else "skip"
     failure_context = context.get("failure_context_tag") or context.get("skip_reason")
     db.add(
         FailureSignal(
@@ -287,7 +310,7 @@ def log_user_event(
     if step_value and event_type in TASK_EVENT_TYPES:
         stats = _get_or_create_task_stats(db, user_id, step_value)
         _update_task_stats(stats, event_type, bucket, event_context)
-        if event_type in {"task_skipped", "task_ignored"}:
+        if event_type in FRICTION_EVENT_TYPES:
             stats.last_failure_reason = event_context.get("skip_reason") or stats.last_failure_reason
             stats.history_ref = True
             _maybe_create_failure_signal(
@@ -301,6 +324,78 @@ def log_user_event(
             )
 
     return event
+
+
+def get_skip_streak(db: Session, user_id: int, limit: int) -> int:
+    events = (
+        db.query(UserEvent.event_type)
+        .filter(UserEvent.user_id == user_id)
+        .order_by(UserEvent.timestamp.desc())
+        .limit(limit)
+        .all()
+    )
+
+    skip_streak = 0
+    for (event_type,) in events:
+        if event_type not in SKIP_STREAK_EVENT_TYPES:
+            break
+        skip_streak += 1
+
+    return skip_streak
+
+
+def get_completion_ratio(
+    db: Session,
+    user_id: int,
+    days: int = 7,
+    now: datetime | None = None,
+) -> float:
+    server_now = now or _utc_now()
+    window_start = server_now - timedelta(days=days)
+    completed_total = (
+        db.query(func.count(UserEvent.id))
+        .filter(
+            UserEvent.user_id == user_id,
+            UserEvent.timestamp >= window_start,
+            UserEvent.event_type == "task_completed",
+        )
+        .scalar()
+        or 0
+    )
+    total_attempts = (
+        db.query(func.count(UserEvent.id))
+        .filter(
+            UserEvent.user_id == user_id,
+            UserEvent.timestamp >= window_start,
+            UserEvent.event_type.in_(COMPLETION_EVENT_TYPES),
+        )
+        .scalar()
+        or 0
+    )
+
+    if total_attempts == 0:
+        return 0.0
+    return float(completed_total / total_attempts)
+
+
+def get_friction_event_count(
+    db: Session,
+    user_id: int,
+    days: int = 7,
+    now: datetime | None = None,
+) -> int:
+    server_now = now or _utc_now()
+    window_start = server_now - timedelta(days=days)
+    return int(
+        db.query(func.count(UserEvent.id))
+        .filter(
+            UserEvent.user_id == user_id,
+            UserEvent.timestamp >= window_start,
+            UserEvent.event_type.in_(FRICTION_EVENT_TYPES),
+        )
+        .scalar()
+        or 0
+    )
 
 
 def update_engagement_statuses(db: Session, now: datetime | None = None) -> int:

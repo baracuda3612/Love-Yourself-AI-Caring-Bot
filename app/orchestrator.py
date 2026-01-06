@@ -18,12 +18,12 @@ from app.db import (
     PlanInstance,
     SessionLocal,
     User,
-    UserEvent,
     UserProfile,
 )
 from app.logic.rule_engine import RuleEngine
 from app.logging.router_logging import log_metric, log_router_decision
 from app.session_memory import SessionMemory
+from app.telemetry import get_skip_streak
 from app.workers.coach_agent import coach_agent
 from app.workers.mock_workers import (
     mock_manager_agent,
@@ -148,7 +148,10 @@ def _is_forbidden_transition(previous_state: Optional[str], next_state: str) -> 
         return True
     if next_state == "ADAPTATION_FLOW" and previous_state != "ACTIVE":
         return True
-    if next_state == "ACTIVE_CONFIRMATION" and previous_state != "PLAN_FLOW:FINALIZATION":
+    if next_state == "ACTIVE_CONFIRMATION" and previous_state not in {
+        "PLAN_FLOW:FINALIZATION",
+        "ADAPTATION_FLOW",
+    }:
         return True
     return False
 
@@ -197,22 +200,7 @@ def _auto_complete_plan_if_needed(user_id: int) -> None:
 
 
 def _get_skip_streak(db: Session, user_id: int) -> int:
-    failure_event_types = {"task_skipped", "task_ignored", "task_failed"}
-    events = (
-        db.query(UserEvent.event_type)
-        .filter(UserEvent.user_id == user_id)
-        .order_by(UserEvent.timestamp.desc())
-        .limit(RuleEngine.MAX_SKIP_THRESHOLD)
-        .all()
-    )
-
-    skip_streak = 0
-    for (event_type,) in events:
-        if event_type not in failure_event_types:
-            break
-        skip_streak += 1
-
-    return skip_streak
+    return get_skip_streak(db, user_id, RuleEngine.MAX_SKIP_THRESHOLD)
 
 
 def _evaluate_adaptation_signal(user_id: int) -> Optional[str]:
@@ -655,9 +643,12 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
             target_agent,
         )
         transition_signal = None
-    if transition_signal == "ACTIVE_CONFIRMATION" and context_payload.get("current_state") != "PLAN_FLOW:FINALIZATION":
+    if transition_signal == "ACTIVE_CONFIRMATION" and context_payload.get("current_state") not in {
+        "PLAN_FLOW:FINALIZATION",
+        "ADAPTATION_FLOW",
+    }:
         logger.warning(
-            "[FSM] ACTIVE_CONFIRMATION rejected — must follow PLAN_FLOW:FINALIZATION (user=%s, agent=%s)",
+            "[FSM] ACTIVE_CONFIRMATION rejected — must follow PLAN_FLOW:FINALIZATION or ADAPTATION_FLOW (user=%s, agent=%s)",
             user_id,
             target_agent,
         )
