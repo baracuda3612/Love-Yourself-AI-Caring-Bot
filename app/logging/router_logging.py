@@ -22,3 +22,14 @@ def log_router_decision(data: Dict[str, Any]) -> None:
         logger.info(json.dumps(data, ensure_ascii=False))
     except Exception:
         logger.info(str(data))
+
+
+def log_metric(metric_name: str, value: int = 1, extra: Dict[str, Any] | None = None) -> None:
+    payload: Dict[str, Any] = {
+        "event_type": "metric",
+        "metric_name": metric_name,
+        "value": value,
+    }
+    if extra:
+        payload.update(extra)
+    log_router_decision(payload)

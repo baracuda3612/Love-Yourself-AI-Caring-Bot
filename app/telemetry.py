@@ -60,6 +60,8 @@ def _ensure_plan_instance(
     plan_instance_id: str | UUID | None = None,
     blueprint_id: str | None = None,
     initial_parameters: dict[str, Any] | None = None,
+    contract_version: str | None = None,
+    schema_version: str | None = None,
 ) -> PlanInstance:
     if plan_instance_id:
         instance_id = _coerce_uuid(plan_instance_id)
@@ -82,6 +84,8 @@ def _ensure_plan_instance(
         user_id=user_id,
         blueprint_id=blueprint_id,
         initial_parameters=initial_parameters or {},
+        contract_version=contract_version or "v1",
+        schema_version=schema_version or "v1",
     )
     db.add(instance)
     db.flush()

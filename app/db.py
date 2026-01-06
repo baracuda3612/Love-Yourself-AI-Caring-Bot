@@ -243,6 +243,8 @@ class PlanInstance(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     blueprint_id = Column(String)
     initial_parameters = Column(JSONB, nullable=False, default=dict)
+    contract_version = Column(String, nullable=False, default="v1")
+    schema_version = Column(String, nullable=False, default="v1")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     user = relationship("User", back_populates="plan_instances")
