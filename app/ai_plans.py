@@ -11,7 +11,7 @@ from app.config import settings
 from app.fsm.states import (
     ACTIVE_CONFIRMATION_ENTRYPOINTS,
     ADAPTATION_STATES,
-    FSM_ALLOWED_STATES,
+    PLAN_AGENT_ALLOWED_TRANSITION_SIGNALS,
 )
 from app.logging.router_logging import log_metric
 
@@ -1099,7 +1099,7 @@ DO NOT:
 - modify constraints or plan structure
 """
 
-_ALLOWED_TRANSITION_SIGNALS = set(FSM_ALLOWED_STATES)
+_ALLOWED_TRANSITION_SIGNALS = set(PLAN_AGENT_ALLOWED_TRANSITION_SIGNALS)
 
 
 class PlanAgentEnvelopeError(ValueError):
