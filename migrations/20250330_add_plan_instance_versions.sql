@@ -1,0 +1,3 @@
+ALTER TABLE plan_instances
+    ADD COLUMN IF NOT EXISTS contract_version TEXT DEFAULT 'v1' NOT NULL,
+    ADD COLUMN IF NOT EXISTS schema_version TEXT DEFAULT 'v1' NOT NULL;

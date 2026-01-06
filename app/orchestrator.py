@@ -22,7 +22,7 @@ from app.db import (
     UserProfile,
 )
 from app.logic.rule_engine import RuleEngine
-from app.logging.router_logging import log_router_decision
+from app.logging.router_logging import log_metric, log_router_decision
 from app.session_memory import SessionMemory
 from app.workers.coach_agent import coach_agent
 from app.workers.mock_workers import (
@@ -34,6 +34,22 @@ from app.schemas.planner import GeneratedPlan
 
 session_memory = SessionMemory(limit=20)
 logger = logging.getLogger(__name__)
+
+PLAN_CONTRACT_VERSION = "v1"
+PLAN_SCHEMA_VERSION = "v1"
+
+
+def _plan_agent_fallback_envelope() -> Dict[str, Any]:
+    return {
+        "reply_text": "Сталася технічна помилка під час генерації плану. Зміни не застосовані.",
+        "transition_signal": None,
+        "plan_updates": None,
+        "generated_plan_object": None,
+        "error": {
+            "code": "INTERNAL_ERROR",
+            "detail": "plan_agent_envelope_invalid",
+        },
+    }
 
 ALLOWED_BASE_STATES = {
     "IDLE_ONBOARDED",
@@ -130,7 +146,9 @@ def _is_forbidden_transition(previous_state: Optional[str], next_state: str) -> 
         return previous_state != next_state
     if previous_state == "IDLE_ONBOARDED" and next_state == "ACTIVE":
         return True
-    if next_state == "ACTIVE_CONFIRMATION" and previous_state != "ADAPTATION_FLOW":
+    if next_state == "ADAPTATION_FLOW" and previous_state != "ACTIVE":
+        return True
+    if next_state == "ACTIVE_CONFIRMATION" and previous_state != "PLAN_FLOW:FINALIZATION":
         return True
     return False
 
@@ -248,6 +266,7 @@ def _persist_generated_plan(db: Session, user: User, plan_payload: Dict[str, Any
         .order_by(AIPlan.created_at.desc())
         .first()
     )
+    # Design rule: every adaptation creates a new plan version and abandons the previous one.
     adaptation_version = (latest_plan.adaptation_version + 1) if latest_plan else 1
     if latest_plan and latest_plan.status == "active":
         latest_plan.status = "abandoned"
@@ -289,11 +308,28 @@ def _persist_generated_plan(db: Session, user: User, plan_payload: Dict[str, Any
             user_id=user.id,
             blueprint_id=str(parsed_plan.module_id),
             initial_parameters=plan_payload,
+            contract_version=str(plan_payload.get("contract_version") or PLAN_CONTRACT_VERSION),
+            schema_version=str(plan_payload.get("schema_version") or PLAN_SCHEMA_VERSION),
         )
     )
 
     tz = _safe_timezone(user.timezone)
     user.plan_end_date = _derive_plan_end_date(parsed_plan, tz)
+
+    log_router_decision(
+        {
+            "event_type": "plan_snapshot",
+            "timestamp": datetime.utcnow().isoformat(),
+            "user_id": user.id,
+            "plan_summary": parsed_plan.title,
+            "plan_key_parameters": {
+                "module_id": str(parsed_plan.module_id),
+                "duration_days": parsed_plan.duration_days,
+                "schedule_days": len(parsed_plan.schedule),
+                "milestones": len(parsed_plan.milestones),
+            },
+        }
+    )
     return ai_plan
 
 
@@ -507,6 +543,11 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
 
     error_payload = worker_result.get("error")
     if error_payload is not None:
+        if error_payload.get("code") == "CONTRACT_MISMATCH":
+            log_metric(
+                "plan_contract_mismatch",
+                extra={"user_id": user_id, "agent": target_agent},
+            )
         log_router_decision(
             {
                 "event_type": "plan_agent_error",
@@ -546,13 +587,26 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                     target_agent,
                     exc_info=exc,
                 )
-                raise
+                log_metric(
+                    "plan_validation_rejected",
+                    extra={"user_id": user_id, "agent": target_agent},
+                )
+                return _plan_agent_fallback_envelope().get("reply_text", "")
             else:
                 logger.info(
                     "[PLAN] Generated plan persisted for user %s (agent=%s)",
                     user_id,
                     target_agent,
                 )
+                log_metric(
+                    "plan_generated_ok",
+                    extra={"user_id": user_id, "agent": target_agent},
+                )
+                if context_payload.get("current_state") == "ADAPTATION_FLOW":
+                    log_metric(
+                        "adaptation_created",
+                        extra={"user_id": user_id, "agent": target_agent},
+                    )
 
     plan_updates = worker_result.get("plan_updates")
     if plan_updates and isinstance(plan_updates, dict):
@@ -594,8 +648,24 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                 )
 
     transition_signal = worker_result.get("transition_signal")
+    if transition_signal and transition_signal.startswith("PLAN_FLOW") and target_agent != "plan":
+        logger.warning(
+            "[FSM] Ignoring PLAN_FLOW transition from non-plan agent for user %s (agent=%s)",
+            user_id,
+            target_agent,
+        )
+        transition_signal = None
+    if transition_signal == "ACTIVE_CONFIRMATION" and context_payload.get("current_state") != "PLAN_FLOW:FINALIZATION":
+        logger.warning(
+            "[FSM] ACTIVE_CONFIRMATION rejected — must follow PLAN_FLOW:FINALIZATION (user=%s, agent=%s)",
+            user_id,
+            target_agent,
+        )
+        transition_signal = None
+
     effective_signal = transition_signal
     if transition_signal == "ACTIVE_CONFIRMATION":
+        # Plan Agent signals ACTIVE_CONFIRMATION; orchestrator persists the plan and returns to ACTIVE.
         effective_signal = "ACTIVE"
     normalized_state = (
         _normalize_fsm_state(effective_signal, current_state=context_payload.get("current_state"))
@@ -699,5 +769,22 @@ async def _invoke_agent(target_agent: str, payload: Dict[str, Any]) -> Dict[str,
     if target_agent == "manager":
         return await mock_manager_agent(payload)
     if target_agent == "plan":
-        return await plan_agent(payload)
+        try:
+            return await plan_agent(payload)
+        except PlanAgentEnvelopeError as exc:
+            user_id = payload.get("user_id")
+            log_router_decision(
+                {
+                    "event_type": "plan_agent_contract_error",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "user_id": user_id,
+                    "error": str(exc),
+                }
+            )
+            logger.error(
+                "[PLAN_AGENT] Envelope error for user %s",
+                user_id,
+                exc_info=exc,
+            )
+            return _plan_agent_fallback_envelope()
     return await coach_agent(payload)

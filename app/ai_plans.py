@@ -8,10 +8,12 @@ from typing import Any, Dict, Optional
 
 from app.ai import async_client, extract_output_text
 from app.config import settings
+from app.logging.router_logging import log_metric
 
 __all__ = ["PlanAgentEnvelopeError", "generate_plan_agent_response", "plan_agent"]
 
 logger = logging.getLogger(__name__)
+envelope_logger = logging.getLogger("plan_agent.envelope_raw")
 
 _SYSTEM_PROMPT = """# ROLE & PURPOSE — The Action Planner
 
@@ -1153,12 +1155,12 @@ def _validate_envelope(envelope: Dict[str, Any], payload: Dict[str, Any]) -> Non
             raise PlanAgentEnvelopeError("error_with_payload_updates")
 
     if generated_plan_object is not None:
-        if current_state != "PLAN_FLOW:FINALIZATION":
+        if current_state not in {"PLAN_FLOW:FINALIZATION", "ADAPTATION_FLOW"}:
             raise PlanAgentEnvelopeError("plan_object_outside_finalization")
         if plan_updates is not None:
             raise PlanAgentEnvelopeError("plan_object_with_updates")
 
-    if plan_updates is not None and current_state != "ADAPTATION_FLOW":
+    if plan_updates is not None and current_state not in {"ADAPTATION_FLOW", "ACTIVE_CONFIRMATION"}:
         raise PlanAgentEnvelopeError("plan_updates_outside_adaptation")
 
 
@@ -1190,7 +1192,12 @@ async def generate_plan_agent_response(
     raw_text = extract_output_text(response)
     try:
         envelope = _parse_envelope(raw_text)
-    except PlanAgentEnvelopeError:
+    except PlanAgentEnvelopeError as exc:
+        log_metric("plan_envelope_parse_failed", extra={"error": str(exc)})
+        envelope_logger.error(
+            "[PLAN_AGENT] Raw envelope parse failure",
+            extra={"payload": payload, "raw_text": raw_text},
+        )
         logger.error(
             "[PLAN_AGENT] Envelope parsing failed",
             extra={"payload": payload, "raw_text": raw_text},
@@ -1199,11 +1206,34 @@ async def generate_plan_agent_response(
 
     try:
         _validate_envelope(envelope, payload)
-    except PlanAgentEnvelopeError:
+    except PlanAgentEnvelopeError as exc:
+        log_metric("plan_validation_rejected", extra={"error": str(exc)})
+        envelope_logger.error(
+            "[PLAN_AGENT] Envelope validation rejected",
+            extra={"payload": payload, "envelope": envelope},
+        )
         logger.error(
             "[PLAN_AGENT] Envelope validation failed",
             extra={"payload": payload, "envelope": envelope},
         )
+        if settings.IS_DEV:
+            logger.debug(
+                "[PLAN_AGENT][DEBUG] Envelope mismatch details",
+                extra={
+                    "error": str(exc),
+                    "expected_fields": sorted(
+                        {
+                            "reply_text",
+                            "transition_signal",
+                            "plan_updates",
+                            "generated_plan_object",
+                            "error",
+                        }
+                    ),
+                    "actual_fields": sorted(envelope.keys()),
+                    "current_state": payload.get("current_state"),
+                },
+            )
         raise
 
     return envelope
