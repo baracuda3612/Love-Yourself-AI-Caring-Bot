@@ -109,6 +109,7 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
             getattr(step, "content_id", None)
             or getattr(step, "content_library_id", None)
         )
+        plan_step_id = step.id
         user_id = user.id
         send_chat_id = user.tg_id
 
@@ -126,15 +127,30 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
 
     with SessionLocal() as db:
         try:
+            base_context = {}
+            if not content_id:
+                base_context = {
+                    "plan_step_title": step.title,
+                    "plan_step_description": step.description,
+                }
             if delivery_error is None:
-                log_user_event(db, user_id, "task_delivered", step_id=content_id)
+                log_user_event(
+                    db,
+                    user_id,
+                    "task_delivered",
+                    content_id=content_id,
+                    plan_step_id=plan_step_id,
+                    context=base_context,
+                )
             else:
+                error_context = {**base_context, "error": delivery_error}
                 log_user_event(
                     db,
                     user_id,
                     "task_delivery_failed",
-                    step_id=content_id,
-                    context={"error": delivery_error},
+                    content_id=content_id,
+                    plan_step_id=plan_step_id,
+                    context=error_context,
                 )
             db.commit()
         except Exception:
