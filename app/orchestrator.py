@@ -25,6 +25,15 @@ from app.logging.router_logging import log_metric, log_router_decision
 from app.session_memory import SessionMemory
 from app.telemetry import get_skip_streak
 from app.workers.coach_agent import coach_agent
+from app.fsm.states import (
+    ACTIVE_CONFIRMATION_ENTRYPOINTS,
+    ADAPTATION_FLOW_ENTRYPOINTS,
+    ALLOWED_BASE_STATES,
+    FSM_ALLOWED_STATES,
+    PLAN_FLOW_ALLOWED_TRANSITIONS,
+    PLAN_FLOW_STATES,
+    PREFIXED_STATES,
+)
 from app.workers.mock_workers import (
     mock_manager_agent,
     mock_onboarding_agent,
@@ -51,26 +60,14 @@ def _plan_agent_fallback_envelope() -> Dict[str, Any]:
         },
     }
 
-ALLOWED_BASE_STATES = {
-    "IDLE_ONBOARDED",
-    "IDLE_PLAN_ABORTED",
-    "IDLE_FINISHED",
-    "IDLE_DROPPED",
-    "ACTIVE",
-    "ACTIVE_CONFIRMATION",
-    "ADAPTATION_FLOW",
-}
-PREFIXED_STATES = {"PLAN_FLOW"}
-
-
 def _violates_tunnel_exit(current_state: Optional[str], new_state: str) -> bool:
     if not current_state:
         return False
     current_state = current_state.strip()
     if not current_state:
         return False
-    if current_state.startswith("PLAN_FLOW") and not (
-        new_state.startswith("PLAN_FLOW") or new_state in {"ACTIVE", "IDLE_PLAN_ABORTED"}
+    if current_state in PLAN_FLOW_STATES and not (
+        new_state in PLAN_FLOW_STATES or new_state in {"ACTIVE", "IDLE_PLAN_ABORTED"}
     ):
         return True
     return False
@@ -97,6 +94,8 @@ def _normalize_fsm_state(raw_state: Optional[str], current_state: Optional[str] 
             return None
     elif prefix not in PREFIXED_STATES:
         return None
+    if normalized not in FSM_ALLOWED_STATES:
+        return None
 
     if _violates_tunnel_exit(current_state, normalized):
         return None
@@ -118,10 +117,14 @@ def _get_fsm_rejection_reason(raw_state: Any, current_state: Optional[str] = Non
         if prefix not in PREFIXED_STATES:
             return "invalid_prefix"
         normalized = f"{prefix}:{suffix}"
+        if normalized not in FSM_ALLOWED_STATES:
+            return "not_allowed"
         if _violates_tunnel_exit(current_state, normalized):
             return "tunnel_exit_rejected"
         return None
     if state.upper() not in ALLOWED_BASE_STATES:
+        return "not_allowed"
+    if state.upper() not in FSM_ALLOWED_STATES:
         return "not_allowed"
     if _violates_tunnel_exit(current_state, state.upper()):
         return "tunnel_exit_rejected"
@@ -131,27 +134,20 @@ def _get_fsm_rejection_reason(raw_state: Any, current_state: Optional[str] = Non
 def _is_forbidden_transition(previous_state: Optional[str], next_state: str) -> bool:
     if not previous_state:
         return False
-    if previous_state.startswith("PLAN_FLOW") and next_state == "IDLE_FINISHED":
+    if previous_state in PLAN_FLOW_STATES and next_state == "IDLE_FINISHED":
         return True
-    if previous_state.startswith("PLAN_FLOW") and next_state.startswith("PLAN_FLOW"):
-        allowed_plan_flow = {
-            ("PLAN_FLOW:DATA_COLLECTION", "PLAN_FLOW:CONFIRMATION_PENDING"),
-            ("PLAN_FLOW:CONFIRMATION_PENDING", "PLAN_FLOW:FINALIZATION"),
-        }
-        if previous_state != next_state and (previous_state, next_state) not in allowed_plan_flow:
+    if previous_state in PLAN_FLOW_STATES and next_state in PLAN_FLOW_STATES:
+        if previous_state != next_state and (previous_state, next_state) not in PLAN_FLOW_ALLOWED_TRANSITIONS:
             return True
-    if previous_state.startswith("PLAN_FLOW") and next_state == "ACTIVE":
+    if previous_state in PLAN_FLOW_STATES and next_state == "ACTIVE":
         return previous_state != "PLAN_FLOW:FINALIZATION"
-    if next_state == "IDLE_PLAN_ABORTED" and not previous_state.startswith("PLAN_FLOW"):
+    if next_state == "IDLE_PLAN_ABORTED" and previous_state not in PLAN_FLOW_STATES:
         return previous_state != next_state
     if previous_state == "IDLE_ONBOARDED" and next_state == "ACTIVE":
         return True
-    if next_state == "ADAPTATION_FLOW" and previous_state != "ACTIVE":
+    if next_state == "ADAPTATION_FLOW" and previous_state not in ADAPTATION_FLOW_ENTRYPOINTS:
         return True
-    if next_state == "ACTIVE_CONFIRMATION" and previous_state not in {
-        "PLAN_FLOW:FINALIZATION",
-        "ADAPTATION_FLOW",
-    }:
+    if next_state == "ACTIVE_CONFIRMATION" and previous_state not in ACTIVE_CONFIRMATION_ENTRYPOINTS:
         return True
     return False
 
@@ -460,7 +456,7 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
 
     current_state = context_payload.get("current_state") or ""
     forced_agent: Optional[str] = None
-    if current_state.startswith("PLAN_FLOW") or current_state == "ADAPTATION_FLOW":
+    if current_state in PLAN_FLOW_STATES or current_state == "ADAPTATION_FLOW":
         forced_agent = "plan"
     elif current_state.startswith("ONBOARDING"):
         forced_agent = "onboarding"
@@ -636,17 +632,16 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                 )
 
     transition_signal = worker_result.get("transition_signal")
-    if transition_signal and transition_signal.startswith("PLAN_FLOW") and target_agent != "plan":
+    if transition_signal and transition_signal in PLAN_FLOW_STATES and target_agent != "plan":
         logger.warning(
             "[FSM] Ignoring PLAN_FLOW transition from non-plan agent for user %s (agent=%s)",
             user_id,
             target_agent,
         )
         transition_signal = None
-    if transition_signal == "ACTIVE_CONFIRMATION" and context_payload.get("current_state") not in {
-        "PLAN_FLOW:FINALIZATION",
-        "ADAPTATION_FLOW",
-    }:
+    if transition_signal == "ACTIVE_CONFIRMATION" and context_payload.get(
+        "current_state"
+    ) not in ACTIVE_CONFIRMATION_ENTRYPOINTS:
         logger.warning(
             "[FSM] ACTIVE_CONFIRMATION rejected — must follow PLAN_FLOW:FINALIZATION or ADAPTATION_FLOW (user=%s, agent=%s)",
             user_id,
@@ -713,7 +708,7 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                 "IDLE_PLAN_ABORTED",
             }:
                 user.execution_policy = "EXECUTION"
-            if normalized_state == "ACTIVE" and previous_state.startswith("PLAN_FLOW"):
+            if normalized_state == "ACTIVE" and previous_state in PLAN_FLOW_STATES:
                 if not _has_complete_plan_metadata(user):
                     logger.warning("[FSM] Transition rejected — incomplete plan metadata")
                     return reply_text
