@@ -165,6 +165,7 @@ class AIPlan(Base):
     status = Column(Enum("active", "completed", "paused", "abandoned", name="plan_status_enum"), default="active")
     start_date = Column(DateTime(timezone=True), server_default=func.now())
     end_date = Column(DateTime(timezone=True), nullable=True)
+    execution_policy = Column(String, default="active", nullable=False)
     
     # Versioning for Adaptation
     adaptation_version = Column(Integer, default=1) 
@@ -176,6 +177,12 @@ class AIPlan(Base):
 
     user = relationship("User", back_populates="plans")
     days = relationship("AIPlanDay", back_populates="plan", cascade="all, delete-orphan", order_by="AIPlanDay.day_number")
+    versions = relationship(
+        "AIPlanVersion",
+        back_populates="plan",
+        cascade="all, delete-orphan",
+        order_by="AIPlanVersion.created_at",
+    )
 
 
 class AIPlanDay(Base):
@@ -218,6 +225,18 @@ class AIPlanStep(Base):
     skipped = Column(Boolean, default=False)
     
     day = relationship("AIPlanDay", back_populates="steps")
+
+
+class AIPlanVersion(Base):
+    __tablename__ = "ai_plan_versions"
+
+    id = Column(Integer, primary_key=True)
+    plan_id = Column(Integer, ForeignKey("ai_plans.id"), nullable=False, index=True)
+    applied_adaptation_type = Column(String, nullable=False)
+    diff = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    plan = relationship("AIPlan", back_populates="versions")
 
 
 # -------------------- CONTENT LIBRARY --------------------

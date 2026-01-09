@@ -22,6 +22,8 @@ from app.db import (
 )
 from app.logic.rule_engine import RuleEngine
 from app.logging.router_logging import log_metric, log_router_decision
+from app.plan_adaptations import PlanAdaptationError, apply_plan_adaptation
+from app.scheduler import cancel_plan_step_jobs, reschedule_plan_steps
 from app.session_memory import SessionMemory
 from app.telemetry import get_skip_streak
 from app.workers.coach_agent import coach_agent
@@ -594,42 +596,102 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
 
     plan_updates = worker_result.get("plan_updates")
     if plan_updates and isinstance(plan_updates, dict):
-        with SessionLocal() as db:
-            user: Optional[User] = db.query(User).filter(User.id == user_id).first()
-            if not user:
-                logger.warning(
-                    "[PLAN] Updates ignored — user %s not found (agent=%s)",
-                    user_id,
-                    target_agent,
+        if "adaptation_type" in plan_updates:
+            adaptation_result = None
+            with SessionLocal() as db:
+                user: Optional[User] = db.query(User).filter(User.id == user_id).first()
+                if not user:
+                    logger.warning(
+                        "[PLAN] Adaptation ignored — user %s not found (agent=%s)",
+                        user_id,
+                        target_agent,
+                    )
+                    return reply_text
+                active_plan = (
+                    db.query(AIPlan)
+                    .filter(AIPlan.user_id == user_id, AIPlan.status == "active")
+                    .order_by(AIPlan.created_at.desc())
+                    .first()
                 )
-                return reply_text
-            try:
-                if "plan_end_date" in plan_updates:
-                    raw_end_date = plan_updates.get("plan_end_date")
-                    if raw_end_date:
-                        user.plan_end_date = datetime.fromisoformat(str(raw_end_date))
-                    else:
-                        user.plan_end_date = None
-                if "current_load" in plan_updates:
-                    user.current_load = plan_updates.get("current_load")
-                if "execution_policy" in plan_updates:
-                    user.execution_policy = plan_updates.get("execution_policy")
-                db.commit()
-            except (ValueError, IntegrityError):
-                db.rollback()
-                logger.error(
-                    "[PLAN] Failed to persist updates for user %s (agent=%s)",
-                    user_id,
-                    target_agent,
-                )
-            else:
-                logger.info(
-                    "[PLAN] User %s updated: end=%s load=%s policy=%s",
-                    user_id,
-                    user.plan_end_date,
-                    user.current_load,
-                    user.execution_policy,
-                )
+                if not active_plan:
+                    logger.warning(
+                        "[PLAN] Adaptation ignored — active plan missing (user=%s, agent=%s)",
+                        user_id,
+                        target_agent,
+                    )
+                    return reply_text
+                try:
+                    adaptation_result = apply_plan_adaptation(db, active_plan.id, plan_updates)
+                    db.commit()
+                except (PlanAdaptationError, IntegrityError) as exc:
+                    db.rollback()
+                    logger.error(
+                        "[PLAN] Failed to apply adaptation for user %s (agent=%s): %s",
+                        user_id,
+                        target_agent,
+                        exc,
+                    )
+                    log_metric(
+                        "plan_adaptation_failed",
+                        extra={
+                            "user_id": user_id,
+                            "agent": target_agent,
+                            "adaptation_type": plan_updates.get("adaptation_type"),
+                        },
+                    )
+                else:
+                    log_metric(
+                        "plan_adaptation_applied",
+                        extra={
+                            "user_id": user_id,
+                            "agent": target_agent,
+                            "adaptation_type": adaptation_result.adaptation_type,
+                            "scope": adaptation_result.scope,
+                            "step_diff_count": adaptation_result.step_diff_count,
+                        },
+                    )
+            if adaptation_result:
+                if adaptation_result.canceled_step_ids:
+                    cancel_plan_step_jobs(adaptation_result.canceled_step_ids)
+                if adaptation_result.rescheduled_step_ids:
+                    reschedule_plan_steps(adaptation_result.rescheduled_step_ids)
+        else:
+            with SessionLocal() as db:
+                user: Optional[User] = db.query(User).filter(User.id == user_id).first()
+                if not user:
+                    logger.warning(
+                        "[PLAN] Updates ignored — user %s not found (agent=%s)",
+                        user_id,
+                        target_agent,
+                    )
+                    return reply_text
+                try:
+                    if "plan_end_date" in plan_updates:
+                        raw_end_date = plan_updates.get("plan_end_date")
+                        if raw_end_date:
+                            user.plan_end_date = datetime.fromisoformat(str(raw_end_date))
+                        else:
+                            user.plan_end_date = None
+                    if "current_load" in plan_updates:
+                        user.current_load = plan_updates.get("current_load")
+                    if "execution_policy" in plan_updates:
+                        user.execution_policy = plan_updates.get("execution_policy")
+                    db.commit()
+                except (ValueError, IntegrityError):
+                    db.rollback()
+                    logger.error(
+                        "[PLAN] Failed to persist updates for user %s (agent=%s)",
+                        user_id,
+                        target_agent,
+                    )
+                else:
+                    logger.info(
+                        "[PLAN] User %s updated: end=%s load=%s policy=%s",
+                        user_id,
+                        user.plan_end_date,
+                        user.current_load,
+                        user.execution_policy,
+                    )
 
     transition_signal = worker_result.get("transition_signal")
     if transition_signal and transition_signal in PLAN_FLOW_STATES and target_agent != "plan":

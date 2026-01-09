@@ -93,6 +93,8 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
 
         if plan.status != "active":
             return
+        if plan.execution_policy != "active":
+            return
         if step.is_completed or step.skipped:
             return
         if not step.scheduled_for:
@@ -177,6 +179,8 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
         return False
     if step.day.plan.status != "active":
         return False
+    if step.day.plan.execution_policy != "active":
+        return False
 
     new_job_id_assigned = False
     if not step.job_id:
@@ -203,6 +207,51 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
     )
 
     return new_job_id_assigned
+
+
+def cancel_plan_step_jobs(step_ids: list[int]) -> int:
+    if not step_ids:
+        return 0
+    removed = 0
+    with SessionLocal() as db:
+        steps = (
+            db.query(AIPlanStep)
+            .filter(AIPlanStep.id.in_(step_ids))
+            .all()
+        )
+        for step in steps:
+            plan_user_id = step.day.plan.user_id if step.day and step.day.plan else 0
+            job_id = getattr(step, "job_id", None) or _generate_step_job_id(plan_user_id, step)
+            try:
+                scheduler.remove_job(job_id)
+            except Exception:
+                continue
+            else:
+                removed += 1
+    return removed
+
+
+def reschedule_plan_steps(step_ids: list[int]) -> int:
+    if not step_ids:
+        return 0
+    created = 0
+    with SessionLocal() as db:
+        steps = (
+            db.query(AIPlanStep, AIPlanDay, AIPlan, User)
+            .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+            .join(AIPlan, AIPlan.id == AIPlanDay.plan_id)
+            .join(User, User.id == AIPlan.user_id)
+            .filter(AIPlanStep.id.in_(step_ids))
+            .all()
+        )
+        for step, _, plan, user in steps:
+            if plan.status != "active" or plan.execution_policy != "active":
+                continue
+            if schedule_plan_step(step, user):
+                created += 1
+        if created > 0:
+            db.commit()
+    return created
 
 
 async def schedule_daily_loop():
@@ -235,6 +284,7 @@ async def schedule_daily_loop():
                 AIPlan.status == "active",
                 User.is_active == True,
                 User.current_state.in_(_ALLOWED_USER_STATES),
+                AIPlan.execution_policy == "active",
                 AIPlanStep.is_completed == False,
                 AIPlanStep.skipped == False,
                 AIPlanStep.scheduled_for != None, # Only schedule if time is set
