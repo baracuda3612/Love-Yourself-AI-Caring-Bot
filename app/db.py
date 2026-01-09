@@ -132,6 +132,14 @@ class UserProfile(Base):
     communication_style = Column(Text)
     name_preference = Column(Text)
     attributes = Column(JSON, default=dict)
+    daily_time_slots = Column(
+        JSONB,
+        default=lambda: {
+            "MORNING": "09:30",
+            "DAY": "14:00",
+            "EVENING": "21:00",
+        },
+    )
 
     user = relationship("User", back_populates="profile")
 
@@ -215,8 +223,8 @@ class AIPlanStep(Base):
     
     # Scheduling
     order_in_day = Column(Integer, default=0)
-    time_of_day = Column(String, default="any")
-    # Concrete timestamp for the scheduler (calculated by Manager Agent based on time_of_day)
+    time_slot = Column(String, default="DAY")
+    # Concrete timestamp for the scheduler (calculated from user daily_time_slots)
     scheduled_for = Column(DateTime(timezone=True), nullable=True)
     
     # Execution State

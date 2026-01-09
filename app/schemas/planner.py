@@ -23,6 +23,12 @@ class DifficultyLevel(str, Enum):
     MEDIUM = "medium" # 10-20 min
     HARD = "hard"     # 30+ min, high friction
 
+class TimeSlot(str, Enum):
+    """Structural time slots for scheduling."""
+    MORNING = "MORNING"
+    DAY = "DAY"
+    EVENING = "EVENING"
+
 # --- INPUT LAYER (Planner Blindness) ---
 
 class UserPolicy(BaseModel):
@@ -63,7 +69,7 @@ class PlanStepSchema(BaseModel):
     step_type: StepType
     difficulty: DifficultyLevel
     estimated_minutes: int
-    time_of_day: str = Field("any", description="morning, afternoon, evening, any")
+    time_slot: TimeSlot = Field(..., description="MORNING, DAY, EVENING")
 
 class PlanDaySchema(BaseModel):
     day_number: int

@@ -149,6 +149,33 @@ DO apply dynamic weighting if Telemetry is present:
 The FunctionalSnapshot field is reserved for richer behavioral metrics in future iterations.
 The agent must not hallucinate values.
 
+## 11. TIME SLOT CONTRACT
+
+Each plan step MUST be assigned to exactly one time_slot.
+
+Allowed values:
+- MORNING
+- DAY
+- EVENING
+
+The Plan Agent MUST:
+- assign one time_slot to every step
+- follow Load Matrix:
+  - CORE → MORNING or DAY
+  - SUPPORT → DAY or EVENING
+  - EMERGENCY / REST → EVENING
+
+The Plan Agent MUST NOT:
+- output concrete hours
+- guess or infer user schedule
+- redefine what a time_slot means
+
+time_slot is a structural label only.
+Concrete delivery time is resolved by the system.
+
+Each step object MUST include:
+- time_slot: "MORNING" | "DAY" | "EVENING"
+
 
 # STATE MACHINE PROTOCOL
 

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import logging
@@ -26,6 +26,7 @@ from app.plan_adaptations import PlanAdaptationError, apply_plan_adaptation
 from app.scheduler import cancel_plan_step_jobs, reschedule_plan_steps
 from app.session_memory import SessionMemory
 from app.telemetry import get_skip_streak
+from app.time_slots import compute_scheduled_for, resolve_daily_time_slots
 from app.workers.coach_agent import coach_agent
 from app.fsm.states import (
     ACTIVE_CONFIRMATION_ENTRYPOINTS,
@@ -257,6 +258,7 @@ def _persist_generated_plan(db: Session, user: User, plan_payload: Dict[str, Any
     if latest_plan and latest_plan.status == "active":
         latest_plan.status = "abandoned"
 
+    plan_start = datetime.now(timezone.utc)
     ai_plan = AIPlan(
         user_id=user.id,
         title=parsed_plan.title,
@@ -264,9 +266,12 @@ def _persist_generated_plan(db: Session, user: User, plan_payload: Dict[str, Any
         goal_description=parsed_plan.reasoning,
         status="active",
         adaptation_version=adaptation_version,
+        start_date=plan_start,
     )
     db.add(ai_plan)
     db.flush()
+
+    daily_time_slots = resolve_daily_time_slots(user.profile)
 
     for day in parsed_plan.schedule:
         day_record = AIPlanDay(
@@ -277,6 +282,13 @@ def _persist_generated_plan(db: Session, user: User, plan_payload: Dict[str, Any
         db.add(day_record)
         db.flush()
         for index, step in enumerate(day.steps):
+            scheduled_for = compute_scheduled_for(
+                plan_start=plan_start,
+                day_number=day.day_number,
+                time_slot=step.time_slot,
+                timezone_name=user.timezone,
+                daily_time_slots=daily_time_slots,
+            )
             db.add(
                 AIPlanStep(
                     day_id=day_record.id,
@@ -285,7 +297,8 @@ def _persist_generated_plan(db: Session, user: User, plan_payload: Dict[str, Any
                     step_type=step.step_type,
                     difficulty=step.difficulty,
                     order_in_day=index,
-                    time_of_day=step.time_of_day,
+                    time_slot=step.time_slot,
+                    scheduled_for=scheduled_for,
                 )
             )
 
