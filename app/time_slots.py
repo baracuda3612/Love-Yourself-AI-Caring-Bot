@@ -112,13 +112,19 @@ def compute_scheduled_for(
     target_date = anchor_date or (
         plan_start_local.date() + timedelta(days=max(day_number - 1, 0))
     )
-    naive_local = datetime.combine(target_date, slot_time)
-    try:
-        local_dt = tz.localize(naive_local)
-    except pytz.NonExistentTimeError:
-        local_dt = tz.localize(naive_local + timedelta(hours=1))
-    except pytz.AmbiguousTimeError:
-        local_dt = tz.localize(naive_local, is_dst=False)
+    def _localize_target_date(date_value: date) -> datetime:
+        naive_local = datetime.combine(date_value, slot_time)
+        try:
+            return tz.localize(naive_local)
+        except pytz.NonExistentTimeError:
+            return tz.localize(naive_local + timedelta(hours=1))
+        except pytz.AmbiguousTimeError:
+            return tz.localize(naive_local, is_dst=False)
+
+    local_dt = _localize_target_date(target_date)
+    if anchor_date is None and local_dt <= plan_start_local:
+        target_date = target_date + timedelta(days=1)
+        local_dt = _localize_target_date(target_date)
     return local_dt.astimezone(timezone.utc)
 
 
