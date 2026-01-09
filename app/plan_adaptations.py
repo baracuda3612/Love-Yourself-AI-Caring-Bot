@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
-
-import pytz
 from sqlalchemy.orm import Session, selectinload
 
 from app.db import AIPlan, AIPlanDay, AIPlanStep, AIPlanVersion
 from app.telemetry import log_user_event
+from app.time_slots import (
+    compute_scheduled_for,
+    normalize_time_slot,
+    resolve_daily_time_slots,
+    resolve_step_date,
+)
 
 _ALLOWED_ADAPTATION_TYPES = {"reduce_load", "shift_timing", "pause", "resume"}
 
@@ -45,13 +49,6 @@ def _parse_effective_from(raw_value: Any) -> datetime:
     return value.astimezone(timezone.utc)
 
 
-def _normalize_timezone(name: Optional[str]) -> pytz.BaseTzInfo:
-    try:
-        return pytz.timezone(name or "UTC")
-    except pytz.UnknownTimeZoneError:
-        return pytz.UTC
-
-
 def _resolve_step_anchor(plan: AIPlan, day: AIPlanDay, step: AIPlanStep) -> datetime:
     if step.scheduled_for:
         return step.scheduled_for.astimezone(timezone.utc)
@@ -72,25 +69,6 @@ def _iter_future_steps(
                 continue
             if _resolve_step_anchor(plan, day, step) >= effective_from:
                 yield day, step
-
-
-def _parse_time(value: str | None) -> Optional[time]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text:
-        return None
-    parts = text.split(":", 1)
-    if len(parts) != 2:
-        return None
-    try:
-        hour = int(parts[0])
-        minute = int(parts[1])
-    except ValueError:
-        return None
-    if 0 <= hour <= 23 and 0 <= minute <= 59:
-        return time(hour=hour, minute=minute)
-    return None
 
 
 def _resolve_daily_target(params: Dict[str, Any], default_target: Optional[int]) -> Optional[int]:
@@ -141,55 +119,32 @@ def _apply_shift_timing(
     params: Dict[str, Any],
 ) -> Tuple[int, List[int]]:
     changed_step_ids: List[int] = []
-    time_of_day = params.get("time_of_day")
-    scheduled_map = params.get("scheduled_for_by_step_id") or params.get("scheduled_for_map")
-    raw_time_override = params.get("scheduled_time") or params.get("scheduled_for")
-    tz = _normalize_timezone(plan.user.timezone if plan.user else None)
-
-    scheduled_time = _parse_time(str(raw_time_override)) if raw_time_override else None
-    scheduled_datetime: Optional[datetime] = None
-    if raw_time_override and scheduled_time is None:
-        try:
-            scheduled_datetime = datetime.fromisoformat(str(raw_time_override))
-        except ValueError:
-            scheduled_datetime = None
-
+    raw_time_slot = params.get("time_slot")
+    if not raw_time_slot:
+        return 0, []
+    try:
+        time_slot = normalize_time_slot(raw_time_slot)
+    except ValueError as exc:
+        raise PlanAdaptationError("invalid_time_slot") from exc
+    daily_time_slots = resolve_daily_time_slots(plan.user.profile if plan.user else None)
     for day, step in _iter_future_steps(plan, effective_from):
-        changed = False
-        if time_of_day:
-            step.time_of_day = str(time_of_day)
-            changed = True
-        if isinstance(scheduled_map, dict):
-            raw_value = scheduled_map.get(str(step.id))
-            if raw_value:
-                try:
-                    parsed_dt = datetime.fromisoformat(str(raw_value))
-                except ValueError as exc:
-                    raise PlanAdaptationError("invalid_scheduled_for_map") from exc
-                if parsed_dt.tzinfo is None:
-                    parsed_dt = parsed_dt.replace(tzinfo=timezone.utc)
-                step.scheduled_for = parsed_dt.astimezone(timezone.utc)
-                changed = True
-        elif scheduled_time is not None or scheduled_datetime is not None:
-            base_time = scheduled_time
-            if base_time is None and scheduled_datetime is not None:
-                base_time = scheduled_datetime.timetz().replace(tzinfo=None)
-            if base_time is not None:
-                day_start = plan.start_date or datetime.now(timezone.utc)
-                if day_start.tzinfo is None:
-                    day_start = day_start.replace(tzinfo=timezone.utc)
-                target_date = (day_start + timedelta(days=max(day.day_number - 1, 0))).date()
-                naive_local = datetime.combine(target_date, base_time)
-                try:
-                    localized = tz.localize(naive_local)
-                except pytz.NonExistentTimeError:
-                    localized = tz.localize(naive_local + timedelta(hours=1))
-                except pytz.AmbiguousTimeError:
-                    localized = tz.localize(naive_local, is_dst=False)
-                step.scheduled_for = localized.astimezone(timezone.utc)
-                changed = True
-        if changed:
-            changed_step_ids.append(step.id)
+        plan_start = plan.start_date or effective_from
+        anchor_date = resolve_step_date(
+            plan_start=plan_start,
+            day_number=day.day_number,
+            scheduled_for=step.scheduled_for,
+            timezone_name=plan.user.timezone if plan.user else None,
+        )
+        step.time_slot = time_slot
+        step.scheduled_for = compute_scheduled_for(
+            plan_start=plan_start,
+            day_number=day.day_number,
+            time_slot=time_slot,
+            timezone_name=plan.user.timezone if plan.user else None,
+            daily_time_slots=daily_time_slots,
+            anchor_date=anchor_date,
+        )
+        changed_step_ids.append(step.id)
     return len(changed_step_ids), changed_step_ids
 
 
