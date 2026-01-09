@@ -109,9 +109,23 @@ def compute_scheduled_for(
     if plan_start_local.tzinfo is None:
         plan_start_local = plan_start_local.replace(tzinfo=timezone.utc)
     plan_start_local = plan_start_local.astimezone(tz)
-    target_date = anchor_date or (
-        plan_start_local.date() + timedelta(days=max(day_number - 1, 0))
-    )
+    if anchor_date is None:
+        base_date = plan_start_local.date()
+        first_slot_time = min(
+            _parse_time(daily_time_slots[slot_key]) for slot_key in TIME_SLOTS
+        )
+        first_slot_naive = datetime.combine(base_date, first_slot_time)
+        try:
+            first_slot_local = tz.localize(first_slot_naive)
+        except pytz.NonExistentTimeError:
+            first_slot_local = tz.localize(first_slot_naive + timedelta(hours=1))
+        except pytz.AmbiguousTimeError:
+            first_slot_local = tz.localize(first_slot_naive, is_dst=False)
+        if first_slot_local <= plan_start_local:
+            base_date = base_date + timedelta(days=1)
+    else:
+        base_date = anchor_date
+    target_date = base_date + timedelta(days=max(day_number - 1, 0))
     naive_local = datetime.combine(target_date, slot_time)
     try:
         local_dt = tz.localize(naive_local)
@@ -149,6 +163,8 @@ def recompute_future_steps(
     effective_from = effective_from or datetime.now(timezone.utc)
     updated_step_ids: list[int] = []
     for plan in plans:
+        if plan.execution_policy != "active":
+            continue
         for day, step in iter_future_steps(plan, effective_from):
             plan_start = plan.start_date or effective_from
             anchor_date = resolve_step_date(
