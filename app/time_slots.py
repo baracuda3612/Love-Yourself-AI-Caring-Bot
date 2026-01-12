@@ -163,8 +163,6 @@ def recompute_future_steps(
     effective_from = effective_from or datetime.now(timezone.utc)
     updated_step_ids: list[int] = []
     for plan in plans:
-        if plan.execution_policy != "active":
-            continue
         for day, step in iter_future_steps(plan, effective_from):
             plan_start = plan.start_date or effective_from
             anchor_date = resolve_step_date(
@@ -221,7 +219,7 @@ def update_user_time_slots(
         .options(selectinload(AIPlan.days).selectinload(AIPlanDay.steps))
         .filter(
             AIPlan.user_id == user.id,
-            AIPlan.status == "active",
+            AIPlan.status.in_(["active", "paused"]),
         )
         .all()
     )
