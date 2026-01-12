@@ -33,12 +33,14 @@ def set_user_time_slots(
         if not user:
             raise HTTPException(status_code=404, detail="user_not_found")
         try:
-            updated_step_ids = update_user_time_slots(db, user, payload.to_dict())
+            updated_step_ids, active_step_ids = update_user_time_slots(
+                db, user, payload.to_dict()
+            )
         except TimeSlotError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         db.commit()
 
-    cancel_plan_step_jobs(updated_step_ids)
-    reschedule_plan_steps(updated_step_ids)
+    cancel_plan_step_jobs(active_step_ids)
+    reschedule_plan_steps(active_step_ids)
 
     return {"updated_steps": len(updated_step_ids)}
