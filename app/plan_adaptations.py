@@ -148,14 +148,41 @@ def _apply_shift_timing(
     return len(changed_step_ids), changed_step_ids
 
 
-def _apply_pause_or_resume(
+def _apply_pause(
     plan: AIPlan,
     effective_from: datetime,
-    new_policy: str,
 ) -> Tuple[int, List[int]]:
     affected_steps = [step.id for _, step in _iter_future_steps(plan, effective_from)]
-    plan.execution_policy = new_policy
+    plan.execution_policy = "paused"
     return len(affected_steps), affected_steps
+
+
+def _apply_resume(
+    plan: AIPlan,
+    effective_from: datetime,
+) -> Tuple[int, List[int]]:
+    plan.execution_policy = "active"
+    rescheduled_step_ids: List[int] = []
+    daily_time_slots = resolve_daily_time_slots(plan.user.profile if plan.user else None)
+    for day, step in _iter_future_steps(plan, effective_from):
+        plan_start = plan.start_date or effective_from
+        anchor_date = resolve_step_date(
+            plan_start=plan_start,
+            day_number=day.day_number,
+            scheduled_for=step.scheduled_for,
+            timezone_name=plan.user.timezone if plan.user else None,
+        )
+        step.time_slot = normalize_time_slot(step.time_slot)
+        step.scheduled_for = compute_scheduled_for(
+            plan_start=plan_start,
+            day_number=day.day_number,
+            time_slot=step.time_slot,
+            timezone_name=plan.user.timezone if plan.user else None,
+            daily_time_slots=daily_time_slots,
+            anchor_date=anchor_date,
+        )
+        rescheduled_step_ids.append(step.id)
+    return len(rescheduled_step_ids), rescheduled_step_ids
 
 
 def apply_plan_adaptation(
@@ -194,7 +221,7 @@ def apply_plan_adaptation(
         step_diff_count, rescheduled_step_ids = _apply_shift_timing(plan, effective_from, params)
         canceled_step_ids = list(rescheduled_step_ids)
     elif adaptation_type == "pause":
-        step_diff_count, canceled_step_ids = _apply_pause_or_resume(plan, effective_from, "paused")
+        step_diff_count, canceled_step_ids = _apply_pause(plan, effective_from)
         if plan.user:
             log_user_event(
                 db,
@@ -203,7 +230,7 @@ def apply_plan_adaptation(
                 context={"adaptation_type": adaptation_type, "effective_from": effective_from.isoformat()},
             )
     elif adaptation_type == "resume":
-        step_diff_count, rescheduled_step_ids = _apply_pause_or_resume(plan, effective_from, "active")
+        step_diff_count, rescheduled_step_ids = _apply_resume(plan, effective_from)
         if plan.user:
             log_user_event(
                 db,

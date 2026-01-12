@@ -159,10 +159,12 @@ def recompute_future_steps(
     daily_time_slots: Dict[str, str],
     *,
     effective_from: Optional[datetime] = None,
-) -> list[int]:
+) -> tuple[list[int], list[int]]:
     effective_from = effective_from or datetime.now(timezone.utc)
     updated_step_ids: list[int] = []
+    active_step_ids: list[int] = []
     for plan in plans:
+        is_active = plan.execution_policy == "active"
         for day, step in iter_future_steps(plan, effective_from):
             plan_start = plan.start_date or effective_from
             anchor_date = resolve_step_date(
@@ -181,7 +183,9 @@ def recompute_future_steps(
                 anchor_date=anchor_date,
             )
             updated_step_ids.append(step.id)
-    return updated_step_ids
+            if is_active:
+                active_step_ids.append(step.id)
+    return updated_step_ids, active_step_ids
 
 
 def resolve_step_date(
@@ -205,7 +209,7 @@ def update_user_time_slots(
     db: Session,
     user: User,
     raw_time_slots: Dict[str, str],
-) -> list[int]:
+) -> tuple[list[int], list[int]]:
     normalized = normalize_daily_time_slots(raw_time_slots, require_all=True)
     profile = user.profile
     if not profile:
