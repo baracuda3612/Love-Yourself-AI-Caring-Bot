@@ -1,0 +1,72 @@
+plan_context:
+  # ————— Plan Identity —————
+  plan_id: "UUID"
+  status: "draft | confirming | active | paused"
+
+  goal: "burnout_recovery"   # з impact_area
+
+  # ————— Core Plan Parameters —————
+  duration_days: 7 | 21 | 90
+  focus: "somatic | cognitive | mixed"
+  load: "LITE | MID | INTENSIVE"
+
+  # ————— Daily Structure —————
+  # Це не фокус-шифти, не фази — просто як день побудований
+  daily_structure:
+    slots:
+      - "MORNING"
+      - "DAY"
+      - "EVENING"
+
+    load_to_slots:
+      LITE: ["MORNING"]
+      MID: ["MORNING", "EVENING"]
+      INTENSIVE: ["MORNING", "DAY", "EVENING"]
+
+  # ————— Content Rules (from library) —————
+  content_rules:
+    cooldown_days_enabled: true
+    categories_enabled: ["somatic", "cognitive", "boundaries", "rest"]
+    difficulty_range: [1, 3]   # allowed difficulty levels
+
+  # ————— What is currently being proposed (draft view) —————
+  today_slots:
+    - slot_type: "MORNING"
+      assigned_exercise:
+        id: "BR_SOM_L1_01"
+        title: "4-7-8 Breathing"
+        category: "somatic"
+        difficulty: 1
+        cooldown_days: 2
+
+        scientific_rationale: "Activates the vagus nerve to reduce sympathetic nervous system arousal and lower stress."
+        full_instruction: "Inhale for 4 seconds, hold for 7, exhale for 8. Repeat 4 times."
+
+    - slot_type: "EVENING"
+      assigned_exercise:
+        id: "BR_COG_L1_03"
+        title: "Leaves on a Stream"
+        category: "cognitive"
+        difficulty: 1
+        cooldown_days: 3
+
+        scientific_rationale: "A CBT defusion exercise that reduces rumination by creating distance from intrusive thoughts."
+        full_instruction: "Imagine each thought floating away on a leaf down a stream..."
+
+  # ————— User Control & Integrity —————
+  plan_integrity:
+    is_locked: true
+    change_requires_confirmation: true
+
+  user_rights:
+    can_request_changes: true
+    can_change_duration: true
+    can_change_focus: true
+    can_change_load: true
+    can_pause: true
+    can_resume: true
+
+  # ————— Safety Signals —————
+  telemetry_snapshot:
+    recent_missed_tasks: 2
+    in_red_zone: false
