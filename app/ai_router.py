@@ -423,7 +423,12 @@ async def cognitive_route_message(payload: dict) -> dict:
         latest_user_message = payload.get("message_text")
     short_term_history = payload.get("short_term_history") or []
 
-    if user_id is None or not current_state or latest_user_message is None:
+    latest_message_text = (
+        latest_user_message.strip()
+        if isinstance(latest_user_message, str)
+        else None
+    )
+    if user_id is None or not current_state or not latest_message_text:
         log_router_decision({
             "event_type": "router_failure",
             "status": "error",
@@ -445,7 +450,7 @@ async def cognitive_route_message(payload: dict) -> dict:
             "user_id": user_id,
             "current_state": current_state,
             "short_term_history": _format_short_history(short_term_history),
-            "latest_user_message": latest_user_message
+            "latest_user_message": latest_message_text
         }
         
         # Prepare Messages
@@ -498,7 +503,7 @@ async def cognitive_route_message(payload: dict) -> dict:
             "status": "success",
             "decision_source": "llm",
             "user_id": user_id,
-            "input_message": latest_user_message,
+            "input_message": latest_message_text,
             "current_state": current_state,
             "decision": decision,
             "latency": router_meta["router_latency_ms"],
