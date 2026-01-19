@@ -36,7 +36,11 @@ async def test_non_coach_agent_returns_immediately(monkeypatch):
 
     async def fake_call_router(user_id, message_text, context):
         return {
-            "router_result": {"target_agent": "plan", "priority": 0},
+            "router_result": {
+                "target_agent": "plan",
+                "confidence": "HIGH",
+                "intent_bucket": "STRUCTURAL",
+            },
             "router_meta": {},
             "fsm_state": None,
             "session_id": None,
@@ -74,7 +78,11 @@ async def test_coach_agent_allows_single_reroute(monkeypatch):
 
     async def fake_call_router(user_id, message_text, context):
         return {
-            "router_result": {"target_agent": "coach", "priority": 0},
+            "router_result": {
+                "target_agent": "coach",
+                "confidence": "MEDIUM",
+                "intent_bucket": "MEANING",
+            },
             "router_meta": {},
             "fsm_state": None,
             "session_id": None,

@@ -426,7 +426,7 @@ async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
 async def call_router(user_id: int, message_text: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Сервісний хелпер: збирає контекст, формує payload для Router'а,
-    викликає router і повертає JSON-відповідь (target_agent, priority).
+    викликає router і повертає JSON-відповідь (target_agent, confidence, intent_bucket).
     """
 
     context_payload = context or await build_user_context(user_id, message_text)
@@ -434,9 +434,9 @@ async def call_router(user_id: int, message_text: str, context: Optional[Dict[st
     # STRICT: Router only reads user_id, current_state, latest_user_message, short_term_history
     router_input = {
         "user_id": user_id,
+        "current_state": context_payload.get("current_state"),
         "latest_user_message": context_payload.get("message_text", message_text),
         "short_term_history": context_payload.get("short_term_history"),
-        "current_state": context_payload.get("current_state"),
     }
 
     router_output = await cognitive_route_message(router_input)
@@ -469,19 +469,6 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
     router_result = router_output.get("router_result", {})
     router_meta = router_output.get("router_meta", {})
 
-    current_state = context_payload.get("current_state") or ""
-    forced_agent: Optional[str] = None
-    if current_state in PLAN_FLOW_STATES or current_state == "ADAPTATION_FLOW":
-        forced_agent = "plan"
-    elif current_state.startswith("ONBOARDING"):
-        forced_agent = "onboarding"
-
-    if router_result.get("target_agent") == "safety":
-        forced_agent = None
-
-    if forced_agent:
-        router_result["target_agent"] = forced_agent
-
     log_payload = {
         "event_type": "router_decision",
         "timestamp": datetime.utcnow().isoformat(),
@@ -490,7 +477,8 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
         "input_message": router_output.get("input_message", message_text),
         "fsm_state": router_output.get("fsm_state"),
         "target_agent": router_result.get("target_agent"),
-        "priority": router_result.get("priority"),
+        "confidence": router_result.get("confidence"),
+        "intent_bucket": router_result.get("intent_bucket"),
         "llm_prompt_tokens": router_meta.get("llm_prompt_tokens"),
         "llm_response_tokens": router_meta.get("llm_response_tokens"),
         "router_latency_ms": router_meta.get("router_latency_ms"),
@@ -508,7 +496,6 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
 
     worker_payload = {
         "user_id": user_id,
-        "priority": router_result.get("priority"),
         "router_result": router_result,
         **context_payload,
     }
@@ -519,7 +506,8 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
             "timestamp": datetime.utcnow().isoformat(),
             "user_id": user_id,
             "target_agent": target_agent,
-            "priority": router_result.get("priority"),
+            "confidence": router_result.get("confidence"),
+            "intent_bucket": router_result.get("intent_bucket"),
             "fallback_to_coach": fallback_to_coach,
             "router_result": router_result,
             "router_meta": router_meta,
