@@ -418,10 +418,12 @@ async def cognitive_route_message(payload: dict) -> dict:
     # STRICT INPUT: Only extract allowed fields
     user_id = payload.get("user_id")
     current_state = payload.get("current_state")
-    latest_user_message = payload.get("latest_user_message") or payload.get("message_text", "")
+    latest_user_message = payload.get("latest_user_message")
+    if latest_user_message is None:
+        latest_user_message = payload.get("message_text")
     short_term_history = payload.get("short_term_history") or []
 
-    if not user_id or not current_state or not latest_user_message:
+    if user_id is None or not current_state or latest_user_message is None:
         log_router_decision({
             "event_type": "router_failure",
             "status": "error",
