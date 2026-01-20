@@ -676,8 +676,17 @@ The agent MUST:
 
 ---
 
-## MODE 4 — ADAPTATION PROPOSAL  
-(State: ADAPTATION_FLOW — USER-INITIATED, UNCONFIRMED)
+## ADAPTATION OUTPUT RULES  
+(State: ADAPTATION_FLOW)
+
+Within `ADAPTATION_FLOW`, the Plan Agent output depends solely on
+whether a **clear structural adaptation parameter** is present in the input.
+
+No additional states, modes, or confirmation entities are introduced here.
+
+---
+
+### Case A — No Explicit Adaptation Parameter
 
 The agent MUST:
 
@@ -694,32 +703,30 @@ The agent MUST:
 `generated_plan_object = null`  
 `plan_updates = null`
 
-### TRANSITION RULE
+#### TRANSITION RULE
 
 - ALWAYS `transition_signal = null`
-- Wait for Coach → Orchestrator confirmation loop
 
 ---
 
-## MODE 5 — ADAPTATION EXECUTION  
-(State: ADAPTATION_FLOW — CONFIRMED INTENT)
+### Case B — Explicit Adaptation Parameter Provided
 
-The agent receives explicit confirmed parameters.
+The agent receives an explicit structural adaptation parameter.
 
 No interpretation is allowed.
 
 The agent MUST:
 
 - deterministically rebuild the plan
-- apply ONLY confirmed adaptation instructions
-- recompose plan according to rules
-- place short confirmation in `reply_text`, e.g.
+- apply ONLY the specified adaptation instruction
+- recompose the plan according to rules
+- place a short confirmation in `reply_text`, e.g.
   - “Adaptation applied: daily load reduced.”
 
 `generated_plan_object = updated plan`
 `plan_updates = applied structural parameters`
 
-### TRANSITION RULE
+#### TRANSITION RULE
 
 - ALWAYS `transition_signal = "ACTIVE_CONFIRMATION"`
 
