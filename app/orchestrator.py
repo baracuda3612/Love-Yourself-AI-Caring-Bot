@@ -20,22 +20,19 @@ from app.db import (
     User,
     UserProfile,
 )
-from app.logic.rule_engine import RuleEngine
 from app.logging.router_logging import log_metric, log_router_decision
 from app.plan_adaptations import PlanAdaptationError, apply_plan_adaptation
 from app.scheduler import cancel_plan_step_jobs, reschedule_plan_steps
 from app.session_memory import SessionMemory
-from app.telemetry import get_skip_streak
 from app.time_slots import compute_scheduled_for, resolve_daily_time_slots
 from app.workers.coach_agent import coach_agent
 from app.fsm.states import (
     ACTIVE_CONFIRMATION_ENTRYPOINTS,
     ADAPTATION_FLOW_ENTRYPOINTS,
-    ALLOWED_BASE_STATES,
     FSM_ALLOWED_STATES,
     PLAN_FLOW_ALLOWED_TRANSITIONS,
+    PLAN_FLOW_ENTRYPOINTS,
     PLAN_FLOW_STATES,
-    PREFIXED_STATES,
 )
 from app.workers.mock_workers import (
     mock_manager_agent,
@@ -63,100 +60,81 @@ def _plan_agent_fallback_envelope() -> Dict[str, Any]:
         },
     }
 
-def _violates_tunnel_exit(current_state: Optional[str], new_state: str) -> bool:
-    if not current_state:
-        return False
-    current_state = current_state.strip()
-    if not current_state:
-        return False
-    if current_state in PLAN_FLOW_STATES and not (
-        new_state in PLAN_FLOW_STATES or new_state in {"ACTIVE", "IDLE_PLAN_ABORTED"}
-    ):
-        return True
-    return False
-
-
-def _normalize_fsm_state(raw_state: Optional[str], current_state: Optional[str] = None) -> Optional[str]:
+def _normalize_fsm_state(raw_state: Optional[str]) -> Optional[str]:
     if not raw_state:
         return None
-
-    state = raw_state.strip()
-    if not state:
-        return None
-
-    if ":" in state:
-        prefix, suffix = state.split(":", 1)
-    else:
-        prefix, suffix = state, None
-
-    prefix = prefix.upper()
-    normalized = prefix if suffix is None else f"{prefix}:{suffix}"
-
-    if suffix is None:
-        if normalized not in ALLOWED_BASE_STATES:
-            return None
-    elif prefix not in PREFIXED_STATES:
-        return None
-    if normalized not in FSM_ALLOWED_STATES:
-        return None
-
-    if _violates_tunnel_exit(current_state, normalized):
-        return None
-
-    return normalized
-
-
-def _get_fsm_rejection_reason(raw_state: Any, current_state: Optional[str] = None) -> Optional[str]:
-    if raw_state is None:
-        return "missing"
     if not isinstance(raw_state, str):
-        return "non_string"
+        return None
     state = raw_state.strip()
     if not state:
-        return "empty"
+        return None
     if ":" in state:
         prefix, suffix = state.split(":", 1)
         prefix = prefix.upper()
-        if prefix not in PREFIXED_STATES:
-            return "invalid_prefix"
         normalized = f"{prefix}:{suffix}"
-        if normalized not in FSM_ALLOWED_STATES:
-            return "not_allowed"
-        if _violates_tunnel_exit(current_state, normalized):
-            return "tunnel_exit_rejected"
+    else:
+        normalized = state.upper()
+    if normalized not in FSM_ALLOWED_STATES:
         return None
-    if state.upper() not in ALLOWED_BASE_STATES:
-        return "not_allowed"
-    if state.upper() not in FSM_ALLOWED_STATES:
-        return "not_allowed"
-    if _violates_tunnel_exit(current_state, state.upper()):
-        return "tunnel_exit_rejected"
-    return None
+    return normalized
 
 
-def _is_forbidden_transition(previous_state: Optional[str], next_state: str) -> bool:
-    if not previous_state:
-        return False
-    if previous_state in PLAN_FLOW_STATES and next_state == "IDLE_FINISHED":
-        return True
-    if previous_state in PLAN_FLOW_STATES and next_state in PLAN_FLOW_STATES:
-        if previous_state != next_state and (previous_state, next_state) not in PLAN_FLOW_ALLOWED_TRANSITIONS:
-            return True
-    if previous_state in PLAN_FLOW_STATES and next_state == "ACTIVE":
-        return previous_state != "PLAN_FLOW:FINALIZATION"
-    if next_state == "IDLE_PLAN_ABORTED" and previous_state not in PLAN_FLOW_STATES:
-        return previous_state != next_state
-    if previous_state == "IDLE_ONBOARDED" and next_state == "ACTIVE":
-        return True
-    if next_state == "ADAPTATION_FLOW" and previous_state not in ADAPTATION_FLOW_ENTRYPOINTS:
-        return True
-    if next_state == "ACTIVE_CONFIRMATION" and previous_state not in ACTIVE_CONFIRMATION_ENTRYPOINTS:
-        return True
-    return False
+def _guard_fsm_transition(
+    current_state: Optional[str],
+    transition_signal: Any,
+    target_agent: str,
+) -> Tuple[Optional[str], Optional[str]]:
+    if transition_signal is None:
+        return None, None
 
+    normalized_current = _normalize_fsm_state(current_state) if current_state else None
+    if normalized_current in PLAN_FLOW_STATES or normalized_current == "ADAPTATION_FLOW":
+        if target_agent != "plan":
+            return None, "non_plan_agent_in_tunnel"
 
-def _has_complete_plan_metadata(user: User) -> bool:
-    return bool(user.plan_end_date and user.current_load and user.execution_policy)
+    normalized_signal = _normalize_fsm_state(transition_signal)
+    if normalized_signal is None:
+        return None, "invalid_state"
+
+    if normalized_signal in PLAN_FLOW_STATES:
+        if normalized_current in PLAN_FLOW_STATES:
+            if normalized_current == normalized_signal:
+                return normalized_signal, None
+            if (normalized_current, normalized_signal) in PLAN_FLOW_ALLOWED_TRANSITIONS:
+                return normalized_signal, None
+            return None, "plan_flow_transition_blocked"
+        if normalized_signal != "PLAN_FLOW:DATA_COLLECTION":
+            return None, "plan_flow_entry_blocked"
+        if normalized_current in PLAN_FLOW_ENTRYPOINTS:
+            return normalized_signal, None
+        return None, "plan_flow_entry_blocked"
+
+    if normalized_current in PLAN_FLOW_STATES:
+        if normalized_signal in {"ACTIVE", "IDLE_PLAN_ABORTED"}:
+            return normalized_signal, None
+        return None, "plan_flow_exit_blocked"
+
+    if normalized_signal == "ADAPTATION_FLOW":
+        if normalized_current in ADAPTATION_FLOW_ENTRYPOINTS:
+            return normalized_signal, None
+        return None, "adaptation_flow_entry_blocked"
+
+    if normalized_current == "ADAPTATION_FLOW":
+        if normalized_signal == "ACTIVE_CONFIRMATION":
+            return normalized_signal, None
+        return None, "adaptation_flow_exit_blocked"
+
+    if normalized_signal == "ACTIVE_CONFIRMATION":
+        if normalized_current in ACTIVE_CONFIRMATION_ENTRYPOINTS:
+            return normalized_signal, None
+        return None, "active_confirmation_entry_blocked"
+
+    if normalized_current == "ACTIVE_CONFIRMATION":
+        if normalized_signal == "ACTIVE":
+            return normalized_signal, None
+        return None, "active_confirmation_exit_blocked"
+
+    return normalized_signal, None
 
 
 def _plan_end_date_status(plan_end_date: Optional[datetime]) -> Optional[Tuple[datetime, datetime]]:
@@ -196,33 +174,6 @@ def _auto_complete_plan_if_needed(user_id: int) -> None:
                 user_id,
                 plan_end_date,
             )
-
-
-def _get_skip_streak(db: Session, user_id: int) -> int:
-    return get_skip_streak(db, user_id, RuleEngine.MAX_SKIP_THRESHOLD)
-
-
-def _evaluate_adaptation_signal(user_id: int) -> Optional[str]:
-    with SessionLocal() as db:
-        user: Optional[User] = db.query(User).filter(User.id == user_id).first()
-        if not user:
-            return None
-        if user.current_state != "ACTIVE":
-            return None
-
-        skip_streak = _get_skip_streak(db, user_id)
-
-    return RuleEngine().evaluate(current_load=user.current_load, skip_streak=skip_streak)
-
-
-def _inject_adaptation_metadata(context_payload: Dict[str, Any], signal: str) -> None:
-    planner_context = context_payload.get("planner_context")
-    if not isinstance(planner_context, dict):
-        planner_context = {}
-    planner_context["ADAPTATION_METADATA"] = (
-        f"System suggests: {signal}. (Use this info only if contextually appropriate, do not spam)"
-    )
-    context_payload["planner_context"] = planner_context
 
 
 def _safe_timezone(name: Optional[str]) -> pytz.BaseTzInfo:
@@ -489,11 +440,6 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
     target_agent = router_result.get("target_agent") or "coach"
     fallback_to_coach = router_result.get("target_agent") is None
 
-    if context_payload.get("current_state") == "ACTIVE":
-        signal = _evaluate_adaptation_signal(user_id)
-        if signal:
-            _inject_adaptation_metadata(context_payload, signal)
-
     worker_payload = {
         "user_id": user_id,
         "router_result": router_result,
@@ -695,48 +641,30 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                     )
 
     transition_signal = worker_result.get("transition_signal")
-    if transition_signal and transition_signal in PLAN_FLOW_STATES and target_agent != "plan":
-        logger.warning(
-            "[FSM] Ignoring PLAN_FLOW transition from non-plan agent for user %s (agent=%s)",
-            user_id,
-            target_agent,
-        )
-        transition_signal = None
-    if transition_signal == "ACTIVE_CONFIRMATION" and context_payload.get(
-        "current_state"
-    ) not in ACTIVE_CONFIRMATION_ENTRYPOINTS:
-        logger.warning(
-            "[FSM] ACTIVE_CONFIRMATION rejected — must follow PLAN_FLOW:FINALIZATION or ADAPTATION_FLOW (user=%s, agent=%s)",
-            user_id,
-            target_agent,
-        )
-        transition_signal = None
-
-    effective_signal = transition_signal
-    if transition_signal == "ACTIVE_CONFIRMATION":
-        # Plan Agent signals ACTIVE_CONFIRMATION; orchestrator persists the plan and returns to ACTIVE.
-        effective_signal = "ACTIVE"
-    normalized_state = (
-        _normalize_fsm_state(effective_signal, current_state=context_payload.get("current_state"))
-        if isinstance(effective_signal, str)
-        else None
+    next_state, rejection_reason = _guard_fsm_transition(
+        context_payload.get("current_state"),
+        transition_signal,
+        target_agent,
     )
-    if transition_signal is not None and normalized_state is None:
-        reason = (
-            _get_fsm_rejection_reason(
-                transition_signal,
-                current_state=context_payload.get("current_state"),
-            )
-            or "invalid_state"
-        )
+    if transition_signal is not None and next_state is None:
         logger.warning(
             "[FSM] Ignoring transition_signal for user %s: %s (reason=%s, agent=%s)",
             user_id,
             transition_signal,
-            reason,
+            rejection_reason or "invalid_state",
             target_agent,
         )
-    elif normalized_state is not None:
+        log_metric(
+            "fsm_transition_blocked",
+            extra={
+                "user_id": user_id,
+                "agent": target_agent,
+                "current_state": context_payload.get("current_state"),
+                "transition_signal": transition_signal,
+                "reason": rejection_reason or "invalid_state",
+            },
+        )
+    elif next_state is not None:
         previous_state: Optional[str] = None
         did_commit = False
         with SessionLocal() as db:
@@ -749,33 +677,7 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                 )
                 return reply_text
             previous_state = user.current_state
-            if _is_forbidden_transition(previous_state, normalized_state):
-                logger.warning(
-                    "[FSM] Forbidden transition ignored for user %s: %s → %s (agent=%s)",
-                    user_id,
-                    previous_state,
-                    normalized_state,
-                    target_agent,
-                )
-                return reply_text
-            if normalized_state == "ACTIVE" and previous_state == "IDLE_FINISHED":
-                logger.warning(
-                    "[FSM] Restore blocked — plan is fully finished for user %s (agent=%s)",
-                    user_id,
-                    target_agent,
-                )
-                return reply_text
-            if normalized_state == "ACTIVE" and previous_state in {
-                "IDLE_DROPPED",
-                "ACTIVE_PAUSED",
-                "IDLE_PLAN_ABORTED",
-            }:
-                user.execution_policy = "EXECUTION"
-            if normalized_state == "ACTIVE" and previous_state in PLAN_FLOW_STATES:
-                if not _has_complete_plan_metadata(user):
-                    logger.warning("[FSM] Transition rejected — incomplete plan metadata")
-                    return reply_text
-            user.current_state = normalized_state
+            user.current_state = next_state
             try:
                 db.commit()
             except IntegrityError:
@@ -783,7 +685,7 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                 logger.error(
                     "[FSM] Failed to persist transition for user %s: %s (agent=%s)",
                     user_id,
-                    normalized_state,
+                    next_state,
                     target_agent,
                 )
             else:
@@ -794,7 +696,7 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                 "[FSM] User %s state transition: %s → %s (agent=%s)",
                 user_id,
                 previous_state,
-                normalized_state,
+                next_state,
                 target_agent,
             )
             log_router_decision(
@@ -803,7 +705,7 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                     "user_id": user_id,
                     "agent": target_agent,
                     "from_state": previous_state,
-                    "to_state": normalized_state,
+                    "to_state": next_state,
                 }
             )
 
