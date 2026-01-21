@@ -217,6 +217,7 @@ class AIPlanStep(Base):
     day_id = Column(Integer, ForeignKey("ai_plan_days.id"), nullable=False, index=True)
     
     # Content
+    exercise_id = Column(String, ForeignKey("content_library.id"), nullable=True, index=True)
     title = Column(String, nullable=False)
     description = Column(Text)
     step_type = Column(Enum(StepType), default=StepType.ACTION)

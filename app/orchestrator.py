@@ -15,6 +15,7 @@ from app.db import (
     AIPlanDay,
     AIPlanStep,
     ChatHistory,
+    ContentLibrary,
     PlanInstance,
     SessionLocal,
     User,
@@ -60,6 +61,7 @@ def _plan_agent_fallback_envelope() -> Dict[str, Any]:
             "detail": "plan_agent_envelope_invalid",
         },
     }
+
 
 def _normalize_fsm_state(raw_state: Optional[str]) -> Optional[str]:
     if not raw_state:
@@ -260,6 +262,59 @@ def _derive_plan_end_date(plan: GeneratedPlan, tz: pytz.BaseTzInfo) -> Optional[
     return end_local.astimezone(pytz.UTC)
 
 
+def _extract_exercise_ids(plan_payload: Dict[str, Any]) -> List[str]:
+    exercise_ids: List[str] = []
+    schedule = plan_payload.get("schedule")
+    if not isinstance(schedule, list):
+        return exercise_ids
+    for day in schedule:
+        if not isinstance(day, dict):
+            continue
+        steps = day.get("steps")
+        if not isinstance(steps, list):
+            continue
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            exercise_id = step.get("exercise_id")
+            if exercise_id:
+                exercise_ids.append(str(exercise_id))
+    return exercise_ids
+
+
+def _load_plan_exercise_ids(db: Session, plan_id: int) -> List[str]:
+    rows = (
+        db.query(AIPlanStep.exercise_id)
+        .join(AIPlanDay, AIPlanStep.day_id == AIPlanDay.id)
+        .filter(AIPlanDay.plan_id == plan_id, AIPlanStep.exercise_id.isnot(None))
+        .all()
+    )
+    return [row[0] for row in rows if row[0]]
+
+
+def _validate_plan_exercise_ids(
+    db: Session,
+    user: User,
+    plan_payload: Dict[str, Any],
+    latest_plan: Optional[AIPlan],
+) -> None:
+    new_exercise_ids = set(_extract_exercise_ids(plan_payload))
+    if not new_exercise_ids:
+        return
+    known_ids = {
+        row[0]
+        for row in db.query(ContentLibrary.id)
+        .filter(ContentLibrary.id.in_(new_exercise_ids))
+        .all()
+    }
+    if new_exercise_ids - known_ids:
+        raise PlanAgentEnvelopeError("invalid_exercise_ids")
+    if latest_plan and latest_plan.status == "active":
+        previous_ids = set(_load_plan_exercise_ids(db, latest_plan.id))
+        if new_exercise_ids - previous_ids:
+            raise PlanAgentEnvelopeError("new_exercise_ids_not_allowed")
+
+
 def _persist_generated_plan(db: Session, user: User, plan_payload: Dict[str, Any]) -> AIPlan:
     try:
         parsed_plan = GeneratedPlan.parse_obj(plan_payload)
@@ -272,6 +327,7 @@ def _persist_generated_plan(db: Session, user: User, plan_payload: Dict[str, Any
         .order_by(AIPlan.created_at.desc())
         .first()
     )
+    _validate_plan_exercise_ids(db, user, plan_payload, latest_plan)
     # Design rule: every adaptation creates a new plan version and abandons the previous one.
     adaptation_version = (latest_plan.adaptation_version + 1) if latest_plan else 1
     if latest_plan and latest_plan.status == "active":
@@ -311,6 +367,7 @@ def _persist_generated_plan(db: Session, user: User, plan_payload: Dict[str, Any
             db.add(
                 AIPlanStep(
                     day_id=day_record.id,
+                    exercise_id=step.exercise_id,
                     title=step.title,
                     description=step.description,
                     step_type=step.step_type,
@@ -614,6 +671,15 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
     plan_updates = worker_result.get("plan_updates")
     if plan_updates and isinstance(plan_updates, dict):
         if "adaptation_type" in plan_updates:
+            allowed_execution_adaptations = {"pause", "resume", "PAUSE_PLAN", "RESUME_PLAN"}
+            if plan_updates.get("adaptation_type") not in allowed_execution_adaptations:
+                logger.info(
+                    "[PLAN] Skipping non-execution adaptation type %s for user %s (agent=%s)",
+                    plan_updates.get("adaptation_type"),
+                    user_id,
+                    target_agent,
+                )
+                return reply_text
             adaptation_result = None
             with SessionLocal() as db:
                 user: Optional[User] = db.query(User).filter(User.id == user_id).first()

@@ -477,6 +477,24 @@ The Plan Agent MUST NOT:
 
 ---
 
+### ADAPTATION ELIGIBILITY (GLOBAL)
+
+Before applying any adaptation, the Plan Agent MUST verify eligibility.
+
+An adaptation is eligible ONLY IF:
+- the current plan state allows it
+- the adaptation-specific bounds are not violated
+- the adaptation would result in an actual structural or execution change
+
+If an adaptation is NOT eligible, the Plan Agent MUST:
+- NOT apply any change
+- NOT generate generated_plan_object
+- NOT populate plan_updates
+- return a short reply_text explaining unavailability
+- keep transition_signal = null
+
+---
+
 ### REINFORCED ADAPTATION-SPECIFIC BANS
 
 (Applies ONLY inside ADAPTATION_FLOW, in addition to global taboos)
