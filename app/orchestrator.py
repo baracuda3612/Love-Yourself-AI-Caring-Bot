@@ -28,6 +28,7 @@ from app.time_slots import compute_scheduled_for, resolve_daily_time_slots
 from app.workers.coach_agent import coach_agent
 from app.fsm.states import (
     ACTIVE_CONFIRMATION_ENTRYPOINTS,
+    ACTIVE_PAUSED_CONFIRMATION_ENTRYPOINTS,
     ADAPTATION_FLOW_ENTRYPOINTS,
     FSM_ALLOWED_STATES,
     PLAN_FLOW_ALLOWED_TRANSITIONS,
@@ -127,7 +128,7 @@ def _guard_fsm_transition(
         return None, "adaptation_flow_entry_blocked"
 
     if normalized_current == "ADAPTATION_FLOW":
-        if normalized_signal == "ACTIVE_CONFIRMATION":
+        if normalized_signal in {"ACTIVE_CONFIRMATION", "ACTIVE_PAUSED_CONFIRMATION"}:
             return normalized_signal, None
         return None, "adaptation_flow_exit_blocked"
 
@@ -136,10 +137,20 @@ def _guard_fsm_transition(
             return normalized_signal, None
         return None, "active_confirmation_entry_blocked"
 
+    if normalized_signal == "ACTIVE_PAUSED_CONFIRMATION":
+        if normalized_current in ACTIVE_PAUSED_CONFIRMATION_ENTRYPOINTS:
+            return normalized_signal, None
+        return None, "active_paused_confirmation_entry_blocked"
+
     if normalized_current == "ACTIVE_CONFIRMATION":
         if normalized_signal == "ACTIVE":
             return normalized_signal, None
         return None, "active_confirmation_exit_blocked"
+
+    if normalized_current == "ACTIVE_PAUSED_CONFIRMATION":
+        if normalized_signal == "ACTIVE_PAUSED":
+            return normalized_signal, None
+        return None, "active_paused_confirmation_exit_blocked"
 
     return normalized_signal, None
 
@@ -188,7 +199,7 @@ def _auto_drop_plan_for_new_flow(user_id: int) -> bool:
         user: Optional[User] = db.query(User).filter(User.id == user_id).first()
         if not user:
             return False
-        if user.current_state not in {"ACTIVE", "ACTIVE_PAUSED"}:
+        if user.current_state not in {"ACTIVE", "ACTIVE_PAUSED", "ACTIVE_PAUSED_CONFIRMATION"}:
             return False
 
         active_plan = (
@@ -701,7 +712,7 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
 
     transition_signal = worker_result.get("transition_signal")
     if transition_signal == "PLAN_FLOW:DATA_COLLECTION":
-        if context_payload.get("current_state") in {"ACTIVE", "ACTIVE_PAUSED"}:
+        if context_payload.get("current_state") in {"ACTIVE", "ACTIVE_PAUSED", "ACTIVE_PAUSED_CONFIRMATION"}:
             did_drop = _auto_drop_plan_for_new_flow(user_id)
             if did_drop:
                 context_payload["current_state"] = "IDLE_DROPPED"

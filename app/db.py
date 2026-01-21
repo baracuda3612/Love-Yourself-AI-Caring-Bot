@@ -69,7 +69,8 @@ class User(Base):
             "current_state IN ("
             "'IDLE_NEW','IDLE_ONBOARDED','IDLE_PLAN_ABORTED','IDLE_FINISHED','IDLE_DROPPED',"
             "'PLAN_FLOW:DATA_COLLECTION','PLAN_FLOW:CONFIRMATION_PENDING',"
-            "'PLAN_FLOW:FINALIZATION','ACTIVE','ACTIVE_PAUSED','ADAPTATION_FLOW'"
+            "'PLAN_FLOW:FINALIZATION','ACTIVE','ACTIVE_CONFIRMATION','ACTIVE_PAUSED',"
+            "'ACTIVE_PAUSED_CONFIRMATION','ADAPTATION_FLOW'"
             ") OR current_state LIKE 'ONBOARDING:%'",
             name="ck_users_current_state",
         ),

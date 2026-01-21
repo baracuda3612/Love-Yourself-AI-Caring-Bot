@@ -134,6 +134,7 @@ User has a live plan.
 |-------|----------------|
 | `ACTIVE` | Executing daily tasks. |
 | `ACTIVE_PAUSED` | Plan frozen temporarily. |
+| `ACTIVE_PAUSED_CONFIRMATION` | Confirming plan pause. |
 
 ---
 
