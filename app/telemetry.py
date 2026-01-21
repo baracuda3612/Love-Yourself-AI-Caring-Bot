@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
@@ -9,6 +11,8 @@ from uuid import UUID
 import pytz
 from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
+
+from app.logic.rule_engine import RuleEngine
 
 from app.db import (
     ContentLibrary,
@@ -39,6 +43,19 @@ COMPLETION_EVENT_TYPES = {
     "task_delayed",
     "task_failed",
 }
+
+PROPOSAL_MESSAGES = {
+    RuleEngine.PROPOSAL_REDUCE_LOAD: (
+        "Ми помітили, що виконання зараз просідає.\n"
+        "Хочеш зменшити навантаження або змінити план?"
+    ),
+    RuleEngine.PROPOSAL_OBSERVATION: (
+        "Схоже, зараз важко тримати ритм.\n"
+        "Хочеш змінити план або залишити як є?"
+    ),
+}
+
+logger = logging.getLogger(__name__)
 
 
 def _coerce_uuid(value: str | UUID | None) -> UUID | None:
@@ -84,6 +101,34 @@ def _ensure_content_stub(db: Session, step_id: str, context: dict[str, Any]) -> 
             is_active=False,
         )
     )
+
+
+async def _send_system_message_async(chat_id: int, text: str) -> None:
+    from app.telegram import bot as tg_bot
+
+    try:
+        await tg_bot.send_message(chat_id, text)
+    except Exception as exc:  # pragma: no cover - safety net for runtime failures
+        logger.error("Failed to send system prompt to %s: %s", chat_id, exc)
+
+
+def _dispatch_system_message(user: User, text: str) -> None:
+    if not user.tg_id:
+        return
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        loop.create_task(_send_system_message_async(user.tg_id, text))
+        return
+
+    try:
+        asyncio.run(_send_system_message_async(user.tg_id, text))
+    except RuntimeError as exc:
+        logger.error("Failed to dispatch system prompt for user %s: %s", user.id, exc)
 
 
 def _utc_now() -> datetime:
@@ -266,6 +311,43 @@ def _maybe_create_failure_signal(
     )
 
 
+def _maybe_emit_system_prompt(
+    db: Session,
+    user: User,
+    window: PlanExecutionWindow,
+    event_type: str,
+) -> None:
+    if event_type not in {"task_skipped", "task_ignored", "task_failed"}:
+        return
+    if user.current_state != "ACTIVE":
+        return
+
+    normalized_load = (user.current_load or "").strip().upper()
+    if normalized_load == "LITE":
+        return
+
+    threshold = RuleEngine.LOAD_THRESHOLDS.get(normalized_load)
+    if threshold is None:
+        return
+
+    skip_streak = get_skip_streak(db, user.id, RuleEngine.MAX_SKIP_THRESHOLD)
+    if skip_streak != threshold:
+        return
+
+    proposal = RuleEngine().evaluate(
+        current_load=normalized_load,
+        skip_streak=skip_streak,
+    )
+    if not proposal:
+        return
+
+    message = PROPOSAL_MESSAGES.get(proposal)
+    if not message:
+        return
+
+    _dispatch_system_message(user, message)
+
+
 def _maybe_increment_batch_completion(
     db: Session,
     window: PlanExecutionWindow,
@@ -369,6 +451,10 @@ def log_user_event(
                 event_context,
                 server_now,
             )
+
+    if event_type in {"task_skipped", "task_ignored", "task_failed"}:
+        db.flush()
+        _maybe_emit_system_prompt(db, user, window, event_type)
 
     return event
 
