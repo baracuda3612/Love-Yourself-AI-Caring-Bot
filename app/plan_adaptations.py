@@ -16,7 +16,11 @@ from app.time_slots import (
     resolve_step_date,
 )
 
-_ALLOWED_ADAPTATION_TYPES = {"reduce_load", "shift_timing", "pause", "resume"}
+_ALLOWED_ADAPTATION_TYPES = {"pause", "resume"}
+_ADAPTATION_ALIASES = {
+    "PAUSE_PLAN": "pause",
+    "RESUME_PLAN": "resume",
+}
 
 
 class PlanAdaptationError(ValueError):
@@ -190,9 +194,15 @@ def apply_plan_adaptation(
     plan_id: int,
     adaptation_payload: Dict[str, Any],
 ) -> PlanAdaptationResult:
+    # MVP rule: apply_plan_adaptation MUST NOT perform structural modifications.
+    # Structural adaptations are exclusively handled by Plan Agent via generated_plan_object.
     adaptation_type = adaptation_payload.get("adaptation_type")
+    if adaptation_type in _ADAPTATION_ALIASES:
+        adaptation_type = _ADAPTATION_ALIASES[adaptation_type]
     if adaptation_type not in _ALLOWED_ADAPTATION_TYPES:
         raise PlanAdaptationError("unsupported_adaptation_type")
+    if adaptation_type not in {"pause", "resume"}:
+        raise PlanAdaptationError("structural_adaptation_not_allowed")
 
     effective_from = _parse_effective_from(adaptation_payload.get("effective_from"))
     params = adaptation_payload.get("params")

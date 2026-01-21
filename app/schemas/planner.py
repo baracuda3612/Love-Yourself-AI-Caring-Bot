@@ -28,6 +28,7 @@ class TimeSlot(str, Enum):
     EVENING = "EVENING"
 
 class PlanStepSchema(BaseModel):
+    exercise_id: Optional[str] = None
     title: str
     description: str
     step_type: StepType
