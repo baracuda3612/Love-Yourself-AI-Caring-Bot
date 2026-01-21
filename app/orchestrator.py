@@ -83,6 +83,7 @@ def _guard_fsm_transition(
     current_state: Optional[str],
     transition_signal: Any,
     target_agent: str,
+    plan_persisted: bool = False,
 ) -> Tuple[Optional[str], Optional[str]]:
     if transition_signal is None:
         return None, None
@@ -110,7 +111,13 @@ def _guard_fsm_transition(
         return None, "plan_flow_entry_blocked"
 
     if normalized_current in PLAN_FLOW_STATES:
-        if normalized_signal in {"ACTIVE", "IDLE_PLAN_ABORTED"}:
+        if normalized_signal == "IDLE_PLAN_ABORTED":
+            return normalized_signal, None
+        if normalized_signal == "ACTIVE":
+            if normalized_current != "PLAN_FLOW:FINALIZATION":
+                return None, "plan_flow_exit_blocked_not_finalized"
+            if not plan_persisted:
+                return None, "plan_flow_exit_blocked_not_persisted"
             return normalized_signal, None
         return None, "plan_flow_exit_blocked"
 
@@ -498,6 +505,7 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
         )
         return reply_text
 
+    plan_persisted = False
     generated_plan_object = worker_result.get("generated_plan_object")
     if generated_plan_object is not None:
         with SessionLocal() as db:
@@ -531,6 +539,7 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                     user_id,
                     target_agent,
                 )
+                plan_persisted = True
                 log_metric(
                     "plan_generated_ok",
                     extra={"user_id": user_id, "agent": target_agent},
@@ -645,6 +654,7 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
         context_payload.get("current_state"),
         transition_signal,
         target_agent,
+        plan_persisted=plan_persisted,
     )
     if transition_signal is not None and next_state is None:
         logger.warning(
