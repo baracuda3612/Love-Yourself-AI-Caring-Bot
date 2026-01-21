@@ -176,6 +176,56 @@ def _auto_complete_plan_if_needed(user_id: int) -> None:
             )
 
 
+def _auto_drop_plan_for_new_flow(user_id: int) -> bool:
+    with SessionLocal() as db:
+        user: Optional[User] = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            return False
+        if user.current_state not in {"ACTIVE", "ACTIVE_PAUSED"}:
+            return False
+
+        active_plan = (
+            db.query(AIPlan)
+            .filter(AIPlan.user_id == user_id, AIPlan.status.in_(["active", "paused"]))
+            .order_by(AIPlan.created_at.desc())
+            .first()
+        )
+
+        step_ids: List[int] = []
+        if active_plan:
+            step_rows = (
+                db.query(AIPlanStep.id)
+                .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+                .filter(AIPlanDay.plan_id == active_plan.id)
+                .all()
+            )
+            step_ids = [row[0] for row in step_rows]
+            active_plan.status = "abandoned"
+            active_plan.execution_policy = "paused"
+            active_plan.end_date = datetime.now(timezone.utc)
+
+        user.current_state = "IDLE_DROPPED"
+        user.plan_end_date = None
+
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            logger.error(
+                "[FSM] Failed to auto-drop plan for user %s",
+                user_id,
+            )
+            return False
+
+    if step_ids:
+        cancel_plan_step_jobs(step_ids)
+    logger.info(
+        "[FSM] Auto-dropped plan before new PLAN_FLOW for user %s",
+        user_id,
+    )
+    return True
+
+
 def _safe_timezone(name: Optional[str]) -> pytz.BaseTzInfo:
     try:
         return pytz.timezone(name or "Europe/Kyiv")
@@ -641,6 +691,17 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                     )
 
     transition_signal = worker_result.get("transition_signal")
+    if transition_signal == "PLAN_FLOW:DATA_COLLECTION":
+        if context_payload.get("current_state") in {"ACTIVE", "ACTIVE_PAUSED"}:
+            did_drop = _auto_drop_plan_for_new_flow(user_id)
+            if did_drop:
+                context_payload["current_state"] = "IDLE_DROPPED"
+            else:
+                logger.warning(
+                    "[FSM] Auto-drop failed, blocking PLAN_FLOW entry for user %s",
+                    user_id,
+                )
+                transition_signal = None
     next_state, rejection_reason = _guard_fsm_transition(
         context_payload.get("current_state"),
         transition_signal,
