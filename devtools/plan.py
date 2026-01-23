@@ -38,7 +38,6 @@ def _load_active_plan_context(user_id: int) -> Dict[str, Any]:
 
 def _inspect(user_id: int) -> None:
     data = _load_active_plan_context(user_id)
-    user = data["user"]
     plan = data["plan"]
     plan_context = data["plan_context"]
 
@@ -52,7 +51,6 @@ def _inspect(user_id: int) -> None:
     print(f"  number_of_days: {days}")
     print(f"  number_of_steps: {steps}")
     print(f"  exercise_ids: {exercise_ids}")
-    print(f"  execution_policy: {user.execution_policy}")
 
 
 async def _call_plan_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -80,7 +78,6 @@ def _dry_run_adaptation(user_id: int, adaptation_type: str) -> None:
         duration_days=len(plan.days) or 21,
         focus="Mixed",
         load=user.current_load,
-        execution_policy=user.execution_policy,
         goal=plan.goal_description or "burnout_recovery",
     )
 

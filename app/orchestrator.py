@@ -221,7 +221,6 @@ def _auto_drop_plan_for_new_flow(user_id: int) -> bool:
             )
             step_ids = [row[0] for row in step_rows]
             active_plan.status = "abandoned"
-            active_plan.execution_policy = "paused"
             active_plan.end_date = datetime.now(timezone.utc)
 
         user.current_state = "IDLE_DROPPED"
@@ -757,8 +756,6 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                             user.plan_end_date = None
                     if "current_load" in plan_updates:
                         user.current_load = plan_updates.get("current_load")
-                    if "execution_policy" in plan_updates:
-                        user.execution_policy = plan_updates.get("execution_policy")
                     db.commit()
                 except (ValueError, IntegrityError):
                     db.rollback()
@@ -769,11 +766,10 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                     )
                 else:
                     logger.info(
-                        "[PLAN] User %s updated: end=%s load=%s policy=%s",
+                        "[PLAN] User %s updated: end=%s load=%s",
                         user_id,
                         user.plan_end_date,
                         user.current_load,
-                        user.execution_policy,
                     )
 
     transition_signal = worker_result.get("transition_signal")
