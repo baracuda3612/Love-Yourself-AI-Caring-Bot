@@ -164,7 +164,7 @@ def recompute_future_steps(
     updated_step_ids: list[int] = []
     active_step_ids: list[int] = []
     for plan in plans:
-        is_active = plan.execution_policy == "active"
+        is_active = plan.status == "active"
         for day, step in iter_future_steps(plan, effective_from):
             plan_start = plan.start_date or effective_from
             anchor_date = resolve_step_date(

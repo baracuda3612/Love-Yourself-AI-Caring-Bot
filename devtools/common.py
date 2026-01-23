@@ -82,7 +82,6 @@ def build_plan_context(plan: Any) -> Dict[str, Any]:
         "milestones": [],
         "plan_id": plan.id,
         "adaptation_version": plan.adaptation_version,
-        "execution_policy": plan.execution_policy,
     }
 
 
@@ -145,7 +144,6 @@ def build_plan_payload(
     duration_days: int,
     focus: str,
     load: str,
-    execution_policy: str,
     goal: str,
 ) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
@@ -158,7 +156,6 @@ def build_plan_payload(
             "load": load,
         },
         "user_policy": {
-            "execution_policy": execution_policy,
             "load": load,
             "duration_days": duration_days,
         },

@@ -157,7 +157,7 @@ def _apply_pause(
     effective_from: datetime,
 ) -> Tuple[int, List[int]]:
     affected_steps = [step.id for _, step in _iter_future_steps(plan, effective_from)]
-    plan.execution_policy = "paused"
+    plan.status = "paused"
     return len(affected_steps), affected_steps
 
 
@@ -165,7 +165,7 @@ def _apply_resume(
     plan: AIPlan,
     effective_from: datetime,
 ) -> Tuple[int, List[int]]:
-    plan.execution_policy = "active"
+    plan.status = "active"
     rescheduled_step_ids: List[int] = []
     daily_time_slots = resolve_daily_time_slots(plan.user.profile if plan.user else None)
     for day, step in _iter_future_steps(plan, effective_from):
@@ -259,7 +259,6 @@ def apply_plan_adaptation(
                 "step_diff_count": step_diff_count,
                 "canceled_step_ids": canceled_step_ids,
                 "rescheduled_step_ids": rescheduled_step_ids,
-                "execution_policy": plan.execution_policy,
             },
         )
     )

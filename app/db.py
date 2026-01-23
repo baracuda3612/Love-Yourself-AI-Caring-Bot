@@ -75,10 +75,6 @@ class User(Base):
             name="ck_users_current_state",
         ),
         CheckConstraint(
-            "execution_policy IN ('EXECUTION','OBSERVATION')",
-            name="ck_users_execution_policy",
-        ),
-        CheckConstraint(
             "current_load IN ('LITE','MID','INTENSIVE')",
             name="ck_users_current_load",
         ),
@@ -89,7 +85,6 @@ class User(Base):
     username = Column(String)
     first_name = Column(String)
     current_state = Column(String, default="IDLE_NEW", index=True)
-    execution_policy = Column(String, default="EXECUTION", nullable=False)
     current_load = Column(String, default="LITE", nullable=False)
     last_active_at = Column(DateTime(timezone=True), nullable=True)
     plan_end_date = Column(DateTime(timezone=True), nullable=True)
@@ -174,7 +169,6 @@ class AIPlan(Base):
     status = Column(Enum("active", "completed", "paused", "abandoned", name="plan_status_enum"), default="active")
     start_date = Column(DateTime(timezone=True), server_default=func.now())
     end_date = Column(DateTime(timezone=True), nullable=True)
-    execution_policy = Column(String, default="active", nullable=False)
     
     # Versioning for Adaptation
     adaptation_version = Column(Integer, default=1) 

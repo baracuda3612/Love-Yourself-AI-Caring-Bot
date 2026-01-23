@@ -93,8 +93,6 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
 
         if plan.status != "active":
             return
-        if plan.execution_policy != "active":
-            return
         if step.is_completed or step.skipped:
             return
         if not step.scheduled_for:
@@ -179,8 +177,6 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
         return False
     if step.day.plan.status != "active":
         return False
-    if step.day.plan.execution_policy != "active":
-        return False
 
     new_job_id_assigned = False
     if not step.job_id:
@@ -245,7 +241,7 @@ def reschedule_plan_steps(step_ids: list[int]) -> int:
             .all()
         )
         for step, _, plan, user in steps:
-            if plan.status != "active" or plan.execution_policy != "active":
+            if plan.status != "active":
                 continue
             if schedule_plan_step(step, user):
                 created += 1
@@ -284,7 +280,6 @@ async def schedule_daily_loop():
                 AIPlan.status == "active",
                 User.is_active == True,
                 User.current_state.in_(_ALLOWED_USER_STATES),
-                AIPlan.execution_policy == "active",
                 AIPlanStep.is_completed == False,
                 AIPlanStep.skipped == False,
                 AIPlanStep.scheduled_for != None, # Only schedule if time is set
