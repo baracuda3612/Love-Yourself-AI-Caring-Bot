@@ -1,0 +1,2 @@
+ALTER TABLE ai_plan_steps
+ADD COLUMN IF NOT EXISTS time_slot VARCHAR(32);
