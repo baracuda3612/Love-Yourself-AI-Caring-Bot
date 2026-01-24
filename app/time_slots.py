@@ -223,7 +223,7 @@ def update_user_time_slots(
         .options(selectinload(AIPlan.days).selectinload(AIPlanDay.steps))
         .filter(
             AIPlan.user_id == user.id,
-            AIPlan.status.in_(["active", "paused"]),
+            AIPlan.status == "active",
         )
         .all()
     )

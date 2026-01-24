@@ -206,7 +206,7 @@ def _auto_drop_plan_for_new_flow(user_id: int) -> bool:
 
         active_plan = (
             db.query(AIPlan)
-            .filter(AIPlan.user_id == user_id, AIPlan.status.in_(["active", "paused"]))
+            .filter(AIPlan.user_id == user_id, AIPlan.status == "active")
             .order_by(AIPlan.created_at.desc())
             .first()
         )
