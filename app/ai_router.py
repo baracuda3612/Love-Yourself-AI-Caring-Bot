@@ -465,7 +465,8 @@ async def cognitive_route_message(payload: dict) -> dict:
             model=ROUTER_MODEL,
             messages=messages,
             temperature=0,
-            max_tokens=100,
+            # GPT-5+ uses max_completion_tokens instead of max_tokens.
+            max_completion_tokens=100,
             response_format={"type": "json_object"}
         )
         
