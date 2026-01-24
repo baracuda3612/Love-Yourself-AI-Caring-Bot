@@ -3,7 +3,7 @@ import logging
 import time
 from typing import Optional
 
-from app.ai import async_client
+from app.ai import async_client, extract_output_text
 from app.config import settings
 from app.logging.router_logging import log_router_decision
 
@@ -461,25 +461,28 @@ async def cognitive_route_message(payload: dict) -> dict:
         ]
         
         # Call LLM
-        response = await async_client.chat.completions.create(
+        response = await async_client.responses.create(
             model=ROUTER_MODEL,
-            messages=messages,
-            temperature=0,
-            # GPT-5+ uses max_completion_tokens instead of max_tokens.
+            input=messages,
+            response_format={"type": "json_object"},
             max_completion_tokens=100,
-            response_format={"type": "json_object"}
         )
         
         t_end = time.monotonic()
         router_meta["router_latency_ms"] = (t_end - t_start) * 1000
         
         # Extract Usage Stats
-        if response.usage:
-            router_meta["llm_prompt_tokens"] = response.usage.prompt_tokens
-            router_meta["llm_response_tokens"] = response.usage.completion_tokens
+        usage = getattr(response, "usage", None)
+        if usage:
+            router_meta["llm_prompt_tokens"] = getattr(
+                usage, "prompt_tokens", getattr(usage, "input_tokens", 0)
+            )
+            router_meta["llm_response_tokens"] = getattr(
+                usage, "completion_tokens", getattr(usage, "output_tokens", 0)
+            )
         
         # Parse Output
-        content = response.choices[0].message.content
+        content = extract_output_text(response)
         if not content:
             raise ValueError("Empty response from Router LLM")
         

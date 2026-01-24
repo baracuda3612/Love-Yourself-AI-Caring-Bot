@@ -598,6 +598,9 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
     reply_text = str(worker_result.get("reply_text") or "")
     await session_memory.append_message(user_id, "assistant", reply_text)
 
+    current_state = context_payload.get("current_state")
+    blocked_persistence_states = {"PLAN_FLOW:DATA_COLLECTION", "PLAN_FLOW:CONFIRMATION_PENDING"}
+
     error_payload = worker_result.get("error")
     if error_payload is not None:
         if error_payload.get("code") == "CONTRACT_MISMATCH":
@@ -624,7 +627,7 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
 
     plan_persisted = False
     generated_plan_object = worker_result.get("generated_plan_object")
-    if generated_plan_object is not None:
+    if generated_plan_object is not None and current_state not in blocked_persistence_states:
         with SessionLocal() as db:
             user: Optional[User] = db.query(User).filter(User.id == user_id).first()
             if not user:
@@ -668,9 +671,23 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                     )
 
     plan_updates = worker_result.get("plan_updates")
-    if plan_updates and isinstance(plan_updates, dict):
-        if "adaptation_type" in plan_updates:
-            allowed_execution_adaptations = {"pause", "resume", "PAUSE_PLAN", "RESUME_PLAN"}
+    if (
+        plan_updates
+        and isinstance(plan_updates, dict)
+        and current_state not in blocked_persistence_states
+    ):
+        allowed_execution_adaptations = {"pause", "resume", "PAUSE_PLAN", "RESUME_PLAN"}
+        should_persist_updates = bool(generated_plan_object) or (
+            plan_updates.get("adaptation_type") in allowed_execution_adaptations
+        )
+        if not should_persist_updates:
+            logger.info(
+                "[PLAN] Skipping plan updates outside allowed persistence window (user=%s, agent=%s, state=%s)",
+                user_id,
+                target_agent,
+                current_state,
+            )
+        elif "adaptation_type" in plan_updates:
             if plan_updates.get("adaptation_type") not in allowed_execution_adaptations:
                 logger.info(
                     "[PLAN] Skipping non-execution adaptation type %s for user %s (agent=%s)",

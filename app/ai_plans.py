@@ -1408,6 +1408,17 @@ Within `ADAPTATION_FLOW`:
 
 No exceptions.
 
+### GENERATED_PLAN_OBJECT — SEMANTIC NOTE (DO NOT OVERRIDE)
+
+`generated_plan_object` is a **structural artifact**, not an instruction to persist.
+It may represent:
+- a preview,
+- a draft,
+- or a confirmation-stage artifact.
+
+Persistence is handled by the Orchestrator/FSM, not by this agent.
+Never assume that `generated_plan_object` implies DB write.
+
 ---
 
 ## ADAPTATION: CHANGE_MAIN_CATEGORY — OUTPUT HANDLING
@@ -1744,11 +1755,14 @@ def _validate_envelope(envelope: Dict[str, Any], payload: Dict[str, Any]) -> Non
         "transition_signal",
         "plan_updates",
         "generated_plan_object",
-        "error",
     }
     missing = required_fields.difference(envelope.keys())
     if missing:
         raise PlanAgentEnvelopeError(f"missing_fields:{sorted(missing)}")
+
+    reply_text = envelope.get("reply_text")
+    if not isinstance(reply_text, str):
+        raise PlanAgentEnvelopeError("reply_text_non_string")
 
     transition_signal = envelope.get("transition_signal")
     if transition_signal is not None:
@@ -1757,7 +1771,7 @@ def _validate_envelope(envelope: Dict[str, Any], payload: Dict[str, Any]) -> Non
         if transition_signal not in _ALLOWED_TRANSITION_SIGNALS:
             raise PlanAgentEnvelopeError("transition_signal_not_allowed")
 
-    error_payload = envelope.get("error")
+    error_payload = envelope.get("error") if "error" in envelope else None
     generated_plan_object = envelope.get("generated_plan_object")
     plan_updates = envelope.get("plan_updates")
     current_state = payload.get("current_state")
@@ -1769,7 +1783,7 @@ def _validate_envelope(envelope: Dict[str, Any], payload: Dict[str, Any]) -> Non
             raise PlanAgentEnvelopeError("error_with_payload_updates")
 
     if generated_plan_object is not None:
-        if current_state not in ACTIVE_CONFIRMATION_ENTRYPOINTS:
+        if current_state not in (ACTIVE_CONFIRMATION_ENTRYPOINTS | {"PLAN_FLOW:FINALIZATION"}):
             raise PlanAgentEnvelopeError("plan_object_outside_finalization")
         if plan_updates is not None:
             raise PlanAgentEnvelopeError("plan_object_with_updates")
@@ -1800,8 +1814,7 @@ async def generate_plan_agent_response(
         model=settings.MODEL,
         input=messages,
         response_format={"type": "json_object"},
-        temperature=settings.TEMPERATURE,
-        max_output_tokens=settings.MAX_TOKENS,
+        max_completion_tokens=settings.MAX_TOKENS,
     )
     raw_text = extract_output_text(response)
     try:
