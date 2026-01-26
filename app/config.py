@@ -53,7 +53,7 @@ class Settings:
     OPENAI_API_KEY: str = ""
     ADMIN_IDS: Set[int] = field(default_factory=set)
     TZ: str = "Europe/Kyiv"
-    MODEL: str = "gpt-4.1"
+    MODEL: str = "gpt-5-mini"
     COACH_MODEL: str = "gpt-5.1"
     ROUTER_MODEL: str = "gpt-5-mini"
     MAX_TOKENS: int = 300
@@ -86,7 +86,7 @@ class Settings:
         self.OPENAI_API_KEY = openai_api_key
         self.ADMIN_IDS = _parse_admin_ids(os.getenv("ADMIN_IDS"))
         self.TZ = os.getenv("TZ", "Europe/Kyiv")
-        self.MODEL = os.getenv("MODEL", "gpt-4.1")
+        self.MODEL = os.getenv("MODEL", "gpt-5-mini")
         self.COACH_MODEL = (
             os.getenv("COACH_MODEL")
             or os.getenv("MODEL_REASONING")
