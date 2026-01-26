@@ -54,6 +54,7 @@ class Settings:
     ADMIN_IDS: Set[int] = field(default_factory=set)
     TZ: str = "Europe/Kyiv"
     MODEL: str = "gpt-5-mini"
+    PLAN_MODEL: str = "gpt-5-mini"
     COACH_MODEL: str = "gpt-5.1"
     ROUTER_MODEL: str = "gpt-5-mini"
     MAX_TOKENS: int = 300
@@ -87,6 +88,7 @@ class Settings:
         self.ADMIN_IDS = _parse_admin_ids(os.getenv("ADMIN_IDS"))
         self.TZ = os.getenv("TZ", "Europe/Kyiv")
         self.MODEL = os.getenv("MODEL", "gpt-5-mini")
+        self.PLAN_MODEL = os.getenv("PLAN_MODEL", "gpt-5-mini")
         self.COACH_MODEL = (
             os.getenv("COACH_MODEL")
             or os.getenv("MODEL_REASONING")
@@ -115,6 +117,7 @@ OPENAI_API_KEY = settings.OPENAI_API_KEY
 ADMIN_IDS = settings.ADMIN_IDS
 TZ = settings.TZ
 MODEL = settings.MODEL
+PLAN_MODEL = settings.PLAN_MODEL
 COACH_MODEL = settings.COACH_MODEL
 ROUTER_MODEL = settings.ROUTER_MODEL
 MAX_TOKENS = settings.MAX_TOKENS
