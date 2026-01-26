@@ -1846,18 +1846,18 @@ async def generate_plan_agent_response(
         input=messages,
         max_output_tokens=settings.MAX_TOKENS,
     )
-    raw_text = extract_plan_raw_text(response)
     try:
+        raw_text = extract_plan_raw_text(response)
         envelope = _parse_envelope(raw_text)
     except PlanAgentEnvelopeError as exc:
         log_metric("plan_envelope_parse_failed", extra={"error": str(exc)})
         envelope_logger.error(
             "[PLAN_AGENT] Raw envelope parse failure",
-            extra={"payload": payload, "raw_text": raw_text},
+            extra={"payload": payload, "raw_text": raw_text if "raw_text" in locals() else None},
         )
         logger.error(
             "[PLAN_AGENT] Envelope parsing failed",
-            extra={"payload": payload, "raw_text": raw_text},
+            extra={"payload": payload, "raw_text": raw_text if "raw_text" in locals() else None},
         )
         raise
 
