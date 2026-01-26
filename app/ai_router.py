@@ -1,7 +1,7 @@
 import json
 import logging
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from app.ai import async_client, extract_output_text
 from app.config import settings
@@ -481,11 +481,19 @@ async def cognitive_route_message(payload: dict) -> dict:
             )
         
         # Parse Output
-        content = extract_output_text(response)
-        if not content:
-            raise ValueError("Empty response from Router LLM")
-        
-        parsed_data = json.loads(content)
+        parsed_data = extract_router_json(response)
+        if not parsed_data:
+            log_router_decision({
+                "event_type": "router_empty_or_unparseable_output",
+                "status": "error",
+                "error_type": "empty_or_unparseable_output",
+                "user_id": user_id,
+                "fallback": decision,
+            })
+            return {
+                "router_result": decision,
+                "router_meta": router_meta,
+            }
 
         # Validate output against allowed enums
         target = parsed_data.get("target_agent")
@@ -515,17 +523,6 @@ async def cognitive_route_message(payload: dict) -> dict:
             "llm_response_tokens": router_meta["llm_response_tokens"],
         })
         
-    except json.JSONDecodeError as e:
-        logger.error(f"[ROUTER ERROR] JSON parsing failed: {e}", exc_info=True)
-        log_router_decision({
-            "event_type": "router_failure",
-            "status": "error",
-            "error_type": "json_parse_error",
-            "error": str(e),
-            "user_id": user_id,
-            "fallback": decision
-        })
-    
     except Exception as e:
         logger.error(f"[ROUTER ERROR] Failed to route message: {e}", exc_info=True)
         log_router_decision({
@@ -560,3 +557,60 @@ def _format_short_history(history: Optional[list]) -> list:
             formatted.append({"role": "user", "content": msg[:200]})
     
     return formatted
+
+
+def _extract_router_text(response: Any) -> list[str]:
+    candidates: list[str] = []
+
+    text = extract_output_text(response)
+    if text:
+        candidates.append(text)
+
+    if not candidates:
+        text = getattr(response, "output_text", None)
+        if text:
+            candidates.append(text)
+
+    output = getattr(response, "output", None)
+    if output:
+        try:
+            for item in output:
+                content = getattr(item, "content", None)
+                if content is None and isinstance(item, dict):
+                    content = item.get("content")
+                if isinstance(content, str):
+                    candidates.append(content)
+                elif isinstance(content, list):
+                    for part in content:
+                        part_text = getattr(part, "text", None)
+                        if part_text is None and isinstance(part, dict):
+                            part_text = part.get("text")
+                        if part_text:
+                            candidates.append(part_text)
+        except TypeError:
+            pass
+
+    return candidates
+
+
+def _extract_first_json(text: str) -> Optional[dict]:
+    if not isinstance(text, str) or not text.strip():
+        return None
+
+    stripped = text.strip()
+    try:
+        payload = json.loads(stripped)
+        if isinstance(payload, dict):
+            return payload
+    except json.JSONDecodeError:
+        pass
+
+    return None
+
+
+def extract_router_json(response: Any) -> Optional[dict]:
+    for candidate in _extract_router_text(response):
+        parsed = _extract_first_json(candidate)
+        if parsed is not None:
+            return parsed
+    return None

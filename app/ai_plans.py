@@ -1737,6 +1737,37 @@ class PlanAgentEnvelopeError(ValueError):
     """Raised when the plan agent envelope violates the contract."""
 
 
+def extract_plan_raw_text(response: Any) -> str:
+    text = extract_output_text(response)
+    if text:
+        return text
+
+    text = getattr(response, "output_text", None)
+    if text:
+        return text
+
+    output = getattr(response, "output", None)
+    if output:
+        try:
+            for item in output:
+                content = getattr(item, "content", None)
+                if content is None and isinstance(item, dict):
+                    content = item.get("content")
+                if isinstance(content, str):
+                    return content
+                if isinstance(content, list):
+                    for part in content:
+                        part_text = getattr(part, "text", None)
+                        if part_text is None and isinstance(part, dict):
+                            part_text = part.get("text")
+                        if part_text:
+                            return part_text
+        except TypeError:
+            pass
+
+    raise PlanAgentEnvelopeError("empty_response")
+
+
 def _parse_envelope(raw_text: str) -> Dict[str, Any]:
     if not isinstance(raw_text, str) or not raw_text.strip():
         raise PlanAgentEnvelopeError("empty_response")
@@ -1815,18 +1846,18 @@ async def generate_plan_agent_response(
         input=messages,
         max_output_tokens=settings.MAX_TOKENS,
     )
-    raw_text = extract_output_text(response)
     try:
+        raw_text = extract_plan_raw_text(response)
         envelope = _parse_envelope(raw_text)
     except PlanAgentEnvelopeError as exc:
         log_metric("plan_envelope_parse_failed", extra={"error": str(exc)})
         envelope_logger.error(
             "[PLAN_AGENT] Raw envelope parse failure",
-            extra={"payload": payload, "raw_text": raw_text},
+            extra={"payload": payload, "raw_text": raw_text if "raw_text" in locals() else None},
         )
         logger.error(
             "[PLAN_AGENT] Envelope parsing failed",
-            extra={"payload": payload, "raw_text": raw_text},
+            extra={"payload": payload, "raw_text": raw_text if "raw_text" in locals() else None},
         )
         raise
 
