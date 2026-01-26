@@ -1814,7 +1814,7 @@ async def generate_plan_agent_response(
         model=settings.MODEL,
         input=messages,
         response_format={"type": "json_object"},
-        max_completion_tokens=settings.MAX_TOKENS,
+        max_output_tokens=settings.MAX_TOKENS,
     )
     raw_text = extract_output_text(response)
     try:

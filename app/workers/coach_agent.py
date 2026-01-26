@@ -1263,7 +1263,7 @@ async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
         response = await async_client.responses.create(
             model=settings.COACH_MODEL,
             input=messages,
-            max_completion_tokens=settings.MAX_TOKENS,
+            max_output_tokens=settings.MAX_TOKENS,
         )
     except Exception as exc:
         logger.error("[coach_model_unavailable] %s: %s", exc.__class__.__name__, exc, exc_info=True)

@@ -465,7 +465,7 @@ async def cognitive_route_message(payload: dict) -> dict:
             model=ROUTER_MODEL,
             input=messages,
             response_format={"type": "json_object"},
-            max_completion_tokens=100,
+            max_output_tokens=100,
         )
         
         t_end = time.monotonic()
