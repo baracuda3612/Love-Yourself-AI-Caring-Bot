@@ -464,7 +464,6 @@ async def cognitive_route_message(payload: dict) -> dict:
         response = await async_client.responses.create(
             model=ROUTER_MODEL,
             input=messages,
-            response_format={"type": "json_object"},
             max_output_tokens=100,
         )
         
