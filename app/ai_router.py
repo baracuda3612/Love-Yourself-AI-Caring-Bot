@@ -487,12 +487,47 @@ async def cognitive_route_message(payload: dict) -> dict:
         # Parse Output
         parsed_data = extract_router_json(response)
         if not parsed_data:
+            try:
+                raw_dump = (
+                    response.model_dump()
+                    if hasattr(response, "model_dump")
+                    else repr(response)
+                )
+            except Exception as e:
+                raw_dump = f"<failed to dump response: {e}>"
+
+            raw_dump_str = json.dumps(raw_dump, default=str)
+            if len(raw_dump_str) > 50_000:
+                raw_dump_str = f"{raw_dump_str[:50_000]}...<truncated>"
+
+            logger.info(
+                json.dumps(
+                    {
+                        "event_type": "router_llm_raw_response",
+                        "agent": "router",
+                        "llm_prompt_tokens": router_meta.get("llm_prompt_tokens"),
+                        "llm_response_tokens": router_meta.get("llm_response_tokens"),
+                        "raw_response": raw_dump_str,
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                )
+            )
             log_llm_response_shape(logger, response, agent="router")
             log_llm_text_candidates(logger, response, agent="router")
 
             content = extract_output_text(response)
             if not content:
-                raise ValueError("Empty response from Router LLM")
+                log_router_decision({
+                    "event_type": "router_empty_llm_output",
+                    "status": "fallback",
+                    "user_id": user_id,
+                    "fallback": decision,
+                })
+                return {
+                    "router_result": decision,
+                    "router_meta": router_meta,
+                }
 
             log_router_decision({
                 "event_type": "router_fallback_due_to_unparseable_llm_output",
