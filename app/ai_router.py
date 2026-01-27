@@ -5,6 +5,10 @@ from typing import Any, Optional
 
 from app.ai import async_client, extract_output_text
 from app.config import settings
+from app.logging.llm_response_logging import (
+    log_llm_response_shape,
+    log_llm_text_candidates,
+)
 from app.logging.router_logging import log_router_decision
 
 logger = logging.getLogger(__name__)
@@ -483,17 +487,13 @@ async def cognitive_route_message(payload: dict) -> dict:
         # Parse Output
         parsed_data = extract_router_json(response)
         if not parsed_data:
-            log_router_decision({
-                "event_type": "router_empty_or_unparseable_output",
-                "status": "error",
-                "error_type": "empty_or_unparseable_output",
-                "user_id": user_id,
-                "fallback": decision,
-            })
-            return {
-                "router_result": decision,
-                "router_meta": router_meta,
-            }
+            log_llm_response_shape(logger, response, agent="router")
+            log_llm_text_candidates(logger, response, agent="router")
+
+            content = extract_output_text(response)
+            if not content:
+                raise ValueError("Empty response from Router LLM")
+            parsed_data = json.loads(content)
 
         # Validate output against allowed enums
         target = parsed_data.get("target_agent")
