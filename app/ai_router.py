@@ -1,10 +1,9 @@
 import json
 import logging
 import time
-from typing import Any, Optional
+from typing import Optional
 
-from app.ai import async_client, extract_output_text
-from app.config import settings
+from app.ai import async_client
 from app.logging.llm_response_logging import (
     log_llm_response_shape,
     log_llm_text_candidates,
@@ -19,8 +18,7 @@ ALLOWED_TARGET_AGENTS = {"safety", "onboarding", "manager", "plan", "coach"}
 ALLOWED_CONFIDENCE = {"HIGH", "MEDIUM", "LOW"}
 ALLOWED_INTENT_BUCKETS = {"SAFETY", "STRUCTURAL", "MEANING", "UNKNOWN"}
 
-# Use ROUTER_MODEL if exists, otherwise default to gpt-5-mini
-ROUTER_MODEL = getattr(settings, "ROUTER_MODEL", "gpt-5-mini")
+ROUTER_MODEL = "gpt-4.1-mini"
 
 ROUTER_SYSTEM_PROMPT = """
 # 1. PERSONA & IDENTITY
@@ -465,10 +463,11 @@ async def cognitive_route_message(payload: dict) -> dict:
         ]
         
         # Call LLM
-        response = await async_client.responses.create(
+        response = await async_client.chat.completions.create(
             model=ROUTER_MODEL,
-            input=messages,
-            max_output_tokens=100,
+            messages=messages,
+            temperature=0,
+            max_tokens=100,
         )
         
         t_end = time.monotonic()
@@ -485,7 +484,16 @@ async def cognitive_route_message(payload: dict) -> dict:
             )
         
         # Parse Output
-        parsed_data = extract_router_json(response)
+        content = None
+        if response and getattr(response, "choices", None):
+            content = response.choices[0].message.content
+        logger.info(json.dumps({
+            "event_type": "router_llm_raw_text",
+            "agent": "router",
+            "text": content[:2000] if content else None
+        }, ensure_ascii=False))
+
+        parsed_data = extract_router_json(content)
         if not parsed_data:
             try:
                 raw_dump = (
@@ -516,7 +524,6 @@ async def cognitive_route_message(payload: dict) -> dict:
             log_llm_response_shape(logger, response, agent="router")
             log_llm_text_candidates(logger, response, agent="router")
 
-            content = extract_output_text(response)
             if not content:
                 log_router_decision({
                     "event_type": "router_empty_llm_output",
@@ -605,36 +612,6 @@ def _format_short_history(history: Optional[list]) -> list:
     return formatted
 
 
-def _extract_router_text(response: Any) -> list[str]:
-    candidates: list[str] = []
-
-    text = extract_output_text(response)
-    if text:
-        candidates.append(text)
-
-    text = getattr(response, "output_text", None)
-    if text:
-        candidates.append(text)
-
-    output = getattr(response, "output", None)
-    if isinstance(output, list):
-        for item in output:
-            content = getattr(item, "content", None)
-            if content is None and isinstance(item, dict):
-                content = item.get("content")
-            if isinstance(content, str):
-                candidates.append(content)
-            elif isinstance(content, list):
-                for part in content:
-                    part_text = getattr(part, "text", None)
-                    if part_text is None and isinstance(part, dict):
-                        part_text = part.get("text")
-                    if part_text:
-                        candidates.append(part_text)
-
-    return candidates
-
-
 def _extract_first_json(text: str) -> Optional[dict]:
     if not isinstance(text, str) or not text.strip():
         return None
@@ -650,9 +627,7 @@ def _extract_first_json(text: str) -> Optional[dict]:
     return None
 
 
-def extract_router_json(response: Any) -> Optional[dict]:
-    for candidate in _extract_router_text(response):
-        parsed = _extract_first_json(candidate)
-        if parsed is not None:
-            return parsed
-    return None
+def extract_router_json(content: Optional[str]) -> Optional[dict]:
+    if not content:
+        return None
+    return _extract_first_json(content)
