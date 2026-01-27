@@ -5,6 +5,10 @@ from typing import Any, Optional
 
 from app.ai import async_client, extract_output_text
 from app.config import settings
+from app.logging.llm_response_logging import (
+    log_llm_response_shape,
+    log_llm_text_candidates,
+)
 from app.logging.router_logging import log_router_decision
 
 logger = logging.getLogger(__name__)
@@ -483,9 +487,16 @@ async def cognitive_route_message(payload: dict) -> dict:
         # Parse Output
         parsed_data = extract_router_json(response)
         if not parsed_data:
+            log_llm_response_shape(logger, response, agent="router")
+            log_llm_text_candidates(logger, response, agent="router")
+
+            content = extract_output_text(response)
+            if not content:
+                raise ValueError("Empty response from Router LLM")
+
             log_router_decision({
-                "event_type": "router_empty_or_unparseable_output",
-                "status": "error",
+                "event_type": "router_fallback_due_to_unparseable_llm_output",
+                "status": "fallback",
                 "error_type": "empty_or_unparseable_output",
                 "user_id": user_id,
                 "fallback": decision,
@@ -566,29 +577,25 @@ def _extract_router_text(response: Any) -> list[str]:
     if text:
         candidates.append(text)
 
-    if not candidates:
-        text = getattr(response, "output_text", None)
-        if text:
-            candidates.append(text)
+    text = getattr(response, "output_text", None)
+    if text:
+        candidates.append(text)
 
     output = getattr(response, "output", None)
-    if output:
-        try:
-            for item in output:
-                content = getattr(item, "content", None)
-                if content is None and isinstance(item, dict):
-                    content = item.get("content")
-                if isinstance(content, str):
-                    candidates.append(content)
-                elif isinstance(content, list):
-                    for part in content:
-                        part_text = getattr(part, "text", None)
-                        if part_text is None and isinstance(part, dict):
-                            part_text = part.get("text")
-                        if part_text:
-                            candidates.append(part_text)
-        except TypeError:
-            pass
+    if isinstance(output, list):
+        for item in output:
+            content = getattr(item, "content", None)
+            if content is None and isinstance(item, dict):
+                content = item.get("content")
+            if isinstance(content, str):
+                candidates.append(content)
+            elif isinstance(content, list):
+                for part in content:
+                    part_text = getattr(part, "text", None)
+                    if part_text is None and isinstance(part, dict):
+                        part_text = part.get("text")
+                    if part_text:
+                        candidates.append(part_text)
 
     return candidates
 
