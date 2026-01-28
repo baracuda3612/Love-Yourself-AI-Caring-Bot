@@ -1847,10 +1847,50 @@ async def generate_plan_agent_response(
         max_output_tokens=settings.MAX_TOKENS,
     )
     try:
-        raw_text = extract_plan_raw_text(response)
+        raw_dump = response.model_dump() if hasattr(response, "model_dump") else repr(response)
+    except Exception as exc:
+        raw_dump = f"<failed to dump response: {exc}>"
+
+    raw_dump_str = json.dumps(raw_dump, default=str)
+    if len(raw_dump_str) > 50_000:
+        raw_dump_str = raw_dump_str[:50_000] + "...<truncated>"
+
+    envelope_logger.info(
+        json.dumps(
+            {
+                "event_type": "plan_llm_raw_response",
+                "model": settings.PLAN_MODEL,
+                "llm_prompt_tokens": getattr(getattr(response, "usage", None), "prompt_tokens", None),
+                "llm_response_tokens": getattr(
+                    getattr(response, "usage", None), "completion_tokens", None
+                ),
+                "raw_response": raw_dump_str,
+            },
+            ensure_ascii=False,
+        )
+    )
+    try:
+        raw_text = None
+        try:
+            raw_text = extract_plan_raw_text(response)
+        finally:
+            envelope_logger.info(
+                json.dumps(
+                    {
+                        "event_type": "plan_llm_extracted_text",
+                        "model": settings.PLAN_MODEL,
+                        "extracted_text": raw_text[:5000] if isinstance(raw_text, str) else None,
+                        "is_empty": not raw_text,
+                    },
+                    ensure_ascii=False,
+                )
+            )
         envelope = _parse_envelope(raw_text)
     except PlanAgentEnvelopeError as exc:
-        log_metric("plan_envelope_parse_failed", extra={"error": str(exc)})
+        log_metric(
+            "plan_envelope_parse_failed",
+            extra={"error": str(exc), "model": settings.PLAN_MODEL},
+        )
         envelope_logger.error(
             "[PLAN_AGENT] Raw envelope parse failure",
             extra={"payload": payload, "raw_text": raw_text if "raw_text" in locals() else None},
