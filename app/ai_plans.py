@@ -83,11 +83,12 @@ def _extract_tool_call(response: Any) -> Optional[Dict[str, Any]]:
     output = getattr(response, "output", None)
     if not output:
         return None
+    tool_call_types = {"tool_call", "function_call"}
     for item in output:
         item_type = getattr(item, "type", None)
         if item_type is None and isinstance(item, dict):
             item_type = item.get("type")
-        if item_type == "tool_call":
+        if item_type in tool_call_types:
             return {
                 "name": getattr(item, "name", None) or (item.get("name") if isinstance(item, dict) else None),
                 "id": getattr(item, "id", None) or (item.get("id") if isinstance(item, dict) else None),
@@ -104,7 +105,7 @@ def _extract_tool_call(response: Any) -> Optional[Dict[str, Any]]:
             part_type = getattr(part, "type", None)
             if part_type is None and isinstance(part, dict):
                 part_type = part.get("type")
-            if part_type != "tool_call":
+            if part_type not in tool_call_types:
                 continue
             return {
                 "name": getattr(part, "name", None)
