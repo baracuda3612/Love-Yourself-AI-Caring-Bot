@@ -1,4 +1,6 @@
-
+import sys
+print("STDOUT TEST — I AM ALIVE", flush=True)
+print("STDERR TEST — I AM ALIVE", file=sys.stderr, flush=True)
 import asyncio
 try:
     import uvloop; uvloop.install()
