@@ -35,19 +35,15 @@ Rules:
 _TOOL_DEFINITIONS = [
     {
         "type": "function",
-        "function": {
-            "name": "start_plan",
-            "description": "Start or create a plan.",
-            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
-        },
+        "name": "start_plan",
+        "description": "Start or create a plan.",
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
         "type": "function",
-        "function": {
-            "name": "noop",
-            "description": "No action needed.",
-            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
-        },
+        "name": "noop",
+        "description": "No action needed.",
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
     },
 ]
 
