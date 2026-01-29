@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.ai_plans import PlanAgentEnvelopeError, plan_agent, run_plan_tool_call
+from app.ai_plans import PlanAgentEnvelopeError, plan_agent
 from app.ai_router import cognitive_route_message
 from app.db import (
     AIPlan,
@@ -588,13 +588,6 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
     )
 
     worker_result = await _invoke_agent(target_agent, worker_payload)
-
-    tool_call = worker_result.get("tool_call")
-    if tool_call:
-        tool_result = run_plan_tool_call(tool_call)
-        reply_text = str(tool_result.get("user_text") or "")
-        await session_memory.append_message(user_id, "assistant", reply_text)
-        return reply_text
 
     reply_text = str(worker_result.get("reply_text") or "")
     await session_memory.append_message(user_id, "assistant", reply_text)

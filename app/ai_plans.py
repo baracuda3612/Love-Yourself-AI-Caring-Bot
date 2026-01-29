@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import logging
+import json
 from typing import Any, Dict, Optional
 
 from app.ai import async_client, extract_output_text
@@ -10,69 +10,115 @@ from app.config import settings
 
 __all__ = [
     "PlanAgentEnvelopeError",
-    "generate_plan_agent_response",
     "plan_agent",
-    "run_plan_tool_call",
+    "plan_flow_data_collection",
 ]
 
-logger = logging.getLogger(__name__)
+_PLAN_FLOW_DATA_COLLECTION_PROMPT = """You are the Plan Agent for PLAN_FLOW:DATA_COLLECTION.
 
-_SYSTEM_PROMPT = """You are a simple decision engine.
+You MUST read the input JSON and return exactly ONE tool call.
+You MUST call the function: plan_flow_data_collection.
+You MUST NOT output any assistant text outside the tool call.
+If you output any text outside the tool call, the response will be rejected.
 
-Your task is to decide whether to call a function.
+Purpose:
+- Collect plan parameters progressively.
+- Base parameters (required): duration, focus, load.
+- Dependent parameter: preferred_time_slots.
 
-Available functions:
-- start_plan: call this if the user wants to create or start a plan
-- noop: call this if no action is needed
+Parameter rules:
+- duration, focus, and load are required base parameters.
+- preferred_time_slots MUST be collected ONLY AFTER load is defined.
+- Do NOT ask about preferred_time_slots if load is null.
+- preferred_time_slots MAY be set in the same turn only if load is set in plan_updates.
+- Do NOT assume missing parameters implicitly.
+
+Input:
+- The user message is raw text in latest_user_message.
+- known_parameters may already include some values.
+- snapshot is always null and MUST be ignored.
+
+Output (tool call arguments):
+{
+  "reply_text": "string",
+  "transition_signal": "PLAN_FLOW:CONFIRMATION_PENDING | null",
+  "plan_updates": {
+    "duration": "SHORT | STANDARD | LONG | null",
+    "focus": "SOMATIC | COGNITIVE | BOUNDARIES | REST | MIXED | null",
+    "load": "LITE | MID | INTENSIVE | null",
+    "preferred_time_slots": ["MORNING", "DAY", "EVENING"] | null
+  },
+  "generated_plan_object": null
+}
 
 Rules:
-- Call at most ONE function
-- Do not explain your reasoning
-- Do not return JSON
-- Only call a function if appropriate
+- generated_plan_object MUST ALWAYS be null.
+- plan_updates MUST include ONLY values changed in this turn.
+- If the user corrects or changes a parameter, overwrite it without confirmation.
+- NEVER generate or preview a plan.
+- NEVER parse or interpret user text in code — you decide values.
+- Ask ONLY short, logistical, choice-based questions.
+- Ask about ALL missing base parameters in one message when possible.
+- No emotional language.
+- No coaching.
+- No suggestions.
+- No "why" questions.
+- Do NOT explain system behavior or internal logic.
+
+Transition rules:
+- If duration, focus, load, and preferred_time_slots are ALL defined explicitly (non-null)
+  in known_parameters ∪ plan_updates after updates,
+  set transition_signal to PLAN_FLOW:CONFIRMATION_PENDING.
+- Otherwise, transition_signal MUST be null.
+- No other transitions are allowed.
+- Do NOT assume or infer missing values.
+- Do NOT add extra fields.
 """
 
-_TOOL_DEFINITIONS = [
-    {
-        "type": "function",
-        "name": "start_plan",
-        "description": "Start or create a plan.",
-        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+_PLAN_FLOW_DATA_COLLECTION_TOOL = {
+    "type": "function",
+    "name": "plan_flow_data_collection",
+    "description": "Return PlanAgentOutput for PLAN_FLOW:DATA_COLLECTION.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "reply_text": {"type": "string"},
+            "transition_signal": {
+                "type": ["string", "null"],
+                "enum": ["PLAN_FLOW:CONFIRMATION_PENDING", None],
+            },
+            "plan_updates": {
+                "type": "object",
+                "properties": {
+                    "duration": {
+                        "type": ["string", "null"],
+                        "enum": ["SHORT", "STANDARD", "LONG", None],
+                    },
+                    "focus": {
+                        "type": ["string", "null"],
+                        "enum": ["SOMATIC", "COGNITIVE", "BOUNDARIES", "REST", "MIXED", None],
+                    },
+                    "load": {
+                        "type": ["string", "null"],
+                        "enum": ["LITE", "MID", "INTENSIVE", None],
+                    },
+                    "preferred_time_slots": {
+                        "type": ["array", "null"],
+                        "items": {"type": "string", "enum": ["MORNING", "DAY", "EVENING"]},
+                    },
+                },
+                "additionalProperties": False,
+            },
+            "generated_plan_object": {"type": "null"},
+        },
+        "required": ["reply_text", "transition_signal", "plan_updates", "generated_plan_object"],
+        "additionalProperties": False,
     },
-    {
-        "type": "function",
-        "name": "noop",
-        "description": "No action needed.",
-        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
-    },
-]
+}
 
 
 class PlanAgentEnvelopeError(ValueError):
     """Raised when the plan agent payload is invalid."""
-
-
-def start_plan() -> Dict[str, str]:
-    return {"user_text": "Starting a plan. Tell me what you'd like to plan."}
-
-
-def noop() -> Dict[str, str]:
-    return {"user_text": "No action needed."}
-
-
-_PLAN_TOOL_HANDLERS = {
-    "start_plan": start_plan,
-    "noop": noop,
-}
-
-
-def run_plan_tool_call(tool_call: Dict[str, Any]) -> Dict[str, str]:
-    name = tool_call.get("name") if isinstance(tool_call, dict) else None
-    handler = _PLAN_TOOL_HANDLERS.get(name)
-    if not handler:
-        logger.warning("Unknown plan tool call: %s", name)
-        return noop()
-    return handler()
 
 
 def _extract_tool_call(response: Any) -> Optional[Dict[str, Any]]:
@@ -113,36 +159,64 @@ def _extract_tool_call(response: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _build_messages(payload: Dict[str, Any]) -> list[dict[str, str]]:
-    user_message = payload.get("message_text") if isinstance(payload, dict) else None
-    return [
-        {"role": "system", "content": _SYSTEM_PROMPT},
-        {"role": "user", "content": user_message or ""},
+async def plan_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Wrapper used by the orchestrator to call the LLM-driven plan agent."""
+
+    return await plan_flow_data_collection(payload)
+
+
+async def plan_flow_data_collection(payload: Dict[str, Any]) -> Dict[str, Any]:
+    planner_input = {
+        "current_state": payload.get("current_state"),
+        "known_parameters": payload.get("known_parameters")
+        or {
+            "duration": None,
+            "focus": None,
+            "load": None,
+            "preferred_time_slots": None,
+        },
+        "latest_user_message": payload.get("message_text") or "",
+        "user_policy": payload.get("user_policy") or {},
+        "snapshot": None,
+    }
+    messages = [
+        {"role": "system", "content": _PLAN_FLOW_DATA_COLLECTION_PROMPT},
+        {"role": "user", "content": json.dumps(planner_input, ensure_ascii=False)},
     ]
-
-
-async def generate_plan_agent_response(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Send the Plan Agent payload to the LLM and return tool calls if present."""
-
-    messages = _build_messages(payload)
     response = await async_client.responses.create(
         model=settings.PLAN_MODEL,
         input=messages,
         max_output_tokens=settings.MAX_TOKENS,
-        tools=_TOOL_DEFINITIONS,
-        tool_choice="auto",
+        tools=[_PLAN_FLOW_DATA_COLLECTION_TOOL],
+        tool_choice={"type": "function", "name": "plan_flow_data_collection"},
     )
-
     tool_call = _extract_tool_call(response)
-    reply_text = "" if tool_call else extract_output_text(response)
-
-    return {
-        "reply_text": reply_text,
-        "tool_call": tool_call,
-    }
-
-
-async def plan_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Wrapper used by the orchestrator to call the LLM-driven plan agent."""
-
-    return await generate_plan_agent_response(payload)
+    if not tool_call:
+        return {
+            "reply_text": extract_output_text(response),
+            "transition_signal": None,
+            "plan_updates": None,
+            "generated_plan_object": None,
+            "error": {"code": "CONTRACT_MISMATCH"},
+        }
+    arguments = tool_call.get("arguments")
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            return {
+                "reply_text": extract_output_text(response),
+                "transition_signal": None,
+                "plan_updates": None,
+                "generated_plan_object": None,
+                "error": {"code": "CONTRACT_MISMATCH"},
+            }
+    if not isinstance(arguments, dict):
+        return {
+            "reply_text": extract_output_text(response),
+            "transition_signal": None,
+            "plan_updates": None,
+            "generated_plan_object": None,
+            "error": {"code": "CONTRACT_MISMATCH"},
+        }
+    return arguments
