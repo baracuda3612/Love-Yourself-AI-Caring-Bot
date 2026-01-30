@@ -238,6 +238,7 @@ class AIPlanVersion(Base):
     plan_id = Column(Integer, ForeignKey("ai_plans.id"), nullable=False, index=True)
     applied_adaptation_type = Column(String, nullable=False)
     diff = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     plan = relationship("AIPlan", back_populates="versions")
 
