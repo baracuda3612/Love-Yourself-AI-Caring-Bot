@@ -238,9 +238,52 @@ class AIPlanVersion(Base):
     plan_id = Column(Integer, ForeignKey("ai_plans.id"), nullable=False, index=True)
     applied_adaptation_type = Column(String, nullable=False)
     diff = Column(JSONB, nullable=False, default=dict)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     plan = relationship("AIPlan", back_populates="versions")
+
+
+class PlanDraftRecord(Base):
+    __tablename__ = "plan_drafts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    status = Column(String(20), nullable=False, default="DRAFT")
+
+    duration = Column(String(20), nullable=False)
+    focus = Column(String(20), nullable=False)
+    load = Column(String(20), nullable=False)
+
+    draft_data = Column(JSONB, nullable=False)
+
+    total_days = Column(Integer, nullable=False)
+    total_steps = Column(Integer, nullable=False)
+    is_valid = Column(Boolean, nullable=False)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    steps = relationship(
+        "PlanDraftStep",
+        back_populates="draft",
+        cascade="all, delete-orphan",
+        order_by="PlanDraftStep.day_number",
+    )
+
+
+class PlanDraftStep(Base):
+    __tablename__ = "plan_draft_steps"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    draft_id = Column(UUID(as_uuid=True), ForeignKey("plan_drafts.id"), nullable=False, index=True)
+
+    day_number = Column(Integer, nullable=False)
+    exercise_id = Column(String(50), nullable=False)
+    slot_type = Column(String(20), nullable=False)
+    time_slot = Column(String(20), nullable=False)
+    category = Column(String(30), nullable=False)
+    difficulty = Column(Integer, nullable=False)
+
+    draft = relationship("PlanDraftRecord", back_populates="steps")
 
 
 # -------------------- CONTENT LIBRARY --------------------

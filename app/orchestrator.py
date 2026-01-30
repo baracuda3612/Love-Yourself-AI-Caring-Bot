@@ -26,6 +26,12 @@ from app.plan_adaptations import PlanAdaptationError, apply_plan_adaptation
 from app.scheduler import cancel_plan_step_jobs, reschedule_plan_steps
 from app.session_memory import SessionMemory
 from app.time_slots import compute_scheduled_for, resolve_daily_time_slots
+from app.plan_drafts.service import (
+    DraftValidationError,
+    InsufficientLibraryError,
+    build_plan_draft,
+    persist_plan_draft,
+)
 from app.workers.coach_agent import coach_agent
 from app.fsm.states import (
     ACTIVE_CONFIRMATION_ENTRYPOINTS,
@@ -667,6 +673,7 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                     )
 
     plan_updates = worker_result.get("plan_updates")
+    draft_parameters = None
     if (
         target_agent == "plan"
         and isinstance(plan_updates, dict)
@@ -676,6 +683,7 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
         updated_parameters = dict(known_parameters)
         updated_parameters.update(plan_updates)
         await session_memory.set_plan_parameters(user_id, updated_parameters)
+        draft_parameters = updated_parameters
     if (
         plan_updates
         and isinstance(plan_updates, dict)
@@ -795,6 +803,26 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                     )
 
     transition_signal = worker_result.get("transition_signal")
+    if transition_signal == "PLAN_FLOW:CONFIRMATION_PENDING":
+        parameters_for_draft = draft_parameters or (context_payload.get("known_parameters") or {})
+        try:
+            draft = build_plan_draft(parameters_for_draft)
+            with SessionLocal() as db:
+                try:
+                    persist_plan_draft(db, user_id, draft)
+                    db.commit()
+                except IntegrityError as exc:
+                    db.rollback()
+                    raise exc
+        except (DraftValidationError, InsufficientLibraryError, IntegrityError) as exc:
+            logger.error(
+                "[PLAN_DRAFT] Draft creation failed for user %s: %s",
+                user_id,
+                exc,
+            )
+            transition_signal = None
+            reply_text = _plan_agent_fallback_envelope().get("reply_text", "")
+            return reply_text
     if transition_signal == "PLAN_FLOW:DATA_COLLECTION":
         if context_payload.get("current_state") in {"ACTIVE", "ACTIVE_PAUSED", "ACTIVE_PAUSED_CONFIRMATION"}:
             did_drop = _auto_drop_plan_for_new_flow(user_id)
