@@ -482,6 +482,7 @@ async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
     ltm_snapshot = await get_ltm_snapshot(user_id)
     fsm_state = await get_fsm_state(user_id)
     temporal_context = await get_temporal_context(user_id)
+    known_parameters = await session_memory.get_plan_parameters(user_id)
 
     return {
         "message_text": message_text,
@@ -489,6 +490,7 @@ async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
         "profile_snapshot": ltm_snapshot,
         "current_state": fsm_state,
         "temporal_context": temporal_context,
+        "known_parameters": known_parameters,
     }
 
 
@@ -665,6 +667,15 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                     )
 
     plan_updates = worker_result.get("plan_updates")
+    if (
+        target_agent == "plan"
+        and isinstance(plan_updates, dict)
+        and current_state in PLAN_FLOW_STATES
+    ):
+        known_parameters = context_payload.get("known_parameters") or {}
+        updated_parameters = dict(known_parameters)
+        updated_parameters.update(plan_updates)
+        await session_memory.set_plan_parameters(user_id, updated_parameters)
     if (
         plan_updates
         and isinstance(plan_updates, dict)
@@ -863,6 +874,8 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                     "to_state": next_state,
                 }
             )
+            if next_state == "PLAN_FLOW:DATA_COLLECTION" and previous_state not in PLAN_FLOW_STATES:
+                await session_memory.clear_plan_parameters(user_id)
 
     return reply_text
 
