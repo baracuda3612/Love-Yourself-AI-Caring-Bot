@@ -482,6 +482,14 @@ async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
     ltm_snapshot = await get_ltm_snapshot(user_id)
     fsm_state = await get_fsm_state(user_id)
     temporal_context = await get_temporal_context(user_id)
+    stored_parameters = await session_memory.get_plan_parameters(user_id)
+    default_parameters = {
+        "duration": None,
+        "focus": None,
+        "load": None,
+        "preferred_time_slots": None,
+    }
+    known_parameters = {**default_parameters, **stored_parameters}
 
     return {
         "message_text": message_text,
@@ -489,6 +497,7 @@ async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
         "profile_snapshot": ltm_snapshot,
         "current_state": fsm_state,
         "temporal_context": temporal_context,
+        "known_parameters": known_parameters,
     }
 
 
@@ -619,6 +628,10 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
         )
         return reply_text
 
+    plan_updates = worker_result.get("plan_updates")
+    if target_agent == "plan" and isinstance(plan_updates, dict):
+        await session_memory.update_plan_parameters(user_id, plan_updates)
+
     plan_persisted = False
     generated_plan_object = worker_result.get("generated_plan_object")
     if generated_plan_object is not None and current_state not in blocked_persistence_states:
@@ -664,7 +677,6 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                         extra={"user_id": user_id, "agent": target_agent},
                     )
 
-    plan_updates = worker_result.get("plan_updates")
     if (
         plan_updates
         and isinstance(plan_updates, dict)
@@ -863,6 +875,8 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                     "to_state": next_state,
                 }
             )
+            if next_state == "PLAN_FLOW:DATA_COLLECTION" and previous_state not in PLAN_FLOW_STATES:
+                await session_memory.clear_plan_parameters(user_id)
 
     return reply_text
 

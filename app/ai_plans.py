@@ -11,8 +11,50 @@ from app.config import settings
 __all__ = [
     "PlanAgentEnvelopeError",
     "plan_agent",
+    "plan_flow_entry",
     "plan_flow_data_collection",
 ]
+
+PLAN_FLOW_ENTRY_STATES = {
+    "IDLE_ONBOARDED",
+    "IDLE_FINISHED",
+    "IDLE_DROPPED",
+    "IDLE_PLAN_ABORTED",
+    "ACTIVE",
+}
+
+_PLAN_FLOW_ENTRY_PROMPT = """You are the Plan Agent operating in ENTRY MODE.
+
+You MUST read the input JSON and return exactly ONE tool call.
+You MUST call the function: plan_flow_entry.
+You MUST NOT output any assistant text outside the tool call.
+If you output any text outside the tool call, the response will be rejected.
+
+Purpose:
+- Detect if the user explicitly asks to create, start, or restart a NEW plan.
+- If yes, emit transition_signal to PLAN_FLOW:DATA_COLLECTION.
+- Otherwise, emit transition_signal as null.
+
+Behavior rules:
+- Do NOT ask questions.
+- Do NOT collect parameters.
+- Do NOT create or adapt a plan.
+- Do NOT reply to the user (reply_text MUST be an empty string).
+
+Input:
+- The user message is raw text in latest_user_message.
+- current_state is provided for context only.
+- known_parameters may already include some values and MUST be ignored in ENTRY MODE.
+- snapshot is always null and MUST be ignored.
+
+Output (tool call arguments):
+{
+  "reply_text": "",
+  "transition_signal": "PLAN_FLOW:DATA_COLLECTION | null",
+  "plan_updates": null,
+  "generated_plan_object": null
+}
+"""
 
 _PLAN_FLOW_DATA_COLLECTION_PROMPT = """You are the Plan Agent for PLAN_FLOW:DATA_COLLECTION.
 
@@ -116,6 +158,26 @@ _PLAN_FLOW_DATA_COLLECTION_TOOL = {
     },
 }
 
+_PLAN_FLOW_ENTRY_TOOL = {
+    "type": "function",
+    "name": "plan_flow_entry",
+    "description": "Return PlanAgentOutput for ENTRY MODE.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "reply_text": {"type": "string"},
+            "transition_signal": {
+                "type": ["string", "null"],
+                "enum": ["PLAN_FLOW:DATA_COLLECTION", None],
+            },
+            "plan_updates": {"type": "null"},
+            "generated_plan_object": {"type": "null"},
+        },
+        "required": ["reply_text", "transition_signal", "plan_updates", "generated_plan_object"],
+        "additionalProperties": False,
+    },
+}
+
 
 class PlanAgentEnvelopeError(ValueError):
     """Raised when the plan agent payload is invalid."""
@@ -162,19 +224,82 @@ def _extract_tool_call(response: Any) -> Optional[Dict[str, Any]]:
 async def plan_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Wrapper used by the orchestrator to call the LLM-driven plan agent."""
 
-    return await plan_flow_data_collection(payload)
+    current_state = payload.get("current_state")
+    if current_state in PLAN_FLOW_ENTRY_STATES:
+        return await plan_flow_entry(payload)
+    if current_state == "PLAN_FLOW:DATA_COLLECTION":
+        return await plan_flow_data_collection(payload)
+    return {
+        "reply_text": "",
+        "transition_signal": None,
+        "plan_updates": None,
+        "generated_plan_object": None,
+    }
+
+
+async def plan_flow_entry(payload: Dict[str, Any]) -> Dict[str, Any]:
+    planner_input = {
+        "current_state": payload.get("current_state"),
+        "known_parameters": payload.get("known_parameters") or {},
+        "latest_user_message": payload.get("message_text") or "",
+        "user_policy": payload.get("user_policy") or {},
+        "snapshot": None,
+    }
+    messages = [
+        {"role": "system", "content": _PLAN_FLOW_ENTRY_PROMPT},
+        {"role": "user", "content": json.dumps(planner_input, ensure_ascii=False)},
+    ]
+    response = await async_client.responses.create(
+        model=settings.PLAN_MODEL,
+        input=messages,
+        max_output_tokens=settings.MAX_TOKENS,
+        tools=[_PLAN_FLOW_ENTRY_TOOL],
+        tool_choice={"type": "function", "name": "plan_flow_entry"},
+    )
+    tool_call = _extract_tool_call(response)
+    if not tool_call:
+        return {
+            "reply_text": "",
+            "transition_signal": None,
+            "plan_updates": None,
+            "generated_plan_object": None,
+            "error": {"code": "CONTRACT_MISMATCH"},
+        }
+    arguments = tool_call.get("arguments")
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            return {
+                "reply_text": "",
+                "transition_signal": None,
+                "plan_updates": None,
+                "generated_plan_object": None,
+                "error": {"code": "CONTRACT_MISMATCH"},
+            }
+    if not isinstance(arguments, dict):
+        return {
+            "reply_text": "",
+            "transition_signal": None,
+            "plan_updates": None,
+            "generated_plan_object": None,
+            "error": {"code": "CONTRACT_MISMATCH"},
+        }
+    return arguments
 
 
 async def plan_flow_data_collection(payload: Dict[str, Any]) -> Dict[str, Any]:
-    planner_input = {
-        "current_state": payload.get("current_state"),
-        "known_parameters": payload.get("known_parameters")
-        or {
+    known_parameters = payload.get("known_parameters")
+    if known_parameters is None:
+        known_parameters = {
             "duration": None,
             "focus": None,
             "load": None,
             "preferred_time_slots": None,
-        },
+        }
+    planner_input = {
+        "current_state": payload.get("current_state"),
+        "known_parameters": known_parameters,
         "latest_user_message": payload.get("message_text") or "",
         "user_policy": payload.get("user_policy") or {},
         "snapshot": None,

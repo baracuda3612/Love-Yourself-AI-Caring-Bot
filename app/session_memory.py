@@ -23,6 +23,9 @@ class SessionMemory:
     def _messages_key(self, user_id: int) -> str:
         return f"session:{user_id}:messages"
 
+    def _plan_parameters_key(self, user_id: int) -> str:
+        return f"session:{user_id}:plan_parameters"
+
     async def append_message(self, user_id: int | None, role: str, text: str) -> None:
         """Append a message to the tail of the user's history."""
 
@@ -80,3 +83,57 @@ class SessionMemory:
                     return text
         return None
 
+    async def get_plan_parameters(self, user_id: int | None) -> dict:
+        """Return the stored plan parameters for the user."""
+
+        if user_id is None or self.redis is None:
+            return {}
+
+        try:
+            raw = await self.redis.get(self._plan_parameters_key(user_id))
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("Failed to fetch plan parameters from Redis", exc_info=True)
+            return {}
+
+        if not raw:
+            return {}
+
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "ignore")
+
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            return {}
+
+        return parsed if isinstance(parsed, dict) else {}
+
+    async def update_plan_parameters(self, user_id: int | None, updates: dict) -> dict:
+        """Update stored plan parameters with the provided updates."""
+
+        if user_id is None or self.redis is None:
+            return {}
+
+        if not isinstance(updates, dict):
+            return await self.get_plan_parameters(user_id)
+
+        existing = await self.get_plan_parameters(user_id)
+        for key, value in updates.items():
+            existing[key] = value
+
+        try:
+            await self.redis.set(self._plan_parameters_key(user_id), json.dumps(existing))
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("Failed to update plan parameters in Redis", exc_info=True)
+        return existing
+
+    async def clear_plan_parameters(self, user_id: int | None) -> None:
+        """Remove stored plan parameters for the user."""
+
+        if user_id is None or self.redis is None:
+            return
+
+        try:
+            await self.redis.delete(self._plan_parameters_key(user_id))
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("Failed to clear plan parameters in Redis", exc_info=True)
