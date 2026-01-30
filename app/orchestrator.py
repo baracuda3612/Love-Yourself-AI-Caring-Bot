@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import logging
@@ -31,6 +32,9 @@ from app.plan_drafts.service import (
     DraftValidationError,
     InsufficientLibraryError,
     build_plan_draft,
+    delete_latest_draft,
+    get_latest_draft,
+    overwrite_plan_draft,
     persist_plan_draft,
 )
 from app.workers.coach_agent import coach_agent
@@ -62,6 +66,61 @@ def _plan_agent_fallback_envelope() -> Dict[str, Any]:
         "reply_text": "Сталася технічна помилка під час генерації плану. Зміни не застосовані.",
         "tool_call": None,
     }
+
+
+async def handle_confirmation_pending_action(
+    user_id: int,
+    plan_updates: Any,
+    transition_signal: Any,
+    context_payload: Dict[str, Any],
+) -> Optional[str]:
+    current_state = context_payload.get("current_state")
+    if current_state != "PLAN_FLOW:CONFIRMATION_PENDING":
+        return None
+
+    if transition_signal == "PLAN_FLOW:DATA_COLLECTION" and plan_updates is None:
+        await session_memory.clear_plan_parameters(user_id)
+        with SessionLocal() as db:
+            delete_latest_draft(db, user_id)
+            db.commit()
+        log_metric("plan_flow_restarted", extra={"user_id": user_id})
+        log_metric("plan_draft_deleted", extra={"user_id": user_id})
+        return None
+
+    if transition_signal == "IDLE_PLAN_ABORTED":
+        await session_memory.clear_plan_parameters(user_id)
+        with SessionLocal() as db:
+            delete_latest_draft(db, user_id)
+            db.commit()
+        log_metric("plan_flow_aborted", extra={"user_id": user_id})
+        log_metric("plan_draft_deleted", extra={"user_id": user_id})
+        return None
+
+    if transition_signal is None and isinstance(plan_updates, dict):
+        parameters_for_draft = context_payload.get("known_parameters") or {}
+        seed_suffix = ""
+        action = None
+        if plan_updates:
+            action = "plan_draft_rebuilt_parameters"
+        elif plan_updates == {}:
+            action = "plan_draft_regenerated"
+            seed_suffix = str(int(time.time()))
+        if action:
+            try:
+                draft = build_plan_draft(parameters_for_draft, seed_suffix=seed_suffix)
+                with SessionLocal() as db:
+                    overwrite_plan_draft(db, user_id, draft)
+                    db.commit()
+                log_metric(action, extra={"user_id": user_id})
+            except (DraftValidationError, InsufficientLibraryError, IntegrityError) as exc:
+                logger.error(
+                    "[PLAN_DRAFT] Draft update failed for user %s: %s",
+                    user_id,
+                    exc,
+                )
+                reply_text = _plan_agent_fallback_envelope().get("reply_text", "")
+                return reply_text
+    return None
 
 
 def _normalize_fsm_state(raw_state: Optional[str]) -> Optional[str]:
@@ -598,6 +657,12 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
     _auto_complete_plan_if_needed(user_id)
 
     context_payload = await build_user_context(user_id, message_text)
+    if context_payload.get("current_state") == "PLAN_FLOW:CONFIRMATION_PENDING":
+        with SessionLocal() as db:
+            latest_draft = get_latest_draft(db, user_id)
+            context_payload["draft_plan_artifact"] = (
+                latest_draft.draft_data if latest_draft else None
+            )
     router_output = await call_router(user_id, message_text, context_payload)
 
     router_result = router_output.get("router_result", {})
@@ -816,7 +881,18 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
         updated_parameters = dict(known_parameters)
         updated_parameters.update(plan_updates)
         await session_memory.set_plan_parameters(user_id, updated_parameters)
+        context_payload["known_parameters"] = updated_parameters
         draft_parameters = updated_parameters
+    transition_signal = worker_result.get("transition_signal")
+    if target_agent == "plan" and current_state == "PLAN_FLOW:CONFIRMATION_PENDING":
+        confirmation_reply = await handle_confirmation_pending_action(
+            user_id,
+            plan_updates,
+            transition_signal,
+            context_payload,
+        )
+        if confirmation_reply is not None:
+            return confirmation_reply
     if (
         plan_updates
         and isinstance(plan_updates, dict)
@@ -935,7 +1011,6 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                         user.current_load,
                     )
 
-    transition_signal = worker_result.get("transition_signal")
     if transition_signal == "PLAN_FLOW:CONFIRMATION_PENDING":
         parameters_for_draft = draft_parameters or (context_payload.get("known_parameters") or {})
         try:
@@ -956,6 +1031,7 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
             transition_signal = None
             reply_text = _plan_agent_fallback_envelope().get("reply_text", "")
             return reply_text
+        log_metric("plan_draft_created", extra={"user_id": user_id})
     if transition_signal == "PLAN_FLOW:DATA_COLLECTION":
         if context_payload.get("current_state") in {"ACTIVE", "ACTIVE_PAUSED", "ACTIVE_PAUSED_CONFIRMATION"}:
             did_drop = _auto_drop_plan_for_new_flow(user_id)

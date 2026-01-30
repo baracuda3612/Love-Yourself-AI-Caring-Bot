@@ -98,14 +98,14 @@ def _serialize_draft(draft: PlanDraft) -> Dict[str, Any]:
     }
 
 
-def build_plan_draft(parameters: Dict[str, Any]) -> PlanDraft:
+def build_plan_draft(parameters: Dict[str, Any], seed_suffix: str = "") -> PlanDraft:
     plan_parameters = _build_plan_parameters(parameters)
     try:
         # TODO: Replace file-based library loading with repository injection post-MVP.
         library = ContentLibrary(str(CONTENT_LIBRARY_PATH))
     except (FileNotFoundError, OSError, ValueError) as exc:
         raise InsufficientLibraryError(str(exc)) from exc
-    builder = DraftBuilder(library)
+    builder = DraftBuilder(library, seed_suffix=seed_suffix)
     return builder.build_plan_draft(plan_parameters)
 
 
@@ -142,10 +142,39 @@ def persist_plan_draft(db: Session, user_id: int, draft: PlanDraft) -> PlanDraft
     return record
 
 
+def get_latest_draft(db: Session, user_id: int) -> PlanDraftRecord | None:
+    return (
+        db.query(PlanDraftRecord)
+        .filter(PlanDraftRecord.user_id == user_id)
+        .order_by(PlanDraftRecord.created_at.desc())
+        .first()
+    )
+
+
+def delete_latest_draft(db: Session, user_id: int) -> PlanDraftRecord | None:
+    draft = get_latest_draft(db, user_id)
+    if draft is None:
+        return None
+    db.delete(draft)
+    return draft
+
+
+def overwrite_plan_draft(db: Session, user_id: int, draft: PlanDraft) -> PlanDraftRecord:
+    existing = get_latest_draft(db, user_id)
+    if existing is not None:
+        db.delete(existing)
+        db.flush()
+    # TODO: enforce 1 draft per user at the DB level (unique constraint on user_id).
+    return persist_plan_draft(db, user_id, draft)
+
+
 __all__ = [
     "CONTENT_LIBRARY_PATH",
     "DraftValidationError",
     "InsufficientLibraryError",
     "build_plan_draft",
+    "delete_latest_draft",
+    "get_latest_draft",
+    "overwrite_plan_draft",
     "persist_plan_draft",
 ]
