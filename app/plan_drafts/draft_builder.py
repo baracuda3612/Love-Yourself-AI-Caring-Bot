@@ -91,9 +91,10 @@ class DraftBuilder:
     Applies all rules from PLAN COMPOSITION RULES & LOGIC MATRIX.
     """
 
-    def __init__(self, content_library: ContentLibrary):
+    def __init__(self, content_library: ContentLibrary, seed_suffix: str = ""):
         self.library = content_library
         self.exercise_last_used: Dict[str, int] = {}
+        self.seed_suffix = seed_suffix
 
     def _is_in_cooldown(self, exercise_id: str, current_day: int, cooldown_days: int) -> bool:
         """
@@ -155,6 +156,7 @@ class DraftBuilder:
                     slot_type=slot_type,
                     max_difficulty=max_difficulty,
                     params=params,
+                    seed_suffix=self.seed_suffix,
                 )
 
                 if not exercise:
@@ -164,6 +166,7 @@ class DraftBuilder:
                         slot_type=slot_type,
                         max_difficulty=max_difficulty,
                         params=params,
+                        seed_suffix=self.seed_suffix,
                     )
 
                 if not exercise:
@@ -242,6 +245,7 @@ def create_plan_draft(
     load: str,
     library_path: str,
     user_policy: dict | None = None,
+    seed_suffix: str = "",
 ) -> dict:
     """
     Convenience function for creating plan draft.
@@ -268,7 +272,7 @@ def create_plan_draft(
 
     library = ContentLibrary(library_path)
 
-    builder = DraftBuilder(library)
+    builder = DraftBuilder(library, seed_suffix=seed_suffix)
     draft = builder.build_plan_draft(params)
 
     return {

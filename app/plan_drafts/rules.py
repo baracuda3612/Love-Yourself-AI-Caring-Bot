@@ -3,6 +3,7 @@ Plan composition rules from PLAN COMPOSITION RULES & LOGIC MATRIX.
 Pure functions - no side effects, no LLM calls.
 """
 
+import hashlib
 from typing import Dict, List
 
 from app.plan_drafts.plan_types import Duration, Exercise, Focus, Load, PlanParameters, SlotType, TimeSlot
@@ -255,6 +256,7 @@ def select_exercise_with_fallback(
     slot_type: SlotType,
     max_difficulty: int,
     params: PlanParameters,
+    seed_suffix: str = "",
 ) -> Exercise | None:
     """
     Rule 5: IMPACT AREA MATCHING (Smart Fallback)
@@ -276,7 +278,7 @@ def select_exercise_with_fallback(
     )
 
     if preferred:
-        return _deterministic_choice(preferred)
+        return _deterministic_choice(preferred, seed_suffix=seed_suffix)
 
     category_exercises = filter_exercises_by_criteria(exercises, category=preferred_category)
 
@@ -293,7 +295,7 @@ def select_exercise_with_fallback(
         )
 
         if fallback:
-            return _deterministic_choice(fallback)
+            return _deterministic_choice(fallback, seed_suffix=seed_suffix)
 
     last_resort = filter_exercises_by_criteria(
         available,
@@ -301,16 +303,26 @@ def select_exercise_with_fallback(
         max_difficulty=max_difficulty,
     )
 
-    return _deterministic_choice(last_resort) if last_resort else None
+    return _deterministic_choice(last_resort, seed_suffix=seed_suffix) if last_resort else None
 
 
-def _deterministic_choice(exercises: List[Exercise]) -> Exercise | None:
+def _deterministic_choice(exercises: List[Exercise], seed_suffix: str = "") -> Exercise | None:
     """
     Deterministic selection by base_weight, then internal_name, then id.
     """
 
     if not exercises:
         return None
+
+    if seed_suffix:
+        def _seeded_hash(exercise: Exercise) -> str:
+            raw = f"{seed_suffix}:{exercise.id}".encode("utf-8")
+            return hashlib.sha256(raw).hexdigest()
+
+        return sorted(
+            exercises,
+            key=lambda e: (-float(e.base_weight), _seeded_hash(e), str(e.internal_name), str(e.id)),
+        )[0]
 
     return sorted(
         exercises,
