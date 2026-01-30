@@ -53,13 +53,7 @@ PLAN_SCHEMA_VERSION = "v1"
 def _plan_agent_fallback_envelope() -> Dict[str, Any]:
     return {
         "reply_text": "Сталася технічна помилка під час генерації плану. Зміни не застосовані.",
-        "transition_signal": None,
-        "plan_updates": None,
-        "generated_plan_object": None,
-        "error": {
-            "code": "INTERNAL_ERROR",
-            "detail": "plan_agent_envelope_invalid",
-        },
+        "tool_call": None,
     }
 
 
@@ -883,18 +877,18 @@ async def _invoke_agent(target_agent: str, payload: Dict[str, Any]) -> Dict[str,
     if target_agent == "plan":
         try:
             return await plan_agent(payload)
-        except PlanAgentEnvelopeError as exc:
+        except Exception as exc:
             user_id = payload.get("user_id")
             log_router_decision(
                 {
-                    "event_type": "plan_agent_contract_error",
+                    "event_type": "plan_agent_error",
                     "timestamp": datetime.utcnow().isoformat(),
                     "user_id": user_id,
                     "error": str(exc),
                 }
             )
             logger.error(
-                "[PLAN_AGENT] Envelope error for user %s",
+                "[PLAN_AGENT] Error during plan agent call for user %s",
                 user_id,
                 exc_info=exc,
             )
