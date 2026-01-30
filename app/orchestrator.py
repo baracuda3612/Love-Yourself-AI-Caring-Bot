@@ -705,6 +705,15 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
             if previous_state is not None:
                 context_payload["current_state"] = next_state
                 worker_payload["current_state"] = next_state
+                if (
+                    next_state == "PLAN_FLOW:DATA_COLLECTION"
+                    and previous_state not in PLAN_FLOW_STATES
+                ):
+                    refreshed_parameters = normalize_plan_parameters(
+                        await session_memory.get_plan_parameters(user_id)
+                    )
+                    context_payload["known_parameters"] = refreshed_parameters
+                    worker_payload["known_parameters"] = refreshed_parameters
                 log_router_decision(
                     {
                         "event_type": "agent_invocation",
