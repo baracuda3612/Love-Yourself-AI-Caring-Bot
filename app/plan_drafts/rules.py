@@ -314,11 +314,17 @@ def _deterministic_choice(exercises: List[Exercise], seed_suffix: str = "") -> E
     if not exercises:
         return None
 
-    def _seeded_hash(exercise: Exercise) -> str:
-        raw = f"{seed_suffix}:{exercise.id}".encode("utf-8")
-        return hashlib.sha256(raw).hexdigest()
+    if seed_suffix:
+        def _seeded_hash(exercise: Exercise) -> str:
+            raw = f"{seed_suffix}:{exercise.id}".encode("utf-8")
+            return hashlib.sha256(raw).hexdigest()
+
+        return sorted(
+            exercises,
+            key=lambda e: (-float(e.base_weight), _seeded_hash(e), str(e.internal_name), str(e.id)),
+        )[0]
 
     return sorted(
         exercises,
-        key=lambda e: (_seeded_hash(e), -float(e.base_weight), str(e.internal_name), str(e.id)),
+        key=lambda e: (-float(e.base_weight), str(e.internal_name), str(e.id)),
     )[0]
