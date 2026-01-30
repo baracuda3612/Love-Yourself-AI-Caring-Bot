@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 
 from app.ai import async_client, extract_output_text
 from app.config import settings
+from app.plan_parameters import normalize_plan_parameters
 
 __all__ = [
     "PlanAgentEnvelopeError",
@@ -241,9 +242,7 @@ async def plan_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def plan_flow_data_collection(payload: Dict[str, Any]) -> Dict[str, Any]:
-    known_parameters = payload.get("known_parameters")
-    if known_parameters is None:
-        known_parameters = {}
+    known_parameters = normalize_plan_parameters(payload.get("known_parameters"))
     planner_input = {
         "current_state": payload.get("current_state"),
         "known_parameters": known_parameters,

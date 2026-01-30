@@ -23,6 +23,7 @@ from app.db import (
 )
 from app.logging.router_logging import log_metric, log_router_decision
 from app.plan_adaptations import PlanAdaptationError, apply_plan_adaptation
+from app.plan_parameters import normalize_plan_parameters
 from app.scheduler import cancel_plan_step_jobs, reschedule_plan_steps
 from app.session_memory import SessionMemory
 from app.time_slots import compute_scheduled_for, resolve_daily_time_slots
@@ -237,6 +238,60 @@ def _auto_drop_plan_for_new_flow(user_id: int) -> bool:
         user_id,
     )
     return True
+
+
+async def _commit_fsm_transition(
+    user_id: int,
+    target_agent: str,
+    next_state: str,
+) -> Optional[str]:
+    previous_state: Optional[str] = None
+    did_commit = False
+    with SessionLocal() as db:
+        user: Optional[User] = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            logger.warning(
+                "[FSM] transition_signal ignored — user %s not found (agent=%s)",
+                user_id,
+                target_agent,
+            )
+            return None
+        previous_state = user.current_state
+        user.current_state = next_state
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            logger.error(
+                "[FSM] Failed to persist transition for user %s: %s (agent=%s)",
+                user_id,
+                next_state,
+                target_agent,
+            )
+        else:
+            did_commit = True
+
+    if did_commit and previous_state is not None:
+        logger.info(
+            "[FSM] User %s state transition: %s → %s (agent=%s)",
+            user_id,
+            previous_state,
+            next_state,
+            target_agent,
+        )
+        log_router_decision(
+            {
+                "event_type": "fsm_transition",
+                "user_id": user_id,
+                "agent": target_agent,
+                "from_state": previous_state,
+                "to_state": next_state,
+            }
+        )
+        if next_state == "PLAN_FLOW:DATA_COLLECTION" and previous_state not in PLAN_FLOW_STATES:
+            await session_memory.clear_plan_parameters(user_id)
+        return previous_state
+    return None
 
 
 def _safe_timezone(name: Optional[str]) -> pytz.BaseTzInfo:
@@ -482,7 +537,9 @@ async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
     ltm_snapshot = await get_ltm_snapshot(user_id)
     fsm_state = await get_fsm_state(user_id)
     temporal_context = await get_temporal_context(user_id)
-    known_parameters = await session_memory.get_plan_parameters(user_id)
+    known_parameters = normalize_plan_parameters(
+        await session_memory.get_plan_parameters(user_id)
+    )
 
     return {
         "message_text": message_text,
@@ -590,6 +647,73 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
     )
 
     worker_result = await _invoke_agent(target_agent, worker_payload)
+
+    # NOTE:
+    # Auto-start PLAN_FLOW commits FSM transition eagerly and re-invokes Plan Agent.
+    # The standard FSM transition logic below MUST NOT re-commit the same transition.
+    auto_start_entry_states = {
+        "IDLE_ONBOARDED",
+        "IDLE_FINISHED",
+        "IDLE_DROPPED",
+        "IDLE_PLAN_ABORTED",
+        "ACTIVE",
+    }
+    if (
+        target_agent == "plan"
+        and context_payload.get("current_state") in auto_start_entry_states
+        and worker_result.get("transition_signal") == "PLAN_FLOW:DATA_COLLECTION"
+    ):
+        transition_signal = worker_result.get("transition_signal")
+        current_state = context_payload.get("current_state")
+        if transition_signal == "PLAN_FLOW:DATA_COLLECTION":
+            if current_state in {"ACTIVE", "ACTIVE_PAUSED", "ACTIVE_PAUSED_CONFIRMATION"}:
+                did_drop = _auto_drop_plan_for_new_flow(user_id)
+                if did_drop:
+                    current_state = "IDLE_DROPPED"
+                    context_payload["current_state"] = current_state
+                else:
+                    logger.warning(
+                        "[FSM] Auto-drop failed, blocking PLAN_FLOW entry for user %s",
+                        user_id,
+                    )
+                    transition_signal = None
+        next_state, rejection_reason = _guard_fsm_transition(
+            current_state,
+            transition_signal,
+            target_agent,
+        )
+        if transition_signal is not None and next_state is None:
+            logger.warning(
+                "[FSM] Ignoring transition_signal for user %s: %s (reason=%s, agent=%s)",
+                user_id,
+                transition_signal,
+                rejection_reason or "invalid_state",
+                target_agent,
+            )
+            log_metric(
+                "fsm_transition_blocked",
+                extra={
+                    "user_id": user_id,
+                    "agent": target_agent,
+                    "current_state": current_state,
+                    "transition_signal": transition_signal,
+                    "reason": rejection_reason or "invalid_state",
+                },
+            )
+        elif next_state is not None:
+            previous_state = await _commit_fsm_transition(user_id, target_agent, next_state)
+            if previous_state is not None:
+                context_payload["current_state"] = next_state
+                worker_payload["current_state"] = next_state
+                log_router_decision(
+                    {
+                        "event_type": "agent_invocation",
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "agent_name": target_agent,
+                        "payload": worker_payload,
+                    }
+                )
+                worker_result = await _invoke_agent(target_agent, worker_payload)
 
     reply_text = str(worker_result.get("reply_text") or "")
     await session_memory.append_message(user_id, "assistant", reply_text)
@@ -831,51 +955,9 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
             },
         )
     elif next_state is not None:
-        previous_state: Optional[str] = None
-        did_commit = False
-        with SessionLocal() as db:
-            user: Optional[User] = db.query(User).filter(User.id == user_id).first()
-            if not user:
-                logger.warning(
-                    "[FSM] transition_signal ignored — user %s not found (agent=%s)",
-                    user_id,
-                    target_agent,
-                )
-                return reply_text
-            previous_state = user.current_state
-            user.current_state = next_state
-            try:
-                db.commit()
-            except IntegrityError:
-                db.rollback()
-                logger.error(
-                    "[FSM] Failed to persist transition for user %s: %s (agent=%s)",
-                    user_id,
-                    next_state,
-                    target_agent,
-                )
-            else:
-                did_commit = True
-
-        if did_commit and previous_state is not None:
-            logger.info(
-                "[FSM] User %s state transition: %s → %s (agent=%s)",
-                user_id,
-                previous_state,
-                next_state,
-                target_agent,
-            )
-            log_router_decision(
-                {
-                    "event_type": "fsm_transition",
-                    "user_id": user_id,
-                    "agent": target_agent,
-                    "from_state": previous_state,
-                    "to_state": next_state,
-                }
-            )
-            if next_state == "PLAN_FLOW:DATA_COLLECTION" and previous_state not in PLAN_FLOW_STATES:
-                await session_memory.clear_plan_parameters(user_id)
+        previous_state = await _commit_fsm_transition(user_id, target_agent, next_state)
+        if previous_state is None:
+            return reply_text
 
     return reply_text
 
