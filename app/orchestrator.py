@@ -37,6 +37,7 @@ from app.plan_drafts.service import (
     overwrite_plan_draft,
     persist_plan_draft,
 )
+from app.plan_drafts.preview import build_confirmation_preview, render_confirmation_preview
 from app.workers.coach_agent import coach_agent
 from app.fsm.states import (
     ACTIVE_CONFIRMATION_ENTRYPOINTS,
@@ -72,8 +73,15 @@ async def handle_confirmation_pending_action(
     user_id: int,
     plan_updates: Any,
     transition_signal: Any,
+    reply_text: str,
     context_payload: Dict[str, Any],
 ) -> Optional[str]:
+    # CONFIRMATION_PENDING is intentionally minimal.
+    # There are only three actions:
+    # - FSM transition
+    # - regenerate (plan_updates == {})
+    # - rebuild (plan_updates != {})
+    # Any other logic is a bug.
     current_state = context_payload.get("current_state")
     if current_state != "PLAN_FLOW:CONFIRMATION_PENDING":
         return None
@@ -112,6 +120,11 @@ async def handle_confirmation_pending_action(
                     overwrite_plan_draft(db, user_id, draft)
                     db.commit()
                 log_metric(action, extra={"user_id": user_id})
+                preview = build_confirmation_preview(draft, parameters_for_draft)
+                rendered_preview = render_confirmation_preview(preview)
+                if reply_text:
+                    return f"{reply_text}\n\n{rendered_preview}"
+                return rendered_preview
             except (DraftValidationError, InsufficientLibraryError, IntegrityError) as exc:
                 logger.error(
                     "[PLAN_DRAFT] Draft update failed for user %s: %s",
@@ -656,6 +669,10 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
 
     _auto_complete_plan_if_needed(user_id)
 
+    async def _finalize_reply(text: str) -> str:
+        await session_memory.append_message(user_id, "assistant", text)
+        return text
+
     context_payload = await build_user_context(user_id, message_text)
     if context_payload.get("current_state") == "PLAN_FLOW:CONFIRMATION_PENDING":
         with SessionLocal() as db:
@@ -796,7 +813,6 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                 worker_result = await _invoke_agent(target_agent, worker_payload)
 
     reply_text = str(worker_result.get("reply_text") or "")
-    await session_memory.append_message(user_id, "assistant", reply_text)
 
     current_state = context_payload.get("current_state")
     blocked_persistence_states = {"PLAN_FLOW:DATA_COLLECTION", "PLAN_FLOW:CONFIRMATION_PENDING"}
@@ -823,7 +839,7 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
             target_agent,
             error_payload,
         )
-        return reply_text
+        return await _finalize_reply(reply_text)
 
     plan_persisted = False
     generated_plan_object = worker_result.get("generated_plan_object")
@@ -836,7 +852,7 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                     user_id,
                     target_agent,
                 )
-                return reply_text
+                return await _finalize_reply(reply_text)
             try:
                 _persist_generated_plan(db, user, generated_plan_object)
                 db.commit()
@@ -852,7 +868,8 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                     "plan_validation_rejected",
                     extra={"user_id": user_id, "agent": target_agent},
                 )
-                return _plan_agent_fallback_envelope().get("reply_text", "")
+                fallback_text = _plan_agent_fallback_envelope().get("reply_text", "")
+                return await _finalize_reply(fallback_text)
             else:
                 logger.info(
                     "[PLAN] Generated plan persisted for user %s (agent=%s)",
@@ -917,10 +934,11 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
             user_id,
             plan_updates,
             transition_signal,
+            reply_text,
             context_payload,
         )
         if confirmation_reply is not None:
-            return confirmation_reply
+            return await _finalize_reply(confirmation_reply)
     if (
         plan_updates
         and isinstance(plan_updates, dict)
@@ -945,7 +963,7 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                     user_id,
                     target_agent,
                 )
-                return reply_text
+                return await _finalize_reply(reply_text)
             adaptation_result = None
             with SessionLocal() as db:
                 user: Optional[User] = db.query(User).filter(User.id == user_id).first()
@@ -955,7 +973,7 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                         user_id,
                         target_agent,
                     )
-                    return reply_text
+                    return await _finalize_reply(reply_text)
                 active_plan = (
                     db.query(AIPlan)
                     .filter(AIPlan.user_id == user_id, AIPlan.status == "active")
@@ -968,7 +986,7 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                         user_id,
                         target_agent,
                     )
-                    return reply_text
+                    return await _finalize_reply(reply_text)
                 try:
                     adaptation_result = apply_plan_adaptation(db, active_plan.id, plan_updates)
                     db.commit()
@@ -1013,7 +1031,7 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                         user_id,
                         target_agent,
                     )
-                    return reply_text
+                    return await _finalize_reply(reply_text)
                 try:
                     if "plan_end_date" in plan_updates:
                         raw_end_date = plan_updates.get("plan_end_date")
@@ -1058,8 +1076,14 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
             )
             transition_signal = None
             reply_text = _plan_agent_fallback_envelope().get("reply_text", "")
-            return reply_text
+            return await _finalize_reply(reply_text)
         log_metric("plan_draft_created", extra={"user_id": user_id})
+        preview = build_confirmation_preview(draft, parameters_for_draft)
+        rendered_preview = render_confirmation_preview(preview)
+        if reply_text:
+            reply_text = f"{reply_text}\n\n{rendered_preview}"
+        else:
+            reply_text = rendered_preview
     if transition_signal == "PLAN_FLOW:DATA_COLLECTION":
         if context_payload.get("current_state") in {"ACTIVE", "ACTIVE_PAUSED", "ACTIVE_PAUSED_CONFIRMATION"}:
             did_drop = _auto_drop_plan_for_new_flow(user_id)
@@ -1098,9 +1122,28 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
     elif next_state is not None:
         previous_state = await _commit_fsm_transition(user_id, target_agent, next_state)
         if previous_state is None:
-            return reply_text
+            return await _finalize_reply(reply_text)
+        if next_state == "PLAN_FLOW:DATA_COLLECTION" and previous_state in PLAN_FLOW_STATES:
+            refreshed_parameters = normalize_plan_parameters(
+                await session_memory.get_plan_parameters(user_id)
+            )
+            context_payload["current_state"] = next_state
+            worker_payload["current_state"] = next_state
+            context_payload["known_parameters"] = refreshed_parameters
+            worker_payload["known_parameters"] = refreshed_parameters
+            log_router_decision(
+                {
+                    "event_type": "agent_invocation",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "agent_name": target_agent,
+                    "payload": worker_payload,
+                }
+            )
+            worker_result = await _invoke_agent(target_agent, worker_payload)
+            reply_text = str(worker_result.get("reply_text") or "")
+            return await _finalize_reply(reply_text)
 
-    return reply_text
+    return await _finalize_reply(reply_text)
 
 
 async def _invoke_agent(target_agent: str, payload: Dict[str, Any]) -> Dict[str, Any]:

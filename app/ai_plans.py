@@ -124,12 +124,11 @@ You MUST NOT output any assistant text outside the tool call.
 If you output any text outside the tool call, the response will be rejected.
 
 Purpose:
-- Show the user the draft plan artifact (already created by backend).
-- Accept exactly ONE of the four allowed actions.
-- Generate the precise FSM transition.
-- Do NOT modify the draft itself.
-- Do NOT generate a new plan.
-- Do NOT interpret business logic.
+- PLAN_FLOW:CONFIRMATION_PENDING is a backend-driven draft review stage.
+- The backend owns preview rendering, buttons, and re-rendering.
+- The LLM interprets user intent only.
+- Task-level editing is forbidden until plan activation.
+- Preview is not a conversational output; it coexists with normal dialogue.
 
 Input:
 {
@@ -147,10 +146,7 @@ Input:
 }
 
 Important:
-- draft_plan_artifact MUST NOT be parsed.
-- draft_plan_artifact MUST NOT be analyzed.
-- draft_plan_artifact MUST NOT be modified.
-- draft_plan_artifact MUST NOT be explained.
+- draft_plan_artifact MUST NOT be parsed, analyzed, modified, or explained.
 
 Output (tool call arguments):
 {
@@ -167,13 +163,16 @@ Output (tool call arguments):
 
 Hard rules:
 - generated_plan_object MUST ALWAYS be null.
+- reply_text MAY be returned for any intent.
 - plan_updates MUST include ONLY changed fields OR be {} OR null.
-- No extra keys, no metadata, no explanation text.
+- Do NOT ask questions.
+- Do NOT describe or explain the plan.
+- Do NOT initiate UI.
+- No extra keys, no metadata.
 
 Allowed intents:
 
 A) CONFIRM (user confirms draft as-is)
-Examples: "ок", "підходить", "стартуємо", "підтверджую".
 Output:
 {
   "reply_text": "Добре. Активую план.",
@@ -183,21 +182,22 @@ Output:
 }
 
 B) CHANGE PARAMETERS (user requests parameter changes)
-Examples mapping:
-- "хочу легше" → load
-- "давай на тіло" → focus
-- "не 21 день, а коротше" → duration
-- "краще ввечері" → preferred_time_slots
+If the user asks to change parameters but does NOT specify new values, return:
+{
+  "reply_text": "Що саме хочеш змінити?",
+  "transition_signal": null,
+  "plan_updates": null,
+  "generated_plan_object": null
+}
 Output:
 {
-  "reply_text": "Окей, оновлю параметри.",
+  "reply_text": "Добре, оновлю параметри.",
   "transition_signal": null,
   "plan_updates": { "load": "LITE" },
   "generated_plan_object": null
 }
 
 C) REGENERATE (same parameters, new tasks)
-Examples: "перегенеруй", "інший варіант", "перероби".
 Output:
 {
   "reply_text": "Добре, згенерую інший варіант.",
@@ -207,7 +207,6 @@ Output:
 }
 
 D) RESTART (start over from scratch)
-Examples: "почнемо спочатку", "старт з нуля".
 Output:
 {
   "reply_text": "Добре, почнемо з початку.",
@@ -217,7 +216,6 @@ Output:
 }
 
 E) ABORT (cancel plan creation)
-Examples: "передумав", "не хочу план", "відміна".
 Output:
 {
   "reply_text": "Добре, план скасовано.",
@@ -228,7 +226,7 @@ Output:
 
 If the user asks for task-level editing, draft internals, or to see full tasks, ALWAYS return:
 {
-  "reply_text": "План ще не активний. На цьому етапі можна змінювати лише загальні параметри.",
+  "reply_text": "Зараз план ще не активний. На цьому етапі можна змінювати лише загальні параметри або перегенерувати весь план. Після активації буде окремий режим для роботи з конкретними вправами.",
   "transition_signal": null,
   "plan_updates": null,
   "generated_plan_object": null
