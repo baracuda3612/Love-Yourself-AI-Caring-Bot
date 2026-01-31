@@ -877,13 +877,25 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
         and isinstance(plan_updates, dict)
         and current_state in PLAN_FLOW_STATES
     ):
-        known_parameters = context_payload.get("known_parameters") or {}
-        updated_parameters = dict(known_parameters)
+        persistent_parameters = await session_memory.get_plan_parameters(user_id)
+        updated_parameters = dict(persistent_parameters)
         updated_parameters.update(plan_updates)
         await session_memory.set_plan_parameters(user_id, updated_parameters)
         context_payload["known_parameters"] = updated_parameters
         draft_parameters = updated_parameters
     transition_signal = worker_result.get("transition_signal")
+    if target_agent == "plan" and current_state == "PLAN_FLOW:DATA_COLLECTION":
+        persistent_parameters = normalize_plan_parameters(
+            await session_memory.get_plan_parameters(user_id)
+        )
+        required_keys = ("duration", "focus", "load", "preferred_time_slots")
+        has_all_parameters = all(
+            persistent_parameters.get(key) is not None for key in required_keys
+        )
+        if has_all_parameters:
+            transition_signal = "PLAN_FLOW:CONFIRMATION_PENDING"
+        elif transition_signal == "PLAN_FLOW:CONFIRMATION_PENDING":
+            transition_signal = None
     if target_agent == "plan" and current_state == "PLAN_FLOW:CONFIRMATION_PENDING":
         confirmation_reply = await handle_confirmation_pending_action(
             user_id,

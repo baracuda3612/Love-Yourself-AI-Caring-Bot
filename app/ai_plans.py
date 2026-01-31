@@ -75,7 +75,7 @@ Parameter rules:
 
 Input:
 - The user message is raw text in latest_user_message.
-- known_parameters may already include some values.
+- known_parameters may already include some values and represents persisted state.
 - snapshot is always null and MUST be ignored.
 
 Output (tool call arguments):
@@ -94,6 +94,10 @@ Output (tool call arguments):
 Rules:
 - generated_plan_object MUST ALWAYS be null.
 - plan_updates MUST include ONLY values changed in this turn.
+- If the user provides a valid value for any parameter, it MUST be included in plan_updates,
+  even if other parameters are still missing.
+- Do NOT repeat previously known parameters unless the user explicitly changes them.
+- Omission means "no change" — do NOT output null for missing values.
 - If the user corrects or changes a parameter, overwrite it without confirmation.
 - NEVER generate or preview a plan.
 - NEVER parse or interpret user text in code — you decide values.
