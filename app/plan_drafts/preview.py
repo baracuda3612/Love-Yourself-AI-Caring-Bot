@@ -134,32 +134,8 @@ def render_confirmation_preview(card: PreviewCard) -> str:
     return "\n".join(lines)
 
 
-def render_change_parameters_prompt() -> str:
-    return "\n".join(
-        [
-            "Змінити параметри",
-            "Оберіть параметр для зміни:",
-            "- Тривалість",
-            "- Фокус",
-            "- Навантаження",
-            "- Часові слоти",
-            "- Кілька параметрів",
-            "",
-            "Опції:",
-            "• Тривалість: SHORT / STANDARD / LONG",
-            "• Фокус: SOMATIC / COGNITIVE / BOUNDARIES / REST / MIXED",
-            "• Навантаження: LITE / MID / INTENSIVE",
-            "• Часові слоти: MORNING / DAY / EVENING (можна кілька)",
-            "",
-            "Кілька параметрів:",
-            "Можеш змінити кілька параметрів одним повідомленням.",
-        ]
-    )
-
-
 __all__ = [
     "PreviewCard",
     "build_confirmation_preview",
     "render_confirmation_preview",
-    "render_change_parameters_prompt",
 ]

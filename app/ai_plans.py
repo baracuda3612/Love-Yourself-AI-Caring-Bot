@@ -158,7 +158,6 @@ Output (tool call arguments):
     "load": "LITE | MID | INTENSIVE | null",
     "preferred_time_slots": ["MORNING", "DAY", "EVENING"] | null
   },
-  "intent_hint": "CHANGE_PARAMETERS_REQUESTED | CHANGE_PARAMETERS_WITH_VALUES | CONFIRM_REQUESTED | REGENERATE_REQUESTED | RESTART_REQUESTED | ABORT_REQUESTED",
   "generated_plan_object": null
 }
 
@@ -166,7 +165,6 @@ Hard rules:
 - generated_plan_object MUST ALWAYS be null.
 - reply_text MAY be returned for any intent.
 - plan_updates MUST include ONLY changed fields OR be {} OR null.
-- intent_hint MUST be provided and MUST match one of the allowed values.
 - Do NOT ask questions.
 - Do NOT describe or explain the plan.
 - Do NOT initiate UI.
@@ -180,17 +178,15 @@ Output:
   "reply_text": "Добре. Активую план.",
   "transition_signal": "PLAN_FLOW:FINALIZATION",
   "plan_updates": null,
-  "intent_hint": "CONFIRM_REQUESTED",
   "generated_plan_object": null
 }
 
 B) CHANGE PARAMETERS (user requests parameter changes)
 If the user asks to change parameters but does NOT specify new values, return:
 {
-  "reply_text": "Окей, давай змінювати.",
+  "reply_text": "Що саме хочеш змінити?",
   "transition_signal": null,
   "plan_updates": null,
-  "intent_hint": "CHANGE_PARAMETERS_REQUESTED",
   "generated_plan_object": null
 }
 Output:
@@ -198,7 +194,6 @@ Output:
   "reply_text": "Добре, оновлю параметри.",
   "transition_signal": null,
   "plan_updates": { "load": "LITE" },
-  "intent_hint": "CHANGE_PARAMETERS_WITH_VALUES",
   "generated_plan_object": null
 }
 
@@ -208,7 +203,6 @@ Output:
   "reply_text": "Добре, згенерую інший варіант.",
   "transition_signal": null,
   "plan_updates": {},
-  "intent_hint": "REGENERATE_REQUESTED",
   "generated_plan_object": null
 }
 
@@ -218,7 +212,6 @@ Output:
   "reply_text": "Добре, почнемо з початку.",
   "transition_signal": "PLAN_FLOW:DATA_COLLECTION",
   "plan_updates": null,
-  "intent_hint": "RESTART_REQUESTED",
   "generated_plan_object": null
 }
 
@@ -228,7 +221,6 @@ Output:
   "reply_text": "Добре, план скасовано.",
   "transition_signal": "IDLE_PLAN_ABORTED",
   "plan_updates": null,
-  "intent_hint": "ABORT_REQUESTED",
   "generated_plan_object": null
 }
 
@@ -237,11 +229,8 @@ If the user asks for task-level editing, draft internals, or to see full tasks, 
   "reply_text": "Зараз план ще не активний. На цьому етапі можна змінювати лише загальні параметри або перегенерувати весь план. Після активації буде окремий режим для роботи з конкретними вправами.",
   "transition_signal": null,
   "plan_updates": null,
-  "intent_hint": "CONFIRM_REQUESTED",
   "generated_plan_object": null
 }
-NOTE: intent_hint here is a placeholder until a dedicated
-INTENT_NOT_ALLOWED_AT_THIS_STAGE value is introduced.
 
 Forbidden:
 - generating plans
@@ -348,29 +337,9 @@ _PLAN_FLOW_CONFIRMATION_PENDING_TOOL = {
                 },
                 "additionalProperties": False,
             },
-            "intent_hint": {
-                # NOTE:
-                # intent_hint enum is versioned implicitly.
-                # New intents must NOT change semantics of existing ones.
-                "type": "string",
-                "enum": [
-                    "CHANGE_PARAMETERS_REQUESTED",
-                    "CHANGE_PARAMETERS_WITH_VALUES",
-                    "CONFIRM_REQUESTED",
-                    "REGENERATE_REQUESTED",
-                    "RESTART_REQUESTED",
-                    "ABORT_REQUESTED",
-                ],
-            },
             "generated_plan_object": {"type": "null"},
         },
-        "required": [
-            "reply_text",
-            "transition_signal",
-            "plan_updates",
-            "intent_hint",
-            "generated_plan_object",
-        ],
+        "required": ["reply_text", "transition_signal", "plan_updates", "generated_plan_object"],
         "additionalProperties": False,
     },
 }

@@ -37,11 +37,7 @@ from app.plan_drafts.service import (
     overwrite_plan_draft,
     persist_plan_draft,
 )
-from app.plan_drafts.preview import (
-    build_confirmation_preview,
-    render_change_parameters_prompt,
-    render_confirmation_preview,
-)
+from app.plan_drafts.preview import build_confirmation_preview, render_confirmation_preview
 from app.workers.coach_agent import coach_agent
 from app.fsm.states import (
     ACTIVE_CONFIRMATION_ENTRYPOINTS,
@@ -78,9 +74,14 @@ async def handle_confirmation_pending_action(
     plan_updates: Any,
     transition_signal: Any,
     reply_text: str,
-    intent_hint: Optional[str],
     context_payload: Dict[str, Any],
 ) -> Optional[str]:
+    # CONFIRMATION_PENDING is intentionally minimal.
+    # There are only three actions:
+    # - FSM transition
+    # - regenerate (plan_updates == {})
+    # - rebuild (plan_updates != {})
+    # Any other logic is a bug.
     current_state = context_payload.get("current_state")
     if current_state != "PLAN_FLOW:CONFIRMATION_PENDING":
         return None
@@ -103,23 +104,13 @@ async def handle_confirmation_pending_action(
         log_metric("plan_draft_deleted", extra={"user_id": user_id})
         return None
 
-    if (
-        transition_signal is None
-        and plan_updates is None
-        and intent_hint == "CHANGE_PARAMETERS_REQUESTED"
-    ):
-        prompt = render_change_parameters_prompt()
-        if reply_text:
-            return f"{reply_text}\n\n{prompt}"
-        return prompt
-
     if transition_signal is None and isinstance(plan_updates, dict):
         parameters_for_draft = context_payload.get("known_parameters") or {}
         seed_suffix = ""
         action = None
-        if plan_updates and intent_hint == "CHANGE_PARAMETERS_WITH_VALUES":
+        if plan_updates:
             action = "plan_draft_rebuilt_parameters"
-        elif plan_updates == {} and intent_hint == "REGENERATE_REQUESTED":
+        elif plan_updates == {}:
             action = "plan_draft_regenerated"
             seed_suffix = str(int(time.time()))
         if action:
@@ -939,13 +930,11 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
         if has_all_parameters:
             transition_signal = "PLAN_FLOW:CONFIRMATION_PENDING"
     if target_agent == "plan" and current_state == "PLAN_FLOW:CONFIRMATION_PENDING":
-        intent_hint = worker_result.get("intent_hint")
         confirmation_reply = await handle_confirmation_pending_action(
             user_id,
             plan_updates,
             transition_signal,
             reply_text,
-            intent_hint,
             context_payload,
         )
         if confirmation_reply is not None:
