@@ -63,9 +63,9 @@ async def test_non_coach_agent_returns_immediately(monkeypatch):
     monkeypatch.setattr(orchestrator, "call_router", fake_call_router)
     monkeypatch.setattr(orchestrator, "_invoke_agent", fake_invoke_agent)
 
-    reply = await orchestrator.handle_incoming_message(user_id=1, message_text="hello")
+    response = await orchestrator.handle_incoming_message(user_id=1, message_text="hello")
 
-    assert reply == "plan says hi"
+    assert response["reply_text"] == "plan says hi"
     assert invoke_calls == ["plan"]
     assert dummy_memory.messages == [
         (1, "user", "hello"),
@@ -115,9 +115,9 @@ async def test_coach_agent_allows_single_reroute(monkeypatch):
     monkeypatch.setattr(orchestrator, "call_router", fake_call_router)
     monkeypatch.setattr(orchestrator, "_invoke_agent", fake_invoke_agent)
 
-    reply = await orchestrator.handle_incoming_message(user_id=2, message_text="hi")
+    response = await orchestrator.handle_incoming_message(user_id=2, message_text="hi")
 
-    assert reply == "coach response"
+    assert response["reply_text"] == "coach response"
     assert invoke_calls == ["coach"]
     assert dummy_memory.messages == [
         (2, "user", "hi"),
@@ -161,9 +161,9 @@ async def test_plan_tool_call_invokes_handler(monkeypatch):
     monkeypatch.setattr(orchestrator, "_invoke_agent", fake_invoke_agent)
     monkeypatch.setattr(orchestrator, "run_plan_tool_call", fake_run_plan_tool_call)
 
-    reply = await orchestrator.handle_incoming_message(user_id=3, message_text="Створи план")
+    response = await orchestrator.handle_incoming_message(user_id=3, message_text="Створи план")
 
-    assert reply == "Starting a plan. Tell me what you'd like to plan."
+    assert response["reply_text"] == "Starting a plan. Tell me what you'd like to plan."
     assert handler_calls == [{"name": "start_plan", "arguments": {}}]
     assert dummy_memory.messages == [
         (3, "user", "Створи план"),

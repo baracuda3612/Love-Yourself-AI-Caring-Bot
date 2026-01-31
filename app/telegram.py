@@ -1,6 +1,7 @@
 # app/telegram.py
 # Спрощена версія для роботи з новою БД та агентною архітектурою
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -11,7 +12,11 @@ from aiogram.types import Message
 
 from app.config import settings
 from app.db import ChatHistory, SessionLocal, User, UserProfile
-from app.orchestrator import handle_incoming_message
+from app.orchestrator import (
+    PLAN_GENERATION_WAIT_MESSAGE,
+    build_plan_draft_preview,
+    handle_incoming_message,
+)
 from app.redis_client import create_fsm_storage, create_redis_client
 
 bot = Bot(token=settings.BOT_TOKEN, parse_mode="HTML")
@@ -48,6 +53,12 @@ def _ensure_user(db, tg_user) -> tuple[User, bool]:
     return user, is_created
 
 
+def _sanitize_message_text(text: Optional[str]) -> str:
+    if text and text.strip():
+        return text
+    return "..."
+
+
 @router.message(Command("start"))
 async def cmd_start(message: Message):
     with SessionLocal() as db:
@@ -72,7 +83,30 @@ async def on_text(message: Message):
         db.add(ChatHistory(user_id=user.id, role="user", text=text))
         db.commit()
 
-    reply_text = await handle_incoming_message(user.id, text)
+    response = await handle_incoming_message(user.id, text, defer_plan_draft=True)
+    if not isinstance(response, dict) or "reply_text" not in response:
+        raise RuntimeError("handle_incoming_message response must include reply_text")
+    if response.get("defer_plan_draft"):
+        wait_text = _sanitize_message_text(PLAN_GENERATION_WAIT_MESSAGE)
+        await message.answer(wait_text)
+        with SessionLocal() as db:
+            db.add(ChatHistory(user_id=user.id, role="assistant", text=wait_text))
+            db.commit()
+
+        await asyncio.sleep(5.5)
+
+        preview_text = await build_plan_draft_preview(
+            user.id,
+            response.get("plan_draft_parameters") or {},
+        )
+        preview_text = _sanitize_message_text(preview_text)
+        await message.answer(preview_text)
+        with SessionLocal() as db:
+            db.add(ChatHistory(user_id=user.id, role="assistant", text=preview_text))
+            db.commit()
+        return
+
+    reply_text = _sanitize_message_text(response.get("reply_text"))
     await message.answer(reply_text)
 
     with SessionLocal() as db:

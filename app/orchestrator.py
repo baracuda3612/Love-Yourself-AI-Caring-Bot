@@ -1,6 +1,4 @@
 from datetime import datetime, timedelta, timezone
-import asyncio
-import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import logging
@@ -108,9 +106,8 @@ async def handle_confirmation_pending_action(
     context_payload: Dict[str, Any],
 ) -> Optional[str]:
     # CONFIRMATION_PENDING is intentionally minimal.
-    # There are only three actions:
+    # There are only two actions:
     # - FSM transition
-    # - regenerate (plan_updates == {})
     # - rebuild (plan_updates != {})
     # Any other logic is a bug.
     current_state = context_payload.get("current_state")
@@ -141,12 +138,8 @@ async def handle_confirmation_pending_action(
         action = None
         if plan_updates:
             action = "plan_draft_rebuilt_parameters"
-        elif plan_updates == {}:
-            action = "plan_draft_regenerated"
-            seed_suffix = str(int(time.time()))
         if action:
             try:
-                await asyncio.sleep(5.5)
                 draft = build_plan_draft(parameters_for_draft, seed_suffix=seed_suffix)
                 with SessionLocal() as db:
                     overwrite_plan_draft(db, user_id, draft)
@@ -154,8 +147,19 @@ async def handle_confirmation_pending_action(
                 log_metric(action, extra={"user_id": user_id})
                 preview = build_confirmation_preview(draft, parameters_for_draft)
                 rendered_preview = render_confirmation_preview(preview)
-                return f"{PLAN_GENERATION_WAIT_MESSAGE}\n\n{rendered_preview}"
-            except (DraftValidationError, InsufficientLibraryError, IntegrityError) as exc:
+                return rendered_preview
+            except DraftValidationError as exc:
+                logger.error(
+                    "[PLAN_DRAFT] Draft update validation failed for user %s: %s (duration=%s focus=%s load=%s slots=%s)",
+                    user_id,
+                    exc,
+                    parameters_for_draft.get("duration"),
+                    parameters_for_draft.get("focus"),
+                    parameters_for_draft.get("load"),
+                    parameters_for_draft.get("preferred_time_slots"),
+                )
+                return PLAN_GENERATION_ERROR_MESSAGE
+            except (InsufficientLibraryError, IntegrityError) as exc:
                 logger.error(
                     "[PLAN_DRAFT] Draft update failed for user %s: %s",
                     user_id,
@@ -685,22 +689,67 @@ async def call_router(user_id: int, message_text: str, context: Optional[Dict[st
     }
 
 
-async def handle_incoming_message(user_id: int, message_text: str) -> str:
+async def build_plan_draft_preview(
+    user_id: int,
+    parameters_for_draft: Dict[str, Any],
+) -> str:
+    try:
+        draft = build_plan_draft(parameters_for_draft)
+        with SessionLocal() as db:
+            persist_plan_draft(db, user_id, draft)
+            db.commit()
+    except DraftValidationError as exc:
+        logger.error(
+            "[PLAN_DRAFT] Draft creation validation failed for user %s: %s (duration=%s focus=%s load=%s slots=%s)",
+            user_id,
+            exc,
+            parameters_for_draft.get("duration"),
+            parameters_for_draft.get("focus"),
+            parameters_for_draft.get("load"),
+            parameters_for_draft.get("preferred_time_slots"),
+        )
+        return PLAN_GENERATION_ERROR_MESSAGE
+    except (InsufficientLibraryError, IntegrityError) as exc:
+        logger.error(
+            "[PLAN_DRAFT] Draft creation failed for user %s: %s",
+            user_id,
+            exc,
+        )
+        return PLAN_GENERATION_ERROR_MESSAGE
+    log_metric("plan_draft_created", extra={"user_id": user_id})
+    preview = build_confirmation_preview(draft, parameters_for_draft)
+    return render_confirmation_preview(preview)
+
+
+async def handle_incoming_message(
+    user_id: int,
+    message_text: str,
+    defer_plan_draft: bool = False,
+) -> Dict[str, Any]:
     """
     Головний оркестратор:
     - збирає контекст
     - викликає Router
     - за target_agent викликає відповідний mock-агент
-    - повертає text-відповідь для користувача
+    - повертає відповідь та метадані для транспорту
     """
 
     await session_memory.append_message(user_id, "user", message_text)
 
     _auto_complete_plan_if_needed(user_id)
 
-    async def _finalize_reply(text: str) -> str:
-        await session_memory.append_message(user_id, "assistant", text)
-        return text
+    async def _finalize_reply(
+        text: str,
+        defer_draft: bool = False,
+        plan_draft_parameters: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        if not defer_draft:
+            await session_memory.append_message(user_id, "assistant", text)
+        return {
+            "reply_text": text,
+            "defer_plan_draft": defer_draft,
+            "plan_draft_parameters": plan_draft_parameters,
+        }
 
     context_payload = await build_user_context(user_id, message_text)
     if context_payload.get("current_state") == "PLAN_FLOW:CONFIRMATION_PENDING":
@@ -841,7 +890,20 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                 )
                 worker_result = await _invoke_agent(target_agent, worker_payload)
 
+    if (
+        context_payload.get("current_state") == "PLAN_FLOW:CONFIRMATION_PENDING"
+        and target_agent == "plan"
+        and worker_result.get("transition_signal") is None
+        and worker_result.get("plan_updates") is None
+        and not str(worker_result.get("reply_text") or "").strip()
+    ):
+        coach_result = await coach_agent(worker_payload)
+        worker_result = coach_result
+        target_agent = "coach"
+
     reply_text = str(worker_result.get("reply_text") or "")
+    defer_draft = False
+    plan_draft_parameters: Optional[Dict[str, Any]] = None
 
     current_state = context_payload.get("current_state")
     blocked_persistence_states = {"PLAN_FLOW:DATA_COLLECTION", "PLAN_FLOW:CONFIRMATION_PENDING"}
@@ -1083,28 +1145,12 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
 
     if transition_signal == "PLAN_FLOW:CONFIRMATION_PENDING":
         parameters_for_draft = draft_parameters or (context_payload.get("known_parameters") or {})
-        try:
-            await asyncio.sleep(5.5)
-            draft = build_plan_draft(parameters_for_draft)
-            with SessionLocal() as db:
-                try:
-                    persist_plan_draft(db, user_id, draft)
-                    db.commit()
-                except IntegrityError as exc:
-                    db.rollback()
-                    raise exc
-        except (DraftValidationError, InsufficientLibraryError, IntegrityError) as exc:
-            logger.error(
-                "[PLAN_DRAFT] Draft creation failed for user %s: %s",
-                user_id,
-                exc,
-            )
-            transition_signal = None
-            return await _finalize_reply(PLAN_GENERATION_ERROR_MESSAGE)
-        log_metric("plan_draft_created", extra={"user_id": user_id})
-        preview = build_confirmation_preview(draft, parameters_for_draft)
-        rendered_preview = render_confirmation_preview(preview)
-        reply_text = f"{PLAN_GENERATION_WAIT_MESSAGE}\n\n{rendered_preview}"
+        if defer_plan_draft:
+            defer_draft = True
+            plan_draft_parameters = parameters_for_draft
+            reply_text = ""
+        else:
+            reply_text = await build_plan_draft_preview(user_id, parameters_for_draft)
     if transition_signal == "PLAN_FLOW:DATA_COLLECTION":
         if context_payload.get("current_state") in {"ACTIVE", "ACTIVE_PAUSED", "ACTIVE_PAUSED_CONFIRMATION"}:
             did_drop = _auto_drop_plan_for_new_flow(user_id)
@@ -1140,6 +1186,8 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                 "reason": rejection_reason or "invalid_state",
             },
         )
+        defer_draft = False
+        plan_draft_parameters = None
     elif next_state is not None:
         previous_state = await _commit_fsm_transition(user_id, target_agent, next_state)
         if previous_state is None:
@@ -1162,9 +1210,17 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
             )
             worker_result = await _invoke_agent(target_agent, worker_payload)
             reply_text = str(worker_result.get("reply_text") or "")
-            return await _finalize_reply(reply_text)
+            return await _finalize_reply(
+                reply_text,
+                defer_draft=defer_draft,
+                plan_draft_parameters=plan_draft_parameters,
+            )
 
-    return await _finalize_reply(reply_text)
+    return await _finalize_reply(
+        reply_text,
+        defer_draft=defer_draft,
+        plan_draft_parameters=plan_draft_parameters,
+    )
 
 
 async def _invoke_agent(target_agent: str, payload: Dict[str, Any]) -> Dict[str, Any]:
