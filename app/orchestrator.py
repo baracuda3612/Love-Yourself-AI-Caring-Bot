@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import asyncio
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -60,13 +61,43 @@ logger = logging.getLogger(__name__)
 
 PLAN_CONTRACT_VERSION = "v1"
 PLAN_SCHEMA_VERSION = "v1"
+PLAN_GENERATION_WAIT_MESSAGE = "⏳ План генерується…"
+PLAN_GENERATION_ERROR_MESSAGE = (
+    "⚠️ Не вдалося згенерувати план.\nСпробуй ще раз або зміни параметри."
+)
+PLAN_DURATION_VALUES = {"SHORT", "STANDARD", "LONG"}
+PLAN_FOCUS_VALUES = {"SOMATIC", "COGNITIVE", "BOUNDARIES", "REST", "MIXED"}
+PLAN_LOAD_VALUES = {"LITE", "MID", "INTENSIVE"}
+PLAN_TIME_SLOT_VALUES = {"MORNING", "DAY", "EVENING"}
 
 
 def _plan_agent_fallback_envelope() -> Dict[str, Any]:
     return {
-        "reply_text": "Сталася технічна помилка під час генерації плану. Зміни не застосовані.",
+        "reply_text": PLAN_GENERATION_ERROR_MESSAGE,
         "tool_call": None,
     }
+
+
+def _sanitize_plan_updates(plan_updates: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(plan_updates, dict):
+        return None
+    clean_updates: Dict[str, Any] = {}
+    for key, value in plan_updates.items():
+        if value is None:
+            continue
+        if key == "duration" and value in PLAN_DURATION_VALUES:
+            clean_updates[key] = value
+        elif key == "focus" and value in PLAN_FOCUS_VALUES:
+            clean_updates[key] = value
+        elif key == "load" and value in PLAN_LOAD_VALUES:
+            clean_updates[key] = value
+        elif key == "preferred_time_slots":
+            if not isinstance(value, list) or not value:
+                continue
+            slots = [slot for slot in value if slot in PLAN_TIME_SLOT_VALUES]
+            if slots:
+                clean_updates[key] = slots
+    return clean_updates
 
 
 async def handle_confirmation_pending_action(
@@ -115,6 +146,7 @@ async def handle_confirmation_pending_action(
             seed_suffix = str(int(time.time()))
         if action:
             try:
+                await asyncio.sleep(5.5)
                 draft = build_plan_draft(parameters_for_draft, seed_suffix=seed_suffix)
                 with SessionLocal() as db:
                     overwrite_plan_draft(db, user_id, draft)
@@ -122,17 +154,14 @@ async def handle_confirmation_pending_action(
                 log_metric(action, extra={"user_id": user_id})
                 preview = build_confirmation_preview(draft, parameters_for_draft)
                 rendered_preview = render_confirmation_preview(preview)
-                if reply_text:
-                    return f"{reply_text}\n\n{rendered_preview}"
-                return rendered_preview
+                return f"{PLAN_GENERATION_WAIT_MESSAGE}\n\n{rendered_preview}"
             except (DraftValidationError, InsufficientLibraryError, IntegrityError) as exc:
                 logger.error(
                     "[PLAN_DRAFT] Draft update failed for user %s: %s",
                     user_id,
                     exc,
                 )
-                reply_text = _plan_agent_fallback_envelope().get("reply_text", "")
-                return reply_text
+                return PLAN_GENERATION_ERROR_MESSAGE
     return None
 
 
@@ -895,31 +924,26 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
         and current_state in PLAN_FLOW_STATES
         and current_state != "PLAN_FLOW:DATA_COLLECTION"
     ):
+        clean_updates = _sanitize_plan_updates(plan_updates)
         persistent_parameters = await session_memory.get_plan_parameters(user_id)
         updated_parameters = dict(persistent_parameters)
-        updated_parameters.update(plan_updates)
-        await session_memory.set_plan_parameters(user_id, updated_parameters)
-        context_payload["known_parameters"] = updated_parameters
-        draft_parameters = updated_parameters
+        if clean_updates:
+            updated_parameters.update(clean_updates)
+            await session_memory.set_plan_parameters(user_id, updated_parameters)
+            context_payload["known_parameters"] = updated_parameters
+            draft_parameters = updated_parameters
     transition_signal = worker_result.get("transition_signal")
     if target_agent == "plan" and current_state == "PLAN_FLOW:DATA_COLLECTION":
         transition_signal = None
         if isinstance(plan_updates, dict):
+            clean_updates = _sanitize_plan_updates(plan_updates)
             persistent_parameters = await session_memory.get_plan_parameters(user_id)
             updated_parameters = dict(persistent_parameters)
-            updated_parameters.update(plan_updates)
-            await session_memory.set_plan_parameters(user_id, updated_parameters)
-            if (
-                "preferred_time_slots" in plan_updates
-                and persistent_parameters.get("load") is None
-                and not plan_updates.get("load")
-            ):
-                updated_parameters["preferred_time_slots"] = persistent_parameters.get(
-                    "preferred_time_slots"
-                )
+            if clean_updates:
+                updated_parameters.update(clean_updates)
                 await session_memory.set_plan_parameters(user_id, updated_parameters)
-            context_payload["known_parameters"] = updated_parameters
-            draft_parameters = updated_parameters
+                context_payload["known_parameters"] = updated_parameters
+                draft_parameters = updated_parameters
         persistent_parameters = normalize_plan_parameters(
             await session_memory.get_plan_parameters(user_id)
         )
@@ -1060,6 +1084,7 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
     if transition_signal == "PLAN_FLOW:CONFIRMATION_PENDING":
         parameters_for_draft = draft_parameters or (context_payload.get("known_parameters") or {})
         try:
+            await asyncio.sleep(5.5)
             draft = build_plan_draft(parameters_for_draft)
             with SessionLocal() as db:
                 try:
@@ -1075,15 +1100,11 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
                 exc,
             )
             transition_signal = None
-            reply_text = _plan_agent_fallback_envelope().get("reply_text", "")
-            return await _finalize_reply(reply_text)
+            return await _finalize_reply(PLAN_GENERATION_ERROR_MESSAGE)
         log_metric("plan_draft_created", extra={"user_id": user_id})
         preview = build_confirmation_preview(draft, parameters_for_draft)
         rendered_preview = render_confirmation_preview(preview)
-        if reply_text:
-            reply_text = f"{reply_text}\n\n{rendered_preview}"
-        else:
-            reply_text = rendered_preview
+        reply_text = f"{PLAN_GENERATION_WAIT_MESSAGE}\n\n{rendered_preview}"
     if transition_signal == "PLAN_FLOW:DATA_COLLECTION":
         if context_payload.get("current_state") in {"ACTIVE", "ACTIVE_PAUSED", "ACTIVE_PAUSED_CONFIRMATION"}:
             did_drop = _auto_drop_plan_for_new_flow(user_id)
