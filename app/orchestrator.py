@@ -876,6 +876,7 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
         target_agent == "plan"
         and isinstance(plan_updates, dict)
         and current_state in PLAN_FLOW_STATES
+        and current_state != "PLAN_FLOW:DATA_COLLECTION"
     ):
         persistent_parameters = await session_memory.get_plan_parameters(user_id)
         updated_parameters = dict(persistent_parameters)
@@ -885,6 +886,23 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
         draft_parameters = updated_parameters
     transition_signal = worker_result.get("transition_signal")
     if target_agent == "plan" and current_state == "PLAN_FLOW:DATA_COLLECTION":
+        transition_signal = None
+        if isinstance(plan_updates, dict):
+            persistent_parameters = await session_memory.get_plan_parameters(user_id)
+            updated_parameters = dict(persistent_parameters)
+            updated_parameters.update(plan_updates)
+            await session_memory.set_plan_parameters(user_id, updated_parameters)
+            if (
+                "preferred_time_slots" in plan_updates
+                and persistent_parameters.get("load") is None
+                and not plan_updates.get("load")
+            ):
+                updated_parameters["preferred_time_slots"] = persistent_parameters.get(
+                    "preferred_time_slots"
+                )
+                await session_memory.set_plan_parameters(user_id, updated_parameters)
+            context_payload["known_parameters"] = updated_parameters
+            draft_parameters = updated_parameters
         persistent_parameters = normalize_plan_parameters(
             await session_memory.get_plan_parameters(user_id)
         )
@@ -894,8 +912,6 @@ async def handle_incoming_message(user_id: int, message_text: str) -> str:
         )
         if has_all_parameters:
             transition_signal = "PLAN_FLOW:CONFIRMATION_PENDING"
-        elif transition_signal == "PLAN_FLOW:CONFIRMATION_PENDING":
-            transition_signal = None
     if target_agent == "plan" and current_state == "PLAN_FLOW:CONFIRMATION_PENDING":
         confirmation_reply = await handle_confirmation_pending_action(
             user_id,

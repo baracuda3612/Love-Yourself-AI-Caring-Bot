@@ -81,7 +81,7 @@ Input:
 Output (tool call arguments):
 {
   "reply_text": "string",
-  "transition_signal": "PLAN_FLOW:CONFIRMATION_PENDING | null",
+  "transition_signal": null,
   "plan_updates": {
     "duration": "SHORT | STANDARD | LONG | null",
     "focus": "SOMATIC | COGNITIVE | BOUNDARIES | REST | MIXED | null",
@@ -98,6 +98,7 @@ Rules:
   even if other parameters are still missing.
 - Do NOT repeat previously known parameters unless the user explicitly changes them.
 - Omission means "no change" — do NOT output null for missing values.
+- transition_signal MUST ALWAYS be null. The backend controls FSM progression.
 - If the user corrects or changes a parameter, overwrite it without confirmation.
 - NEVER generate or preview a plan.
 - NEVER parse or interpret user text in code — you decide values.
@@ -110,11 +111,7 @@ Rules:
 - Do NOT explain system behavior or internal logic.
 
 Transition rules:
-- If duration, focus, load, and preferred_time_slots are ALL defined explicitly (non-null)
-  in known_parameters ∪ plan_updates after updates,
-  set transition_signal to PLAN_FLOW:CONFIRMATION_PENDING.
-- Otherwise, transition_signal MUST be null.
-- No other transitions are allowed.
+- transition_signal MUST always be null.
 - Do NOT assume or infer missing values.
 - Do NOT add extra fields.
 """
@@ -276,8 +273,8 @@ _PLAN_FLOW_DATA_COLLECTION_TOOL = {
         "properties": {
             "reply_text": {"type": "string"},
             "transition_signal": {
-                "type": ["string", "null"],
-                "enum": ["PLAN_FLOW:CONFIRMATION_PENDING", None],
+                "type": "null",
+                "enum": [None],
             },
             "plan_updates": {
                 "type": "object",
