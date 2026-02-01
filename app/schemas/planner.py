@@ -10,7 +10,6 @@ class PlanModule(str, Enum):
 
 class StepType(str, Enum):
     """Step categories stored in the database."""
-    EDUCATION = "education"
     ACTION = "action"
     REFLECTION = "reflection"
     REST = "rest"

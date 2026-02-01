@@ -553,13 +553,15 @@ def _persist_generated_plan(db: Session, user: User, plan_payload: Dict[str, Any
                 timezone_name=user.timezone,
                 daily_time_slots=daily_time_slots,
             )
+            step_type = step.step_type.value
+            assert step_type in {entry.value for entry in StepType}
             db.add(
                 AIPlanStep(
                     day_id=day_record.id,
                     exercise_id=step.exercise_id,
                     title=step.title,
                     description=step.description,
-                    step_type=step.step_type,
+                    step_type=step_type,
                     difficulty=step.difficulty,
                     order_in_day=index,
                     time_slot=step.time_slot,
