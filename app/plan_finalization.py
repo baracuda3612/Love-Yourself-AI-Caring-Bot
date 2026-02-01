@@ -83,10 +83,10 @@ _FIXED_TIME_SLOTS: dict[str, time] = {
 }
 
 
-def _map_step_type(slot_type: str | None) -> StepType:
+def _map_step_type(slot_type: str | None) -> str:
     if (slot_type or "").strip().upper() == "REST":
-        return StepType.REST
-    return StepType.ACTION
+        return StepType.REST.value
+    return StepType.ACTION.value
 
 
 def _map_difficulty(difficulty: int | None) -> DifficultyLevel:
@@ -281,6 +281,8 @@ def finalize_plan(
                 time_slot=time_slot,
                 tz=tz,
             )
+            step_type = _map_step_type(step_row.slot_type)
+            assert step_type in {entry.value for entry in StepType}
             order_in_day = day_orders[day_number]
             day_orders[day_number] += 1
             db.add(
@@ -289,7 +291,7 @@ def finalize_plan(
                     exercise_id=exercise_id,
                     title=_build_step_title(content),
                     description=_build_step_description(content),
-                    step_type=_map_step_type(step_row.slot_type),
+                    step_type=step_type,
                     difficulty=_map_difficulty(step_row.difficulty),
                     order_in_day=order_in_day,
                     time_slot=time_slot,

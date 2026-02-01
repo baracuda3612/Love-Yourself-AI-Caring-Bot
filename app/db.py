@@ -230,7 +230,16 @@ class AIPlanStep(Base):
     exercise_id = Column(String, ForeignKey("content_library.id"), nullable=True, index=True)
     title = Column(String, nullable=False)
     description = Column(Text)
-    step_type = Column(Enum(StepType), default=StepType.ACTION)
+    step_type = Column(
+        Enum(
+            StepType,
+            values_callable=lambda enum: [entry.value for entry in enum],
+            native_enum=True,
+            name="step_type",
+        ),
+        nullable=False,
+        default=StepType.ACTION.value,
+    )
     difficulty = Column(Enum(DifficultyLevel), default=DifficultyLevel.EASY)
     
     # Scheduling
