@@ -1063,7 +1063,7 @@ async def handle_incoming_message(
             return await _finalize_reply(**normalized_reply)
         if transition_signal == "PLAN_FLOW:FINALIZATION":
             try:
-                with SessionLocal() as db:
+                with SessionLocal.begin() as db:
                     draft = validate_for_finalization(db, user_id)
                     activation_time_utc = datetime.now(timezone.utc)
                     plan = finalize_plan(

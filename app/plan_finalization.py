@@ -166,139 +166,138 @@ def finalize_plan(
     activation_time_utc: datetime,
 ) -> AIPlan:
     try:
-        with db.begin():
-            user = (
-                db.query(User)
-                .filter(User.id == user_id)
-                .with_for_update()
-                .first()
-            )
-            if not user:
-                raise FinalizationError("user_not_found")
+        user = (
+            db.query(User)
+            .filter(User.id == user_id)
+            .with_for_update()
+            .first()
+        )
+        if not user:
+            raise FinalizationError("user_not_found")
 
-            locked_draft = (
-                db.query(PlanDraftRecord)
-                .filter(PlanDraftRecord.id == draft.id)
-                .with_for_update()
-                .first()
-            )
-            if not locked_draft:
-                raise FinalizationError("draft_missing")
-            if locked_draft.user_id != user_id:
-                raise InvalidDraftError("draft_user_mismatch")
-            if str(locked_draft.status).upper() == "FINALIZED":
-                raise InvalidDraftError("draft_already_finalized")
-            if not locked_draft.is_valid:
-                raise InvalidDraftError("draft_invalid")
+        locked_draft = (
+            db.query(PlanDraftRecord)
+            .filter(PlanDraftRecord.id == draft.id)
+            .with_for_update()
+            .first()
+        )
+        if not locked_draft:
+            raise FinalizationError("draft_missing")
+        if locked_draft.user_id != user_id:
+            raise InvalidDraftError("draft_user_mismatch")
+        if str(locked_draft.status).upper() == "FINALIZED":
+            raise InvalidDraftError("draft_already_finalized")
+        if not locked_draft.is_valid:
+            raise InvalidDraftError("draft_invalid")
 
-            active_plan = (
-                db.query(AIPlan)
-                .filter(AIPlan.user_id == user_id, AIPlan.status == "active")
-                .with_for_update()
-                .first()
-            )
-            if active_plan is not None:
-                raise ActivePlanExistsError("active_plan_exists")
+        active_plan = (
+            db.query(AIPlan)
+            .filter(AIPlan.user_id == user_id, AIPlan.status == "active")
+            .with_for_update()
+            .first()
+        )
+        if active_plan is not None:
+            raise ActivePlanExistsError("active_plan_exists")
 
-            plan_start = resolve_activation_anchor_date(
-                draft=locked_draft,
-                activation_time_utc=activation_time_utc,
-                user_timezone=user.timezone,
-                slot_time_mapping=_FIXED_TIME_SLOTS,
-            )
-            plan = AIPlan(
-                user_id=user_id,
-                title="Personalized Recovery Plan",
-                module_id=PlanModule.BURNOUT_RECOVERY,
-                status="active",
-                start_date=plan_start,
-            )
-            if hasattr(AIPlan, "activated_at"):
-                plan.activated_at = plan_start
-            if hasattr(AIPlan, "current_day"):
-                plan.current_day = 1
-            if hasattr(AIPlan, "duration"):
-                plan.duration = locked_draft.duration
-            if hasattr(AIPlan, "focus"):
-                plan.focus = locked_draft.focus
-            if hasattr(AIPlan, "load"):
-                plan.load = locked_draft.load
-            if hasattr(AIPlan, "total_days"):
-                plan.total_days = locked_draft.total_days
+        plan_start = resolve_activation_anchor_date(
+            draft=locked_draft,
+            activation_time_utc=activation_time_utc,
+            user_timezone=user.timezone,
+            slot_time_mapping=_FIXED_TIME_SLOTS,
+        )
+        plan = AIPlan(
+            user_id=user_id,
+            title="Personalized Recovery Plan",
+            module_id=PlanModule.BURNOUT_RECOVERY,
+            status="active",
+            start_date=plan_start,
+        )
+        if hasattr(AIPlan, "activated_at"):
+            plan.activated_at = plan_start
+        if hasattr(AIPlan, "current_day"):
+            plan.current_day = 1
+        if hasattr(AIPlan, "duration"):
+            plan.duration = locked_draft.duration
+        if hasattr(AIPlan, "focus"):
+            plan.focus = locked_draft.focus
+        if hasattr(AIPlan, "load"):
+            plan.load = locked_draft.load
+        if hasattr(AIPlan, "total_days"):
+            plan.total_days = locked_draft.total_days
 
-            db.add(plan)
+        db.add(plan)
+        db.flush()
+
+        tz = _normalize_timezone(user.timezone)
+        anchor_dt = plan_start.astimezone(tz)
+
+        day_records: dict[int, AIPlanDay] = {}
+        for day_number in range(1, locked_draft.total_days + 1):
+            day_record = AIPlanDay(
+                plan_id=plan.id,
+                day_number=day_number,
+                focus_theme=None,
+            )
+            db.add(day_record)
             db.flush()
+            day_records[day_number] = day_record
 
-            tz = _normalize_timezone(user.timezone)
-            anchor_dt = plan_start.astimezone(tz)
+        step_rows = list(locked_draft.steps or [])
+        if not step_rows:
+            raise FinalizationError("draft_steps_missing")
+        if locked_draft.total_steps and len(step_rows) < locked_draft.total_steps:
+            raise FinalizationError("draft_steps_incomplete")
 
-            day_records: dict[int, AIPlanDay] = {}
-            for day_number in range(1, locked_draft.total_days + 1):
-                day_record = AIPlanDay(
-                    plan_id=plan.id,
-                    day_number=day_number,
-                    focus_theme=None,
-                )
-                db.add(day_record)
-                db.flush()
-                day_records[day_number] = day_record
+        exercise_ids = {str(step.exercise_id) for step in step_rows if step.exercise_id}
+        content_entries = {
+            content.id: content
+            for content in db.query(ContentLibrary)
+            .filter(ContentLibrary.id.in_(exercise_ids))
+            .all()
+        }
+        if exercise_ids - set(content_entries.keys()):
+            raise FinalizationError("content_library_missing")
 
-            step_rows = list(locked_draft.steps or [])
-            if not step_rows:
-                raise FinalizationError("draft_steps_missing")
-            if locked_draft.total_steps and len(step_rows) < locked_draft.total_steps:
-                raise FinalizationError("draft_steps_incomplete")
-
-            exercise_ids = {str(step.exercise_id) for step in step_rows if step.exercise_id}
-            content_entries = {
-                content.id: content
-                for content in db.query(ContentLibrary)
-                .filter(ContentLibrary.id.in_(exercise_ids))
-                .all()
-            }
-            if exercise_ids - set(content_entries.keys()):
-                raise FinalizationError("content_library_missing")
-
-            day_orders: dict[int, int] = defaultdict(int)
-            for step_row in step_rows:
-                day_number = int(step_row.day_number or 0)
-                if day_number <= 0:
-                    raise FinalizationError("invalid_day_number")
-                day_record = day_records.get(day_number)
-                if not day_record:
-                    raise FinalizationError("day_not_found")
-                exercise_id = str(step_row.exercise_id or "")
-                content = content_entries.get(exercise_id)
-                time_slot = normalize_time_slot(step_row.time_slot)
-                scheduled_for = _resolve_scheduled_for(
-                    anchor_date=anchor_dt,
-                    day_number=day_number,
+        day_orders: dict[int, int] = defaultdict(int)
+        for step_row in step_rows:
+            day_number = int(step_row.day_number or 0)
+            if day_number <= 0:
+                raise FinalizationError("invalid_day_number")
+            day_record = day_records.get(day_number)
+            if not day_record:
+                raise FinalizationError("day_not_found")
+            exercise_id = str(step_row.exercise_id or "")
+            content = content_entries.get(exercise_id)
+            time_slot = normalize_time_slot(step_row.time_slot)
+            scheduled_for = _resolve_scheduled_for(
+                anchor_date=anchor_dt,
+                day_number=day_number,
+                time_slot=time_slot,
+                tz=tz,
+            )
+            order_in_day = day_orders[day_number]
+            day_orders[day_number] += 1
+            db.add(
+                AIPlanStep(
+                    day_id=day_record.id,
+                    exercise_id=exercise_id,
+                    title=_build_step_title(content),
+                    description=_build_step_description(content),
+                    step_type=_map_step_type(step_row.slot_type),
+                    difficulty=_map_difficulty(step_row.difficulty),
+                    order_in_day=order_in_day,
                     time_slot=time_slot,
-                    tz=tz,
+                    scheduled_for=scheduled_for,
                 )
-                order_in_day = day_orders[day_number]
-                day_orders[day_number] += 1
-                db.add(
-                    AIPlanStep(
-                        day_id=day_record.id,
-                        exercise_id=exercise_id,
-                        title=_build_step_title(content),
-                        description=_build_step_description(content),
-                        step_type=_map_step_type(step_row.slot_type),
-                        difficulty=_map_difficulty(step_row.difficulty),
-                        order_in_day=order_in_day,
-                        time_slot=time_slot,
-                        scheduled_for=scheduled_for,
-                    )
-                )
+            )
 
-            locked_draft.status = "FINALIZED"
+        locked_draft.status = "FINALIZED"
 
-            user.current_state = "ACTIVE"
-            end_date = _derive_plan_end_date(plan_start, locked_draft.total_days, tz)
-            user.plan_end_date = end_date
-            if end_date is not None:
-                plan.end_date = end_date
+        user.current_state = "ACTIVE"
+        end_date = _derive_plan_end_date(plan_start, locked_draft.total_days, tz)
+        user.plan_end_date = end_date
+        if end_date is not None:
+            plan.end_date = end_date
 
         return plan
     except (DraftNotFoundError, InvalidDraftError, ActivePlanExistsError):
