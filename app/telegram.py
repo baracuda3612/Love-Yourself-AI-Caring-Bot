@@ -16,6 +16,7 @@ from app.orchestrator import (
     PLAN_GENERATION_WAIT_MESSAGE,
     build_plan_draft_preview,
     handle_incoming_message,
+    session_memory,
 )
 from app.redis_client import create_fsm_storage, create_redis_client
 
@@ -92,6 +93,7 @@ async def on_text(message: Message):
         with SessionLocal() as db:
             db.add(ChatHistory(user_id=user.id, role="assistant", text=wait_text))
             db.commit()
+        await session_memory.append_message(user.id, "assistant", wait_text)
 
         await asyncio.sleep(5.5)
 
@@ -104,6 +106,7 @@ async def on_text(message: Message):
         with SessionLocal() as db:
             db.add(ChatHistory(user_id=user.id, role="assistant", text=preview_text))
             db.commit()
+        await session_memory.append_message(user.id, "assistant", preview_text)
         return
 
     reply_text = _sanitize_message_text(response.get("reply_text"))
