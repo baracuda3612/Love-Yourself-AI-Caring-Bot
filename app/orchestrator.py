@@ -28,7 +28,6 @@ from app.plan_parameters import normalize_plan_parameters
 from app.scheduler import cancel_plan_step_jobs, reschedule_plan_steps
 from app.session_memory import SessionMemory
 from app.time_slots import compute_scheduled_for, resolve_daily_time_slots
-from app.plan_activation.regenerate_on_activation import regenerate_plan_for_activation
 from app.plan_drafts.service import (
     DraftValidationError,
     InsufficientLibraryError,
@@ -1066,17 +1065,13 @@ async def handle_incoming_message(
             try:
                 with SessionLocal() as db:
                     draft = validate_for_finalization(db, user_id)
-                    user = db.query(User).filter(User.id == user_id).first()
-                    try:
-                        # TODO: Freeze regeneration on activation once draft carries final schedule.
-                        regenerated_plan = regenerate_plan_for_activation(
-                            draft=draft,
-                            activation_time_utc=datetime.now(timezone.utc),
-                            user_timezone=user.timezone if user else "UTC",
-                        )
-                    except ValueError as exc:
-                        raise FinalizationError("activation_regeneration_failed") from exc
-                    plan = finalize_plan(db, user_id, draft, regenerated_plan=regenerated_plan)
+                    activation_time_utc = datetime.now(timezone.utc)
+                    plan = finalize_plan(
+                        db,
+                        user_id,
+                        draft,
+                        activation_time_utc=activation_time_utc,
+                    )
                 async def _run_side_effects() -> None:
                     await asyncio.to_thread(activate_plan_side_effects, plan.id, user_id)
 

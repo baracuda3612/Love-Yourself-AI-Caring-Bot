@@ -18,7 +18,7 @@ from app.db import (
     PlanDraftRecord,
     User,
 )
-from app.plan_activation.regenerate_on_activation import RegeneratedPlan
+from app.plan_activation.activation_anchor import resolve_activation_anchor_date
 from app.schemas.planner import DifficultyLevel, StepType, PlanModule
 from app.time_slots import normalize_time_slot
 from app.telemetry import log_user_event
@@ -163,7 +163,7 @@ def finalize_plan(
     user_id: int,
     draft: PlanDraftRecord,
     *,
-    regenerated_plan: RegeneratedPlan,
+    activation_time_utc: datetime,
 ) -> AIPlan:
     try:
         with db.begin():
@@ -200,7 +200,12 @@ def finalize_plan(
             if active_plan is not None:
                 raise ActivePlanExistsError("active_plan_exists")
 
-            plan_start = regenerated_plan.plan_start_utc
+            plan_start = resolve_activation_anchor_date(
+                draft=locked_draft,
+                activation_time_utc=activation_time_utc,
+                user_timezone=user.timezone,
+                slot_time_mapping=_FIXED_TIME_SLOTS,
+            )
             plan = AIPlan(
                 user_id=user_id,
                 title="Personalized Recovery Plan",
@@ -219,7 +224,7 @@ def finalize_plan(
             if hasattr(AIPlan, "load"):
                 plan.load = locked_draft.load
             if hasattr(AIPlan, "total_days"):
-                plan.total_days = regenerated_plan.total_days
+                plan.total_days = locked_draft.total_days
 
             db.add(plan)
             db.flush()
@@ -228,7 +233,7 @@ def finalize_plan(
             anchor_dt = plan_start.astimezone(tz)
 
             day_records: dict[int, AIPlanDay] = {}
-            for day_number in range(1, regenerated_plan.total_days + 1):
+            for day_number in range(1, locked_draft.total_days + 1):
                 day_record = AIPlanDay(
                     plan_id=plan.id,
                     day_number=day_number,
@@ -238,7 +243,7 @@ def finalize_plan(
                 db.flush()
                 day_records[day_number] = day_record
 
-            step_rows = list(regenerated_plan.steps or [])
+            step_rows = list(locked_draft.steps or [])
             if not step_rows:
                 raise FinalizationError("draft_steps_missing")
             if locked_draft.total_steps and len(step_rows) < locked_draft.total_steps:
@@ -290,7 +295,7 @@ def finalize_plan(
             locked_draft.status = "FINALIZED"
 
             user.current_state = "ACTIVE"
-            end_date = _derive_plan_end_date(plan_start, regenerated_plan.total_days, tz)
+            end_date = _derive_plan_end_date(plan_start, locked_draft.total_days, tz)
             user.plan_end_date = end_date
             if end_date is not None:
                 plan.end_date = end_date
