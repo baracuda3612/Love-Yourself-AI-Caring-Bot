@@ -208,10 +208,16 @@ def finalize_plan(
         plan = AIPlan(
             user_id=user_id,
             title="Personalized Recovery Plan",
-            module_id=PlanModule.BURNOUT_RECOVERY,
+            module_id=PlanModule.BURNOUT_RECOVERY.value,
             status="active",
             start_date=plan_start,
         )
+        if plan.module_id not in {
+            PlanModule.BURNOUT_RECOVERY.value,
+            PlanModule.SLEEP_OPTIMIZATION.value,
+            PlanModule.DIGITAL_DETOX.value,
+        }:
+            raise FinalizationError("invalid_plan_module")
         if hasattr(AIPlan, "activated_at"):
             plan.activated_at = plan_start
         if hasattr(AIPlan, "current_day"):
