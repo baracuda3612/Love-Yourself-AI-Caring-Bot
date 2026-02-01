@@ -18,6 +18,7 @@ from app.orchestrator import (
     handle_incoming_message,
     session_memory,
 )
+from app.session_memory import SessionMemory
 from app.redis_client import create_fsm_storage, create_redis_client
 
 bot = Bot(token=settings.BOT_TOKEN, parse_mode="HTML")
@@ -27,6 +28,7 @@ dp = Dispatcher(storage=storage)
 router = Router()
 dp.include_router(router)
 logger = logging.getLogger(__name__)
+session_memory = SessionMemory(limit=20)
 
 
 def _ensure_user(db, tg_user) -> tuple[User, bool]:
@@ -115,6 +117,15 @@ async def on_text(message: Message):
     with SessionLocal() as db:
         db.add(ChatHistory(user_id=user.id, role="assistant", text=reply_text))
         db.commit()
+
+    followup_messages = response.get("followup_messages") or []
+    for followup in followup_messages:
+        followup_text = _sanitize_message_text(followup)
+        await message.answer(followup_text)
+        await session_memory.append_message(user.id, "assistant", followup_text)
+        with SessionLocal() as db:
+            db.add(ChatHistory(user_id=user.id, role="assistant", text=followup_text))
+            db.commit()
 
 
 __all__ = ["bot", "dp", "router"]

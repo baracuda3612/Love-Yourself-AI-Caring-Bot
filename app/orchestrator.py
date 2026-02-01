@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -37,6 +38,16 @@ from app.plan_drafts.service import (
     persist_plan_draft,
 )
 from app.plan_drafts.preview import build_confirmation_preview, render_confirmation_preview
+from app.plan_finalization import (
+    ActivePlanExistsError,
+    DraftNotFoundError,
+    FinalizationError,
+    InvalidDraftError,
+    activate_plan_side_effects,
+    finalize_plan,
+    validate_for_finalization,
+)
+from app.ux.plan_messages import build_activation_info_message
 from app.workers.coach_agent import coach_agent
 from app.fsm.states import (
     ACTIVE_CONFIRMATION_ENTRYPOINTS,
@@ -63,6 +74,11 @@ PLAN_GENERATION_WAIT_MESSAGE = "⏳ План генерується…"
 PLAN_GENERATION_ERROR_MESSAGE = (
     "⚠️ Не вдалося згенерувати план.\nСпробуй ще раз або зміни параметри."
 )
+PLAN_ACTIVATION_MESSAGE = (
+    "✅ План активовано.\n"
+    "Перші завдання надійдуть згідно з обраними часовими слотами."
+)
+PLAN_FINALIZATION_ERROR_MESSAGE = "⚠️ Не вдалося активувати план."
 PLAN_DURATION_VALUES = {"SHORT", "STANDARD", "LONG"}
 PLAN_FOCUS_VALUES = {"SOMATIC", "COGNITIVE", "BOUNDARIES", "REST", "MIXED"}
 PLAN_LOAD_VALUES = {"LITE", "MID", "INTENSIVE"}
@@ -742,6 +758,7 @@ async def handle_incoming_message(
         text: str,
         defer_draft: bool = False,
         plan_draft_parameters: Optional[Dict[str, Any]] = None,
+        followup_messages: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         if not defer_draft:
             await session_memory.append_message(user_id, "assistant", text)
@@ -749,6 +766,7 @@ async def handle_incoming_message(
             "reply_text": text,
             "defer_plan_draft": defer_draft,
             "plan_draft_parameters": plan_draft_parameters,
+            "followup_messages": followup_messages or [],
         }
 
     context_payload = await build_user_context(user_id, message_text)
@@ -1025,6 +1043,46 @@ async def handle_incoming_message(
         )
         if confirmation_reply is not None:
             return await _finalize_reply(confirmation_reply)
+        if transition_signal == "PLAN_FLOW:FINALIZATION":
+            try:
+                with SessionLocal() as db:
+                    draft = validate_for_finalization(db, user_id)
+                    plan = finalize_plan(db, user_id, draft)
+                async def _run_side_effects() -> None:
+                    await asyncio.to_thread(activate_plan_side_effects, plan.id, user_id)
+
+                asyncio.create_task(_run_side_effects())
+                log_metric("plan_finalized", extra={"user_id": user_id, "plan_id": plan.id})
+                await _commit_fsm_transition(user_id, "plan", "ACTIVE")
+                context_payload["current_state"] = "ACTIVE"
+                selected_slots = [
+                    slot
+                    for slot in (context_payload.get("known_parameters") or {}).get(
+                        "preferred_time_slots", []
+                    )
+                    if slot in PLAN_TIME_SLOT_VALUES
+                ]
+                followup = build_activation_info_message(
+                    selected_slots,
+                    (context_payload.get("profile_snapshot") or {}).get("timezone"),
+                )
+                await session_memory.clear_plan_parameters(user_id)
+                return await _finalize_reply(
+                    PLAN_ACTIVATION_MESSAGE,
+                    followup_messages=[followup],
+                )
+            except (
+                DraftNotFoundError,
+                InvalidDraftError,
+                ActivePlanExistsError,
+                FinalizationError,
+            ) as exc:
+                logger.error(
+                    "[PLAN_FINALIZATION] Failed to finalize plan for user %s: %s",
+                    user_id,
+                    exc,
+                )
+                return await _finalize_reply(PLAN_FINALIZATION_ERROR_MESSAGE)
     if (
         plan_updates
         and isinstance(plan_updates, dict)

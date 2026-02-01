@@ -167,8 +167,15 @@ class AIPlan(Base):
     
     # Status & Lifecycle
     status = Column(Enum("active", "completed", "paused", "abandoned", name="plan_status_enum"), default="active")
+    activated_at = Column(DateTime(timezone=True), nullable=True)
     start_date = Column(DateTime(timezone=True), server_default=func.now())
     end_date = Column(DateTime(timezone=True), nullable=True)
+    current_day = Column(Integer, default=1, nullable=False)
+
+    duration = Column(String(20), nullable=True)
+    focus = Column(String(20), nullable=True)
+    load = Column(String(20), nullable=True)
+    total_days = Column(Integer, nullable=True)
     
     # Versioning for Adaptation
     adaptation_version = Column(Integer, default=1) 
