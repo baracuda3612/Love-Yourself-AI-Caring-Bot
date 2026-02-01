@@ -1,5 +1,33 @@
 """Regenerate plan steps based on activation time."""
-
+# ⚠️ FROZEN LOGIC (activation anchor / finalization)
+#
+# Цей код свідомо ЗАМОРОЖЕНИЙ.
+#
+# Чому:
+# - Логіка прив’язки Day 1 до дати активації має багато UX- та бізнес-edge-кейсів
+#   (частково пропущені слоти, очікування користувача vs календар, preview ≠ activation).
+# - Повна регенерація плану на активації виявилась надто складною для поточного етапу
+#   і ламала стабільність фіналізації.
+# - Поточне рішення — мінімальне і безпечне: якщо Day 1 слот уже в минулому,
+#   план стартує з наступного дня, без мутації draft.
+#
+# Що зараз гарантується:
+# - Draft preview НЕ змінюється після підтвердження
+# - Finalization детермінована
+# - Нема регенерації, тільки зсув anchor_date (today / tomorrow)
+#
+# Як РОЗМОРОЖУВАТИ:
+# 1. Написати інтеграційні тести:
+#    - single slot (EVENING only)
+#    - multi-slot (MORNING + EVENING)
+#    - activation before first slot / between slots / after all slots
+# 2. Зафіксувати UX-очікування (що користувач бачить у preview vs коли реально стартує)
+# 3. Вирішити: 
+#    - або повна регенерація плану при activation
+#    - або стабільний draft + окремий activation-view
+# 4. Тільки після цього міняти цю логіку.
+#
+# До того моменту — НЕ ЧІПАТИ.
 from __future__ import annotations
 
 from dataclasses import dataclass
