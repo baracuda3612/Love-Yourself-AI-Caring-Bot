@@ -121,7 +121,7 @@ async def handle_confirmation_pending_action(
     transition_signal: Any,
     reply_text: str,
     context_payload: Dict[str, Any],
-) -> Optional[str]:
+) -> Optional[Dict[str, Any]]:
     # CONFIRMATION_PENDING is intentionally minimal.
     # There are only two actions:
     # - FSM transition
@@ -164,7 +164,7 @@ async def handle_confirmation_pending_action(
                 log_metric(action, extra={"user_id": user_id})
                 preview = build_confirmation_preview(draft, parameters_for_draft)
                 rendered_preview = render_confirmation_preview(preview)
-                return rendered_preview
+                return {"reply_text": rendered_preview, "show_plan_actions": True}
             except DraftValidationError as exc:
                 logger.error(
                     "[PLAN_DRAFT] Draft update validation failed for user %s: %s (duration=%s focus=%s load=%s slots=%s)",
@@ -175,15 +175,29 @@ async def handle_confirmation_pending_action(
                     parameters_for_draft.get("load"),
                     parameters_for_draft.get("preferred_time_slots"),
                 )
-                return PLAN_GENERATION_ERROR_MESSAGE
+                return {"reply_text": PLAN_GENERATION_ERROR_MESSAGE, "show_plan_actions": False}
             except (InsufficientLibraryError, IntegrityError) as exc:
                 logger.error(
                     "[PLAN_DRAFT] Draft update failed for user %s: %s",
                     user_id,
                     exc,
                 )
-                return PLAN_GENERATION_ERROR_MESSAGE
+                return {"reply_text": PLAN_GENERATION_ERROR_MESSAGE, "show_plan_actions": False}
     return None
+
+
+def _normalize_confirmation_reply(payload: Any) -> Optional[Dict[str, Any]]:
+    if payload is None:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    reply_text = payload.get("reply_text")
+    if not isinstance(reply_text, str):
+        return None
+    show_plan_actions = payload.get("show_plan_actions", False)
+    if not isinstance(show_plan_actions, bool):
+        return None
+    return {"reply_text": reply_text, "show_plan_actions": show_plan_actions}
 
 
 def _normalize_fsm_state(raw_state: Optional[str]) -> Optional[str]:
@@ -760,6 +774,7 @@ async def handle_incoming_message(
         defer_draft: bool = False,
         plan_draft_parameters: Optional[Dict[str, Any]] = None,
         followup_messages: Optional[List[str]] = None,
+        show_plan_actions: bool = False,
     ) -> Dict[str, Any]:
         if not defer_draft:
             await session_memory.append_message(user_id, "assistant", text)
@@ -768,9 +783,11 @@ async def handle_incoming_message(
             "defer_plan_draft": defer_draft,
             "plan_draft_parameters": plan_draft_parameters,
             "followup_messages": followup_messages or [],
+            "show_plan_actions": show_plan_actions,
         }
 
     context_payload = await build_user_context(user_id, message_text)
+    show_plan_actions = False
     if context_payload.get("current_state") == "PLAN_FLOW:CONFIRMATION_PENDING":
         with SessionLocal() as db:
             latest_draft = get_latest_draft(db, user_id)
@@ -1042,14 +1059,16 @@ async def handle_incoming_message(
             reply_text,
             context_payload,
         )
-        if confirmation_reply is not None:
-            return await _finalize_reply(confirmation_reply)
+        normalized_reply = _normalize_confirmation_reply(confirmation_reply)
+        if normalized_reply is not None:
+            return await _finalize_reply(**normalized_reply)
         if transition_signal == "PLAN_FLOW:FINALIZATION":
             try:
                 with SessionLocal() as db:
                     draft = validate_for_finalization(db, user_id)
                     user = db.query(User).filter(User.id == user_id).first()
                     try:
+                        # TODO: Freeze regeneration on activation once draft carries final schedule.
                         regenerated_plan = regenerate_plan_for_activation(
                             draft=draft,
                             activation_time_utc=datetime.now(timezone.utc),
@@ -1217,10 +1236,13 @@ async def handle_incoming_message(
             defer_draft = True
             plan_draft_parameters = parameters_for_draft
             reply_text = ""
+            show_plan_actions = True
         else:
             reply_text = await build_plan_draft_preview(user_id, parameters_for_draft)
             if reply_text == PLAN_GENERATION_ERROR_MESSAGE:
                 transition_signal = None
+            else:
+                show_plan_actions = True
     if transition_signal == "PLAN_FLOW:DATA_COLLECTION":
         if context_payload.get("current_state") in {"ACTIVE", "ACTIVE_PAUSED", "ACTIVE_PAUSED_CONFIRMATION"}:
             did_drop = _auto_drop_plan_for_new_flow(user_id)
@@ -1284,12 +1306,14 @@ async def handle_incoming_message(
                 reply_text,
                 defer_draft=defer_draft,
                 plan_draft_parameters=plan_draft_parameters,
+                show_plan_actions=show_plan_actions,
             )
 
     return await _finalize_reply(
         reply_text,
         defer_draft=defer_draft,
         plan_draft_parameters=plan_draft_parameters,
+        show_plan_actions=show_plan_actions,
     )
 
 

@@ -8,7 +8,7 @@ from typing import Optional
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.config import settings
 from app.db import ChatHistory, SessionLocal, User, UserProfile
@@ -29,6 +29,29 @@ router = Router()
 dp.include_router(router)
 logger = logging.getLogger(__name__)
 session_memory = SessionMemory(limit=20)
+
+_PLAN_ACTIONS = [
+    ("✅ Confirm plan", "plan_confirm", "підтвердь план"),
+    ("🔁 Regenerate", "plan_regenerate", "перегенеруй план"),
+    ("✏️ Change parameters", "plan_edit", "зміни параметри"),
+    ("🔄 Restart from scratch", "plan_restart", "почни спочатку"),
+]
+
+
+def _build_plan_action_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=label, callback_data=callback)]
+            for label, callback, _ in _PLAN_ACTIONS
+        ]
+    )
+
+
+def _plan_action_text(callback_data: str) -> str:
+    for _, callback, text in _PLAN_ACTIONS:
+        if callback == callback_data:
+            return text
+    return callback_data
 
 
 def _ensure_user(db, tg_user) -> tuple[User, bool]:
@@ -89,42 +112,63 @@ async def on_text(message: Message):
     response = await handle_incoming_message(user.id, text, defer_plan_draft=True)
     if not isinstance(response, dict) or "reply_text" not in response:
         raise RuntimeError("handle_incoming_message response must include reply_text")
+    await _send_agent_response(message, user.id, response)
+
+
+@router.callback_query(F.data.in_([action[1] for action in _PLAN_ACTIONS]))
+async def on_plan_action(callback_query: CallbackQuery):
+    callback_text = _plan_action_text(callback_query.data or "")
+    with SessionLocal() as db:
+        user, _ = _ensure_user(db, callback_query.from_user)
+        db.add(ChatHistory(user_id=user.id, role="user", text=callback_text))
+        db.commit()
+    await callback_query.answer()
+    response = await handle_incoming_message(user.id, callback_text, defer_plan_draft=True)
+    if not isinstance(response, dict) or "reply_text" not in response:
+        raise RuntimeError("handle_incoming_message response must include reply_text")
+    if callback_query.message:
+        await _send_agent_response(callback_query.message, user.id, response)
+
+
+async def _send_agent_response(message: Message, user_id: int, response: dict) -> None:
     if response.get("defer_plan_draft"):
         wait_text = _sanitize_message_text(PLAN_GENERATION_WAIT_MESSAGE)
         await message.answer(wait_text)
         with SessionLocal() as db:
-            db.add(ChatHistory(user_id=user.id, role="assistant", text=wait_text))
+            db.add(ChatHistory(user_id=user_id, role="assistant", text=wait_text))
             db.commit()
-        await session_memory.append_message(user.id, "assistant", wait_text)
+        await session_memory.append_message(user_id, "assistant", wait_text)
 
         await asyncio.sleep(5.5)
 
         preview_text = await build_plan_draft_preview(
-            user.id,
+            user_id,
             response.get("plan_draft_parameters") or {},
         )
         preview_text = _sanitize_message_text(preview_text)
-        await message.answer(preview_text)
+        reply_markup = _build_plan_action_keyboard() if response.get("show_plan_actions") else None
+        await message.answer(preview_text, reply_markup=reply_markup)
         with SessionLocal() as db:
-            db.add(ChatHistory(user_id=user.id, role="assistant", text=preview_text))
+            db.add(ChatHistory(user_id=user_id, role="assistant", text=preview_text))
             db.commit()
-        await session_memory.append_message(user.id, "assistant", preview_text)
+        await session_memory.append_message(user_id, "assistant", preview_text)
         return
 
     reply_text = _sanitize_message_text(response.get("reply_text"))
-    await message.answer(reply_text)
+    reply_markup = _build_plan_action_keyboard() if response.get("show_plan_actions") else None
+    await message.answer(reply_text, reply_markup=reply_markup)
 
     with SessionLocal() as db:
-        db.add(ChatHistory(user_id=user.id, role="assistant", text=reply_text))
+        db.add(ChatHistory(user_id=user_id, role="assistant", text=reply_text))
         db.commit()
 
     followup_messages = response.get("followup_messages") or []
     for followup in followup_messages:
         followup_text = _sanitize_message_text(followup)
         await message.answer(followup_text)
-        await session_memory.append_message(user.id, "assistant", followup_text)
+        await session_memory.append_message(user_id, "assistant", followup_text)
         with SessionLocal() as db:
-            db.add(ChatHistory(user_id=user.id, role="assistant", text=followup_text))
+            db.add(ChatHistory(user_id=user_id, role="assistant", text=followup_text))
             db.commit()
 
 

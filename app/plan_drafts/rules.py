@@ -120,9 +120,15 @@ def get_time_slot_for_slot_type(
 
     preferred_times = SLOT_TIME_PREFERENCES.get(slot_type, [TimeSlot.DAY])
     if user_preferences:
-        for slot in preferred_times:
-            if slot.value in user_preferences:
-                return slot
+        normalized_preferences = [
+            slot for slot in user_preferences if slot in {time_slot.value for time_slot in TimeSlot}
+        ]
+        if normalized_preferences:
+            for preferred in normalized_preferences:
+                for slot in preferred_times:
+                    if slot.value == preferred:
+                        return slot
+            return TimeSlot(normalized_preferences[0])
     return preferred_times[0]
 
 
