@@ -121,16 +121,7 @@ def render_confirmation_preview(card: PreviewCard) -> str:
         lines.append(f"Day {day_number} · {time_slot}")
         lines.append(f"– {exercise_name} ({category})")
 
-    lines.extend(
-        [
-            "",
-            str(card.get("footer") or ""),
-            "",
-            "Дії:",
-        ]
-    )
-    for button in card.get("buttons") or []:
-        lines.append(button)
+    lines.extend(["", str(card.get("footer") or "")])
     return "\n".join(lines)
 
 
