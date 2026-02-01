@@ -1151,6 +1151,8 @@ async def handle_incoming_message(
             reply_text = ""
         else:
             reply_text = await build_plan_draft_preview(user_id, parameters_for_draft)
+            if reply_text == PLAN_GENERATION_ERROR_MESSAGE:
+                transition_signal = None
     if transition_signal == "PLAN_FLOW:DATA_COLLECTION":
         if context_payload.get("current_state") in {"ACTIVE", "ACTIVE_PAUSED", "ACTIVE_PAUSED_CONFIRMATION"}:
             did_drop = _auto_drop_plan_for_new_flow(user_id)
