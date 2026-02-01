@@ -162,7 +162,16 @@ class AIPlan(Base):
     
     # Metadata
     title = Column(String, nullable=False)
-    module_id = Column(Enum(PlanModule), nullable=False, default=PlanModule.BURNOUT_RECOVERY)
+    module_id = Column(
+        Enum(
+            PlanModule,
+            values_callable=lambda enum: [entry.value for entry in enum],
+            native_enum=True,
+            name="plan_module",
+        ),
+        nullable=False,
+        default=PlanModule.BURNOUT_RECOVERY.value,
+    )
     goal_description = Column(Text) 
     
     # Status & Lifecycle
