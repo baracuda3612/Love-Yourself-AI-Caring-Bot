@@ -94,7 +94,7 @@ class Settings:
             or os.getenv("MODEL_REASONING")
             or os.getenv("REASONING_MODEL")
             or os.getenv("HIGH_REASONING_MODEL")
-            or "gpt-4.1"
+            or "gpt-5.1"
         )
         self.ROUTER_MODEL = os.getenv("ROUTER_MODEL", "gpt-4.1-mini")
         self.MAX_TOKENS = _as_int(os.getenv("MAX_TOKENS"), 300)
