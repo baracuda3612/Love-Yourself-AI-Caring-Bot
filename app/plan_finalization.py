@@ -89,13 +89,13 @@ def _map_step_type(slot_type: str | None) -> str:
     return StepType.ACTION.value
 
 
-def _map_difficulty(difficulty: int | None) -> DifficultyLevel:
+def _map_difficulty(difficulty: int | None) -> str:
     value = difficulty or 1
     if value <= 2:
-        return DifficultyLevel.EASY
+        return DifficultyLevel.EASY.value
     if value <= 4:
-        return DifficultyLevel.MEDIUM
-    return DifficultyLevel.HARD
+        return DifficultyLevel.MEDIUM.value
+    return DifficultyLevel.HARD.value
 
 
 def _build_step_title(content: ContentLibrary | None) -> str:
@@ -283,6 +283,8 @@ def finalize_plan(
             )
             step_type = _map_step_type(step_row.slot_type)
             assert step_type in {entry.value for entry in StepType}
+            difficulty = _map_difficulty(step_row.difficulty)
+            assert difficulty in {entry.value for entry in DifficultyLevel}
             order_in_day = day_orders[day_number]
             day_orders[day_number] += 1
             db.add(
@@ -292,7 +294,7 @@ def finalize_plan(
                     title=_build_step_title(content),
                     description=_build_step_description(content),
                     step_type=step_type,
-                    difficulty=_map_difficulty(step_row.difficulty),
+                    difficulty=difficulty,
                     order_in_day=order_in_day,
                     time_slot=time_slot,
                     scheduled_for=scheduled_for,

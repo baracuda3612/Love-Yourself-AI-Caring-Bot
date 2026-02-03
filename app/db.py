@@ -240,7 +240,16 @@ class AIPlanStep(Base):
         nullable=False,
         default=StepType.ACTION.value,
     )
-    difficulty = Column(Enum(DifficultyLevel), default=DifficultyLevel.EASY)
+    difficulty = Column(
+        Enum(
+            DifficultyLevel,
+            values_callable=lambda enum: [entry.value for entry in enum],
+            native_enum=True,
+            name="difficulty_level",
+        ),
+        nullable=False,
+        default=DifficultyLevel.EASY.value,
+    )
     
     # Scheduling
     order_in_day = Column(Integer, default=0)
