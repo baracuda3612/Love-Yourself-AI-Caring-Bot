@@ -63,7 +63,7 @@ from app.workers.mock_workers import (
     mock_onboarding_agent,
     mock_safety_agent,
 )
-from app.schemas.planner import GeneratedPlan
+from app.schemas.planner import DifficultyLevel, GeneratedPlan, StepType
 
 session_memory = SessionMemory(limit=20)
 logger = logging.getLogger(__name__)
@@ -555,6 +555,8 @@ def _persist_generated_plan(db: Session, user: User, plan_payload: Dict[str, Any
             )
             step_type = step.step_type.value
             assert step_type in {entry.value for entry in StepType}
+            difficulty = step.difficulty.value
+            assert difficulty in {entry.value for entry in DifficultyLevel}
             db.add(
                 AIPlanStep(
                     day_id=day_record.id,
@@ -562,7 +564,7 @@ def _persist_generated_plan(db: Session, user: User, plan_payload: Dict[str, Any
                     title=step.title,
                     description=step.description,
                     step_type=step_type,
-                    difficulty=step.difficulty,
+                    difficulty=difficulty,
                     order_in_day=index,
                     time_slot=step.time_slot,
                     scheduled_for=scheduled_for,
