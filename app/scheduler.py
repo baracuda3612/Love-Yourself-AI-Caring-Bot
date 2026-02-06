@@ -178,10 +178,8 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
     if step.day.plan.status != "active":
         return False
 
-    new_job_id_assigned = False
-    if not step.job_id:
-        step.job_id = _generate_step_job_id(user.id, step)
-        new_job_id_assigned = True
+    job_id = getattr(step, "job_id", None) or _generate_step_job_id(user.id, step)
+    new_job_id_assigned = getattr(step, "job_id", None) is None
 
     # Ensure run_date is in the future
     run_date = step.scheduled_for.astimezone(pytz.UTC)
@@ -193,7 +191,7 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
     scheduler.add_job(
         "app.scheduler:send_scheduled_message",
         "date",
-        id=step.job_id,
+        id=job_id,
         run_date=run_date,
         args=[user.tg_id, f"🔔 {step.title}\n\n{step.description}", step.id],
         replace_existing=True,
