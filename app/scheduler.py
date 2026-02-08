@@ -7,6 +7,7 @@ from typing import Optional
 import pytz
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.background import BackgroundScheduler
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.config import settings
 from app.db import AIPlan, AIPlanDay, AIPlanStep, SessionLocal, User
@@ -62,11 +63,15 @@ def _submit_coroutine(coro):
     return asyncio.run_coroutine_threadsafe(coro, _event_loop)
 
 
-async def _send_message_async(chat_id: int, text: str):
+async def _send_message_async(
+    chat_id: int,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+):
     """Async wrapper to send Telegram message."""
     from app.telegram import bot as tg_bot
     try:
-        return await tg_bot.send_message(chat_id, text)
+        return await tg_bot.send_message(chat_id, text, reply_markup=reply_markup)
     except Exception as e:
         logger.error(f"Failed to send scheduled message to {chat_id}: {e}")
         return None
@@ -113,7 +118,22 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
         user_id = user.id
         send_chat_id = user.tg_id
 
-    future = _submit_coroutine(_send_message_async(send_chat_id, text))
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Виконано",
+                    callback_data=f"task_complete:{plan_step_id}",
+                ),
+                InlineKeyboardButton(
+                    text="⏭️ Пропустити",
+                    callback_data=f"task_skip:{plan_step_id}",
+                ),
+            ]
+        ]
+    )
+
+    future = _submit_coroutine(_send_message_async(send_chat_id, text, reply_markup=keyboard))
     if not future:
         return
 
