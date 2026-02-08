@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 _scheduler_started = False
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
-_ALLOWED_USER_STATES = {"ACTIVE", "ADAPTATION_FLOW", "ACTIVE_CONFIRMATION"}
+_ALLOWED_USER_STATES = {"ACTIVE"}
 
 _DELIVERY_LATE_GRACE = timedelta(minutes=1)
 
@@ -63,6 +63,10 @@ def _submit_coroutine(coro):
     return asyncio.run_coroutine_threadsafe(coro, _event_loop)
 
 
+def can_deliver_tasks(user: User) -> bool:
+    return user.current_state == "ACTIVE"
+
+
 async def _send_message_async(
     chat_id: int,
     text: str,
@@ -93,7 +97,7 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
         user = plan.user
         if not user or not user.is_active:
             return
-        if user.current_state not in _ALLOWED_USER_STATES:
+        if not can_deliver_tasks(user):
             return
 
         if plan.status != "active":
@@ -190,7 +194,7 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
         
     if not user or not user.is_active:
         return False
-    if user.current_state not in _ALLOWED_USER_STATES:
+    if not can_deliver_tasks(user):
         return False
 
     if not step.day or not step.day.plan:
@@ -297,7 +301,7 @@ async def schedule_daily_loop():
             .filter(
                 AIPlan.status == "active",
                 User.is_active == True,
-                User.current_state.in_(_ALLOWED_USER_STATES),
+                User.current_state == "ACTIVE",
                 AIPlanStep.is_completed == False,
                 AIPlanStep.skipped == False,
                 AIPlanStep.scheduled_for != None, # Only schedule if time is set
