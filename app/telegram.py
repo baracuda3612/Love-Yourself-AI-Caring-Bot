@@ -19,6 +19,7 @@ from app.orchestrator import (
     handle_incoming_message,
     session_memory,
 )
+from app.plan_guards import validate_step_action
 from app.session_memory import SessionMemory
 from app.redis_client import create_fsm_storage, create_redis_client
 from app.telemetry import log_user_event
@@ -154,8 +155,9 @@ async def handle_task_completed(callback_query: CallbackQuery):
             await callback_query.answer("Це не ваше завдання")
             return
 
-        if step.is_completed:
-            await callback_query.answer("Вже виконано")
+        is_allowed, error_msg = validate_step_action(step)
+        if not is_allowed:
+            await callback_query.answer(error_msg)
             return
 
         step.is_completed = True
@@ -202,12 +204,14 @@ async def handle_task_skipped(callback_query: CallbackQuery):
             await callback_query.answer("Це не ваше завдання")
             return
 
-        if step.skipped:
-            await callback_query.answer("Вже пропущено")
+        is_allowed, error_msg = validate_step_action(step)
+        if not is_allowed:
+            await callback_query.answer(error_msg)
             return
 
         step.skipped = True
         step.is_completed = False
+        step.completed_at = None
 
         log_user_event(
             db,

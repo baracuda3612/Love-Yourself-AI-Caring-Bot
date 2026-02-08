@@ -14,15 +14,17 @@ from app import telegram
 
 
 class DummyUser:
-    def __init__(self, tg_id: int, user_id: int) -> None:
+    def __init__(self, tg_id: int, user_id: int, current_state: str = "ACTIVE") -> None:
         self.tg_id = tg_id
         self.id = user_id
+        self.current_state = current_state
 
 
 class DummyPlan:
-    def __init__(self, user: DummyUser) -> None:
+    def __init__(self, user: DummyUser, status: str = "active") -> None:
         self.user = user
         self.user_id = user.id
+        self.status = status
 
 
 class DummyDay:
@@ -188,6 +190,7 @@ async def test_task_skipped_happy_path(monkeypatch):
 
     assert step.skipped is True
     assert step.is_completed is False
+    assert step.completed_at is None
     assert fake_session.committed is True
     assert logged_events == [
         {
@@ -256,6 +259,170 @@ async def test_already_completed(monkeypatch):
 
     await telegram.handle_task_completed(callback_query)
 
-    assert callback_query.answers[-1] == "Вже виконано"
+    assert callback_query.answers[-1] == "Завдання вже виконано"
     assert fake_session.committed is False
     assert logged_events == []
+
+
+@pytest.mark.anyio
+async def test_cannot_complete_when_plan_paused(monkeypatch):
+    """Plan in paused state → no state changes."""
+    user = DummyUser(tg_id=123, user_id=42)
+    plan = DummyPlan(user=user, status="paused")
+    day = DummyDay(plan=plan, day_number=1)
+    step = DummyStep(step_id=101, day=day)
+    callback_query = DummyCallbackQuery(
+        data="task_complete:101",
+        user_id=123,
+        message=DummyMessage(),
+    )
+
+    fake_session = FakeSession(step)
+    monkeypatch.setattr(telegram, "SessionLocal", lambda: fake_session)
+
+    logged_events = []
+
+    def fake_log_user_event(*_args, **_kwargs):
+        logged_events.append("logged")
+
+    monkeypatch.setattr(telegram, "log_user_event", fake_log_user_event)
+
+    await telegram.handle_task_completed(callback_query)
+
+    assert step.is_completed is False
+    assert fake_session.committed is False
+    assert logged_events == []
+    assert callback_query.answers[-1] == "План зараз не активний"
+
+
+@pytest.mark.anyio
+async def test_cannot_complete_when_user_not_active(monkeypatch):
+    """User in ADAPTATION_FLOW → no state changes."""
+    user = DummyUser(tg_id=123, user_id=42, current_state="ADAPTATION_FLOW")
+    plan = DummyPlan(user=user, status="active")
+    day = DummyDay(plan=plan, day_number=1)
+    step = DummyStep(step_id=101, day=day)
+    callback_query = DummyCallbackQuery(
+        data="task_complete:101",
+        user_id=123,
+        message=DummyMessage(),
+    )
+
+    fake_session = FakeSession(step)
+    monkeypatch.setattr(telegram, "SessionLocal", lambda: fake_session)
+
+    logged_events = []
+
+    def fake_log_user_event(*_args, **_kwargs):
+        logged_events.append("logged")
+
+    monkeypatch.setattr(telegram, "log_user_event", fake_log_user_event)
+
+    await telegram.handle_task_completed(callback_query)
+
+    assert step.is_completed is False
+    assert fake_session.committed is False
+    assert logged_events == []
+    assert callback_query.answers[-1] == "План зараз не активний"
+
+
+@pytest.mark.anyio
+async def test_cannot_skip_completed_task(monkeypatch):
+    """Terminal step (completed) → skip is noop."""
+    user = DummyUser(tg_id=123, user_id=42)
+    plan = DummyPlan(user=user)
+    day = DummyDay(plan=plan, day_number=1)
+    step = DummyStep(
+        step_id=101,
+        day=day,
+        is_completed=True,
+        completed_at=datetime.now(timezone.utc),
+    )
+    callback_query = DummyCallbackQuery(
+        data="task_skip:101",
+        user_id=123,
+        message=DummyMessage(),
+    )
+
+    fake_session = FakeSession(step)
+    monkeypatch.setattr(telegram, "SessionLocal", lambda: fake_session)
+
+    logged_events = []
+
+    def fake_log_user_event(*_args, **_kwargs):
+        logged_events.append("logged")
+
+    monkeypatch.setattr(telegram, "log_user_event", fake_log_user_event)
+
+    await telegram.handle_task_skipped(callback_query)
+
+    assert step.is_completed is True
+    assert step.skipped is False
+    assert step.completed_at is not None
+    assert fake_session.committed is False
+    assert logged_events == []
+    assert callback_query.answers[-1] == "Завдання вже виконано"
+
+
+@pytest.mark.anyio
+async def test_cannot_complete_skipped_task(monkeypatch):
+    """Terminal step (skipped) → complete is noop."""
+    user = DummyUser(tg_id=123, user_id=42)
+    plan = DummyPlan(user=user)
+    day = DummyDay(plan=plan, day_number=1)
+    step = DummyStep(step_id=101, day=day, skipped=True)
+    callback_query = DummyCallbackQuery(
+        data="task_complete:101",
+        user_id=123,
+        message=DummyMessage(),
+    )
+
+    fake_session = FakeSession(step)
+    monkeypatch.setattr(telegram, "SessionLocal", lambda: fake_session)
+
+    logged_events = []
+
+    def fake_log_user_event(*_args, **_kwargs):
+        logged_events.append("logged")
+
+    monkeypatch.setattr(telegram, "log_user_event", fake_log_user_event)
+
+    await telegram.handle_task_completed(callback_query)
+
+    assert step.is_completed is False
+    assert step.skipped is True
+    assert fake_session.committed is False
+    assert logged_events == []
+    assert callback_query.answers[-1] == "Завдання вже пропущено"
+
+
+@pytest.mark.anyio
+async def test_idempotency_multiple_clicks(monkeypatch):
+    """Multiple clicks on same action → only first has effect."""
+    user = DummyUser(tg_id=123, user_id=42)
+    plan = DummyPlan(user=user)
+    day = DummyDay(plan=plan, day_number=1)
+    step = DummyStep(step_id=101, day=day)
+    callback_query = DummyCallbackQuery(
+        data="task_complete:101",
+        user_id=123,
+        message=DummyMessage(),
+    )
+
+    fake_session = FakeSession(step)
+    monkeypatch.setattr(telegram, "SessionLocal", lambda: fake_session)
+
+    logged_events = []
+
+    def fake_log_user_event(*_args, **_kwargs):
+        logged_events.append("logged")
+
+    monkeypatch.setattr(telegram, "log_user_event", fake_log_user_event)
+
+    await telegram.handle_task_completed(callback_query)
+    assert step.is_completed is True
+    assert len(logged_events) == 1
+
+    await telegram.handle_task_completed(callback_query)
+    assert step.is_completed is True
+    assert len(logged_events) == 1
