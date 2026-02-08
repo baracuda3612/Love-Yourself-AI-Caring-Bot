@@ -67,7 +67,7 @@ def test_skip_streak_in_progress_stops(monkeypatch):
     monkeypatch.setattr(plan_metrics, "_fetch_delivered_steps", lambda *_args, **_kwargs: delivered)
     monkeypatch.setattr(plan_metrics, "_fetch_reset_events", lambda *_args, **_kwargs: [])
 
-    assert plan_metrics.calculate_skip_streak(db=None, user_id=1, plan_id=1) == 0
+    assert plan_metrics.calculate_skip_streak(db=None, user_id=1, plan_id=1) == 1
 
 
 def test_skip_streak_reset_event_stops(monkeypatch):

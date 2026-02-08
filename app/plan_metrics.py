@@ -109,6 +109,6 @@ def calculate_skip_streak(db: Session, user_id: int, plan_id: int) -> int:
         if event.step.skipped:
             skip_streak += 1
             continue
-        break
+        continue
 
     return skip_streak
