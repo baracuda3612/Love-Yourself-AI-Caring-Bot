@@ -64,6 +64,9 @@ def _submit_coroutine(coro):
 
 
 def can_deliver_tasks(user: User) -> bool:
+    # NOTE:
+    # Missed scheduled deliveries while user is not ACTIVE are intentional.
+    # Replay/recovery (if any) must be handled by adaptation/reconciliation layer.
     return user.current_state == "ACTIVE"
 
 
