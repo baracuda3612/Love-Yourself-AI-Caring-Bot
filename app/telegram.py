@@ -3,6 +3,7 @@
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -11,7 +12,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.config import settings
-from app.db import ChatHistory, SessionLocal, User, UserProfile
+from app.db import AIPlanStep, ChatHistory, SessionLocal, User, UserProfile
 from app.orchestrator import (
     PLAN_GENERATION_WAIT_MESSAGE,
     build_plan_draft_preview,
@@ -20,6 +21,7 @@ from app.orchestrator import (
 )
 from app.session_memory import SessionMemory
 from app.redis_client import create_fsm_storage, create_redis_client
+from app.telemetry import log_user_event
 
 bot = Bot(token=settings.BOT_TOKEN, parse_mode="HTML")
 redis_client = create_redis_client()
@@ -128,6 +130,101 @@ async def on_plan_action(callback_query: CallbackQuery):
         raise RuntimeError("handle_incoming_message response must include reply_text")
     if callback_query.message:
         await _send_agent_response(callback_query.message, user.id, response)
+
+
+@router.callback_query(F.data.startswith("task_complete:"))
+async def handle_task_completed(callback_query: CallbackQuery):
+    """
+    User clicked ✅ Виконано button.
+    """
+    if not callback_query.data:
+        await callback_query.answer("Завдання не знайдено")
+        return
+
+    step_id = int(callback_query.data.split(":")[1])
+    user_id = callback_query.from_user.id
+
+    with SessionLocal() as db:
+        step = db.query(AIPlanStep).filter(AIPlanStep.id == step_id).first()
+        if not step:
+            await callback_query.answer("Завдання не знайдено")
+            return
+
+        if step.day.plan.user.tg_id != user_id:
+            await callback_query.answer("Це не ваше завдання")
+            return
+
+        if step.is_completed:
+            await callback_query.answer("Вже виконано")
+            return
+
+        step.is_completed = True
+        step.completed_at = datetime.now(timezone.utc)
+        step.skipped = False
+
+        log_user_event(
+            db,
+            user_id=step.day.plan.user_id,
+            event_type="task_completed",
+            plan_step_id=step.id,
+            context={
+                "exercise_id": step.exercise_id,
+                "day_number": step.day.day_number,
+            },
+        )
+
+        db.commit()
+
+    await callback_query.answer("✅ Чудово! Завдання виконано.")
+    if callback_query.message:
+        await callback_query.message.edit_reply_markup(reply_markup=None)
+
+
+@router.callback_query(F.data.startswith("task_skip:"))
+async def handle_task_skipped(callback_query: CallbackQuery):
+    """
+    User clicked ⏭️ Пропустити button.
+    """
+    if not callback_query.data:
+        await callback_query.answer("Завдання не знайдено")
+        return
+
+    step_id = int(callback_query.data.split(":")[1])
+    user_id = callback_query.from_user.id
+
+    with SessionLocal() as db:
+        step = db.query(AIPlanStep).filter(AIPlanStep.id == step_id).first()
+        if not step:
+            await callback_query.answer("Завдання не знайдено")
+            return
+
+        if step.day.plan.user.tg_id != user_id:
+            await callback_query.answer("Це не ваше завдання")
+            return
+
+        if step.skipped:
+            await callback_query.answer("Вже пропущено")
+            return
+
+        step.skipped = True
+        step.is_completed = False
+
+        log_user_event(
+            db,
+            user_id=step.day.plan.user_id,
+            event_type="task_skipped",
+            plan_step_id=step.id,
+            context={
+                "exercise_id": step.exercise_id,
+                "day_number": step.day.day_number,
+            },
+        )
+
+        db.commit()
+
+    await callback_query.answer("⏭️ Завдання пропущено")
+    if callback_query.message:
+        await callback_query.message.edit_reply_markup(reply_markup=None)
 
 
 async def _send_agent_response(message: Message, user_id: int, response: dict) -> None:
