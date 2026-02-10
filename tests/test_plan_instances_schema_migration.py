@@ -70,6 +70,10 @@ def test_migration_declares_required_upgrade_steps() -> None:
     assert '"schema_version"' in text
     assert "UPDATE plan_instances SET contract_version = 'v1' WHERE contract_version IS NULL" in text
     assert "UPDATE plan_instances SET schema_version = 'v1' WHERE schema_version IS NULL" in text
+    assert "def downgrade() -> None:" in text
+    assert "# Irreversible migration by design." in text
+    assert "# No-op to keep Alembic graph consistent." in text
+    assert "pass" in text
 
 def test_scheduler_telemetry_logging_is_guarded_by_exception_handler() -> None:
     source = Path("app/scheduler.py").read_text(encoding="utf-8")

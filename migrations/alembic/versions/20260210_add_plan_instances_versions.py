@@ -58,5 +58,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("plan_instances", "schema_version")
-    op.drop_column("plan_instances", "contract_version")
+    # Irreversible migration by design.
+    # No-op to keep Alembic graph consistent.
+    pass
