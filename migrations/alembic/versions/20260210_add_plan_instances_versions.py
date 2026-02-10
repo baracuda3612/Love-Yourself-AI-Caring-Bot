@@ -1,7 +1,7 @@
 """Align plan_instances schema with ORM version fields.
 
 Revision ID: 20260210_add_plan_instances_versions
-Revises: 20250330_add_plan_instance_versions
+Revises: None
 Create Date: 2026-02-10
 """
 
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 revision = "20260210_add_plan_instances_versions"
-down_revision = "20250330_add_plan_instance_versions"
+down_revision = None
 branch_labels = None
 depends_on = None
 

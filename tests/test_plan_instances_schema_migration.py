@@ -65,7 +65,7 @@ def test_migration_declares_required_upgrade_steps() -> None:
     text = MIGRATION_PATH.read_text(encoding="utf-8")
 
     assert "revision = \"20260210_add_plan_instances_versions\"" in text
-    assert "down_revision = \"20250330_add_plan_instance_versions\"" in text
+    assert "down_revision = None" in text
     assert '"contract_version"' in text
     assert '"schema_version"' in text
     assert "UPDATE plan_instances SET contract_version = 'v1' WHERE contract_version IS NULL" in text
