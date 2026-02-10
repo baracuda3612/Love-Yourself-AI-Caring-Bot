@@ -82,3 +82,19 @@ def test_log_user_event_calls_plan_instance_resolution_path() -> None:
     source = Path("app/telemetry.py").read_text(encoding="utf-8")
 
     assert "instance = _ensure_plan_instance(db, user_id, plan_instance_id)" in source
+
+
+def test_startup_schema_audit_has_critical_assertion_for_missing_columns() -> None:
+    source = Path("app/db.py").read_text(encoding="utf-8")
+
+    assert "def audit_startup_schema()" in source
+    assert "Startup schema audit failed: missing columns on %s: %s" in source
+    assert "raise AssertionError(" in source
+    assert '"plan_instances": {"contract_version", "schema_version", "initial_parameters"}' in source
+
+
+def test_main_runs_startup_schema_audit_before_polling() -> None:
+    source = Path("app/main.py").read_text(encoding="utf-8")
+
+    assert "from app.db import audit_startup_schema, init_db" in source
+    assert "audit_startup_schema()" in source

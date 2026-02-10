@@ -6,12 +6,13 @@ try:
     import uvloop; uvloop.install()
 except Exception:
     pass
-from app.db import init_db
+from app.db import audit_startup_schema, init_db
 from app.telegram import dp, bot
 from app.scheduler import schedule_daily_loop
 
 async def main():
     init_db()
+    audit_startup_schema()
     asyncio.create_task(schedule_daily_loop())
     await dp.start_polling(bot)
 

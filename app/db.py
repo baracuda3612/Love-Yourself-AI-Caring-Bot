@@ -1,6 +1,7 @@
 """Database models and session management for the multi-agent architecture."""
 
 from enum import Enum as PyEnum
+import logging
 from uuid import uuid4
 
 from sqlalchemy import (
@@ -19,6 +20,7 @@ from sqlalchemy import (
     Text,
     Time,
     create_engine,
+    inspect,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
@@ -35,6 +37,33 @@ SessionLocal = sessionmaker(
     expire_on_commit=False,
 )
 Base = declarative_base()
+logger = logging.getLogger(__name__)
+
+
+def audit_startup_schema() -> None:
+    """Assert critical schema requirements before startup."""
+    inspector = inspect(engine)
+
+    required_columns = {
+        "plan_instances": {"contract_version", "schema_version", "initial_parameters"},
+    }
+
+    for table_name, expected in required_columns.items():
+        if not inspector.has_table(table_name):
+            logger.critical("Startup schema audit failed: required table %s does not exist.", table_name)
+            raise AssertionError(f"Startup schema audit failed: missing table {table_name}")
+
+        existing = {column["name"] for column in inspector.get_columns(table_name)}
+        missing = sorted(expected - existing)
+        if missing:
+            logger.critical(
+                "Startup schema audit failed: missing columns on %s: %s",
+                table_name,
+                ", ".join(missing),
+            )
+            raise AssertionError(
+                f"Startup schema audit failed: {table_name} missing columns {', '.join(missing)}"
+            )
 
 
 class PlanStatus(PyEnum):
