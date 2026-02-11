@@ -243,7 +243,15 @@ def _get_or_create_task_stats(db: Session, user_id: int, step_id: str) -> TaskSt
     stats = db.get(TaskStats, {"user_id": user_id, "step_id": step_id})
     if stats:
         return stats
-    stats = TaskStats(user_id=user_id, step_id=step_id)
+    stats = TaskStats(
+        user_id=user_id,
+        step_id=step_id,
+        attempts_total=0,
+        completed_total=0,
+        skipped_total=0,
+        avg_reaction_sec=0.0,
+        completed_edge_of_day=0,
+    )
     db.add(stats)
     return stats
 
@@ -259,7 +267,7 @@ def _update_task_stats(
         return
 
     if event_type == "task_completed":
-        stats.completed_total += 1
+        stats.completed_total = (stats.completed_total or 0) + 1
         if bucket in EDGE_OF_DAY_BUCKETS:
             stats.completed_edge_of_day += 1
         reaction = context.get("reaction_sec")
