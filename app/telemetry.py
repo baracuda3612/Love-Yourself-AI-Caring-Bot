@@ -243,7 +243,15 @@ def _get_or_create_task_stats(db: Session, user_id: int, step_id: str) -> TaskSt
     stats = db.get(TaskStats, {"user_id": user_id, "step_id": step_id})
     if stats:
         return stats
-    stats = TaskStats(user_id=user_id, step_id=step_id)
+    stats = TaskStats(
+        user_id=user_id,
+        step_id=step_id,
+        attempts_total=0,
+        completed_total=0,
+        skipped_total=0,
+        avg_reaction_sec=0.0,
+        completed_edge_of_day=0,
+    )
     db.add(stats)
     return stats
 
