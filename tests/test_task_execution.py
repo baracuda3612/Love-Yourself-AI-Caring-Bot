@@ -54,9 +54,13 @@ class DummyStep:
 class DummyMessage:
     def __init__(self) -> None:
         self.edited_reply_markup = None
+        self.answers = []
 
     async def edit_reply_markup(self, reply_markup=None):
         self.edited_reply_markup = reply_markup
+
+    async def answer(self, text: str):
+        self.answers.append(text)
 
 
 class DummyFromUser:
@@ -153,6 +157,7 @@ async def test_task_completed_happy_path(monkeypatch):
     ]
     assert callback_query.answers[-1] == "✅ Чудово! Завдання виконано."
     assert message.edited_reply_markup is None
+    assert message.answers[-1] == "✅ Завдання відмічено як виконане."
 
 
 @pytest.mark.anyio
@@ -203,6 +208,7 @@ async def test_task_skipped_happy_path(monkeypatch):
     ]
     assert callback_query.answers[-1] == "⏭️ Завдання пропущено"
     assert message.edited_reply_markup is None
+    assert message.answers[-1] == "⏭️ Завдання відмічено як пропущене."
 
 
 @pytest.mark.anyio

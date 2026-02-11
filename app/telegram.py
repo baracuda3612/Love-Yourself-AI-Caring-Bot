@@ -180,6 +180,7 @@ async def handle_task_completed(callback_query: CallbackQuery):
     await callback_query.answer("✅ Чудово! Завдання виконано.")
     if callback_query.message:
         await callback_query.message.edit_reply_markup(reply_markup=None)
+        await callback_query.message.answer("✅ Завдання відмічено як виконане.")
 
 
 @router.callback_query(F.data.startswith("task_skip:"))
@@ -229,6 +230,7 @@ async def handle_task_skipped(callback_query: CallbackQuery):
     await callback_query.answer("⏭️ Завдання пропущено")
     if callback_query.message:
         await callback_query.message.edit_reply_markup(reply_markup=None)
+        await callback_query.message.answer("⏭️ Завдання відмічено як пропущене.")
 
 
 async def _send_agent_response(message: Message, user_id: int, response: dict) -> None:
