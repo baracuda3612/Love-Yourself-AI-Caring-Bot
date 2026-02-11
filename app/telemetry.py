@@ -259,7 +259,7 @@ def _update_task_stats(
         return
 
     if event_type == "task_completed":
-        stats.completed_total += 1
+        stats.completed_total = (stats.completed_total or 0) + 1
         if bucket in EDGE_OF_DAY_BUCKETS:
             stats.completed_edge_of_day += 1
         reaction = context.get("reaction_sec")
