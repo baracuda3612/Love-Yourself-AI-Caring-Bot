@@ -32,6 +32,12 @@ Parameters:
   --delay: Delivery delay (seconds) when start="now" or "now+<seconds>".
   --utc: Interpret naive datetimes as UTC instead of user timezone.
   --wait-seconds: Keep the process alive for a while to allow local delivery.
+
+  python -m devtools.spawn_tasks schedule-custom \
+    --user-id 42 \
+    --title "Test task" \
+    --description "Manual override task" \
+    --datetime "2026-02-11T18:55:00"
 """
 
 from __future__ import annotations
@@ -259,6 +265,79 @@ def _parse_step_ids(values: Iterable[str]) -> list[int]:
     return [int(value) for value in values]
 
 
+def _parse_custom_datetime(value: str) -> datetime:
+    parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%S")
+    return parsed.replace(tzinfo=timezone.utc)
+
+
+def _load_or_create_active_plan(db, user) -> tuple:
+    from app.db import AIPlan, AIPlanDay
+
+    plan = (
+        db.query(AIPlan)
+        .filter(AIPlan.user_id == user.id, AIPlan.status == "active")
+        .order_by(AIPlan.id.desc())
+        .first()
+    )
+    is_new_plan = False
+
+    if plan is None:
+        plan = AIPlan(
+            user_id=user.id,
+            title="[DEV] Temporary manual scheduling plan",
+            goal_description="Created by devtools schedule-custom manual override.",
+            status="active",
+            current_day=1,
+        )
+        db.add(plan)
+        db.flush()
+        is_new_plan = True
+
+    day, is_new_day = _resolve_plan_day(plan)
+    if is_new_day:
+        db.add(day)
+        db.flush()
+
+    return plan, day, is_new_plan
+
+
+def _schedule_custom_step(*, user_id: int, title: str, description: str, scheduled_for: datetime) -> tuple[int, str]:
+    from app.db import AIPlanStep, SessionLocal, User
+    from app.scheduler import _generate_step_job_id, can_deliver_tasks, schedule_plan_step
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise ValueError("user not found")
+        if not user.is_active or not can_deliver_tasks(user):
+            raise ValueError("user is not ACTIVE")
+
+        _, day, _ = _load_or_create_active_plan(db, user)
+
+        step = AIPlanStep(
+            day_id=day.id,
+            title=title,
+            description=description,
+            is_completed=False,
+            skipped=False,
+            scheduled_for=scheduled_for.astimezone(pytz.UTC),
+            step_type="action",
+            difficulty="easy",
+            order_in_day=0,
+            time_slot="DAY",
+        )
+        db.add(step)
+        db.flush()
+
+        _ensure_scheduler_loop()
+        schedule_plan_step(step, user)
+        job_id = _generate_step_job_id(user.id, step)
+
+        db.commit()
+
+    return step.id, job_id
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Spawn plan steps for scheduler testing.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -285,6 +364,16 @@ def build_parser() -> argparse.ArgumentParser:
     reschedule.add_argument("--utc", action="store_true")
     reschedule.add_argument("--wait-seconds", type=int, default=0)
 
+    schedule_custom = subparsers.add_parser(
+        "schedule-custom",
+        help="Schedule a single step for a user at an exact UTC datetime",
+    )
+    schedule_custom.add_argument("--user-id", type=int, required=True)
+    schedule_custom.add_argument("--title", required=True)
+    schedule_custom.add_argument("--description", required=True)
+    schedule_custom.add_argument("--datetime", required=True)
+    schedule_custom.add_argument("--wait-seconds", type=int, default=0)
+
     return parser
 
 
@@ -294,19 +383,17 @@ def main() -> None:
         parser = build_parser()
         args = parser.parse_args()
 
-        from app.db import SessionLocal
-
-        with SessionLocal() as db:
-            from app.db import User
-
-            user = db.query(User).filter(User.id == args.user_id).first()
-            if not user:
-                raise ValueError("user not found")
-            timezone_name = user.timezone
-
-        base_time = _parse_start(args.start, timezone_name, args.delay, args.utc)
-
         if args.command == "create":
+            from app.db import SessionLocal
+
+            with SessionLocal() as db:
+                from app.db import User
+
+                user = db.query(User).filter(User.id == args.user_id).first()
+                if not user:
+                    raise ValueError("user not found")
+                timezone_name = user.timezone
+            base_time = _parse_start(args.start, timezone_name, args.delay, args.utc)
             _create_steps(
                 user_id=args.user_id,
                 plan_id=args.plan_id,
@@ -317,6 +404,16 @@ def main() -> None:
                 description=args.description,
             )
         elif args.command == "reschedule":
+            from app.db import SessionLocal
+
+            with SessionLocal() as db:
+                from app.db import User
+
+                user = db.query(User).filter(User.id == args.user_id).first()
+                if not user:
+                    raise ValueError("user not found")
+                timezone_name = user.timezone
+            base_time = _parse_start(args.start, timezone_name, args.delay, args.utc)
             _reschedule_steps(
                 user_id=args.user_id,
                 plan_id=args.plan_id,
@@ -324,6 +421,17 @@ def main() -> None:
                 base_time=base_time,
                 interval_seconds=args.interval,
             )
+        elif args.command == "schedule-custom":
+            scheduled_for = _parse_custom_datetime(args.datetime)
+            step_id, job_id = _schedule_custom_step(
+                user_id=args.user_id,
+                title=args.title,
+                description=args.description,
+                scheduled_for=scheduled_for,
+            )
+            print(f"Scheduled task for user {args.user_id} at {scheduled_for.strftime('%Y-%m-%dT%H:%M:%S')} UTC")
+            print(f"Step ID: {step_id}")
+            print(f"Job ID: {job_id}")
         else:
             parser.error("Unknown command")
 
