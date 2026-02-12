@@ -222,7 +222,7 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
         run_date=run_date,
         args=[user.tg_id, f"🔔 {step.title}\n\n{step.description}", step.id],
         replace_existing=True,
-        misfire_grace_time=1,
+        misfire_grace_time=None,
         coalesce=False,
         max_instances=1,
     )
