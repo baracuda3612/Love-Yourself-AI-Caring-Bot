@@ -3,7 +3,7 @@
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -12,7 +12,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.config import settings
-from app.db import AIPlanStep, ChatHistory, SessionLocal, User, UserProfile
+from app.db import AIPlan, AIPlanDay, AIPlanStep, ChatHistory, SessionLocal, User, UserProfile
 from app.orchestrator import (
     PLAN_GENERATION_WAIT_MESSAGE,
     build_plan_draft_preview,
@@ -21,8 +21,10 @@ from app.orchestrator import (
 )
 from app.plan_guards import validate_step_action
 from app.session_memory import SessionMemory
+from app.scheduler import schedule_plan_step
 from app.redis_client import create_fsm_storage, create_redis_client
 from app.telemetry import log_user_event
+from app.logging.router_logging import log_metric
 
 bot = Bot(token=settings.BOT_TOKEN, parse_mode="HTML")
 redis_client = create_redis_client()
@@ -101,6 +103,104 @@ async def cmd_start(message: Message):
         user.id,
         is_created,
         user.current_state,
+    )
+
+
+@router.message(Command("spawn"))
+async def cmd_spawn(message: Message):
+    if not message.from_user or message.from_user.id not in settings.ADMIN_IDS:
+        return
+
+    parts = (message.text or "").strip().split()
+    if len(parts) != 4:
+        await message.answer("Usage: /spawn <count> <interval_seconds> <start_offset_seconds>")
+        return
+
+    try:
+        count = int(parts[1])
+        interval_seconds = int(parts[2])
+        start_offset_seconds = int(parts[3])
+    except ValueError:
+        await message.answer("Usage: /spawn <count> <interval_seconds> <start_offset_seconds>")
+        return
+
+    if count < 1:
+        await message.answer("Count must be >= 1")
+        return
+    if count > 20:
+        await message.answer("Max 20 tasks per spawn.")
+        return
+    if interval_seconds < 0 or start_offset_seconds < 0:
+        await message.answer("interval_seconds and start_offset_seconds must be >= 0")
+        return
+
+    with SessionLocal() as db:
+        user, _ = _ensure_user(db, message.from_user)
+        if user.current_state != "ACTIVE":
+            await message.answer("Spawn not allowed: user state is not ACTIVE.")
+            return
+
+        active_plan = (
+            db.query(AIPlan)
+            .filter(AIPlan.user_id == user.id, AIPlan.status == "active")
+            .order_by(AIPlan.id.desc())
+            .first()
+        )
+        if not active_plan:
+            await message.answer("Spawn not allowed: no active plan.")
+            return
+
+        plan_day = (
+            db.query(AIPlanDay)
+            .filter(AIPlanDay.plan_id == active_plan.id)
+            .order_by(AIPlanDay.day_number.asc())
+            .first()
+        )
+        if not plan_day:
+            await message.answer("Spawn not allowed: active plan has no days.")
+            return
+
+        now_utc = datetime.now(timezone.utc)
+        first_run_at = now_utc + timedelta(seconds=start_offset_seconds)
+        scheduled_at = first_run_at
+        created_steps = 0
+
+        max_order = (
+            db.query(AIPlanStep.order_in_day)
+            .filter(AIPlanStep.day_id == plan_day.id)
+            .order_by(AIPlanStep.order_in_day.desc())
+            .first()
+        )
+        next_order = (max_order[0] if max_order and max_order[0] is not None else 0) + 1
+
+        for index in range(count):
+            step = AIPlanStep(
+                day_id=plan_day.id,
+                title=f"Admin spawned task #{index + 1}",
+                description=(
+                    "This is a scheduled test task created by /spawn command."
+                ),
+                order_in_day=next_order + index,
+                scheduled_for=scheduled_at,
+            )
+            db.add(step)
+            db.flush()
+
+            if schedule_plan_step(step, user):
+                created_steps += 1
+
+            scheduled_at = scheduled_at + timedelta(seconds=interval_seconds)
+
+        db.commit()
+
+    log_metric(
+        "admin_spawn_tasks",
+        extra={"admin_tg_id": message.from_user.id, "count": count, "scheduled_jobs": created_steps},
+    )
+    await message.answer(
+        f"Spawned {count} tasks.\n"
+        f"First run at: {first_run_at.isoformat()}\n"
+        f"Plan ID: {active_plan.id}"
     )
 
 

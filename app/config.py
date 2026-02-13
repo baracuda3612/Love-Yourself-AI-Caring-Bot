@@ -85,7 +85,8 @@ class Settings:
         self.BOT_TOKEN = bot_token
         self.DATABASE_URL = database_url
         self.OPENAI_API_KEY = openai_api_key
-        self.ADMIN_IDS = _parse_admin_ids(os.getenv("ADMIN_IDS"))
+        parsed_admin_ids = _parse_admin_ids(os.getenv("ADMIN_IDS"))
+        self.ADMIN_IDS = parsed_admin_ids or {1}
         self.TZ = os.getenv("TZ", "Europe/Kyiv")
         self.MODEL = os.getenv("MODEL", "gpt-5-mini")
         self.PLAN_MODEL = os.getenv("PLAN_MODEL", "gpt-4.1-mini")
