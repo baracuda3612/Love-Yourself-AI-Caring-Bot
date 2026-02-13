@@ -161,7 +161,8 @@ async def cmd_spawn(message: Message):
             return
 
         now_utc = datetime.now(timezone.utc)
-        first_run_at = now_utc + timedelta(seconds=start_offset_seconds)
+        effective_offset = max(start_offset_seconds, 5)
+        first_run_at = now_utc + timedelta(seconds=effective_offset)
         scheduled_at = first_run_at
         created_steps = 0
 
@@ -198,9 +199,12 @@ async def cmd_spawn(message: Message):
         extra={"admin_tg_id": message.from_user.id, "count": count, "scheduled_jobs": created_steps},
     )
     await message.answer(
-        f"Spawned {count} tasks.\n"
-        f"First run at: {first_run_at.isoformat()}\n"
-        f"Plan ID: {active_plan.id}"
+        "Spawned tasks.\n"
+        f"Requested: count={count}, interval_seconds={interval_seconds}, start_offset_seconds={start_offset_seconds}\n"
+        f"Effective offset: {effective_offset}s\n"
+        f"First run at (UTC): {first_run_at.isoformat()}\n"
+        f"Plan ID: {active_plan.id}\n"
+        f"Scheduled jobs: {created_steps}"
     )
 
 
