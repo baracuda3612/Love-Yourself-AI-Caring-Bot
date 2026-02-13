@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.logic.rule_engine import RuleEngine
 
 from app.db import (
+    AIPlan,
     ContentLibrary,
     EngagementStatus,
     FailureSignal,
@@ -330,7 +331,16 @@ def _maybe_emit_system_prompt(
     if user.current_state != "ACTIVE":
         return
 
-    normalized_load = (user.current_load or "").strip().upper()
+    active_plan = (
+        db.query(AIPlan)
+        .filter(AIPlan.user_id == user.id, AIPlan.status == "active")
+        .order_by(AIPlan.id.desc())
+        .first()
+    )
+    if active_plan is None:
+        return
+
+    normalized_load = (active_plan.load or "").strip().upper()
     if normalized_load == "LITE":
         return
 
