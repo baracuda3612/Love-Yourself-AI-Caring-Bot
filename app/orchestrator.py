@@ -522,6 +522,16 @@ def _persist_generated_plan(db: Session, user: User, plan_payload: Dict[str, Any
     if latest_plan and latest_plan.status == "active":
         latest_plan.status = "abandoned"
 
+    known_parameters = normalize_plan_parameters(plan_payload.get("known_parameters"))
+    plan_load = (known_parameters.get("load") or plan_payload.get("load"))
+    if not plan_load:
+        logger.error("Attempted to activate plan without load")
+        raise RuntimeError("Active plan must have non-null load")
+    normalized_plan_load = str(plan_load).strip().upper()
+    if normalized_plan_load not in PLAN_LOAD_VALUES:
+        logger.error("Attempted to activate plan without load")
+        raise RuntimeError("Active plan must have non-null load")
+
     plan_start = datetime.now(timezone.utc)
     ai_plan = AIPlan(
         user_id=user.id,
@@ -529,11 +539,19 @@ def _persist_generated_plan(db: Session, user: User, plan_payload: Dict[str, Any
         module_id=parsed_plan.module_id,
         goal_description=parsed_plan.reasoning,
         status="active",
+        load=normalized_plan_load,
         adaptation_version=adaptation_version,
         start_date=plan_start,
     )
     db.add(ai_plan)
     db.flush()
+
+    logger.info(
+        "Plan %s activated with load=%s for user %s",
+        ai_plan.id,
+        ai_plan.load,
+        user.id,
+    )
 
     daily_time_slots = resolve_daily_time_slots(user.profile)
 

@@ -231,19 +231,27 @@ def finalize_plan(
         if hasattr(AIPlan, "total_days"):
             plan.total_days = locked_draft.total_days
 
-        if plan.load:
-            user.current_load = plan.load.strip().upper()
+        if not plan.load:
+            logger.error("Attempted to activate plan without load")
+            raise RuntimeError("Active plan must have non-null load")
+
+        user.current_load = plan.load.strip().upper()
 
         db.add(plan)
         db.flush()
 
-        if plan.load:
-            logger.info(
-                "User %s load synchronized to %s (plan %s)",
-                user.id,
-                user.current_load,
-                plan.id,
-            )
+        logger.info(
+            "User %s load synchronized to %s (plan %s)",
+            user.id,
+            user.current_load,
+            plan.id,
+        )
+        logger.info(
+            "Plan %s activated with load=%s for user %s",
+            plan.id,
+            plan.load,
+            user.id,
+        )
 
         tz = _normalize_timezone(user.timezone)
         anchor_dt = plan_start.astimezone(tz)

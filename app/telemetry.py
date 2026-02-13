@@ -340,7 +340,10 @@ def _maybe_emit_system_prompt(
     if active_plan is None:
         return
 
-    normalized_load = (active_plan.load or "").strip().upper()
+    if not active_plan.load:
+        raise RuntimeError("Invariant violation: active plan without load")
+
+    normalized_load = active_plan.load.strip().upper()
     if normalized_load == "LITE":
         return
 
