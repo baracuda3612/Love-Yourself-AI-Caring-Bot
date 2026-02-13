@@ -212,7 +212,7 @@ class AIPlan(Base):
 
     duration = Column(String(20), nullable=True)
     focus = Column(String(20), nullable=True)
-    load = Column(String(20), nullable=True)
+    load = Column(String(20), nullable=False)
     total_days = Column(Integer, nullable=True)
     
     # Versioning for Adaptation
