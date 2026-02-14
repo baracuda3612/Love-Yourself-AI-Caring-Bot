@@ -15,6 +15,9 @@ __all__ = [
     "plan_flow_entry",
     "plan_flow_data_collection",
     "plan_flow_confirmation_pending",
+    "adaptation_flow_selection",
+    "adaptation_flow_params",
+    "adaptation_flow_confirmation",
 ]
 
 _PLAN_FLOW_ENTRY_PROMPT = """You are the Plan Agent for ENTRY MODE.
@@ -287,7 +290,392 @@ Forbidden:
 - outputting anything outside the single tool call
 """
 
+_ADAPTATION_FLOW_SELECTION_PROMPT = """You are the Plan Agent for ADAPTATION_FLOW:SELECTION.
+
+You MUST read the input JSON and return exactly ONE tool call.
+You MUST call the function: adaptation_flow_selection.
+You MUST NOT output any assistant text outside the tool call.
+
+PURPOSE:
+User wants to adapt their active plan but hasn't chosen which adaptation yet.
+Your ONLY job: present available options clearly.
+
+INPUT:
+{
+  "current_state": "ADAPTATION_FLOW:SELECTION",
+  "message_text": "string",
+  "available_adaptations": [
+    "REDUCE_DAILY_LOAD",
+    "INCREASE_DAILY_LOAD",
+    ...
+  ],
+  "active_plan": {
+    "load": "LITE | MID | INTENSIVE",
+    "duration": 7 | 14 | 21 | 90,
+    "status": "active | paused"
+  }
+}
+
+OUTPUT:
+{
+  "reply_text": "string",
+  "transition_signal": "ADAPTATION_FLOW:PARAMS | ADAPTATION_FLOW:CONFIRMATION | ACTIVE | null",
+  "adaptation_intent": "REDUCE_DAILY_LOAD | ... | null",
+  "adaptation_params": null
+}
+
+BEHAVIOR:
+
+If message_text is UNCLEAR or user just said "хочу змінити план":
+- List ALL adaptations from available_adaptations array
+- Use SHORT descriptions (1 line each)
+- Format as bullet list
+- transition_signal = null
+- adaptation_intent = null
+
+If message_text contains CLEAR intent:
+- Match to one of available_adaptations
+- If matched adaptation needs params → transition to PARAMS
+- If matched adaptation needs NO params → transition to CONFIRMATION
+- Set adaptation_intent
+
+If user says ABORT:
+{
+  "reply_text": "Добре, скасовано.",
+  "transition_signal": "ACTIVE",
+  "adaptation_intent": null,
+  "adaptation_params": null
+}
+
+ADAPTATIONS REQUIRING PARAMS:
+- CHANGE_MAIN_CATEGORY (needs target_category)
+- EXTEND_PLAN_DURATION (needs target_duration)
+- SHORTEN_PLAN_DURATION (needs target_duration)
+
+ALL OTHER ADAPTATIONS: no params needed
+
+HARD RULES:
+1. ONLY list adaptations from available_adaptations array
+2. NEVER invent new adaptation types
+3. NEVER explain psychology or motivation
+4. NEVER recommend specific adaptations
+5. Keep descriptions SHORT (max 5 words)
+"""
+
+_ADAPTATION_FLOW_PARAMS_PROMPT = """You are the Plan Agent for ADAPTATION_FLOW:PARAMS.
+
+You MUST read the input JSON and return exactly ONE tool call.
+You MUST call the function: adaptation_flow_params.
+You MUST NOT output any assistant text outside the tool call.
+
+PURPOSE:
+Adaptation type is KNOWN but parameters are MISSING.
+Your ONLY job: collect the missing parameter.
+
+INPUT:
+{
+  "current_state": "ADAPTATION_FLOW:PARAMS",
+  "message_text": "string",
+  "adaptation_context": {
+    "intent": "CHANGE_MAIN_CATEGORY | EXTEND_PLAN_DURATION | SHORTEN_PLAN_DURATION",
+    "params": {
+      "target_category": null | "somatic" | ...,
+      "target_duration": null | 7 | 14 | 21 | 90
+    }
+  },
+  "active_plan": {
+    "duration": 7 | 14 | 21 | 90,
+    ...
+  }
+}
+
+OUTPUT:
+{
+  "reply_text": "string",
+  "transition_signal": "ADAPTATION_FLOW:CONFIRMATION | ACTIVE | null",
+  "adaptation_intent": "[SAME AS INPUT]",
+  "adaptation_params": {
+    "target_category": "somatic | ... | null",
+    "target_duration": 7 | 14 | 21 | 90 | null
+  }
+}
+
+BEHAVIOR:
+
+If param is MISSING (null in input):
+- Ask for that specific param
+- Show allowed values ONLY
+- Keep question SHORT
+- transition_signal = null
+
+If param is PROVIDED (present in message_text):
+- Extract param value
+- Set adaptation_params with extracted value
+- transition_signal = "ADAPTATION_FLOW:CONFIRMATION"
+
+If user says ABORT:
+{
+  "reply_text": "Добре, скасовано.",
+  "transition_signal": "ACTIVE",
+  "adaptation_intent": null,
+  "adaptation_params": null
+}
+
+PARAMETER RULES:
+
+CHANGE_MAIN_CATEGORY:
+- Param: target_category
+- Allowed: somatic, cognitive, boundaries, rest, mixed
+- Question: "Обери нову категорію: somatic / cognitive / boundaries / rest / mixed"
+
+EXTEND_PLAN_DURATION:
+- Param: target_duration
+- If current = 7 or 14 → allowed: 21
+- If current = 21 → allowed: 90
+- Question: "Продовжити до скількох днів? Доступно: [allowed_value]"
+
+SHORTEN_PLAN_DURATION:
+- Param: target_duration
+- If current = 90 → allowed: 21
+- If current = 21 → allowed: 7 or 14
+- Question: "Скоротити до скількох днів? Доступно: [allowed_values]"
+
+HARD RULES:
+1. adaptation_intent MUST NOT change (pass through from input)
+2. ONLY collect ONE parameter
+3. NEVER recommend which value to choose
+4. NEVER explain why parameter is needed
+5. Show ONLY allowed values
+6. You MAY list allowed values from schema.
+"""
+
+_ADAPTATION_FLOW_CONFIRMATION_PROMPT = """You are the Plan Agent for ADAPTATION_FLOW:CONFIRMATION.
+
+You MUST read the input JSON and return exactly ONE tool call.
+You MUST call the function: adaptation_flow_confirmation.
+You MUST NOT output any assistant text outside the tool call.
+
+PURPOSE:
+Adaptation type and all params are KNOWN and LOCKED.
+Your ONLY job: show preview and get confirmation.
+
+INPUT:
+{
+  "current_state": "ADAPTATION_FLOW:CONFIRMATION",
+  "message_text": "string",
+  "adaptation_context": {
+    "intent": "REDUCE_DAILY_LOAD | ...",
+    "params": {...}
+  },
+  "active_plan": {
+    "load": "LITE | MID | INTENSIVE",
+    "duration": 7 | 14 | 21 | 90,
+    "focus": "SOMATIC | ...",
+    "daily_task_count": 1 | 2 | 3,
+    "difficulty_level": 1 | 2 | 3
+  }
+}
+
+OUTPUT:
+{
+  "reply_text": "string",
+  "transition_signal": "EXECUTE_ADAPTATION | ADAPTATION_FLOW:PARAMS | ACTIVE | null",
+  "adaptation_intent": "[SAME AS INPUT - FROZEN]",
+  "adaptation_params": "[SAME AS INPUT - FROZEN]",
+  "confirmed": true | false
+}
+
+CRITICAL INVARIANT:
+adaptation_intent and adaptation_params are FROZEN in this state.
+They MUST be copied verbatim from input.
+They CANNOT be changed under ANY circumstances.
+
+BEHAVIOR:
+
+If FIRST TIME in confirmation (no user response yet):
+- Show preview of changes
+- Use ONLY values from active_plan (don't invent numbers)
+- Ask "Підтвердити?"
+- transition_signal = null
+- confirmed = false
+
+If user says YES/CONFIRM:
+{
+  "reply_text": "Застосовую зміни.",
+  "transition_signal": "EXECUTE_ADAPTATION",
+  "adaptation_intent": "[FROZEN]",
+  "adaptation_params": "[FROZEN]",
+  "confirmed": true
+}
+
+If user wants to EDIT param:
+{
+  "reply_text": "Обери нову категорію:",
+  "transition_signal": "ADAPTATION_FLOW:PARAMS",
+  "adaptation_intent": "[FROZEN]",
+  "adaptation_params": "[FROZEN - but with param set to null]",
+  "confirmed": false
+}
+
+If user wants DIFFERENT adaptation:
+{
+  "reply_text": "Для іншої зміни скасуй поточну. Скасувати?",
+  "transition_signal": null,
+  "adaptation_intent": "[FROZEN]",
+  "adaptation_params": "[FROZEN]",
+  "confirmed": false
+}
+
+If user wants DIFFERENT adaptation AND confirms abort:
+{
+  "reply_text": "Добре, скасовано.",
+  "transition_signal": "ACTIVE",
+  "adaptation_intent": null,
+  "adaptation_params": null,
+  "confirmed": false
+}
+
+If user says ABORT:
+{
+  "reply_text": "Добре, скасовано.",
+  "transition_signal": "ACTIVE",
+  "adaptation_intent": null,
+  "adaptation_params": null,
+  "confirmed": false
+}
+
+PREVIEW FORMAT RULES:
+
+Use ONLY values from active_plan payload:
+- daily_task_count (not load label)
+- difficulty_level (not qualitative descriptions)
+- duration (number of days)
+
+HARD RULES:
+1. NEVER change adaptation_intent (copy from input)
+2. NEVER change adaptation_params (copy from input)
+3. NEVER invent numbers not in active_plan
+4. NEVER explain WHY changes are good
+5. Show ONLY structural facts
+"""
+
+_ADAPTATION_FLOW_SELECTION_TOOL = {
+    "type": "function",
+    "name": "adaptation_flow_selection",
+    "description": "Handle SELECTION state of adaptation flow",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "reply_text": {"type": "string"},
+            "transition_signal": {
+                "type": ["string", "null"],
+                "enum": [
+                    "ADAPTATION_FLOW:PARAMS",
+                    "ADAPTATION_FLOW:CONFIRMATION",
+                    "ACTIVE",
+                    None,
+                ],
+            },
+            "adaptation_intent": {
+                "type": ["string", "null"],
+                "enum": [
+                    "REDUCE_DAILY_LOAD",
+                    "INCREASE_DAILY_LOAD",
+                    "LOWER_DIFFICULTY",
+                    "INCREASE_DIFFICULTY",
+                    "EXTEND_PLAN_DURATION",
+                    "SHORTEN_PLAN_DURATION",
+                    "PAUSE_PLAN",
+                    "RESUME_PLAN",
+                    "CHANGE_MAIN_CATEGORY",
+                    None,
+                ],
+            },
+            "adaptation_params": {"type": "null"},
+        },
+        "required": ["reply_text", "transition_signal", "adaptation_intent", "adaptation_params"],
+        "additionalProperties": False,
+    },
+}
+
+_ADAPTATION_FLOW_PARAMS_TOOL = {
+    "type": "function",
+    "name": "adaptation_flow_params",
+    "description": "Handle PARAMS state of adaptation flow",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "reply_text": {"type": "string"},
+            "transition_signal": {
+                "type": ["string", "null"],
+                "enum": ["ADAPTATION_FLOW:CONFIRMATION", "ACTIVE", None],
+            },
+            "adaptation_intent": {
+                "type": "string",
+                "enum": ["CHANGE_MAIN_CATEGORY", "EXTEND_PLAN_DURATION", "SHORTEN_PLAN_DURATION"],
+            },
+            "adaptation_params": {
+                "type": ["object", "null"],
+                "properties": {
+                    "target_category": {
+                        "type": ["string", "null"],
+                        "enum": ["somatic", "cognitive", "boundaries", "rest", "mixed", None],
+                    },
+                    "target_duration": {
+                        "type": ["integer", "null"],
+                        "enum": [7, 14, 21, 90, None],
+                    },
+                },
+                "additionalProperties": False,
+            },
+        },
+        "required": ["reply_text", "transition_signal", "adaptation_intent", "adaptation_params"],
+        "additionalProperties": False,
+    },
+}
+
+_ADAPTATION_FLOW_CONFIRMATION_TOOL = {
+    "type": "function",
+    "name": "adaptation_flow_confirmation",
+    "description": "Handle CONFIRMATION state of adaptation flow",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "reply_text": {"type": "string"},
+            "transition_signal": {
+                "type": ["string", "null"],
+                "enum": ["EXECUTE_ADAPTATION", "ADAPTATION_FLOW:PARAMS", "ACTIVE", None],
+            },
+            "adaptation_intent": {
+                "type": "string",
+                "enum": [
+                    "REDUCE_DAILY_LOAD",
+                    "INCREASE_DAILY_LOAD",
+                    "LOWER_DIFFICULTY",
+                    "INCREASE_DIFFICULTY",
+                    "EXTEND_PLAN_DURATION",
+                    "SHORTEN_PLAN_DURATION",
+                    "PAUSE_PLAN",
+                    "RESUME_PLAN",
+                    "CHANGE_MAIN_CATEGORY",
+                ],
+            },
+            "adaptation_params": {"type": ["object", "null"]},
+            "confirmed": {"type": "boolean"},
+        },
+        "required": [
+            "reply_text",
+            "transition_signal",
+            "adaptation_intent",
+            "adaptation_params",
+            "confirmed",
+        ],
+        "additionalProperties": False,
+    },
+}
+
 _PLAN_FLOW_ENTRY_TOOL = {
+
     "type": "function",
     "name": "plan_flow_entry",
     "description": "Return PlanAgentOutput for ENTRY MODE.",
@@ -449,12 +837,172 @@ async def plan_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
         return await plan_flow_data_collection(payload)
     if current_state == "PLAN_FLOW:CONFIRMATION_PENDING":
         return await plan_flow_confirmation_pending(payload)
+    if current_state == "ADAPTATION_FLOW:SELECTION":
+        return await adaptation_flow_selection(payload)
+    if current_state == "ADAPTATION_FLOW:PARAMS":
+        return await adaptation_flow_params(payload)
+    if current_state == "ADAPTATION_FLOW:CONFIRMATION":
+        return await adaptation_flow_confirmation(payload)
     return {
         "reply_text": "",
         "transition_signal": None,
-        "plan_updates": None,
-        "generated_plan_object": None,
+        "adaptation_intent": None,
+        "adaptation_params": None,
+        "confirmed": False,
     }
+
+
+async def adaptation_flow_selection(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle SELECTION state."""
+    messages = [
+        {"role": "system", "content": _ADAPTATION_FLOW_SELECTION_PROMPT},
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+    ]
+
+    response = await async_client.responses.create(
+        model=settings.PLAN_MODEL,
+        input=messages,
+        max_output_tokens=settings.MAX_TOKENS,
+        tools=[_ADAPTATION_FLOW_SELECTION_TOOL],
+        tool_choice={"type": "function", "name": "adaptation_flow_selection"},
+    )
+
+    tool_call = _extract_tool_call(response)
+    if not tool_call:
+        return {
+            "reply_text": extract_output_text(response),
+            "transition_signal": None,
+            "adaptation_intent": None,
+            "adaptation_params": None,
+            "error": {"code": "CONTRACT_MISMATCH"},
+        }
+
+    arguments = tool_call.get("arguments")
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            return {
+                "reply_text": "",
+                "transition_signal": None,
+                "adaptation_intent": None,
+                "adaptation_params": None,
+                "error": {"code": "CONTRACT_MISMATCH"},
+            }
+
+    if not isinstance(arguments, dict):
+        return {
+            "reply_text": "",
+            "transition_signal": None,
+            "adaptation_intent": None,
+            "adaptation_params": None,
+            "error": {"code": "CONTRACT_MISMATCH"},
+        }
+
+    return arguments
+
+
+async def adaptation_flow_params(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle PARAMS state."""
+    messages = [
+        {"role": "system", "content": _ADAPTATION_FLOW_PARAMS_PROMPT},
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+    ]
+
+    response = await async_client.responses.create(
+        model=settings.PLAN_MODEL,
+        input=messages,
+        max_output_tokens=settings.MAX_TOKENS,
+        tools=[_ADAPTATION_FLOW_PARAMS_TOOL],
+        tool_choice={"type": "function", "name": "adaptation_flow_params"},
+    )
+
+    tool_call = _extract_tool_call(response)
+    if not tool_call:
+        return {
+            "reply_text": extract_output_text(response),
+            "transition_signal": None,
+            "adaptation_intent": None,
+            "adaptation_params": None,
+            "error": {"code": "CONTRACT_MISMATCH"},
+        }
+
+    arguments = tool_call.get("arguments")
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            return {
+                "reply_text": "",
+                "transition_signal": None,
+                "adaptation_intent": None,
+                "adaptation_params": None,
+                "error": {"code": "CONTRACT_MISMATCH"},
+            }
+
+    if not isinstance(arguments, dict):
+        return {
+            "reply_text": "",
+            "transition_signal": None,
+            "adaptation_intent": None,
+            "adaptation_params": None,
+            "error": {"code": "CONTRACT_MISMATCH"},
+        }
+
+    return arguments
+
+
+async def adaptation_flow_confirmation(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle CONFIRMATION state."""
+    messages = [
+        {"role": "system", "content": _ADAPTATION_FLOW_CONFIRMATION_PROMPT},
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+    ]
+
+    response = await async_client.responses.create(
+        model=settings.PLAN_MODEL,
+        input=messages,
+        max_output_tokens=settings.MAX_TOKENS,
+        tools=[_ADAPTATION_FLOW_CONFIRMATION_TOOL],
+        tool_choice={"type": "function", "name": "adaptation_flow_confirmation"},
+    )
+
+    tool_call = _extract_tool_call(response)
+    if not tool_call:
+        return {
+            "reply_text": extract_output_text(response),
+            "transition_signal": None,
+            "adaptation_intent": None,
+            "adaptation_params": None,
+            "confirmed": False,
+            "error": {"code": "CONTRACT_MISMATCH"},
+        }
+
+    arguments = tool_call.get("arguments")
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            return {
+                "reply_text": "",
+                "transition_signal": None,
+                "adaptation_intent": None,
+                "adaptation_params": None,
+                "confirmed": False,
+                "error": {"code": "CONTRACT_MISMATCH"},
+            }
+
+    if not isinstance(arguments, dict):
+        return {
+            "reply_text": "",
+            "transition_signal": None,
+            "adaptation_intent": None,
+            "adaptation_params": None,
+            "confirmed": False,
+            "error": {"code": "CONTRACT_MISMATCH"},
+        }
+
+    return arguments
 
 
 async def plan_flow_data_collection(payload: Dict[str, Any]) -> Dict[str, Any]:
