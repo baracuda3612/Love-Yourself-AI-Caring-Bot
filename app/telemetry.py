@@ -37,6 +37,7 @@ TASK_EVENT_TYPES = {
 RESOURCE_EVENT_TYPES = {"task_viewed_resource"}
 FRICTION_EVENT_TYPES = {"task_skipped", "task_ignored", "task_delayed", "task_failed"}
 SKIP_STREAK_EVENT_TYPES = {"task_skipped", "task_ignored", "task_failed"}
+SKIP_STREAK_RESET_EVENT_TYPES = {"task_completed"}
 COMPLETION_EVENT_TYPES = {
     "task_completed",
     "task_skipped",
@@ -108,13 +109,16 @@ async def _send_system_message_async(chat_id: int, text: str) -> None:
     from app.telegram import bot as tg_bot
 
     try:
+        logger.info("[ADAPTATION_PROMPT] Sending system prompt to chat_id=%s", chat_id)
         await tg_bot.send_message(chat_id, text)
+        logger.info("[ADAPTATION_PROMPT] System prompt sent to chat_id=%s", chat_id)
     except Exception as exc:  # pragma: no cover - safety net for runtime failures
-        logger.error("Failed to send system prompt to %s: %s", chat_id, exc)
+        logger.error("[ADAPTATION_PROMPT] Failed to send system prompt to %s: %s", chat_id, exc)
 
 
 def _dispatch_system_message(user: User, text: str) -> None:
     if not user.tg_id:
+        logger.warning("[ADAPTATION_PROMPT] Skip dispatch: user_id=%s has no tg_id", user.id)
         return
 
     try:
@@ -123,13 +127,23 @@ def _dispatch_system_message(user: User, text: str) -> None:
         loop = None
 
     if loop and loop.is_running():
+        logger.info(
+            "[ADAPTATION_PROMPT] Dispatch via running loop for user_id=%s chat_id=%s",
+            user.id,
+            user.tg_id,
+        )
         loop.create_task(_send_system_message_async(user.tg_id, text))
         return
 
     try:
+        logger.info(
+            "[ADAPTATION_PROMPT] Dispatch via asyncio.run for user_id=%s chat_id=%s",
+            user.id,
+            user.tg_id,
+        )
         asyncio.run(_send_system_message_async(user.tg_id, text))
     except RuntimeError as exc:
-        logger.error("Failed to dispatch system prompt for user %s: %s", user.id, exc)
+        logger.error("[ADAPTATION_PROMPT] Failed to dispatch system prompt for user %s: %s", user.id, exc)
 
 
 def _utc_now() -> datetime:
@@ -326,9 +340,18 @@ def _maybe_emit_system_prompt(
     window: PlanExecutionWindow,
     event_type: str,
 ) -> None:
+    logger.info(
+        "[ADAPTATION_PROMPT] Evaluate trigger user_id=%s event_type=%s state=%s window_id=%s",
+        user.id,
+        event_type,
+        user.current_state,
+        window.id,
+    )
     if event_type not in {"task_skipped", "task_ignored", "task_failed"}:
+        logger.info("[ADAPTATION_PROMPT] Exit: unsupported event_type=%s", event_type)
         return
     if user.current_state != "ACTIVE":
+        logger.info("[ADAPTATION_PROMPT] Exit: user_id=%s state=%s", user.id, user.current_state)
         return
 
     active_plan = (
@@ -338,6 +361,7 @@ def _maybe_emit_system_prompt(
         .first()
     )
     if active_plan is None:
+        logger.info("[ADAPTATION_PROMPT] Exit: user_id=%s has no active plan", user.id)
         return
 
     if not active_plan.load:
@@ -345,14 +369,24 @@ def _maybe_emit_system_prompt(
 
     normalized_load = active_plan.load.strip().upper()
     if normalized_load == "LITE":
+        logger.info("[ADAPTATION_PROMPT] Exit: user_id=%s load=LITE", user.id)
         return
 
     threshold = RuleEngine.LOAD_THRESHOLDS.get(normalized_load)
     if threshold is None:
+        logger.info("[ADAPTATION_PROMPT] Exit: unsupported load=%s", normalized_load)
         return
 
     skip_streak = get_skip_streak(db, user.id, RuleEngine.MAX_SKIP_THRESHOLD)
+    logger.info(
+        "[ADAPTATION_PROMPT] user_id=%s load=%s skip_streak=%s threshold=%s",
+        user.id,
+        normalized_load,
+        skip_streak,
+        threshold,
+    )
     if skip_streak != threshold:
+        logger.info("[ADAPTATION_PROMPT] Exit: skip_streak(%s) != threshold(%s)", skip_streak, threshold)
         return
 
     proposal = RuleEngine().evaluate(
@@ -360,12 +394,16 @@ def _maybe_emit_system_prompt(
         skip_streak=skip_streak,
     )
     if not proposal:
+        logger.info("[ADAPTATION_PROMPT] Exit: no proposal from rule engine")
         return
+    logger.info("[ADAPTATION_PROMPT] Proposal=%s for user_id=%s", proposal, user.id)
 
     message = PROPOSAL_MESSAGES.get(proposal)
     if not message:
+        logger.warning("[ADAPTATION_PROMPT] Exit: message template missing for proposal=%s", proposal)
         return
 
+    logger.info("[ADAPTATION_PROMPT] Dispatching system prompt for user_id=%s", user.id)
     _dispatch_system_message(user, message)
 
 
@@ -483,17 +521,21 @@ def log_user_event(
 def get_skip_streak(db: Session, user_id: int, limit: int) -> int:
     events = (
         db.query(UserEvent.event_type)
-        .filter(UserEvent.user_id == user_id)
-        .order_by(UserEvent.timestamp.desc())
+        .filter(
+            UserEvent.user_id == user_id,
+            UserEvent.event_type.in_(SKIP_STREAK_EVENT_TYPES | SKIP_STREAK_RESET_EVENT_TYPES),
+        )
+        .order_by(UserEvent.timestamp.desc(), UserEvent.id.desc())
         .limit(limit)
         .all()
     )
 
     skip_streak = 0
     for (event_type,) in events:
-        if event_type not in SKIP_STREAK_EVENT_TYPES:
+        if event_type in SKIP_STREAK_RESET_EVENT_TYPES:
             break
-        skip_streak += 1
+        if event_type in SKIP_STREAK_EVENT_TYPES:
+            skip_streak += 1
 
     return skip_streak
 
