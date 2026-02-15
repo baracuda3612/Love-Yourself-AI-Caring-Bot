@@ -29,13 +29,9 @@ _ALLOWED_USER_STATES = {"ACTIVE"}
 _DELIVERY_LATE_GRACE = timedelta(minutes=1)
 
 
-def _generate_step_job_id(user_id: int, step: AIPlanStep) -> str:
-    """Generate a unique Job ID based on the new hierarchy."""
-    # Safety check if step is detached
-    plan_id = "unknown"
-    if step.day and step.day.plan_id:
-        plan_id = step.day.plan_id
-    
+def _generate_step_job_id(step: AIPlanStep) -> str:
+    """Generate a deterministic Job ID from persistent plan/day/step identifiers."""
+    plan_id = step.day.plan_id if step.day and step.day.plan_id is not None else "unknown"
     return f"plan_{plan_id}_day_{step.day_id}_step_{step.id}"
 
 
@@ -205,7 +201,7 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
     if step.day.plan.status != "active":
         return False
 
-    job_id = getattr(step, "job_id", None) or _generate_step_job_id(user.id, step)
+    job_id = getattr(step, "job_id", None) or _generate_step_job_id(step)
     new_job_id_assigned = getattr(step, "job_id", None) is None
 
     # Ensure run_date is in the future
@@ -213,6 +209,8 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
     now_utc = datetime.now(pytz.UTC)
     if run_date <= now_utc:
         return False
+
+    logger.info("Scheduling job %s (replace_existing=True)", job_id)
 
     # Use replace_existing=True to avoid conflicts
     scheduler.add_job(
@@ -241,8 +239,7 @@ def cancel_plan_step_jobs(step_ids: list[int]) -> int:
             .all()
         )
         for step in steps:
-            plan_user_id = step.day.plan.user_id if step.day and step.day.plan else 0
-            job_id = getattr(step, "job_id", None) or _generate_step_job_id(plan_user_id, step)
+            job_id = getattr(step, "job_id", None) or _generate_step_job_id(step)
             try:
                 scheduler.remove_job(job_id)
             except Exception:
