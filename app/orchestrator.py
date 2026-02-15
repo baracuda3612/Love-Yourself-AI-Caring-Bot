@@ -756,8 +756,19 @@ def compute_available_adaptations(db: Session, plan: AIPlan) -> List[AdaptationI
         .all()
     )
     if steps:
-        min_difficulty = min(step.difficulty for step in steps)
-        max_difficulty = max(step.difficulty for step in steps)
+        difficulty_map = {
+            "EASY": 1,
+            "MEDIUM": 2,
+            "HARD": 3,
+        }
+
+        normalized_difficulties = [
+            difficulty_map.get(str(step.difficulty).upper(), 1)
+            for step in steps
+        ]
+        min_difficulty = min(normalized_difficulties)
+        max_difficulty = max(normalized_difficulties)
+
         if max_difficulty > 1:
             available.append(AdaptationIntent.LOWER_DIFFICULTY)
         if min_difficulty < 3:
