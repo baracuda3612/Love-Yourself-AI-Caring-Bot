@@ -29,7 +29,10 @@ You MUST NOT output any assistant text outside the tool call.
 If you output any text outside the tool call, the response will be rejected.
 
 Purpose:
-- Decide whether the user explicitly wants to start a NEW plan.
+- Decide whether the user wants to:
+  A) Start a NEW plan (plan creation)
+  B) MODIFY existing plan (plan adaptation)
+  C) Neither (null signal)
 
 Rules:
 - Do NOT ask questions.
@@ -38,10 +41,19 @@ Rules:
 - Do NOT respond to the user in text.
 - reply_text MUST be an empty string.
 
-Decision:
-- If the user explicitly asks to create/start/restart a plan, set transition_signal to
-  PLAN_FLOW:DATA_COLLECTION.
-- Otherwise, transition_signal MUST be null.
+Decision Logic:
+
+1. PLAN CREATION (new plan):
+   - User explicitly asks to create/start/restart/build a plan
+   - Set transition_signal to "PLAN_FLOW:DATA_COLLECTION"
+
+2. PLAN ADAPTATION (modify existing):
+   - User wants to change/modify/adjust existing plan
+   - Set transition_signal to "ADAPTATION_SELECTION"
+
+3. NEITHER:
+   - User message does not clearly indicate plan creation or adaptation
+   - Set transition_signal to null
 
 Input:
 - The user message is raw text in latest_user_message.
@@ -50,12 +62,27 @@ Input:
 Output (tool call arguments):
 {
   "reply_text": "",
-  "transition_signal": "PLAN_FLOW:DATA_COLLECTION | null",
+  "transition_signal": "PLAN_FLOW:DATA_COLLECTION | ADAPTATION_SELECTION | null",
   "plan_updates": null,
   "generated_plan_object": null
 }
 
+Examples:
+
+Input: "створи план"
+Output: {"reply_text": "", "transition_signal": "PLAN_FLOW:DATA_COLLECTION", "plan_updates": null, "generated_plan_object": null}
+
+Input: "хочу змінити план"
+Output: {"reply_text": "", "transition_signal": "ADAPTATION_SELECTION", "plan_updates": null, "generated_plan_object": null}
+
+Input: "зменш навантаження"
+Output: {"reply_text": "", "transition_signal": "ADAPTATION_SELECTION", "plan_updates": null, "generated_plan_object": null}
+
+Input: "як справи?"
+Output: {"reply_text": "", "transition_signal": null, "plan_updates": null, "generated_plan_object": null}
+
 Do NOT add extra fields.
+Do NOT output anything outside the tool call.
 """
 
 _PLAN_FLOW_DATA_COLLECTION_PROMPT = """You are the Plan Agent for PLAN_FLOW:DATA_COLLECTION.
@@ -291,7 +318,7 @@ Forbidden:
 - outputting anything outside the single tool call
 """
 
-_ADAPTATION_FLOW_SELECTION_PROMPT = """You are the Plan Agent for ADAPTATION_FLOW:SELECTION.
+_ADAPTATION_FLOW_SELECTION_PROMPT = """You are the Plan Agent for ADAPTATION_SELECTION.
 
 You MUST read the input JSON and return exactly ONE tool call.
 You MUST call the function: adaptation_flow_selection.
@@ -303,7 +330,7 @@ Your ONLY job: present available options clearly.
 
 INPUT:
 {
-  "current_state": "ADAPTATION_FLOW:SELECTION",
+  "current_state": "ADAPTATION_SELECTION",
   "message_text": "string",
   "available_adaptations": [
     "<ADAPTATION_INTENT>",
@@ -319,7 +346,7 @@ INPUT:
 OUTPUT:
 {
   "reply_text": "string",
-  "transition_signal": "ADAPTATION_FLOW:PARAMS | ADAPTATION_FLOW:CONFIRMATION | ACTIVE | null",
+  "transition_signal": "ADAPTATION_PARAMS | ADAPTATION_CONFIRMATION | ACTIVE | null",
   "adaptation_intent": "<ADAPTATION_INTENT> | null",
   "adaptation_params": null
 }
@@ -362,7 +389,7 @@ HARD RULES:
 5. Keep descriptions SHORT (max 5 words)
 """
 
-_ADAPTATION_FLOW_PARAMS_PROMPT = """You are the Plan Agent for ADAPTATION_FLOW:PARAMS.
+_ADAPTATION_FLOW_PARAMS_PROMPT = """You are the Plan Agent for ADAPTATION_PARAMS.
 
 You MUST read the input JSON and return exactly ONE tool call.
 You MUST call the function: adaptation_flow_params.
@@ -374,7 +401,7 @@ Your ONLY job: collect the missing parameter.
 
 INPUT:
 {
-  "current_state": "ADAPTATION_FLOW:PARAMS",
+  "current_state": "ADAPTATION_PARAMS",
   "message_text": "string",
   "adaptation_context": {
     "intent": "CHANGE_MAIN_CATEGORY | EXTEND_PLAN_DURATION | SHORTEN_PLAN_DURATION",
@@ -392,7 +419,7 @@ INPUT:
 OUTPUT:
 {
   "reply_text": "string",
-  "transition_signal": "ADAPTATION_FLOW:CONFIRMATION | ACTIVE | null",
+  "transition_signal": "ADAPTATION_CONFIRMATION | ACTIVE | null",
   "adaptation_intent": "[SAME AS INPUT]",
   "adaptation_params": {
     "target_category": "somatic | ... | null",
@@ -411,7 +438,7 @@ If param is MISSING (null in input):
 If param is PROVIDED (present in message_text):
 - Extract param value
 - Set adaptation_params with extracted value
-- transition_signal = "ADAPTATION_FLOW:CONFIRMATION"
+- transition_signal = "ADAPTATION_CONFIRMATION"
 
 If user says ABORT:
 {
@@ -449,7 +476,7 @@ HARD RULES:
 6. You MAY list allowed values from schema.
 """
 
-_ADAPTATION_FLOW_CONFIRMATION_PROMPT = """You are the Plan Agent for ADAPTATION_FLOW:CONFIRMATION.
+_ADAPTATION_FLOW_CONFIRMATION_PROMPT = """You are the Plan Agent for ADAPTATION_CONFIRMATION.
 
 You MUST read the input JSON and return exactly ONE tool call.
 You MUST call the function: adaptation_flow_confirmation.
@@ -461,7 +488,7 @@ Your ONLY job: show preview and get confirmation.
 
 INPUT:
 {
-  "current_state": "ADAPTATION_FLOW:CONFIRMATION",
+  "current_state": "ADAPTATION_CONFIRMATION",
   "message_text": "string",
   "adaptation_context": {
     "intent": "<ADAPTATION_INTENT>",
@@ -479,7 +506,7 @@ INPUT:
 OUTPUT:
 {
   "reply_text": "string",
-  "transition_signal": "EXECUTE_ADAPTATION | ADAPTATION_FLOW:PARAMS | ACTIVE | null",
+  "transition_signal": "EXECUTE_ADAPTATION | ADAPTATION_PARAMS | ACTIVE | null",
   "adaptation_intent": "[SAME AS INPUT - FROZEN]",
   "adaptation_params": "[SAME AS INPUT - FROZEN]",
   "confirmed": true | false
@@ -511,7 +538,7 @@ If user says YES/CONFIRM:
 If user wants to EDIT param:
 {
   "reply_text": "Обери нову категорію:",
-  "transition_signal": "ADAPTATION_FLOW:PARAMS",
+  "transition_signal": "ADAPTATION_PARAMS",
   "adaptation_intent": "[FROZEN]",
   "adaptation_params": "[FROZEN - but with param set to null]",
   "confirmed": false
@@ -570,8 +597,8 @@ _ADAPTATION_FLOW_SELECTION_TOOL = {
             "transition_signal": {
                 "type": ["string", "null"],
                 "enum": [
-                    "ADAPTATION_FLOW:PARAMS",
-                    "ADAPTATION_FLOW:CONFIRMATION",
+                    "ADAPTATION_PARAMS",
+                    "ADAPTATION_CONFIRMATION",
                     "ACTIVE",
                     None,
                 ],
@@ -597,7 +624,7 @@ _ADAPTATION_FLOW_PARAMS_TOOL = {
             "reply_text": {"type": "string"},
             "transition_signal": {
                 "type": ["string", "null"],
-                "enum": ["ADAPTATION_FLOW:CONFIRMATION", "ACTIVE", None],
+                "enum": ["ADAPTATION_CONFIRMATION", "ACTIVE", None],
             },
             "adaptation_intent": {
                 "type": "string",
@@ -633,7 +660,7 @@ _ADAPTATION_FLOW_CONFIRMATION_TOOL = {
             "reply_text": {"type": "string"},
             "transition_signal": {
                 "type": ["string", "null"],
-                "enum": ["EXECUTE_ADAPTATION", "ADAPTATION_FLOW:PARAMS", "ACTIVE", None],
+                "enum": ["EXECUTE_ADAPTATION", "ADAPTATION_PARAMS", "ACTIVE", None],
             },
             "adaptation_intent": {
                 "type": "string",
@@ -664,7 +691,7 @@ _PLAN_FLOW_ENTRY_TOOL = {
             "reply_text": {"type": "string"},
             "transition_signal": {
                 "type": ["string", "null"],
-                "enum": ["PLAN_FLOW:DATA_COLLECTION", None],
+                "enum": ["PLAN_FLOW:DATA_COLLECTION", "ADAPTATION_SELECTION", None],
             },
             "plan_updates": {"type": "null"},
             "generated_plan_object": {"type": "null"},
@@ -816,11 +843,11 @@ async def plan_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
         return await plan_flow_data_collection(payload)
     if current_state == "PLAN_FLOW:CONFIRMATION_PENDING":
         return await plan_flow_confirmation_pending(payload)
-    if current_state == "ADAPTATION_FLOW:SELECTION":
+    if current_state == "ADAPTATION_SELECTION":
         return await adaptation_flow_selection(payload)
-    if current_state == "ADAPTATION_FLOW:PARAMS":
+    if current_state == "ADAPTATION_PARAMS":
         return await adaptation_flow_params(payload)
-    if current_state == "ADAPTATION_FLOW:CONFIRMATION":
+    if current_state == "ADAPTATION_CONFIRMATION":
         return await adaptation_flow_confirmation(payload)
     return {
         "reply_text": "",

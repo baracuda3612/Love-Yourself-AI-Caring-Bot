@@ -27,6 +27,9 @@ class SessionMemory:
     def _plan_parameters_key(self, user_id: int) -> str:
         return f"session:{user_id}:plan_parameters"
 
+    def _adaptation_context_key(self, user_id: int) -> str:
+        return f"session:{user_id}:adaptation_context"
+
     async def append_message(self, user_id: int | None, role: str, text: str) -> None:
         """Append a message to the tail of the user's history."""
 
@@ -130,3 +133,61 @@ class SessionMemory:
             await self.redis.delete(self._plan_parameters_key(user_id))
         except Exception:  # pragma: no cover - defensive
             logger.warning("Failed to clear plan parameters from Redis", exc_info=True)
+
+    async def get_adaptation_context(self, user_id: int | None) -> dict | None:
+        """Get adaptation context (intent + params)."""
+
+        if user_id is None or self.redis is None:
+            return None
+
+        try:
+            raw = await self.redis.get(self._adaptation_context_key(user_id))
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("Failed to fetch adaptation context from Redis", exc_info=True)
+            return None
+
+        if not raw:
+            return None
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "ignore")
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    async def set_adaptation_context(self, user_id: int | None, context: dict) -> None:
+        """Set adaptation context with a 1 hour TTL."""
+
+        if user_id is None or self.redis is None:
+            return
+
+        try:
+            await self.redis.set(
+                self._adaptation_context_key(user_id),
+                json.dumps(context),
+                ex=3600,
+            )
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("Failed to persist adaptation context to Redis", exc_info=True)
+
+    async def update_adaptation_context(self, user_id: int | None, updates: dict) -> None:
+        """Merge updates into current adaptation context."""
+
+        if user_id is None or self.redis is None:
+            return
+
+        existing = await self.get_adaptation_context(user_id) or {}
+        existing.update(updates)
+        await self.set_adaptation_context(user_id, existing)
+
+    async def clear_adaptation_context(self, user_id: int | None) -> None:
+        """Clear adaptation context."""
+
+        if user_id is None or self.redis is None:
+            return
+
+        try:
+            await self.redis.delete(self._adaptation_context_key(user_id))
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("Failed to clear adaptation context from Redis", exc_info=True)

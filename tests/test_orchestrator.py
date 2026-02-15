@@ -169,3 +169,62 @@ async def test_plan_tool_call_invokes_handler(monkeypatch):
         (3, "user", "Створи план"),
         (3, "assistant", "Starting a plan. Tell me what you'd like to plan."),
     ]
+
+
+class _FakeQuery:
+    def __init__(self, steps):
+        self._steps = steps
+
+    def join(self, *_args, **_kwargs):
+        return self
+
+    def filter(self, *_args, **_kwargs):
+        return self
+
+    def all(self):
+        return self._steps
+
+
+class _FakeDB:
+    def __init__(self, steps):
+        self._steps = steps
+
+    def query(self, *_args, **_kwargs):
+        return _FakeQuery(self._steps)
+
+
+class _FakeStep:
+    def __init__(self, difficulty):
+        self.difficulty = difficulty
+
+
+class _FakePlan:
+    def __init__(self, plan_id=1):
+        self.id = plan_id
+
+
+def test_get_avg_difficulty_mixed_enum_values():
+    db = _FakeDB([_FakeStep("EASY"), _FakeStep("MEDIUM"), _FakeStep("HARD")])
+    plan = _FakePlan()
+
+    result = orchestrator.get_avg_difficulty(db, plan)
+
+    assert result == 2
+
+
+def test_get_avg_difficulty_empty_steps_returns_default_one():
+    db = _FakeDB([])
+    plan = _FakePlan()
+
+    result = orchestrator.get_avg_difficulty(db, plan)
+
+    assert result == 1
+
+
+def test_get_avg_difficulty_unknown_value_falls_back_to_one():
+    db = _FakeDB([_FakeStep("UNKNOWN"), _FakeStep("HARD")])
+    plan = _FakePlan()
+
+    result = orchestrator.get_avg_difficulty(db, plan)
+
+    assert result == 2
