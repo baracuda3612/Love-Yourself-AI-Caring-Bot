@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 from app.ai import async_client, extract_output_text
 from app.config import settings
 from app.plan_parameters import normalize_plan_parameters
+from app.adaptation_types import get_all_intent_values, get_intents_requiring_params
 
 __all__ = [
     "PlanAgentEnvelopeError",
@@ -305,8 +306,7 @@ INPUT:
   "current_state": "ADAPTATION_FLOW:SELECTION",
   "message_text": "string",
   "available_adaptations": [
-    "REDUCE_DAILY_LOAD",
-    "INCREASE_DAILY_LOAD",
+    "<ADAPTATION_INTENT>",
     ...
   ],
   "active_plan": {
@@ -320,7 +320,7 @@ OUTPUT:
 {
   "reply_text": "string",
   "transition_signal": "ADAPTATION_FLOW:PARAMS | ADAPTATION_FLOW:CONFIRMATION | ACTIVE | null",
-  "adaptation_intent": "REDUCE_DAILY_LOAD | ... | null",
+  "adaptation_intent": "<ADAPTATION_INTENT> | null",
   "adaptation_params": null
 }
 
@@ -464,7 +464,7 @@ INPUT:
   "current_state": "ADAPTATION_FLOW:CONFIRMATION",
   "message_text": "string",
   "adaptation_context": {
-    "intent": "REDUCE_DAILY_LOAD | ...",
+    "intent": "<ADAPTATION_INTENT>",
     "params": {...}
   },
   "active_plan": {
@@ -578,18 +578,7 @@ _ADAPTATION_FLOW_SELECTION_TOOL = {
             },
             "adaptation_intent": {
                 "type": ["string", "null"],
-                "enum": [
-                    "REDUCE_DAILY_LOAD",
-                    "INCREASE_DAILY_LOAD",
-                    "LOWER_DIFFICULTY",
-                    "INCREASE_DIFFICULTY",
-                    "EXTEND_PLAN_DURATION",
-                    "SHORTEN_PLAN_DURATION",
-                    "PAUSE_PLAN",
-                    "RESUME_PLAN",
-                    "CHANGE_MAIN_CATEGORY",
-                    None,
-                ],
+                "enum": get_all_intent_values() + [None],
             },
             "adaptation_params": {"type": "null"},
         },
@@ -612,7 +601,7 @@ _ADAPTATION_FLOW_PARAMS_TOOL = {
             },
             "adaptation_intent": {
                 "type": "string",
-                "enum": ["CHANGE_MAIN_CATEGORY", "EXTEND_PLAN_DURATION", "SHORTEN_PLAN_DURATION"],
+                "enum": get_intents_requiring_params(),
             },
             "adaptation_params": {
                 "type": ["object", "null"],
@@ -648,17 +637,7 @@ _ADAPTATION_FLOW_CONFIRMATION_TOOL = {
             },
             "adaptation_intent": {
                 "type": "string",
-                "enum": [
-                    "REDUCE_DAILY_LOAD",
-                    "INCREASE_DAILY_LOAD",
-                    "LOWER_DIFFICULTY",
-                    "INCREASE_DIFFICULTY",
-                    "EXTEND_PLAN_DURATION",
-                    "SHORTEN_PLAN_DURATION",
-                    "PAUSE_PLAN",
-                    "RESUME_PLAN",
-                    "CHANGE_MAIN_CATEGORY",
-                ],
+                "enum": get_all_intent_values(),
             },
             "adaptation_params": {"type": ["object", "null"]},
             "confirmed": {"type": "boolean"},
@@ -853,7 +832,10 @@ async def plan_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def adaptation_flow_selection(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Handle SELECTION state."""
+    """Handle SELECTION state.
+
+    Returns adaptation_intent as AdaptationIntent.value or None.
+    """
     messages = [
         {"role": "system", "content": _ADAPTATION_FLOW_SELECTION_PROMPT},
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -903,7 +885,10 @@ async def adaptation_flow_selection(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def adaptation_flow_params(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Handle PARAMS state."""
+    """Handle PARAMS state.
+
+    Returns adaptation_intent as required AdaptationIntent.value.
+    """
     messages = [
         {"role": "system", "content": _ADAPTATION_FLOW_PARAMS_PROMPT},
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -953,7 +938,10 @@ async def adaptation_flow_params(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def adaptation_flow_confirmation(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Handle CONFIRMATION state."""
+    """Handle CONFIRMATION state.
+
+    Returns adaptation_intent frozen from input as AdaptationIntent.value.
+    """
     messages = [
         {"role": "system", "content": _ADAPTATION_FLOW_CONFIRMATION_PROMPT},
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
