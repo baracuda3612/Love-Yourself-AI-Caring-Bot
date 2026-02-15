@@ -24,6 +24,8 @@ from app.db import (
 )
 from app.logging.router_logging import log_metric, log_router_decision
 from app.plan_adaptations import PlanAdaptationError, apply_plan_adaptation
+from app.adaptation_executor import AdaptationExecutor
+from app.adaptation_types import AdaptationIntent
 from app.plan_parameters import normalize_plan_parameters
 from app.scheduler import cancel_plan_step_jobs, reschedule_plan_steps
 from app.session_memory import SessionMemory
@@ -49,10 +51,14 @@ from app.plan_finalization import (
 )
 from app.ux.plan_messages import build_activation_info_message
 from app.workers.coach_agent import coach_agent
+from app.fsm.guards import can_transition
 from app.fsm.states import (
-    ACTIVE_CONFIRMATION_ENTRYPOINTS,
-    ACTIVE_PAUSED_CONFIRMATION_ENTRYPOINTS,
-    ADAPTATION_FLOW_ENTRYPOINTS,
+    ADAPTATION_CONFIRMATION,
+    ADAPTATION_FLOW_ALLOWED_TRANSITIONS,
+    ADAPTATION_FLOW_ENTRY_STATES,
+    ADAPTATION_FLOW_STATES,
+    ADAPTATION_PARAMS,
+    ADAPTATION_SELECTION,
     FSM_ALLOWED_STATES,
     PLAN_FLOW_ALLOWED_TRANSITIONS,
     PLAN_FLOW_ENTRYPOINTS,
@@ -112,6 +118,14 @@ def _sanitize_plan_updates(plan_updates: Any) -> Optional[Dict[str, Any]]:
             if slots:
                 clean_updates[key] = slots
     return clean_updates
+
+
+def run_plan_tool_call(tool_call: Dict[str, Any]) -> Dict[str, Any]:
+    """Backward-compatible handler for legacy plan tool call payloads."""
+    tool_name = str(tool_call.get("name") or "")
+    if tool_name == "start_plan":
+        return {"user_text": "Starting a plan. Tell me what you'd like to plan."}
+    return {"user_text": ""}
 
 
 async def handle_confirmation_pending_action(
@@ -228,12 +242,14 @@ def _guard_fsm_transition(
         return None, None
 
     normalized_current = _normalize_fsm_state(current_state) if current_state else None
-    if normalized_current in PLAN_FLOW_STATES or normalized_current == "ADAPTATION_FLOW":
+    if normalized_current in PLAN_FLOW_STATES or normalized_current in ADAPTATION_FLOW_STATES:
         if target_agent != "plan":
             return None, "non_plan_agent_in_tunnel"
 
     normalized_signal = _normalize_fsm_state(transition_signal)
     if normalized_signal is None:
+        if transition_signal == "EXECUTE_ADAPTATION":
+            return "EXECUTE_ADAPTATION", None
         return None, "invalid_state"
 
     if normalized_signal in PLAN_FLOW_STATES:
@@ -260,35 +276,23 @@ def _guard_fsm_transition(
             return normalized_signal, None
         return None, "plan_flow_exit_blocked"
 
-    if normalized_signal == "ADAPTATION_FLOW":
-        if normalized_current in ADAPTATION_FLOW_ENTRYPOINTS:
+    if normalized_signal in ADAPTATION_FLOW_STATES:
+        if normalized_current in ADAPTATION_FLOW_STATES:
+            if normalized_current == normalized_signal:
+                return normalized_signal, None
+            if (normalized_current, normalized_signal) in ADAPTATION_FLOW_ALLOWED_TRANSITIONS:
+                return normalized_signal, None
+            return None, "adaptation_flow_transition_blocked"
+        if normalized_signal != ADAPTATION_SELECTION:
+            return None, "adaptation_flow_entry_blocked"
+        if normalized_current in ADAPTATION_FLOW_ENTRY_STATES:
             return normalized_signal, None
         return None, "adaptation_flow_entry_blocked"
 
-    if normalized_current == "ADAPTATION_FLOW":
-        if normalized_signal in {"ACTIVE_CONFIRMATION", "ACTIVE_PAUSED_CONFIRMATION"}:
-            return normalized_signal, None
-        return None, "adaptation_flow_exit_blocked"
-
-    if normalized_signal == "ACTIVE_CONFIRMATION":
-        if normalized_current in ACTIVE_CONFIRMATION_ENTRYPOINTS:
-            return normalized_signal, None
-        return None, "active_confirmation_entry_blocked"
-
-    if normalized_signal == "ACTIVE_PAUSED_CONFIRMATION":
-        if normalized_current in ACTIVE_PAUSED_CONFIRMATION_ENTRYPOINTS:
-            return normalized_signal, None
-        return None, "active_paused_confirmation_entry_blocked"
-
-    if normalized_current == "ACTIVE_CONFIRMATION":
+    if normalized_current in ADAPTATION_FLOW_STATES:
         if normalized_signal == "ACTIVE":
             return normalized_signal, None
-        return None, "active_confirmation_exit_blocked"
-
-    if normalized_current == "ACTIVE_PAUSED_CONFIRMATION":
-        if normalized_signal == "ACTIVE_PAUSED":
-            return normalized_signal, None
-        return None, "active_paused_confirmation_exit_blocked"
+        return None, "adaptation_flow_exit_blocked"
 
     return normalized_signal, None
 
@@ -385,40 +389,44 @@ async def _commit_fsm_transition(
     user_id: int,
     target_agent: str,
     next_state: str,
+    db: Optional[Session] = None,
+    reason: str = "",
 ) -> Optional[str]:
-    previous_state: Optional[str] = None
-    did_commit = False
-    with SessionLocal() as db:
-        user: Optional[User] = db.query(User).filter(User.id == user_id).first()
+    """Commit FSM transition with guard validation.
+
+    If ``db`` is provided, transition is staged into that session and caller controls commit.
+    Otherwise function opens and commits its own session for backward compatibility.
+    """
+
+    def _apply_transition(session: Session) -> Optional[str]:
+        user: Optional[User] = session.query(User).filter(User.id == user_id).first()
         if not user:
-            logger.warning(
-                "[FSM] transition_signal ignored — user %s not found (agent=%s)",
-                user_id,
-                target_agent,
-            )
-            return None
+            raise ValueError(f"User {user_id} not found")
+
         previous_state = user.current_state
-        user.current_state = next_state
-        try:
-            db.commit()
-        except IntegrityError:
-            db.rollback()
-            logger.error(
-                "[FSM] Failed to persist transition for user %s: %s (agent=%s)",
+        if previous_state == next_state:
+            logger.debug(
+                "[FSM] No-op transition for user %s already in %s (agent=%s)",
                 user_id,
                 next_state,
                 target_agent,
             )
-        else:
-            did_commit = True
+            return previous_state
 
-    if did_commit and previous_state is not None:
+        if not can_transition(previous_state, next_state):
+            raise ValueError(
+                f"Transition {previous_state} → {next_state} not allowed by FSM guards"
+            )
+
+        user.current_state = next_state
+        session.add(user)
         logger.info(
-            "[FSM] User %s state transition: %s → %s (agent=%s)",
+            "[FSM] User %s state transition: %s → %s (agent=%s, reason=%s)",
             user_id,
             previous_state,
             next_state,
             target_agent,
+            reason,
         )
         log_router_decision(
             {
@@ -427,12 +435,24 @@ async def _commit_fsm_transition(
                 "agent": target_agent,
                 "from_state": previous_state,
                 "to_state": next_state,
+                "reason": reason,
             }
         )
+        return previous_state
+
+    if db is not None:
+        previous_state = _apply_transition(db)
         if next_state == "PLAN_FLOW:DATA_COLLECTION" and previous_state not in PLAN_FLOW_STATES:
             await session_memory.clear_plan_parameters(user_id)
         return previous_state
-    return None
+
+    with SessionLocal() as managed_db:
+        previous_state = _apply_transition(managed_db)
+        managed_db.commit()
+
+    if next_state == "PLAN_FLOW:DATA_COLLECTION" and previous_state not in PLAN_FLOW_STATES:
+        await session_memory.clear_plan_parameters(user_id)
+    return previous_state
 
 
 def _safe_timezone(name: Optional[str]) -> pytz.BaseTzInfo:
@@ -741,6 +761,237 @@ async def call_router(user_id: int, message_text: str, context: Optional[Dict[st
     }
 
 
+
+
+def get_active_plan(db: Session, user_id: int) -> Optional[AIPlan]:
+    return (
+        db.query(AIPlan)
+        .filter(AIPlan.user_id == user_id, AIPlan.status.in_(["active", "paused"]))
+        .order_by(AIPlan.created_at.desc())
+        .first()
+    )
+
+
+def compute_available_adaptations(db: Session, plan: AIPlan) -> List[AdaptationIntent]:
+    available: List[AdaptationIntent] = []
+
+    if plan.load in {"MID", "INTENSIVE"}:
+        available.append(AdaptationIntent.REDUCE_DAILY_LOAD)
+    if plan.load in {"LITE", "MID"}:
+        available.append(AdaptationIntent.INCREASE_DAILY_LOAD)
+
+    steps = (
+        db.query(AIPlanStep)
+        .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+        .filter(AIPlanDay.plan_id == plan.id)
+        .all()
+    )
+    if steps:
+        min_difficulty = min(step.difficulty for step in steps)
+        max_difficulty = max(step.difficulty for step in steps)
+        if max_difficulty > 1:
+            available.append(AdaptationIntent.LOWER_DIFFICULTY)
+        if min_difficulty < 3:
+            available.append(AdaptationIntent.INCREASE_DIFFICULTY)
+
+    if plan.total_days in {7, 14}:
+        available.append(AdaptationIntent.EXTEND_PLAN_DURATION)
+    elif plan.total_days == 21:
+        available.append(AdaptationIntent.EXTEND_PLAN_DURATION)
+        available.append(AdaptationIntent.SHORTEN_PLAN_DURATION)
+    elif plan.total_days == 90:
+        available.append(AdaptationIntent.SHORTEN_PLAN_DURATION)
+
+    if plan.status == "active":
+        available.append(AdaptationIntent.PAUSE_PLAN)
+    elif plan.status == "paused":
+        available.append(AdaptationIntent.RESUME_PLAN)
+
+    available.append(AdaptationIntent.CHANGE_MAIN_CATEGORY)
+    return available
+
+
+def get_daily_task_count(db: Session, plan: AIPlan) -> int:
+    first_day = (
+        db.query(AIPlanDay)
+        .filter(AIPlanDay.plan_id == plan.id)
+        .order_by(AIPlanDay.day_number.asc())
+        .first()
+    )
+    if not first_day:
+        return 0
+    return db.query(AIPlanStep).filter(AIPlanStep.day_id == first_day.id).count()
+
+
+def get_avg_difficulty(db: Session, plan: AIPlan) -> int:
+    steps = (
+        db.query(AIPlanStep)
+        .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+        .filter(AIPlanDay.plan_id == plan.id)
+        .all()
+    )
+    if not steps:
+        return 1
+    return round(sum(step.difficulty for step in steps) / len(steps))
+
+
+async def build_adaptation_payload(
+    user_id: int,
+    message_text: str,
+    current_state: str,
+    db: Session,
+) -> Dict[str, Any]:
+    active_plan = get_active_plan(db, user_id)
+    if not active_plan:
+        raise ValueError("No active plan for adaptation")
+
+    adaptation_context = await session_memory.get_adaptation_context(user_id) or {
+        "intent": None,
+        "params": None,
+    }
+
+    payload: Dict[str, Any] = {
+        "current_state": current_state,
+        "message_text": message_text,
+        "adaptation_context": adaptation_context,
+    }
+
+    if current_state == ADAPTATION_SELECTION:
+        available = compute_available_adaptations(db, active_plan)
+        payload["available_adaptations"] = [intent.value for intent in available]
+        payload["active_plan"] = {
+            "load": active_plan.load,
+            "duration": active_plan.total_days,
+            "status": active_plan.status,
+        }
+    elif current_state == ADAPTATION_PARAMS:
+        payload["active_plan"] = {
+            "duration": active_plan.total_days,
+        }
+    elif current_state == ADAPTATION_CONFIRMATION:
+        payload["active_plan"] = {
+            "load": active_plan.load,
+            "duration": active_plan.total_days,
+            "focus": active_plan.focus,
+            "daily_task_count": get_daily_task_count(db, active_plan),
+            "difficulty_level": get_avg_difficulty(db, active_plan),
+            "status": active_plan.status,
+        }
+
+    return payload
+
+
+async def execute_adaptation(user_id: int, llm_response: Dict[str, Any], db: Session) -> None:
+    adaptation_intent_str = llm_response.get("adaptation_intent")
+    adaptation_params = llm_response.get("adaptation_params")
+
+    try:
+        intent = AdaptationIntent(adaptation_intent_str)
+    except ValueError:
+        logger.error("Invalid adaptation_intent: %s", adaptation_intent_str)
+        raise
+
+    active_plan = get_active_plan(db, user_id)
+    if not active_plan:
+        raise ValueError("No active plan for adaptation")
+
+    executor = AdaptationExecutor()
+    executor.execute(
+        db=db,
+        plan_id=active_plan.id,
+        intent=intent,
+        params=adaptation_params,
+    )
+
+
+async def handle_adaptation_response(
+    user_id: int,
+    llm_response: Dict[str, Any],
+    current_state: str,
+    db: Session,
+) -> Tuple[str, List[str]]:
+    """Handle LLM response for adaptation flow using caller session."""
+    reply_text = str(llm_response.get("reply_text") or "")
+    transition_signal = llm_response.get("transition_signal")
+    adaptation_intent = llm_response.get("adaptation_intent")
+    adaptation_params = llm_response.get("adaptation_params")
+    followups: List[str] = []
+
+    if adaptation_intent or adaptation_params:
+        await session_memory.update_adaptation_context(
+            user_id,
+            {"intent": adaptation_intent, "params": adaptation_params},
+        )
+
+    if transition_signal == "EXECUTE_ADAPTATION":
+        try:
+            await execute_adaptation(user_id, llm_response, db)
+            followups.append("Зміни успішно застосовано! ✅")
+        except NotImplementedError:
+            db.rollback()
+            followups.append("Ця адаптація ще в розробці (Phase 3). Спробуй іншу зміну.")
+        except Exception:
+            db.rollback()
+            logger.exception("Adaptation execution failed for user %s", user_id)
+            followups.append("Не вдалось застосувати зміни. Спробуй пізніше.")
+
+        await _commit_fsm_transition(
+            user_id=user_id,
+            target_agent="plan",
+            next_state="ACTIVE",
+            db=db,
+            reason="adaptation_executed",
+        )
+        await session_memory.clear_adaptation_context(user_id)
+        return reply_text, followups
+
+    if transition_signal == "ACTIVE":
+        await _commit_fsm_transition(
+            user_id=user_id,
+            target_agent="plan",
+            next_state="ACTIVE",
+            db=db,
+            reason="adaptation_aborted",
+        )
+        await session_memory.clear_adaptation_context(user_id)
+        return reply_text, followups
+
+    if transition_signal in ADAPTATION_FLOW_STATES:
+        await _commit_fsm_transition(
+            user_id=user_id,
+            target_agent="plan",
+            next_state=transition_signal,
+            db=db,
+            reason=f"adaptation_flow_{current_state}_to_{transition_signal}",
+        )
+        return reply_text, followups
+
+    if transition_signal is None:
+        return reply_text, followups
+
+    logger.error("Unknown adaptation transition_signal: %s", transition_signal)
+    await _commit_fsm_transition(
+        user_id=user_id,
+        target_agent="plan",
+        next_state="ACTIVE",
+        db=db,
+        reason="invalid_signal_fallback",
+    )
+    await session_memory.clear_adaptation_context(user_id)
+    return reply_text or "Помилка. Спробуй ще раз.", followups
+
+
+async def handle_adaptation_flow(
+    user_id: int,
+    message_text: str,
+    current_state: str,
+    db: Session,
+) -> Tuple[str, List[str]]:
+    payload = await build_adaptation_payload(user_id, message_text, current_state, db)
+    llm_response = await plan_agent(payload)
+    return await handle_adaptation_response(user_id, llm_response, current_state, db)
+
+
 async def build_plan_draft_preview(
     user_id: int,
     parameters_for_draft: Dict[str, Any],
@@ -808,6 +1059,17 @@ async def handle_incoming_message(
         }
 
     context_payload = await build_user_context(user_id, message_text)
+    if context_payload.get("current_state") in ADAPTATION_FLOW_STATES:
+        with SessionLocal() as db:
+            reply_text, followups = await handle_adaptation_flow(
+                user_id,
+                message_text,
+                str(context_payload.get("current_state")),
+                db,
+            )
+            db.commit()
+        return await _finalize_reply(reply_text, followup_messages=followups)
+
     show_plan_actions = False
     if context_payload.get("current_state") == "PLAN_FLOW:CONFIRMATION_PENDING":
         with SessionLocal() as db:
@@ -870,6 +1132,39 @@ async def handle_incoming_message(
     )
 
     worker_result = await _invoke_agent(target_agent, worker_payload)
+
+    if target_agent == "plan" and isinstance(worker_result.get("tool_call"), dict):
+        tool_result = run_plan_tool_call(worker_result["tool_call"])
+        return await _finalize_reply(str(tool_result.get("user_text") or ""))
+
+    if target_agent == "plan" and worker_result.get("transition_signal") == ADAPTATION_SELECTION:
+        with SessionLocal() as db:
+            active_plan = get_active_plan(db, user_id)
+            if not active_plan:
+                return await _finalize_reply(
+                    "Спочатку потрібно створити план. Напиши 'створи план'."
+                )
+            try:
+                await _commit_fsm_transition(
+                    user_id=user_id,
+                    target_agent=target_agent,
+                    next_state=ADAPTATION_SELECTION,
+                    db=db,
+                    reason="user_initiated_adaptation",
+                )
+            except ValueError as exc:
+                logger.error("FSM transition blocked: %s", exc)
+                return await _finalize_reply("Помилка переходу стану. Спробуй ще раз.")
+
+            reply_text, followups = await handle_adaptation_flow(
+                user_id,
+                message_text,
+                ADAPTATION_SELECTION,
+                db,
+            )
+            db.commit()
+
+        return await _finalize_reply(reply_text, followup_messages=followups)
 
     # NOTE:
     # Auto-start PLAN_FLOW commits FSM transition eagerly and re-invokes Plan Agent.
@@ -1029,7 +1324,7 @@ async def handle_incoming_message(
                     "plan_generated_ok",
                     extra={"user_id": user_id, "agent": target_agent},
                 )
-                if context_payload.get("current_state") == "ADAPTATION_FLOW":
+                if context_payload.get("current_state") in ADAPTATION_FLOW_STATES:
                     log_metric(
                         "adaptation_created",
                         extra={"user_id": user_id, "agent": target_agent},
