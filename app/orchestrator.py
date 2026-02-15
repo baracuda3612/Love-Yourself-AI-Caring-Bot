@@ -812,7 +812,18 @@ def get_avg_difficulty(db: Session, plan: AIPlan) -> int:
     )
     if not steps:
         return 1
-    return round(sum(step.difficulty for step in steps) / len(steps))
+    difficulty_map = {
+        "EASY": 1,
+        "MEDIUM": 2,
+        "HARD": 3,
+    }
+
+    values = [
+        difficulty_map.get(str(step.difficulty).upper(), 1)
+        for step in steps
+    ]
+
+    return round(sum(values) / len(values))
 
 
 async def build_adaptation_payload(
