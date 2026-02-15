@@ -331,7 +331,7 @@ def _schedule_custom_step(*, user_id: int, title: str, description: str, schedul
 
         _ensure_scheduler_loop()
         schedule_plan_step(step, user)
-        job_id = _generate_step_job_id(user.id, step)
+        job_id = _generate_step_job_id(step)
 
         db.commit()
 
