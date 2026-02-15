@@ -252,47 +252,16 @@ def _guard_fsm_transition(
             return "EXECUTE_ADAPTATION", None
         return None, "invalid_state"
 
-    if normalized_signal in PLAN_FLOW_STATES:
-        if normalized_current in PLAN_FLOW_STATES:
-            if normalized_current == normalized_signal:
-                return normalized_signal, None
-            if (normalized_current, normalized_signal) in PLAN_FLOW_ALLOWED_TRANSITIONS:
-                return normalized_signal, None
-            return None, "plan_flow_transition_blocked"
-        if normalized_signal != "PLAN_FLOW:DATA_COLLECTION":
-            return None, "plan_flow_entry_blocked"
-        if normalized_current in PLAN_FLOW_ENTRYPOINTS:
-            return normalized_signal, None
-        return None, "plan_flow_entry_blocked"
+    if normalized_current is None:
+        return normalized_signal, None
 
-    if normalized_current in PLAN_FLOW_STATES:
-        if normalized_signal == "IDLE_PLAN_ABORTED":
-            return normalized_signal, None
-        if normalized_signal == "ACTIVE":
-            if normalized_current != "PLAN_FLOW:FINALIZATION":
-                return None, "plan_flow_exit_blocked_not_finalized"
-            if not plan_persisted:
-                return None, "plan_flow_exit_blocked_not_persisted"
-            return normalized_signal, None
-        return None, "plan_flow_exit_blocked"
+    # PLAN finalization has additional runtime requirement beyond state graph validity.
+    if normalized_current == "PLAN_FLOW:FINALIZATION" and normalized_signal == "ACTIVE":
+        if not plan_persisted:
+            return None, "plan_flow_exit_blocked_not_persisted"
 
-    if normalized_signal in ADAPTATION_FLOW_STATES:
-        if normalized_current in ADAPTATION_FLOW_STATES:
-            if normalized_current == normalized_signal:
-                return normalized_signal, None
-            if (normalized_current, normalized_signal) in ADAPTATION_FLOW_ALLOWED_TRANSITIONS:
-                return normalized_signal, None
-            return None, "adaptation_flow_transition_blocked"
-        if normalized_signal != ADAPTATION_SELECTION:
-            return None, "adaptation_flow_entry_blocked"
-        if normalized_current in ADAPTATION_FLOW_ENTRY_STATES:
-            return normalized_signal, None
-        return None, "adaptation_flow_entry_blocked"
-
-    if normalized_current in ADAPTATION_FLOW_STATES:
-        if normalized_signal == "ACTIVE":
-            return normalized_signal, None
-        return None, "adaptation_flow_exit_blocked"
+    if not can_transition(normalized_current, normalized_signal):
+        return None, "transition_blocked_by_guards"
 
     return normalized_signal, None
 
@@ -1060,6 +1029,11 @@ async def handle_incoming_message(
 
     context_payload = await build_user_context(user_id, message_text)
     if context_payload.get("current_state") in ADAPTATION_FLOW_STATES:
+        logger.info(
+            "Bypassing router for user %s in adaptation tunnel (state=%s)",
+            user_id,
+            context_payload.get("current_state"),
+        )
         with SessionLocal() as db:
             reply_text, followups = await handle_adaptation_flow(
                 user_id,
@@ -1153,8 +1127,16 @@ async def handle_incoming_message(
                     reason="user_initiated_adaptation",
                 )
             except ValueError as exc:
-                logger.error("FSM transition blocked: %s", exc)
-                return await _finalize_reply("Помилка переходу стану. Спробуй ще раз.")
+                logger.error(
+                    "FSM transition blocked for user %s: %s -> %s, reason: %s",
+                    user_id,
+                    context_payload.get("current_state"),
+                    ADAPTATION_SELECTION,
+                    exc,
+                )
+                return await _finalize_reply(
+                    "Не можу розпочати адаптацію зараз. Спробуй пізніше або створи новий план."
+                )
 
             reply_text, followups = await handle_adaptation_flow(
                 user_id,
