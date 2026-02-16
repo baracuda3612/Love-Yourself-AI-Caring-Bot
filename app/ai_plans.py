@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Dict, Optional
 
 from app.ai import async_client, extract_output_text
 from app.config import settings
+from app.fsm.states import (
+    ADAPTATION_CONFIRMATION,
+    ADAPTATION_PARAMS,
+    ADAPTATION_SELECTION,
+    ENTRY_PROMPT_ALLOWED_STATES,
+)
 from app.plan_parameters import normalize_plan_parameters
 from app.adaptation_types import get_all_intent_values, get_intents_requiring_params
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "PlanAgentEnvelopeError",
@@ -38,22 +47,25 @@ Rules:
 - Do NOT ask questions.
 - Do NOT collect parameters.
 - Do NOT generate a plan.
-- Do NOT respond to the user in text.
-- reply_text MUST be an empty string.
 
 Decision Logic:
 
 1. PLAN CREATION (new plan):
    - User explicitly asks to create/start/restart/build a plan
    - Set transition_signal to "PLAN_FLOW:DATA_COLLECTION"
+   - Set reply_text to "" (orchestrator handles entry)
 
 2. PLAN ADAPTATION (modify existing):
    - User wants to change/modify/adjust existing plan
    - Set transition_signal to "ADAPTATION_SELECTION"
+   - Set reply_text to "" (orchestrator handles entry)
 
 3. NEITHER:
    - User message does not clearly indicate plan creation or adaptation
    - Set transition_signal to null
+   - Set reply_text to a helpful response acknowledging the message
+   - Example reply_text: "Чим можу допомогти з твоїм планом?"
+   - Example reply_text: "Хочеш створити новий план чи змінити поточний?"
 
 Input:
 - The user message is raw text in latest_user_message.
@@ -61,7 +73,7 @@ Input:
 
 Output (tool call arguments):
 {
-  "reply_text": "",
+  "reply_text": "string",
   "transition_signal": "PLAN_FLOW:DATA_COLLECTION | ADAPTATION_SELECTION | null",
   "plan_updates": null,
   "generated_plan_object": null
@@ -75,11 +87,11 @@ Output: {"reply_text": "", "transition_signal": "PLAN_FLOW:DATA_COLLECTION", "pl
 Input: "хочу змінити план"
 Output: {"reply_text": "", "transition_signal": "ADAPTATION_SELECTION", "plan_updates": null, "generated_plan_object": null}
 
-Input: "зменш навантаження"
-Output: {"reply_text": "", "transition_signal": "ADAPTATION_SELECTION", "plan_updates": null, "generated_plan_object": null}
+Input: "як справи з планом?"
+Output: {"reply_text": "Чим можу допомогти з твоїм планом? Хочеш створити новий чи змінити поточний?", "transition_signal": null, "plan_updates": null, "generated_plan_object": null}
 
-Input: "як справи?"
-Output: {"reply_text": "", "transition_signal": null, "plan_updates": null, "generated_plan_object": null}
+Input: "розкажи про план"
+Output: {"reply_text": "Що саме хочеш дізнатись про план?", "transition_signal": null, "plan_updates": null, "generated_plan_object": null}
 
 Do NOT add extra fields.
 Do NOT output anything outside the tool call.
@@ -827,34 +839,30 @@ def _extract_tool_call(response: Any) -> Optional[Dict[str, Any]]:
 
 
 async def plan_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Wrapper used by the orchestrator to call the LLM-driven plan agent."""
+    """Dispatcher for Plan Agent prompts."""
 
     current_state = payload.get("current_state")
-    entry_states = {
-        "IDLE_ONBOARDED",
-        "IDLE_FINISHED",
-        "IDLE_DROPPED",
-        "IDLE_PLAN_ABORTED",
-        "ACTIVE",
-    }
-    if current_state in entry_states:
-        return await plan_flow_entry(payload)
+
     if current_state == "PLAN_FLOW:DATA_COLLECTION":
         return await plan_flow_data_collection(payload)
     if current_state == "PLAN_FLOW:CONFIRMATION_PENDING":
         return await plan_flow_confirmation_pending(payload)
-    if current_state == "ADAPTATION_SELECTION":
+    if current_state == ADAPTATION_SELECTION:
         return await adaptation_flow_selection(payload)
-    if current_state == "ADAPTATION_PARAMS":
+    if current_state == ADAPTATION_PARAMS:
         return await adaptation_flow_params(payload)
-    if current_state == "ADAPTATION_CONFIRMATION":
+    if current_state == ADAPTATION_CONFIRMATION:
         return await adaptation_flow_confirmation(payload)
+
+    if current_state in ENTRY_PROMPT_ALLOWED_STATES:
+        return await plan_flow_entry(payload)
+
+    logger.warning("Plan agent called with unexpected state: %s", current_state)
     return {
-        "reply_text": "",
+        "reply_text": "Щось пішло не так. Спробуй ще раз.",
         "transition_signal": None,
-        "adaptation_intent": None,
-        "adaptation_params": None,
-        "confirmed": False,
+        "plan_updates": None,
+        "generated_plan_object": None,
     }
 
 

@@ -63,6 +63,9 @@ from app.fsm.states import (
     PLAN_FLOW_ALLOWED_TRANSITIONS,
     PLAN_FLOW_ENTRYPOINTS,
     PLAN_FLOW_STATES,
+    ADAPTATION_ENTRY_STATES,
+    ENTRY_PROMPT_ALLOWED_STATES,
+    PLAN_CREATION_ENTRY_STATES,
 )
 from app.workers.mock_workers import (
     mock_manager_agent,
@@ -1082,8 +1085,66 @@ async def handle_incoming_message(
 
     log_router_decision(log_payload)
 
-    target_agent = router_result.get("target_agent") or "coach"
-    fallback_to_coach = router_result.get("target_agent") is None
+    target_agent = router_result.get("target_agent", "coach")
+    fallback_to_coach = target_agent == "coach"
+    current_state = context_payload.get("current_state")
+
+    # ==================== EARLY HANDLING (OPTION C) ====================
+
+    if target_agent == "plan" and current_state in ADAPTATION_FLOW_STATES:
+        logger.info(
+            "User %s in adaptation tunnel (state=%s), handling via tunnel prompt",
+            user_id,
+            current_state,
+        )
+        with SessionLocal() as db:
+            try:
+                reply_text, followups = await handle_adaptation_flow(
+                    user_id,
+                    message_text,
+                    current_state,
+                    db,
+                )
+                db.commit()
+                return await _finalize_reply(reply_text, followup_messages=followups)
+            except Exception as exc:
+                db.rollback()
+                logger.error(
+                    "Adaptation flow failed for user %s in state %s: %s",
+                    user_id,
+                    current_state,
+                    exc,
+                    exc_info=True,
+                )
+                return await _finalize_reply(
+                    "Щось пішло не так. Спробуй ще раз або напиши 'скасувати'."
+                )
+
+    if target_agent == "coach":
+        worker_result = await _invoke_agent("coach", {"message_text": message_text})
+        reply_text = str(worker_result.get("reply_text") or "")
+        return await _finalize_reply(reply_text)
+
+    if target_agent == "plan" and current_state not in ENTRY_PROMPT_ALLOWED_STATES:
+        if current_state == "IDLE_NEW":
+            return await _finalize_reply(
+                "Спочатку пройди вітальний процес. Напиши 'почати'."
+            )
+
+        if current_state in ADAPTATION_ENTRY_STATES:
+            logger.warning(
+                "Plan agent signal in adaptation entry state %s bypassed to coach for user %s",
+                current_state,
+                user_id,
+            )
+        else:
+            logger.warning(
+                "Plan agent invoked from forbidden state %s for user %s, routing to coach",
+                current_state,
+                user_id,
+            )
+        coach_result = await _invoke_agent("coach", {"message_text": message_text})
+        return await _finalize_reply(str(coach_result.get("reply_text") or ""))
 
     worker_payload = {
         "user_id": user_id,
@@ -1157,44 +1218,10 @@ async def handle_incoming_message(
 
         return await _finalize_reply(reply_text, followup_messages=followups)
 
-    current_state = context_payload.get("current_state")
-    if (
-        target_agent == "plan"
-        and current_state in ADAPTATION_FLOW_STATES
-    ):
-        with SessionLocal() as db:
-            try:
-                reply_text, followups = await handle_adaptation_flow(
-                    user_id,
-                    message_text,
-                    current_state,
-                    db,
-                )
-                db.commit()
-                return await _finalize_reply(reply_text, followup_messages=followups)
-            except Exception as exc:
-                db.rollback()
-                logger.error(
-                    "Adaptation flow handling failed for user %s in state %s: %s",
-                    user_id,
-                    current_state,
-                    exc,
-                    exc_info=True,
-                )
-                return await _finalize_reply(
-                    "Щось пішло не так. Спробуй ще раз або напиши 'скасувати'."
-                )
-
     # NOTE:
     # Auto-start PLAN_FLOW commits FSM transition eagerly and re-invokes Plan Agent.
     # The standard FSM transition logic below MUST NOT re-commit the same transition.
-    auto_start_entry_states = {
-        "IDLE_ONBOARDED",
-        "IDLE_FINISHED",
-        "IDLE_DROPPED",
-        "IDLE_PLAN_ABORTED",
-        "ACTIVE",
-    }
+    auto_start_entry_states = PLAN_CREATION_ENTRY_STATES - {"ACTIVE_PAUSED"}
     if (
         target_agent == "plan"
         and context_payload.get("current_state") in auto_start_entry_states
