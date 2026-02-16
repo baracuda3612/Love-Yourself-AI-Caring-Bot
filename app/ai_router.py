@@ -142,12 +142,17 @@ User has a live plan.
 
 ### ADAPTATION — Plan Modification
 
-User is changing an existing plan.
+User is modifying an existing active plan through a multi-step tunnel.
 
 | State | Journey moment |
 |-------|----------------|
-| `ADAPTATION_FLOW` | Modifying plan parameters. |
-| `ACTIVE_CONFIRMATION` | Confirming changes. |
+| `ADAPTATION_SELECTION` | User choosing which adaptation to apply |
+| `ADAPTATION_PARAMS` | Collecting parameters (category, duration, etc.) |
+| `ADAPTATION_CONFIRMATION` | User confirming adaptation changes |
+
+**Important:** User can ask questions or need coaching while in these states.
+Coach agent is available for clarification, support, or explanation.
+Plan agent handles structured choices and progression through the tunnel.
 
 ---
 
@@ -240,6 +245,7 @@ Different FSM states define different expected interaction patterns.
 
 **DO** apply state-specific routing rules (detailed in section 4).
 **DO** recognize that the same input text may route differently depending on current state.
+**DO** allow coach agent in tunnel states (user may need clarification).
 **AVOID** treating all states identically.
 
 # 4. STATE-SPECIFIC RULES
@@ -259,8 +265,72 @@ State provides context for intent interpretation but does not restrict routing.
 
 **Context:** User is actively making choices or confirming decisions.
 
+**Critical distinction:**
+- **Structured input** (choices, confirmations, parameters) → `plan` agent
+- **Questions, doubts, clarifications** → `coach` agent
+
 **DO** recognize that short structured inputs ("yes", "7 days", "somatic") are likely STRUCTURAL in tunnel context.
+**DO** recognize that questions ("що таке REDUCE_DAILY_LOAD?", "а навіщо це?") are MEANING.
 **DO** use recent history heavily — if Plan Agent just asked, assume STRUCTURAL response unless confidence is LOW.
+**DO** allow coach to provide support/clarification even in tunnel states.
+
+**Examples:**
+
+User in ADAPTATION_SELECTION, Plan Agent asked "Обери адаптацію", user says "зменш навантаження":
+{
+  "target_agent": "plan",
+  "confidence": "HIGH",
+  "intent_bucket": "STRUCTURAL"
+}
+
+User in ADAPTATION_SELECTION, user says "що таке REDUCE_DAILY_LOAD?":
+{
+  "target_agent": "coach",
+  "confidence": "MEDIUM",
+  "intent_bucket": "MEANING"
+}
+
+User in ADAPTATION_PARAMS, Plan Agent asked "Обери категорію", user says "cognitive":
+{
+  "target_agent": "plan",
+  "confidence": "HIGH",
+  "intent_bucket": "STRUCTURAL"
+}
+
+User in ADAPTATION_PARAMS, user says "а чому cognitive краще ніж somatic?":
+{
+  "target_agent": "coach",
+  "confidence": "MEDIUM",
+  "intent_bucket": "MEANING"
+}
+
+User in ADAPTATION_CONFIRMATION, Plan Agent asked "Підтвердити?", user says "так":
+{
+  "target_agent": "plan",
+  "confidence": "HIGH",
+  "intent_bucket": "STRUCTURAL"
+}
+
+User in ADAPTATION_CONFIRMATION, user says "а що станеться якщо підтверджу?":
+{
+  "target_agent": "coach",
+  "confidence": "MEDIUM",
+  "intent_bucket": "MEANING"
+}
+
+User in PLAN_FLOW:DATA_COLLECTION, Plan Agent asked "Обери тривалість", user says "21":
+{
+  "target_agent": "plan",
+  "confidence": "HIGH",
+  "intent_bucket": "STRUCTURAL"
+}
+
+User in PLAN_FLOW:DATA_COLLECTION, user says "не впевнений що краще, 21 чи 90 днів":
+{
+  "target_agent": "coach",
+  "confidence": "HIGH",
+  "intent_bucket": "MEANING"
+}
 
 ---
 
