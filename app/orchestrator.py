@@ -243,6 +243,8 @@ def _guard_fsm_transition(
 
     normalized_current = _normalize_fsm_state(current_state) if current_state else None
     if normalized_current in PLAN_FLOW_STATES or normalized_current in ADAPTATION_FLOW_STATES:
+        if target_agent == "coach":
+            return None, None
         if target_agent != "plan":
             return None, "non_plan_agent_in_tunnel"
 
@@ -1050,21 +1052,6 @@ async def handle_incoming_message(
         }
 
     context_payload = await build_user_context(user_id, message_text)
-    if context_payload.get("current_state") in ADAPTATION_FLOW_STATES:
-        logger.info(
-            "Bypassing router for user %s in adaptation tunnel (state=%s)",
-            user_id,
-            context_payload.get("current_state"),
-        )
-        with SessionLocal() as db:
-            reply_text, followups = await handle_adaptation_flow(
-                user_id,
-                message_text,
-                str(context_payload.get("current_state")),
-                db,
-            )
-            db.commit()
-        return await _finalize_reply(reply_text, followup_messages=followups)
 
     show_plan_actions = False
     if context_payload.get("current_state") == "PLAN_FLOW:CONFIRMATION_PENDING":
@@ -1169,6 +1156,34 @@ async def handle_incoming_message(
             db.commit()
 
         return await _finalize_reply(reply_text, followup_messages=followups)
+
+    current_state = context_payload.get("current_state")
+    if (
+        target_agent == "plan"
+        and current_state in ADAPTATION_FLOW_STATES
+    ):
+        with SessionLocal() as db:
+            try:
+                reply_text, followups = await handle_adaptation_flow(
+                    user_id,
+                    message_text,
+                    current_state,
+                    db,
+                )
+                db.commit()
+                return await _finalize_reply(reply_text, followup_messages=followups)
+            except Exception as exc:
+                db.rollback()
+                logger.error(
+                    "Adaptation flow handling failed for user %s in state %s: %s",
+                    user_id,
+                    current_state,
+                    exc,
+                    exc_info=True,
+                )
+                return await _finalize_reply(
+                    "Щось пішло не так. Спробуй ще раз або напиши 'скасувати'."
+                )
 
     # NOTE:
     # Auto-start PLAN_FLOW commits FSM transition eagerly and re-invokes Plan Agent.
