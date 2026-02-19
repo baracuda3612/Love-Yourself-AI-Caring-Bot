@@ -1,757 +1,2148 @@
 {
   "inventory": [
     {
-      "id": "BR_SOM_L1_01",
-      "internal_name": "4-7-8 Breathing",
+      "id": "boundaries_001_v2",
+      "internal_name": "assertive_no_practice",
+      "display": {
+        "title": "Практика асертивної відмови",
+        "description": "Навчись говорити \"ні\" без провини та агресії. Базова техніка захисту особистих меж у повсякденних ситуаціях.",
+        "instructions": "1. Згадай ситуацію де тобі важко відмовити\\n2. Запиши що тебе просять зробити\\n3. Визнач своє справжнє бажання (так чи ні)\\n4. Сформулюй відмову: \"Дякую за пропозицію але [причина]\"\\n5. Додай альтернативу якщо можливо\\n6. Прорепетируй вголос 3 рази\\n7. Помітай що відчуваєш в тілі",
+        "scientific_rationale": "Асертивність (assertiveness) - це баланс між пасивністю та агресією що підтверджений в дослідженнях як ефективна комунікаційна стратегія. Зменшує тривожність та покращує міжособистісні стосунки.",
+        "duration_estimate": "10 хвилин"
+      },
       "logic_tags": {
-        "difficulty": 1,
-        "energy_cost": "LOW",
-        "category": "somatic",
+        "category": "boundaries",
         "impact_areas": [
-          "parasympathetic",
-          "anxiety",
-          "stress"
+          "interpersonal",
+          "self_compassion",
+          "stress_reduction"
         ],
         "priority_tier": "CORE",
-        "min_plan_duration": 1
+        "difficulty": 1,
+        "energy_cost": "medium"
       },
       "balancing": {
-        "base_weight": 1.0,
+        "cooldown_days": 1,
         "is_active": true,
-        "cooldown_days": 2
-      },
-      "content_payload": {
-        "title_uk": "Дихання 4-7-8",
-        "card_description": "Швидке заспокоєння через дихання.",
-        "full_instruction": "Вдихніть носом 4с, затримайте дихання на 7с, повільно видихніть ротом на 8с. Повторіть кілька циклів.",
-        "scientific_rationale": "Активація блукаючого нерва сприяє заспокоєнню [cite: https://www.massgeneral.org/news/article/vagus-nerve]",
-        "resource": {
-          "type": "external_link",
-          "url": "https://www.massgeneral.org/news/article/vagus-nerve",
-          "button_text": "Читати: Як це працює"
-        }
+        "base_weight": 1.5
       }
     },
     {
-      "id": "BR_SOM_L2_01",
-      "internal_name": "Progressive Muscle Relaxation",
+      "id": "boundaries_002_v2",
+      "internal_name": "communication_needs_template",
+      "display": {
+        "title": "Формула вираження потреб",
+        "description": "Структурований спосіб донести свої потреби без звинувачень. Базується на принципах ненасильницької комунікації (NVC).",
+        "instructions": "1. Визнач ситуацію що турбує\\n2. Заповни формулу:\\n   \"Коли [факт без оцінки]\\n   Я відчуваю [емоція]\\n   Тому що мені важлива [потреба]\\n   Чи міг би ти [конкретна просьба]?\"\\n3. Перевір: чи немає звинувачень?\\n4. Прорепетируй тон голосу\\n5. Запиши фінальний варіант",
+        "scientific_rationale": "Ненасильницька комунікація (NVC) Маршалла Розенберга - evidence-based метод що знижує конфліктність та підвищує емпатію. Розділення спостережень та оцінок знижує захисну реакцію співрозмовника.",
+        "duration_estimate": "15 хвилин"
+      },
       "logic_tags": {
+        "category": "boundaries",
+        "impact_areas": [
+          "interpersonal",
+          "self_awareness",
+          "emotional_regulation"
+        ],
+        "priority_tier": "CORE",
         "difficulty": 2,
-        "energy_cost": "MED",
-        "category": "somatic",
-        "impact_areas": [
-          "stress",
-          "tension",
-          "burnout"
-        ],
-        "priority_tier": "CORE",
-        "min_plan_duration": 1
+        "energy_cost": "medium"
       },
       "balancing": {
-        "base_weight": 1.0,
+        "cooldown_days": 1,
         "is_active": true,
-        "cooldown_days": 3
-      },
-      "content_payload": {
-        "title_uk": "Прогресивна м'язова релаксація",
-        "card_description": "Зниження м'язової напруги через поступове розслаблення.",
-        "full_instruction": "Напружуйте й розслаблюйте кожну групу м'язів від стоп до обличчя. Звертайте увагу на відчуття після розслаблення.",
-        "scientific_rationale": "Метод активує фізіологічну реакцію релаксації, що знижує прояви вигорання [cite: https://www.psychiatryjournal.in/.../burnout-among-non-nationalized-bank-employees...]",
-        "resource": {
-          "type": "external_link",
-          "url": "https://www.psychiatryjournal.in/archives/2025.v7.i2.B.111/a-study-to-evaluate-the-effectiveness-of-jacobsonrsquos-progressive-muscle-relaxation-technique-to-reduce-level-of-burnout-among-non-nationalized-bank-employees-in-selected-area-of-city",
-          "button_text": "Читати: Як це працює"
-        }
+        "base_weight": 1.4
       }
     },
     {
-      "id": "BR_SOM_L1_02",
-      "internal_name": "5-4-3-2-1 Grounding",
+      "id": "boundaries_004_v2",
+      "internal_name": "guilt_response_check",
+      "display": {
+        "title": "Перевірка провини як сигналу",
+        "description": "Навчись розрізняти здорову провину (порушив цінності) від нездорової (не виправдав очікування інших). Техніка з когнітивної терапії.",
+        "instructions": "1. Коли відчуваєш провину - зупинись\\n2. Запитай: \"Що саме я зробив/не зробив?\"\\n3. Перевір: це порушення МОЇХ цінностей чи чужих очікувань?\\n4. Якщо моїх - запланувати виправлення\\n5. Якщо чужих - практикувати прийняття: \"Я маю право на свій вибір\"\\n6. Запиши висновок",
+        "scientific_rationale": "Когнітивна терапія розрізняє adaptive guilt (мотивує виправити помилку) та maladaptive guilt (chronic self-blame). Диференціація знижує надмірну провину та збільшує автономію.",
+        "duration_estimate": "7 хвилин"
+      },
       "logic_tags": {
-        "difficulty": 1,
-        "energy_cost": "LOW",
-        "category": "somatic",
+        "category": "boundaries",
         "impact_areas": [
-          "anxiety",
-          "dissociation",
-          "panic"
+          "self_awareness",
+          "cognitive_flexibility",
+          "self_compassion"
         ],
         "priority_tier": "SUPPORT",
-        "min_plan_duration": 1
+        "difficulty": 2,
+        "energy_cost": "medium"
       },
       "balancing": {
-        "base_weight": 1.2,
+        "cooldown_days": 1,
         "is_active": true,
-        "cooldown_days": 1
-      },
-      "content_payload": {
-        "title_uk": "Граундінг 5-4-3-2-1",
-        "card_description": "Приземлення у поточний момент через п’ять відчуттів.",
-        "full_instruction": "Назвіть 5 речей, які бачите, 4 — що можете торкнутися, 3 — які чуєте, 2 — які відчуваєте на запах, і 1 — на смак.",
-        "scientific_rationale": "Фокус на теперішньому моменті знижує реакцію стресу [cite: https://www.healthline.com/health/grounding-techniques]",
-        "resource": {
-          "type": "external_link",
-          "url": "https://www.healthline.com/health/grounding-techniques",
-          "button_text": "Читати: Як це працює"
-        }
+        "base_weight": 1.3
       }
     },
     {
-      "id": "BR_SOM_L2_02",
-      "internal_name": "Mindfulness Meditation",
+      "id": "boundaries_005_v2",
+      "internal_name": "request_vs_demand",
+      "display": {
+        "title": "Розрізнення прохань та вимог",
+        "description": "Навчись помічати коли тебе просять vs маніпулюють. Захист від guilt-tripping та emotional blackmail.",
+        "instructions": "1. Згадай недавню \"просьбу\" від когось\\n2. Перевір чи був варіант відмовити БЕЗ наслідків?\\n3. Якщо \"ні але...\" - це вимога під виглядом прохання\\n4. Типові маркери вимоги:\\n   - \"Якщо ти мене любиш...\"\\n   - \"Нормальні люди...\"\\n   - \"Після всього що я для тебе...\"\\n5. Запиши 3 справжні прохання vs 3 замасковані вимоги\\n6. Практикуй відповідь: \"Я розумію що тобі важливо але я не можу\"",
+        "scientific_rationale": "Теорія маніпуляцій показує: справжні прохання respect autonomy інших. Guilt-tripping - це covert control що підриває стосунки. Розпізнавання знижує вразливість.",
+        "duration_estimate": "10 хвилин"
+      },
       "logic_tags": {
+        "category": "boundaries",
+        "impact_areas": [
+          "interpersonal",
+          "cognitive_flexibility",
+          "self_awareness"
+        ],
+        "priority_tier": "SUPPORT",
         "difficulty": 2,
-        "energy_cost": "MED",
+        "energy_cost": "medium"
+      },
+      "balancing": {
+        "cooldown_days": 2,
+        "is_active": true,
+        "base_weight": 1.2
+      }
+    },
+    {
+      "id": "boundaries_007_v2",
+      "internal_name": "overcommitment_autopsy",
+      "display": {
+        "title": "Розбір overcommitment",
+        "description": "Аналіз чому береш більше ніж можеш. Виявлення cognitive distortions що призводять до перевантаження.",
+        "instructions": "1. Згадай останній випадок overcommitment\\n2. Що обіцяв зробити?\\n3. Що насправді сталось?\\n4. Запитай:\\n   - Що я думав коли погоджувався?\\n   - Яку fantasy мав про себе?\\n   - Чого боявся якщо відмовлю?\\n5. Знайди thinking error (perfectionism? people-pleasing? catastrophizing?)\\n6. Перепиши реалістичну версію\\n7. Практикуй realistic commitment наступного разу",
+        "scientific_rationale": "CBT ідентифікує cognitive distortions що ведуть до overcommitment: mind reading (\"вони розчаруються\") та should statements (\"я повинен\"). Реструктуризація знижує stress.",
+        "duration_estimate": "15 хвилин"
+      },
+      "logic_tags": {
+        "category": "boundaries",
+        "impact_areas": [
+          "cognitive_flexibility",
+          "self_awareness",
+          "stress_reduction"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 2,
+        "energy_cost": "medium"
+      },
+      "balancing": {
+        "cooldown_days": 2,
+        "is_active": true,
+        "base_weight": 1.2
+      }
+    },
+    {
+      "id": "boundaries_008_v2",
+      "internal_name": "digital_boundary_protocol",
+      "display": {
+        "title": "Протокол цифрових меж",
+        "description": "Встановлення меж з digital interruptions. Базується на дослідженнях attention residue та context switching.",
+        "instructions": "1. Audit: скільки разів сьогодні перевіряв phone?\\n2. Виміряй: скільки notifications за день?\\n3. Встанови правила:\\n   - No phone 1 година перед сном\\n   - No work emails після 19:00\\n   - Batch checking: 3 рази на день\\n4. Turn off всі non-essential notifications\\n5. Практикуй 1 тиждень\\n6. Записуй: як змінився focus і stress?",
+        "scientific_rationale": "Gloria Mark дослідження показує: кожне переключення контексту коштує 23 хвилини на повернення в flow. Digital boundaries критичні для когнітивного відновлення.",
+        "duration_estimate": "7 днів"
+      },
+      "logic_tags": {
+        "category": "boundaries",
+        "impact_areas": [
+          "stress_reduction",
+          "present_moment",
+          "energy_management"
+        ],
+        "priority_tier": "CORE",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 7,
+        "is_active": true,
+        "base_weight": 1.4
+      }
+    },
+    {
+      "id": "boundaries_009_v2",
+      "internal_name": "saying_yes_mindfully",
+      "display": {
+        "title": "Усвідомлене \"\"так\"\"",
+        "description": "Техніка прийняття зобов'язань тільки після паузи. Протидія automatic yes reflex.",
+        "instructions": "1. Коли хтось щось просить - НЕ відповідай одразу\\n2. Скажи: \"Дай мені подумати я відповім до [час]\"\\n3. Запитай себе:\\n   - Чи маю час/енергію?\\n   - Чи це aligned з моїми пріоритетами?\\n   - Що я втрачу якщо погоджусь?\\n4. Використай 24-hour rule для великих зобов'язань\\n5. Практикуй відповідь (так чи ні)\\n6. Deliver відповідь без over-explaining",
+        "scientific_rationale": "Impulse control та delayed response - базові навички емоційної регуляції. Pause між стимулом та реакцією створює простір для autonomous choice (Viktor Frankl).",
+        "duration_estimate": "5 хвилин"
+      },
+      "logic_tags": {
+        "category": "boundaries",
+        "impact_areas": [
+          "self_awareness",
+          "emotional_regulation",
+          "interpersonal"
+        ],
+        "priority_tier": "CORE",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.5
+      }
+    },
+    {
+      "id": "boundaries_010_v2",
+      "internal_name": "repair_after_boundary",
+      "display": {
+        "title": "Відновлення після встановлення межі",
+        "description": "Як справлятись з дискомфортом після того як сказав ні. Підтримка себе після assertiveness.",
+        "instructions": "1. Після того як встановив межу - відчуй дискомфорт\\n2. Validate себе: \"Це нормально відчувати [guilt/anxiety]\"\\n3. Нагадай чому це було важливо\\n4. Body check: де в тілі тримається напруга?\\n5. Breathing: 5 повільних вдихів\\n6. Self-compassion phrase: \"Я вчусь піклуватись про себе\"\\n7. Дай собі credit за courage",
+        "scientific_rationale": "Boundary-setting активує threat response навіть коли це healthy behavior. Self-compassion після assertiveness знижує subsequent avoidance та reinforces behavior.",
+        "duration_estimate": "10 хвилин"
+      },
+      "logic_tags": {
+        "category": "boundaries",
+        "impact_areas": [
+          "self_compassion",
+          "emotional_regulation",
+          "stress_reduction"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 2,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 1,
+        "is_active": true,
+        "base_weight": 1.3
+      }
+    },
+    {
+      "id": "rest_001_v2",
+      "internal_name": "micro_rest_protocol",
+      "display": {
+        "title": "Протокол мікро-відпочинків",
+        "description": "Structured breaks кожні 90 хвилин для підтримки продуктивності. Базується на ultradian rhythms.",
+        "instructions": "1. Встанови timer на 90 хвилин роботи\\n2. Коли timer - повна зупинка на 15 хвилин\\n3. NO screens під часbreak\\n4. Варіанти активності:\\n   - Walk (навіть 5 хв)\\n   - Stretch\\n   - Stare в вікно\\n   - Snack + water\\n5. НЕ думай про роботу\\n6. Після 15 хв - return refreshed\\n7. Repeat 3-4 цикли на день",
+        "scientific_rationale": "Ultradian Basic Rest-Activity Cycle (BRAC) - природні 90-120 хв цикли продуктивності. Breaks aligned з біологією підвищують sustained performance (Rossi 1991).",
+        "duration_estimate": "15 хвилин"
+      },
+      "logic_tags": {
+        "category": "rest",
+        "impact_areas": [
+          "energy_management",
+          "stress_reduction",
+          "present_moment"
+        ],
+        "priority_tier": "CORE",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.5
+      }
+    },
+    {
+      "id": "rest_002_v2",
+      "internal_name": "nap_optimization",
+      "display": {
+        "title": "Оптимізація денного сну",
+        "description": "Science-backed протокол для ефективного power nap. 20 хвилин для alertness без grogginess.",
+        "instructions": "1. Timing: між 13:00-15:00 (post-lunch dip)\\n2. Set alarm на 20 хвилин (не більше!)\\n3. Dark quiet space\\n4. Lie down якщо можливо\\n5. Якщо не можеш заснути - просто rest з закритими очима\\n6. Coffee nap hack: кава перед nap (caffeine kicks in after 20 min)\\n7. After wake: splash холодної води на обличчя",
+        "scientific_rationale": "20-хвилинний nap підвищує alertness та performance без sleep inertia. Довші naps (> 30 хв) ведуть до deep sleep що причиняє grogginess (NASA nap research).",
+        "duration_estimate": "20 хвилин"
+      },
+      "logic_tags": {
+        "category": "rest",
+        "impact_areas": [
+          "energy_management",
+          "stress_reduction"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.3
+      }
+    },
+    {
+      "id": "rest_003_v2",
+      "internal_name": "evening_wind_down",
+      "display": {
+        "title": "Ритуал вечірнього уповільнення",
+        "description": "Structured routine 90 хвилин перед сном для покращення sleep onset. Базується на sleep hygiene research.",
+        "instructions": "1. 90 хв перед сном: dim lights (50% brightness)\\n2. 60 хв перед сном: no screens / blue light filter\\n3. 45 хв перед сном: light activity (reading tidying)\\n4. 30 хв перед сном: hygiene routine\\n5. 20 хв перед сном: relaxation (breathing meditation)\\n6. 10 хв перед сном: gratitude (3 речі за сьогодні)\\n7. Lights out - same time щодня",
+        "scientific_rationale": "Consistent bedtime routine сигналізує мозку про sleep onset. Dim light стимулює melatonin production. Sleep regularity важливіша ніж кількість годин (Walker 2017).",
+        "duration_estimate": "90 хвилин"
+      },
+      "logic_tags": {
+        "category": "rest",
+        "impact_areas": [
+          "sleep_quality",
+          "stress_reduction",
+          "present_moment"
+        ],
+        "priority_tier": "CORE",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.5
+      }
+    },
+    {
+      "id": "rest_004_v2",
+      "internal_name": "worry_time_quarantine",
+      "display": {
+        "title": "Карантин для турбот",
+        "description": "Техніка відкладання rumination на designated час. Звільняє mental space протягом дня.",
+        "instructions": "1. Вибери 15-хвилинний слот щодня (не перед сном!)\\n2. Протягом дня: коли worry приходить\\n3. Запиши її в \"worry list\"\\n4. Скажи собі: \"Я подумаю про це о 17:00\"\\n5. Return до поточної активності\\n6. О designated час: сядь з worry list\\n7. Розглянь кожну worry: problem-solving можливий? Якщо ні - practice letting go",
+        "scientific_rationale": "Worry postponement - validated CBT техніка що знижує intrusive thoughts. Containment worries до specific час знижує їх frequency та intensity (Borkovec 1983).",
+        "duration_estimate": "15 хвилин"
+      },
+      "logic_tags": {
+        "category": "rest",
+        "impact_areas": [
+          "stress_reduction",
+          "cognitive_flexibility",
+          "present_moment"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 2,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 1,
+        "is_active": true,
+        "base_weight": 1.3
+      }
+    },
+    {
+      "id": "rest_005_v2",
+      "internal_name": "recovery_day_design",
+      "display": {
+        "title": "Дизайн дня відновлення",
+        "description": "Планування справжнього rest day без productive activities. Countercultural approach до відпочинку.",
+        "instructions": "1. Вибери 1 день на тиждень\\n2. NO work (включно з side projects)\\n3. NO productivity hacks\\n4. NO self-improvement\\n5. YES на:\\n   - Aimless walking\\n   - Napping\\n   - Socializing\\n   - Hobby заради процесу\\n   - Boredom\\n6. Помітай resistance до \"нічого не робити\"\\n7. Practice being замість doing",
+        "scientific_rationale": "Sabbath principle підтверджений в дослідженнях recovery: повне відключення від work-related activities критичне для psychological detachment. Це physiologically відновлює HPA axis.",
+        "duration_estimate": "1 день"
+      },
+      "logic_tags": {
+        "category": "rest",
+        "impact_areas": [
+          "energy_management",
+          "stress_reduction",
+          "self_compassion"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 2,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 7,
+        "is_active": true,
+        "base_weight": 1.2
+      }
+    },
+    {
+      "id": "rest_006_v2",
+      "internal_name": "active_rest_catalog",
+      "display": {
+        "title": "Каталог активного відпочинку",
+        "description": "Створи персональний список activities що відновлюють а не виснажують. Допомагає розрізнити rest vs distraction.",
+        "instructions": "1. Brainstorm 20 activities\\n2. Для кожної запитай:\\n   - Після цього маю більше чи менше енергії?\\n   - Це відпочинок чи втеча (avoidance)?\\n   - Присутній тут і зараз чи на автопілоті?\\n3. Поділи на:\\n   TRUE REST (відновлює)\\n   DISTRACTION (numbing)\\n4. Помітай: social media TV в якій категорії?\\n5. Створи go-to list з TRUE REST\\n6. Next burnout moment - вибери з списку",
+        "scientific_rationale": "Not all downtime є recovery. Passive activities (TV scrolling) не відновлюють так само як active rest (nature hobbies social). Dopamine detox важливий для справжнього rest.",
+        "duration_estimate": "30 хвилин"
+      },
+      "logic_tags": {
+        "category": "rest",
+        "impact_areas": [
+          "self_awareness",
+          "energy_management",
+          "behavioral_activation"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 2,
+        "energy_cost": "medium"
+      },
+      "balancing": {
+        "cooldown_days": 3,
+        "is_active": true,
+        "base_weight": 1.2
+      }
+    },
+    {
+      "id": "rest_008_v2",
+      "internal_name": "stimulus_control_bed",
+      "display": {
+        "title": "Stimulus control для ліжка",
+        "description": "Перенавчання мозку асоціювати ліжко тільки з сном. Базується на classical conditioning.",
+        "instructions": "1. Ліжко = тільки сон та секс\\n2. NO reading working TV в ліжку\\n3. Якщо не спиш 20 хв - встань іди в іншу кімнату\\n4. Boring activity (reading не захоплююча книга)\\n5. Коли sleepy - повертайся в ліжко\\n6. Repeat якщо знову awake > 20 хв\\n7. Same wake time навіть якщо погано спав",
+        "scientific_rationale": "Stimulus control - CBT-I техніка що breaks асоціацію bed = wakefulness. Strengthens sleep-bed connection через consistent conditioning (Bootzin 1972).",
+        "duration_estimate": "Ongoing"
+      },
+      "logic_tags": {
+        "category": "rest",
+        "impact_areas": [
+          "sleep_quality",
+          "behavioral_activation"
+        ],
+        "priority_tier": "CORE",
+        "difficulty": 2,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.4
+      }
+    },
+    {
+      "id": "rest_009_v2",
+      "internal_name": "legs_up_wall",
+      "display": {
+        "title": "Ноги на стіну (Viparita Karani)",
+        "description": "Restorative yoga поза для швидкого зниження stress. Активує relaxation response через venous return.",
+        "instructions": "1. Ляж на спину біля стіни\\n2. Підніми ноги на стіну (90°)\\n3. Руки в сторони долонями вгору\\n4. Підклади подушку під таз якщо комфортніше\\n5. Закрий очі\\n6. Breathe nature\\n7. Stay 10-15 хвилин\\n8. Після - повільно перевернись на бік before sitting up",
+        "scientific_rationale": "Інверсія стимулює baroreceptors що trigger parasympathetic activation. Венозний return знижує heart rate та blood pressure. Simple profound relaxation (Anderson 2007).",
+        "duration_estimate": "15 хвилин"
+      },
+      "logic_tags": {
+        "category": "rest",
+        "impact_areas": [
+          "stress_reduction",
+          "present_moment",
+          "energy_management"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.3
+      }
+    },
+    {
+      "id": "rest_010_v2",
+      "internal_name": "digital_sunset",
+      "display": {
+        "title": "Цифровий захід сонця",
+        "description": "Ritual відключення від digital world годину перед сном. Захист від blue light та cognitive arousal.",
+        "instructions": "1. Встанови alarm на годину перед сном\\n2. Коли alarm - всі devices на зарядку ПОЗА спальнею\\n3. No \"just one more scroll\"\\n4. Альтернативи:\\n   - Paper book\\n   - Journaling\\n   - Conversation\\n   - Bath\\n   - Gentle stretching\\n5. Помітай FOMO що виникає\\n6. Remind: nothing urgent can't wait до ранку",
+        "scientific_rationale": "Blue light пригнічує melatonin на 50% навіть з night shift. Cognitive arousal від content (news social) delays sleep onset. Digital curfew покращує sleep quality.",
+        "duration_estimate": "60 хвилин"
+      },
+      "logic_tags": {
+        "category": "rest",
+        "impact_areas": [
+          "sleep_quality",
+          "present_moment",
+          "stress_reduction"
+        ],
+        "priority_tier": "CORE",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.4
+      }
+    },
+    {
+      "id": "cognitive_001_v2",
+      "internal_name": "thought_distance_practice",
+      "display": {
+        "title": "Практика дистанції від думок",
+        "description": "ACT техніка когнітивної дефузії. Спостереження думок без злиття з ними.",
+        "instructions": "1. Коли помічаєш anxious thought\\n2. Prefix її: \"Я помічаю думку що...\"\\n3. Приклад: замість \"Я провалюся\" → \"Я помічаю думку що я провалюся\"\\n4. Або: \"Моє mind каже що...\"\\n5. Помітай як це створює space\\n6. Практикуй з 5 різними думками\\n7. Не намагайся змінити думку - просто спостерігай",
+        "scientific_rationale": "Cognitive defusion (ACT) знижує believability та emotional impact думок без їх зміни. Метакогнітивна дистанція важливіша ніж content (Hayes 2006).",
+        "duration_estimate": "5 хвилин"
+      },
+      "logic_tags": {
+        "category": "cognitive",
+        "impact_areas": [
+          "cognitive_flexibility",
+          "present_moment",
+          "stress_reduction"
+        ],
+        "priority_tier": "CORE",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.5
+      }
+    },
+    {
+      "id": "cognitive_002_v2",
+      "internal_name": "thinking_error_spotter",
+      "display": {
+        "title": "Визначник thinking errors",
+        "description": "Навчись розпізнавати типові cognitive distortions в реальному часі. CBT core skill.",
+        "instructions": "1. Коли emotional distress - pause\\n2. Запиши думку що була перед емоцією\\n3. Check проти списку errors:\\n   - All-or-nothing\\n   - Overgeneralization\\n   - Mental filter\\n   - Catastrophizing\\n   - Mind reading\\n   - Fortune telling\\n   - Emotional reasoning\\n4. Label error(s)\\n5. Запиши більш balanced thought\\n6. Помітай: чи змінилась intensity емоції?",
+        "scientific_rationale": "Cognitive distortions - systematic errors в thinking що підтримують depression та anxiety. Розпізнавання та challenging знижує symptoms (Beck 1979).",
+        "duration_estimate": "10 хвилин"
+      },
+      "logic_tags": {
+        "category": "cognitive",
+        "impact_areas": [
+          "cognitive_flexibility",
+          "emotional_regulation",
+          "self_awareness"
+        ],
+        "priority_tier": "CORE",
+        "difficulty": 2,
+        "energy_cost": "medium"
+      },
+      "balancing": {
+        "cooldown_days": 1,
+        "is_active": true,
+        "base_weight": 1.5
+      }
+    },
+    {
+      "id": "cognitive_003_v2",
+      "internal_name": "evidence_collection",
+      "display": {
+        "title": "Збір доказів за та проти",
+        "description": "Structured evaluation anxious predictions. Допомагає побачити bias у thinking.",
+        "instructions": "1. Визнач anxious prediction: \"Якщо [X] то [Y]\"\\n2. Створи таблицю:\\n   EVIDENCE FOR | EVIDENCE AGAINST\\n3. Заповни обидві колонки чесно\\n4. Включи:\\n   - Минулий досвід\\n   - Факти (не feelings)\\n   - Alternative explanations\\n5. Зважти evidence\\n6. Сформулюй more balanced prediction\\n7. Test prediction і запиши що сталось насправді",
+        "scientific_rationale": "Hypothesis testing - core CBT техніка. Anxious thinking має confirmation bias - actively looking for disconfirming evidence corrects це (Clark 1999).",
+        "duration_estimate": "15 хвилин"
+      },
+      "logic_tags": {
+        "category": "cognitive",
+        "impact_areas": [
+          "cognitive_flexibility",
+          "self_awareness",
+          "anxiety_reduction"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 2,
+        "energy_cost": "medium"
+      },
+      "balancing": {
+        "cooldown_days": 1,
+        "is_active": true,
+        "base_weight": 1.3
+      }
+    },
+    {
+      "id": "cognitive_004_v2",
+      "internal_name": "worry_vs_problem",
+      "display": {
+        "title": "Розрізнення турботи та проблеми",
+        "description": "Класифікація тривог на actionable vs pure rumination. Допомагає направити mental energy ефективно.",
+        "instructions": "1. Візьми current worry\\n2. Запитай: \"Чи можу я щось зробити ЗАРАЗ?\"\\n3. Якщо ТАК - це problem → problem-solving\\n4. Якщо НІ - це worry → acceptance/distraction\\n5. Для problems:\\n   - List possible actions\\n   - Pick smallest doable step\\n   - Do it\\n6. Для worries:\\n   - Acknowledge uncertainty\\n   - Redirect attention\\n   - Practice acceptance",
+        "scientific_rationale": "Worries про unpredictable future не productive. Problem-solving знижує anxiety тільки для controllable situations. Диференціація знижує rumination (Borkovec 1990).",
+        "duration_estimate": "10 хвилин"
+      },
+      "logic_tags": {
+        "category": "cognitive",
+        "impact_areas": [
+          "cognitive_flexibility",
+          "stress_reduction",
+          "behavioral_activation"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 2,
+        "energy_cost": "medium"
+      },
+      "balancing": {
+        "cooldown_days": 1,
+        "is_active": true,
+        "base_weight": 1.3
+      }
+    },
+    {
+      "id": "cognitive_005_v2",
+      "internal_name": "assumptions_audit",
+      "display": {
+        "title": "Аудит припущень",
+        "description": "Виявлення implicit rules що керують behaviour. Часто unrealistic \"\"shoulds\"\" та \"\"musts\"\".",
+        "instructions": "1. Заповни:\\n   \"Я повинен завжди...\"\\n   \"Люди завжди повинні...\"\\n   \"Світ має бути...\"\\n2. Напиши 5-10 таких rules\\n3. Для кожного запитай:\\n   - Звідки це правило?\\n   - Чи всі дотримуються?\\n   - Що найгірше якщо порушити?\\n4. Rewrite rules:\\n   \"Було б добре якщо... але не обов'язково\"\\n5. Pick 1 rule to challenge наступного тижня",
+        "scientific_rationale": "Core beliefs та rules підтримують rigid thinking. Challenging absolutist thinking (shoulds musts) знижує stress та perfectionism (Ellis REBT).",
+        "duration_estimate": "20 хвилин"
+      },
+      "logic_tags": {
+        "category": "cognitive",
+        "impact_areas": [
+          "cognitive_flexibility",
+          "self_awareness",
+          "self_compassion"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 2,
+        "energy_cost": "medium"
+      },
+      "balancing": {
+        "cooldown_days": 2,
+        "is_active": true,
+        "base_weight": 1.2
+      }
+    },
+    {
+      "id": "cognitive_006_v2",
+      "internal_name": "decatastrophizing",
+      "display": {
+        "title": "Декатастрофізація",
+        "description": "Structured метод зменшення feared outcomes до realistic scale. Для anxiety management.",
+        "instructions": "1. Визнач worst-case scenario що боїшся\\n2. Запитай: \"Наскільки ймовірно? (0-100%)\"\\n3. Запитай: \"Якщо це станеться яка реально severity? (0-10)\"\\n4. Запитай: \"Як я справлюся якщо це станеться?\"\\n5. Запиши coping resources:\\n   - Support system\\n   - Past similar situations\\n   - Skills які маю\\n6. Rate anxiety знову після цього\\n7. Помітай: чи catastrophe менш catastrophic тепер?",
+        "scientific_rationale": "Catastrophizing - overestimation probability та severity негативних outcomes. Decatastrophizing знижує avoidance behavior (Leahy 2005).",
+        "duration_estimate": "10 хвилин"
+      },
+      "logic_tags": {
+        "category": "cognitive",
+        "impact_areas": [
+          "cognitive_flexibility",
+          "stress_reduction",
+          "self_awareness"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 2,
+        "energy_cost": "medium"
+      },
+      "balancing": {
+        "cooldown_days": 1,
+        "is_active": true,
+        "base_weight": 1.3
+      }
+    },
+    {
+      "id": "cognitive_008_v2",
+      "internal_name": "gratitude_3_things",
+      "display": {
+        "title": "Три речі сьогодні",
+        "description": "Evidence-based gratitude practice. Rewiring brain до помічання positive.",
+        "instructions": "1. Кожен вечір (same time)\\n2. Запиши 3 речі за які вдячний сьогодні\\n3. Правила:\\n   - Specific (не \"сім'я\" а \"телефонувала мама\")\\n   - Varied (не одне й те саме щодня)\\n   - Small counts (гарна кава теплий душ)\\n4. Для кожного: чому це важливо?\\n5. Pause і відчуй appreciation\\n6. Продовж 21 день для habit formation",
+        "scientific_rationale": "Gratitude intervention consistently показує improvements у wellbeing та зниження depression symptoms. 3-good-things техніка має strongest evidence base (Seligman 2005).",
+        "duration_estimate": "5 хвилин"
+      },
+      "logic_tags": {
+        "category": "cognitive",
+        "impact_areas": [
+          "self_awareness",
+          "emotional_regulation",
+          "present_moment"
+        ],
+        "priority_tier": "CORE",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.4
+      }
+    },
+    {
+      "id": "cognitive_009_v2",
+      "internal_name": "silver_lining_practice",
+      "display": {
+        "title": "Пошук silver lining",
+        "description": "Cognitive reappraisal складних ситуацій. НЕ toxic positivity - acknowledge pain але шукати growth.",
+        "instructions": "1. Візьми recent difficult experience\\n2. Validate: \"Це було важко/painful\"\\n3. Запитай: \"Чого я навчився з цього?\"\\n4. Можливі areas:\\n   - Про себе\\n   - Про інших\\n   - Що важливо\\n   - Skills developed\\n   - Strength discovered\\n5. Запиши 1-3 learnings\\n6. НЕ minimize pain - both/and thinking",
+        "scientific_rationale": "Post-traumatic growth - реальний феномен де adversity веде до positive changes. Reappraisal знижує negative affect без denial (Tedeschi 2004).",
+        "duration_estimate": "10 хвилин"
+      },
+      "logic_tags": {
+        "category": "cognitive",
+        "impact_areas": [
+          "cognitive_flexibility",
+          "self_awareness",
+          "self_compassion"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 2,
+        "energy_cost": "medium"
+      },
+      "balancing": {
+        "cooldown_days": 2,
+        "is_active": true,
+        "base_weight": 1.2
+      }
+    },
+    {
+      "id": "somatic_001_v2",
+      "internal_name": "body_scan_basic",
+      "display": {
+        "title": "Базове сканування тіла",
+        "description": "Systematic mindfulness тіла від голови до ніг. Foundation practice для body awareness.",
+        "instructions": "1. Ляг або сядь комфортно\\n2. Закрий очі\\n3. Почни з верхівки голови\\n4. Повільно рухайся вниз:\\n   - Обличчя (напруга?)\\n   - Шия плечі (стиснуті?)\\n   - Груди (дихання?)\\n   - Живіт (затиснутий?)\\n   - Ноги стопи\\n5. Для кожної зони: просто notice без зміни\\n6. Якщо знайшов напругу - breathe into it\\n7. Повна 10-минутна journey тілом",
+        "scientific_rationale": "Body scan - core mindfulness practice що збільшує interoceptive awareness. Допомагає розпізнати stress в тілі перед cognitive awareness (Kabat-Zinn MBSR).",
+        "duration_estimate": "10 хвилин"
+      },
+      "logic_tags": {
+        "category": "somatic",
+        "impact_areas": [
+          "self_awareness",
+          "stress_reduction",
+          "present_moment"
+        ],
+        "priority_tier": "CORE",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.5
+      }
+    },
+    {
+      "id": "somatic_002_v2",
+      "internal_name": "tension_release_progressive",
+      "display": {
+        "title": "Progressive Muscle Relaxation",
+        "description": "Systematic напруження та розслаблення muscle groups. Jacobson's PMR protocol.",
+        "instructions": "1. Сядь або ляг\\n2. Для кожної групи м'язів:\\n   - Напружи на 5 сек (80% effort)\\n   - Різко розслаби\\n   - Notice різницю 10 сек\\n3. Послідовність:\\n   - Кулаки\\n   - Біцепси\\n   - Плечі (до вух)\\n   - Обличчя (зморшки)\\n   - Щелепа\\n   - Шия\\n   - Груди\\n   - Живіт\\n   - Ноги\\n   - Стопи\\n4. Full body relaxation після",
+        "scientific_rationale": "PMR - validated техніка що знижує muscle tension та anxiety. Тілесне relaxation physiologically неможливе одночасно з anxiety response (Jacobson 1938).",
+        "duration_estimate": "15 хвилин"
+      },
+      "logic_tags": {
+        "category": "somatic",
+        "impact_areas": [
+          "stress_reduction",
+          "present_moment",
+          "emotional_regulation"
+        ],
+        "priority_tier": "CORE",
+        "difficulty": 1,
+        "energy_cost": "medium"
+      },
+      "balancing": {
+        "cooldown_days": 1,
+        "is_active": true,
+        "base_weight": 1.4
+      }
+    },
+    {
+      "id": "somatic_003_v2",
+      "internal_name": "grounding_5_senses",
+      "display": {
+        "title": "Заземлення через 5 чуттів",
+        "description": "Техніка grounding через sensory input. Швидко повертає в present moment при стресі чи overwhelm.",
+        "instructions": "1. Name 5 речей що БАЧИШ\\n2. Name 4 речі що ТОРКАЄШСЯ\\n3. Name 3 речі що ЧУЄШ\\n4. Name 2 речі що НЮХАЄШ\\n5. Name 1 річ що СМАКУЄШ\\n6. Повторюй якщо потрібно\\n7. Breathe глибоко після кожного sense",
+        "scientific_rationale": "Sensory grounding - evidence-based техніка для acute anxiety та dissociation. Activates present-moment awareness та interrupts rumination cascade (Van der Kolk).",
+        "duration_estimate": "5 хвилин"
+      },
+      "logic_tags": {
+        "category": "somatic",
+        "impact_areas": [
+          "present_moment",
+          "stress_reduction",
+          "emotional_regulation"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.4
+      }
+    },
+    {
+      "id": "somatic_004_v2",
+      "internal_name": "breath_4_7_8",
+      "display": {
+        "title": "Дихання 4-7-8",
+        "description": "Дихальна техніка для швидкого relaxation. Стимулює vagal tone.",
+        "instructions": "1. Exhale повністю через рот (whoosh)\\n2. Закрий рот вдихни носом на 4\\n3. Затримай дихання на 7\\n4. Exhale повністю через рот на 8 (whoosh)\\n5. Це 1 цикл\\n6. Зроби 4 цикли\\n7. Practice 2 рази на день\\n8. Після тижня можна більше циклів",
+        "scientific_rationale": "4-7-8 breathing активує парасимпатичну систему та знижує cortisol. Затримка дихання збільшує CO2 що має calming effect (Weil protocol).",
+        "duration_estimate": "2 хвилини"
+      },
+      "logic_tags": {
+        "category": "somatic",
+        "impact_areas": [
+          "stress_reduction",
+          "emotional_regulation",
+          "present_moment"
+        ],
+        "priority_tier": "CORE",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.5
+      }
+    },
+    {
+      "id": "somatic_005_v2",
+      "internal_name": "cold_water_splash",
+      "display": {
+        "title": "Холодна вода на обличчя",
+        "description": "Dive reflex для фізіологічного заспокоєння. Проста техніка для сильних емоцій.",
+        "instructions": "1. Коли intense emotion (panic anger)\\n2. Іди до раковини\\n3. Холодна вода (NOT iced)\\n4. Зануриий обличчя або\\n5. Splash обличчя 20-30 секунд\\n6. Особливо очі та лоб\\n7. Breathe повільно після\\n8. Помітай зниження heart rate",
+        "scientific_rationale": "Dive reflex - mammalian response що знижує heart rate на 10-25%. Холод на обличчі активує vagus nerve що overrides sympathetic arousal (DBT TIP skills).",
+        "duration_estimate": "1 хвилина"
+      },
+      "logic_tags": {
+        "category": "somatic",
+        "impact_areas": [
+          "stress_reduction",
+          "emotional_regulation"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.3
+      }
+    },
+    {
+      "id": "somatic_006_v2",
+      "internal_name": "walking_meditation",
+      "display": {
+        "title": "Медитація при ходьбі",
+        "description": "Mindful walking для embodied awareness. Alternative до sitting meditation.",
+        "instructions": "1. Знайди 10-метровий шлях\\n2. Стань в початку\\n3. Починай йти ДУЖЕ повільно\\n4. Увага на:\\n   - Lifting foot\\n   - Moving forward\\n   - Placing down\\n   - Shifting weight\\n5. Коли дійдеш кінця - pause зверніть\\n6. Продовж 10-15 хвилин\\n7. Коли mind wanders - return to feet sensations",
+        "scientific_rationale": "Walking meditation - alternative mindfulness practice що easier для деяких ніж sitting. Поєднує movement та awareness що покращує adherence (Thich Nhat Hanh).",
+        "duration_estimate": "15 хвилин"
+      },
+      "logic_tags": {
+        "category": "somatic",
+        "impact_areas": [
+          "present_moment",
+          "self_awareness",
+          "stress_reduction"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 1,
+        "is_active": true,
+        "base_weight": 1.3
+      }
+    },
+    {
+      "id": "somatic_007_v2",
+      "internal_name": "hand_heart_calm",
+      "display": {
+        "title": "Рука на серці",
+        "description": "Self-soothing through physical touch. Активує oxytocin release для self-compassion.",
+        "instructions": "1. Поклади руку на серце\\n2. Відчуй warmth та contact\\n3. Breathe повільно\\n4. На кожному вдиху:\\n   \"Вдихаю спокій\"\\n5. На кожному видиху:\\n   \"Відпускаю напругу\"\\n6. Continue 5 хвилин\\n7. Можна додати gentle rocking",
+        "scientific_rationale": "Physical self-touch активує care system та release oxytocin. Це simple effective self-soothing техніка з Compassion-Focused Therapy (Gilbert).",
+        "duration_estimate": "5 хвилин"
+      },
+      "logic_tags": {
+        "category": "somatic",
+        "impact_areas": [
+          "self_compassion",
+          "stress_reduction",
+          "emotional_regulation"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.4
+      }
+    },
+    {
+      "id": "somatic_008_v2",
+      "internal_name": "stretching_tension_spots",
+      "display": {
+        "title": "Розтяжка напружених зон",
+        "description": "Targeted stretching для типових burnout tension areas: neck shoulders jaw.",
+        "instructions": "1. Neck:\\n   - Gentle side bends (ear до shoulder)\\n   - Hold 30 сек кожна сторона\\n2. Shoulders:\\n   - Shoulder rolls (10 вперед 10 назад)\\n   - Cross-body arm stretch\\n3. Jaw:\\n   - Massage jaw muscles\\n   - Open mouth wide hold 10 сек\\n4. Upper back:\\n   - Cat-cow stretches\\n   - Seated twist\\n5. Breathe into stretches\\n6. Repeat 2 рази на день",
+        "scientific_rationale": "Chronic stress тримається в тілі як muscle tension. Regular stretching знижує cortisol та покращує HRV. Особливо ефективно для neck/shoulder tension (Field 2005).",
+        "duration_estimate": "10 хвилин"
+      },
+      "logic_tags": {
+        "category": "somatic",
+        "impact_areas": [
+          "stress_reduction",
+          "present_moment",
+          "energy_management"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 1,
+        "energy_cost": "medium"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.3
+      }
+    },
+    {
+      "id": "somatic_009_v2",
+      "internal_name": "body_battery_check",
+      "display": {
+        "title": "Перевірка тілесної батареї",
+        "description": "Quick body check-in для monitoring energy levels. Допомагає catch burnout signals early.",
+        "instructions": "1. Pause на хвилину\\n2. Сканuj тіло:\\n   - Рівень енергії (0-10)?\\n   - Де tension?\\n   - Як breathing? (shallow/deep?)\\n   - Hunger? Thirst?\\n   - Сонливість?\\n3. Rate overall body battery: 0-100%\\n4. Якщо < 30% - негайний мікро-відпочинок\\n5. Якщо 30-60% - запланувати rest сьогодні\\n6. Track протягом тижня - notice patterns",
+        "scientific_rationale": "Interoceptive awareness - ability читати body signals - критична для early burnout detection. Regular check-ins підвищують self-regulation (Craig 2009).",
+        "duration_estimate": "2 хвилини"
+      },
+      "logic_tags": {
+        "category": "somatic",
+        "impact_areas": [
+          "self_awareness",
+          "energy_management",
+          "stress_reduction"
+        ],
+        "priority_tier": "CORE",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.5
+      }
+    },
+    {
+      "id": "somatic_010_v2",
+      "internal_name": "humming_vagal_stimulation",
+      "display": {
+        "title": "Гудіння для вагусу",
+        "description": "Humming/chanting для vagus nerve stimulation. Простий powerful calming tool.",
+        "instructions": "1. Сядь комфортно\\n2. Глибокий вдих\\n3. На видиху - hum (мммммм)\\n4. Відчуй vibration в грудях та throat\\n5. Зроби це 10 разів\\n6. Variant: бджоле дихання (bhramari)\\n   - Закрий вуха пальцями\\n   - Hum на видиху\\n7. Помітай calming effect",
+        "scientific_rationale": "Humming стимулює vagus nerve через vibration. Збільшує vagal tone що асоціюється з lower anxiety та better emotional regulation (Kang 2018).",
+        "duration_estimate": "5 хвилин"
+      },
+      "logic_tags": {
+        "category": "somatic",
+        "impact_areas": [
+          "stress_reduction",
+          "emotional_regulation",
+          "present_moment"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.3
+      }
+    },
+    {
+      "id": "mixed_001_v2",
+      "internal_name": "morning_intention_setting",
+      "display": {
+        "title": "Ранкове встановлення наміру",
+        "description": "Комбінація mindfulness та behavioral commitment. Structured start дня aligned з values.",
+        "instructions": "1. Після пробудження (before phone!)\\n2. Sit 5 хвилин\\n3. Breathing до calm\\n4. Запитай:\\n   \"Як хочу показатись сьогодні?\"\\n   \"Яка моя core value сьогодні?\"\\n5. Pick 1 specific intention:\\n   \"Сьогодні я буду [action] aligned з [value]\"\\n6. Visualize 1 situation де practice це\\n7. Запиши intention",
+        "scientific_rationale": "Values-based behavioral activation - gold standard для depression treatment. Morning ritual sets psychological trajectory дня (Hayes ACT + behavioral activation).",
+        "duration_estimate": "10 хвилин"
+      },
+      "logic_tags": {
+        "category": "mixed",
+        "impact_areas": [
+          "values_clarity",
+          "behavioral_activation",
+          "present_moment"
+        ],
+        "priority_tier": "CORE",
+        "difficulty": 2,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.4
+      }
+    },
+    {
+      "id": "mixed_002_v2",
+      "internal_name": "urge_surfing",
+      "display": {
+        "title": "Серфінг по імпульсах",
+        "description": "Mindful approach до urges (переїдання scrolling avoidance). Ride impulse без acting.",
+        "instructions": "1. Коли відчуваєш urge (їжа соцмережі тощо)\\n2. Pause - НЕ дій одразу\\n3. Body scan: де в тілі відчуття?\\n4. Intensity rating: 0-10\\n5. Breathe і observe як urge:\\n   - Rises (як хвиля)\\n   - Peaks\\n   - Falls\\n6. НЕ fight НЕ follow - просто surf\\n7. Після 10-15 хв urge typically знижується\\n8. Помітай: я більший ніж urge",
+        "scientific_rationale": "Urge surfing - mindfulness техніка для addiction та impulse control. Urges physiologically peak та decline без action якщо не reinforce (Marlatt relapse prevention).",
+        "duration_estimate": "15 хвилин"
+      },
+      "logic_tags": {
+        "category": "mixed",
+        "impact_areas": [
+          "emotional_regulation",
+          "self_awareness",
+          "present_moment"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 2,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 1,
+        "is_active": true,
+        "base_weight": 1.3
+      }
+    },
+    {
+      "id": "mixed_003_v2",
+      "internal_name": "opposite_action",
+      "display": {
+        "title": "Протилежна дія",
+        "description": "DBT skill: робити opposite emotional urge коли emotion не justified. Powerful для breaking cycles.",
+        "instructions": "1. Identify emotion та її action urge:\\n   - Anxiety → avoid\\n   - Anger → attack\\n   - Sadness → isolate\\n   - Shame → hide\\n2. Check: чи emotion justified?\\n3. Якщо НІ (overblown or unhelpful):\\n4. DO THE OPPOSITE:\\n   - Anxiety → approach\\n   - Anger → gentle\\n   - Sadness → activate\\n   - Shame → self-disclose\\n5. All the way - not halfheartedly\\n6. Помітай: чи emotion змінилась?",
+        "scientific_rationale": "Opposite action - DBT technique що breaks emotion-behavior cycle. Коли behavior matches non-justified emotion це reinforces її. Opposite action shifts emotional state (Linehan 2015).",
+        "duration_estimate": "varies"
+      },
+      "logic_tags": {
+        "category": "mixed",
+        "impact_areas": [
+          "emotional_regulation",
+          "behavioral_activation",
+          "cognitive_flexibility"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 3,
+        "energy_cost": "medium"
+      },
+      "balancing": {
+        "cooldown_days": 1,
+        "is_active": true,
+        "base_weight": 1.2
+      }
+    },
+    {
+      "id": "mixed_004_v2",
+      "internal_name": "5_min_values_check",
+      "display": {
+        "title": "5-хвилинна перевірка цінностей",
+        "description": "Quick check: чи сьогоднішні дії aligned з deep values? Prevents drift.",
+        "instructions": "1. Name своє top 3 values:\\n   (relationships? creativity? growth? health?)\\n2. Для кожної запитай:\\n   \"Що я зробив сьогодні aligned з цим?\"\\n3. Якщо nothing - це yellow flag\\n4. Pick 1 small action на завтра:\\n   Value: connection\\n   Action: text друг\\n5. Додай в календар\\n6. Weekly: більший values audit",
+        "scientific_rationale": "ACT core principle: values-consistent behavior веде до wellbeing більше ніж symptom reduction. Daily values check prevents burnout drift (Hayes 2012).",
+        "duration_estimate": "5 хвилин"
+      },
+      "logic_tags": {
+        "category": "mixed",
+        "impact_areas": [
+          "values_clarity",
+          "self_awareness",
+          "behavioral_activation"
+        ],
+        "priority_tier": "CORE",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.5
+      }
+    },
+    {
+      "id": "mixed_005_v2",
+      "internal_name": "compassion_break",
+      "display": {
+        "title": "Перерва на співчуття",
+        "description": "Kristin Neff self-compassion practice. 3 components: mindfulness common humanity self-kindness.",
+        "instructions": "1. Коли struggling moment\\n2. Hand on heart\\n3. Say (вголос або в думках):\\n   \"Це момент страждання\" (mindfulness)\\n   \"Страждання частина життя\" (common humanity)\\n   \"Нехай я буду добрим до себе\" (self-kindness)\\n4. Додай:\\n   \"Що мені зараз потрібно?\"\\n5. Offer собі що потрібно\\n6. Breathe",
+        "scientific_rationale": "Self-compassion - stronger predictor wellbeing ніж self-esteem. 3 компоненти працюють synergistically (Neff validated scale та interventions).",
+        "duration_estimate": "3 хвилини"
+      },
+      "logic_tags": {
+        "category": "mixed",
+        "impact_areas": [
+          "self_compassion",
+          "emotional_regulation",
+          "stress_reduction"
+        ],
+        "priority_tier": "CORE",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.5
+      }
+    },
+    {
+      "id": "somatic_011_v2",
+      "internal_name": "stress_grounding_protocol",
+      "display": {
+        "title": "Заземлення при сильному стресі",
+        "description": "Швидка grounding техніка для моментів сильного стресу. Interrupt stress cascade через sensory anchoring.",
+        "instructions": "1. ЗУПИНИСЬ де стоїш/сидиш\n2. FEET on ground - відчуй contact\n3. Name 3 речі що БАЧИШ (вголос)\n4. TOUCH something - опиши texture\n5. SMELL - що можеш понюхати?\n6. ICE - тримай ice cube в руці\n7. COLD water - пий повільно\n8. REPEAT до відчуття заспокоєння\n9. Breathe повільно після",
+        "scientific_rationale": "Sensory grounding активує prefrontal cortex та знижує amygdala activation. Cold temperature додатково стимулює parasympathetic response через vagus nerve.",
+        "duration_estimate": "10 хвилин"
+      },
+      "logic_tags": {
+        "category": "somatic",
+        "impact_areas": [
+          "stress_reduction",
+          "emotional_regulation",
+          "present_moment"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.5
+      }
+    },
+    {
+      "id": "cognitive_012_v2",
+      "internal_name": "core_belief_restructuring",
+      "display": {
+        "title": "Реструктуризація core beliefs",
+        "description": "Глибока когнітивна робота з fundamental beliefs про себе. Складна довготривала практика.",
+        "instructions": "1. Identify core belief:\\n   \"Я fundamentally [негативна якість]\"\\n2. Downward arrow:\\n   - Що це означає про мене?\\n   - Що це означає про мене?\\n   - (до core belief)\\n3. Evidence log:\\n   2 тижні записуй все що contradicts belief\\n4. Historical analysis:\\n   - Звідки це belief?\\n   - Як воно сформувалось?\\n5. Compassionate reframe:\\n   - Що б сказав другу?\\n6. New belief development:\\n   - More realistic\\n   - Practice daily\\n7. Behavioral experiments:\\n   - Act as if new belief true",
+        "scientific_rationale": "Core belief change - deepest рівень CBT. Потребує sustained effort але produces fundamental shifts. Schema therapy показує: можливо змінити early maladaptive schemas (Young).",
+        "duration_estimate": "8+ тижнів"
+      },
+      "logic_tags": {
+        "category": "cognitive",
+        "impact_areas": [
+          "cognitive_flexibility",
+          "self_compassion",
+          "self_awareness"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 3,
+        "energy_cost": "high"
+      },
+      "balancing": {
+        "cooldown_days": 7,
+        "is_active": true,
+        "base_weight": 1.1
+      }
+    },
+    {
+      "id": "mixed_006_v2",
+      "internal_name": "exposure_hierarchy_burnout",
+      "display": {
+        "title": "Експозиційна ієрархія для burnout",
+        "description": "Systematic desensitization до avoided work tasks. Gradual approach до overwhelm.",
+        "instructions": "1. List всі avoided tasks (10-20)\\n2. Rate anxiety кожної: 0-100\\n3. Sort від lowest до highest\\n4. Start з lowest (SUDS < 30)\\n5. Exposure protocol:\\n   - Do task WITHOUT escape\\n   - Stay until anxiety drops 50%\\n   - Repeat до habituation\\n6. Move вище по hierarchy\\n7. Daily practice\\n8. Track progress: SUDS ratings over time",
+        "scientific_rationale": "Exposure therapy - gold standard для anxiety. Systematic desensitization works для work-related avoidance. Habituation curve показує: anxiety peaks then drops with sustained exposure (Foa).",
+        "duration_estimate": "weeks"
+      },
+      "logic_tags": {
+        "category": "mixed",
+        "impact_areas": [
+          "stress_reduction",
+          "behavioral_activation",
+          "cognitive_flexibility"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 3,
+        "energy_cost": "high"
+      },
+      "balancing": {
+        "cooldown_days": 3,
+        "is_active": true,
+        "base_weight": 1.1
+      }
+    },
+    {
+      "id": "rest_011_v2",
+      "internal_name": "sleep_divorce",
+      "display": {
+        "title": "Sleep divorce (окремі ліжка)",
+        "description": "Sleeping separately від партнера for better sleep quality. Addresses partner-based sleep disruption.",
+        "instructions": "1. Assess:\\n   - Partner snoring?\\n   - Different schedules?\\n   - Movement/heat issues?\\n2. Trial period (2 тижні):\\n   - Separate beds/rooms\\n   - Track sleep quality\\n3. Communication:\\n   - Frame as health need\\n   - Plan intimacy time\\n   - Not rejection\\n4. Optimize each sleep space:\\n   - Temperature\\n   - Darkness\\n   - Noise\\n5. Reassess relationship:\\n   - Quality time when awake\\n   - Intentional connection",
+        "scientific_rationale": "Sleep divorce shows: 30-40% couples sleep better apart. Partner-based disruptions (snoring movement) chronically degrade sleep. Separate sleeping doesn't harm relationship quality (Troxel research).",
+        "duration_estimate": "ongoing"
+      },
+      "logic_tags": {
+        "category": "rest",
+        "impact_areas": [
+          "sleep_quality",
+          "interpersonal",
+          "stress_reduction"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 2,
+        "energy_cost": "medium"
+      },
+      "balancing": {
+        "cooldown_days": 30,
+        "is_active": true,
+        "base_weight": 1.0
+      }
+    },
+    {
+      "id": "somatic_012_v2",
+      "internal_name": "shaking_TRE",
+      "display": {
+        "title": "Trauma Release Exercise (тремтіння)",
+        "description": "Somatic shaking для releasing stored stress in body. Базується на TRE protocol.",
+        "instructions": "1. Warm up:\\n   - Walk в місці 5 хв\\n   - Light stretching\\n2. Fatigue legs:\\n   - Wall sit або squat hold\\n   - До тремтіння початку\\n3. Ляг на спину:\\n   - Feet together коліна apart\\n   - Let tremors come\\n4. НЕ control shaking:\\n   - Body knows що робити\\n   - May spread до всього тіла\\n5. Continue 15-20 хв\\n6. Rest після\\n7. Hydrate\\n8. Можливі emotional releases - це нормально",
+        "scientific_rationale": "TRE (Tension & Trauma Release Exercises) використовує neurogenic tremors для release stored stress. Тремтіння - natural mammalian stress discharge. Потребує caution з PTSD (Berceli).",
+        "duration_estimate": "30 хвилин"
+      },
+      "logic_tags": {
+        "category": "somatic",
+        "impact_areas": [
+          "stress_reduction",
+          "emotional_regulation",
+          "present_moment"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 3,
+        "energy_cost": "medium"
+      },
+      "balancing": {
+        "cooldown_days": 3,
+        "is_active": true,
+        "base_weight": 1.0
+      }
+    },
+    {
+      "id": "cognitive_013_v2",
+      "internal_name": "behavioral_activation_scheduling",
+      "display": {
+        "title": "Поведінкова активація (scheduling)",
+        "description": "Structured activity scheduling для depression. Противага до avoidance pattern.",
+        "instructions": "1. Baseline week:\\n   - Track activities + mood (0-10)\\n   - Identify mood-activity patterns\\n2. Categorize activities:\\n   - Mastery (achievement)\\n   - Pleasure (enjoyment)\\n   - Necessary (survival)\\n3. Schedule week ahead:\\n   - Daily mix: mastery + pleasure\\n   - Small achievable steps\\n   - Specific times\\n4. Follow schedule:\\n   - Regardless of motivation\\n   - Track mood before/after\\n5. Review weekly:\\n   - What lifted mood?\\n   - Adjust schedule\\n6. Gradually increase demands",
+        "scientific_rationale": "Behavioral activation - first-line treatment для depression (equal до мeds). Ідея: action → mood not mood → action. Breaking avoidance cycle restores reinforcement (Martell 2001).",
+        "duration_estimate": "ongoing"
+      },
+      "logic_tags": {
+        "category": "cognitive",
+        "impact_areas": [
+          "behavioral_activation",
+          "emotional_regulation",
+          "energy_management"
+        ],
+        "priority_tier": "CORE",
+        "difficulty": 2,
+        "energy_cost": "medium"
+      },
+      "balancing": {
+        "cooldown_days": 7,
+        "is_active": true,
+        "base_weight": 1.4
+      }
+    },
+    {
+      "id": "boundaries_012_v2",
+      "internal_name": "capacity_communication",
+      "display": {
+        "title": "Комунікація своєї capacity",
+        "description": "Honest communication про current bandwidth. Prevents overcommitment through transparency.",
+        "instructions": "1. Assess current capacity:\\n   - Energy level (0-10)\\n   - Time available (реальний)\\n   - Mental load (0-10)\\n2. Communication template:\\n   \"Зараз моя capacity [X/10]\\n   Я можу взяти [specific]\\n   Але не можу [specific]\\n   Timeline: [realistic]\"\\n3. Practice saying:\\n   \"Я в overload зараз\"\\n   \"Треба відновитись спочатку\"\\n4. Alternative offers:\\n   \"Можу після [date]\"\\n   \"Можу частково\"\\n5. NO apologizing за limitations\\n6. Track: чи capacity matches commitments?",
+        "scientific_rationale": "Honest capacity communication попереджує burnout через overcommitment. Transparency builds trust більше ніж false promises. Realistic self-assessment критичний skill (Covey).",
+        "duration_estimate": "10 хвилин"
+      },
+      "logic_tags": {
+        "category": "boundaries",
+        "impact_areas": [
+          "interpersonal",
+          "self_awareness",
+          "stress_reduction"
+        ],
+        "priority_tier": "CORE",
+        "difficulty": 2,
+        "energy_cost": "medium"
+      },
+      "balancing": {
+        "cooldown_days": 1,
+        "is_active": true,
+        "base_weight": 1.4
+      }
+    },
+    {
+      "id": "somatic_104_v2",
+      "internal_name": "voo_vagal_toning_sound",
+      "display": {
+        "title": "Звукове тонування \"Вуу\"",
+        "description": "Використання низькочастотних звукових вібрацій для заспокоєння внутрішніх органів.",
+        "instructions": "1. Зробіть глибокий вдих у живіт.\n2. На довгому видиху видайте низький вібруючий звук \"Вууууу\".\n3. Відчуйте вібрацію в грудях та животі.\n4. Зробіть паузу вдихніть природно і повторіть 5 разів.",
+        "scientific_rationale": "Низькочастотний звук створює вісцеральну вібрацію яка безпосередньо впливає на вентральний вагусний комплекс сприяючи виходу з режиму \"завмирання\" або паніки.",
+        "duration_estimate": "5 хвилин"
+      },
+      "logic_tags": {
         "category": "somatic",
         "impact_areas": [
           "emotional_regulation",
-          "burnout",
-          "anxiety"
+          "stress_reduction"
         ],
         "priority_tier": "SUPPORT",
-        "min_plan_duration": 2
+        "difficulty": 1,
+        "energy_cost": "low"
       },
       "balancing": {
-        "base_weight": 1.0,
+        "cooldown_days": 1,
         "is_active": true,
-        "cooldown_days": 2
-      },
-      "content_payload": {
-        "title_uk": "Медитація усвідомленості",
-        "card_description": "Спокій через фокус на диханні.",
-        "full_instruction": "Сидіть спокійно та спостерігайте за диханням. Коли увага зникає, лагідно поверніть її до відчуттів тіла.",
-        "scientific_rationale": "Усвідомленість знижує емоційне виснаження при вигоранні [cite: https://doi.org/10.3389/fpubh.2024.1381373]",
-        "resource": {
-          "type": "external_link",
-          "url": "https://doi.org/10.3389/fpubh.2024.1381373",
-          "button_text": "Читати: Як це працює"
-        }
+        "base_weight": 1.4
       }
     },
     {
-      "id": "BR_SOM_L3_01",
-      "internal_name": "Brisk Walk Break",
+      "id": "somatic_105_v2",
+      "internal_name": "butterfly_hug_bilateral",
+      "display": {
+        "title": "Обійми метелика",
+        "description": "Техніка самодопомоги що використовує білатеральну (двосторонню) стимуляцію мозку.",
+        "instructions": "1. Схрестіть руки на грудях так щоб пальці лежали під ключицями.\n2. Почергово та ритмічно постукуйте по плечах (ліво-право-ліво).\n3. Продовжуйте 2-3 хвилини дихаючи глибоко.\n4. Спостерігайте як емоція стає менш гострою.",
+        "scientific_rationale": "Ритмічна почергова стимуляція півкуль допомагає інтегрувати травматичний або стресовий досвід на нейронному рівні подібно до механізмів EMDR-терапії.",
+        "duration_estimate": "3 хвилини"
+      },
       "logic_tags": {
-        "difficulty": 3,
-        "energy_cost": "HIGH",
         "category": "somatic",
         "impact_areas": [
-          "stress",
-          "recovery",
-          "energy_boost"
+          "emotional_regulation",
+          "acceptance"
         ],
         "priority_tier": "SUPPORT",
-        "min_plan_duration": 3
+        "difficulty": 1,
+        "energy_cost": "low"
       },
       "balancing": {
-        "base_weight": 0.8,
+        "cooldown_days": 1,
         "is_active": true,
-        "cooldown_days": 3
-      },
-      "content_payload": {
-        "title_uk": "Швидка прогулянка",
-        "card_description": "Фізичне перезавантаження через рух.",
-        "full_instruction": "Прогуляйтесь 10 хвилин в середньому темпі. Звертайте увагу на своє тіло та простір довкола.",
-        "scientific_rationale": "Фізична активність підвищує тонус блукаючого нерва [cite: https://www.massgeneral.org/news/article/vagus-nerve]",
-        "resource": {
-          "type": "external_link",
-          "url": "https://www.massgeneral.org/news/article/vagus-nerve",
-          "button_text": "Читати: Як це працює"
-        }
+        "base_weight": 1.4
       }
     },
     {
-      "id": "BR_COG_L2_01",
-      "internal_name": "Thought Reframing",
+      "id": "cognitive_101_v2",
+      "internal_name": "thought_challenging_diary",
+      "display": {
+        "title": "Щоденник перевірки думок",
+        "description": "Інструмент для виявлення автоматичних негативних думок та їх логічної перевірки.",
+        "instructions": "1. Запишіть ситуацію.\n2. Виділіть головну тривожну думку.\n3. Випишіть докази що підтверджують думку.\n4. Випишіть докази що спростовують її.\n5. Сформулюйте збалансований висновок.",
+        "scientific_rationale": "Раціональний аналіз активує дорсолатеральну префронтальну кору що дозволяє зменшити емоційний \"заряд\" думки та розірвати ланцюг автоматичних реакцій.",
+        "duration_estimate": "15 хвилин"
+      },
       "logic_tags": {
-        "difficulty": 2,
-        "energy_cost": "MED",
         "category": "cognitive",
         "impact_areas": [
-          "perfectionism",
-          "stress",
-          "distorted_thinking"
+          "cognitive_flexibility",
+          "stress_reduction"
         ],
         "priority_tier": "CORE",
-        "min_plan_duration": 2
-      },
-      "balancing": {
-        "base_weight": 1.0,
-        "is_active": true,
-        "cooldown_days": 3
-      },
-      "content_payload": {
-        "title_uk": "Переформулювання думок",
-        "card_description": "Зміна негативних думок на реалістичні.",
-        "full_instruction": "Запишіть тривожну думку. Задайте 3 питання: це правда? що найгірше? що б сказали другові?",
-        "scientific_rationale": "Рефреймінг допомагає змінювати шкідливі патерни мислення [cite: https://www.inspirethemind.org/post/eight-evidence-based-approaches-to-beat-burnout]",
-        "resource": {
-          "type": "external_link",
-          "url": "https://www.inspirethemind.org/post/eight-evidence-based-approaches-to-beat-burnout",
-          "button_text": "Читати: Як це працює"
-        }
-      }
-    },
-    {
-      "id": "BR_COG_L2_02",
-      "internal_name": "Good Enough Experiment",
-      "logic_tags": {
         "difficulty": 2,
-        "energy_cost": "MED",
-        "category": "cognitive",
-        "impact_areas": [
-          "perfectionism",
-          "control",
-          "performance"
-        ],
-        "priority_tier": "SUPPORT",
-        "min_plan_duration": 2
+        "energy_cost": "medium"
       },
       "balancing": {
-        "base_weight": 1.0,
+        "cooldown_days": 1,
         "is_active": true,
-        "cooldown_days": 3
-      },
-      "content_payload": {
-        "title_uk": "Експеримент \"Достатньо добре\"",
-        "card_description": "Практика недосконалості як експеримент.",
-        "full_instruction": "Спробуйте зробити задачу на 80%. Прослідкуйте, чи справді трапиться щось страшне.",
-        "scientific_rationale": "Допомагає зменшити страх помилок через поступове розширення зони дозволеного [cite: https://www.drolsonmadden.com/post/coping-techniques-for-perfectionism]",
-        "resource": {
-          "type": "external_link",
-          "url": "https://www.drolsonmadden.com/post/coping-techniques-for-perfectionism",
-          "button_text": "Читати: Як це працює"
-        }
+        "base_weight": 1.5
       }
     },
     {
-      "id": "BR_COG_L1_01",
-      "internal_name": "Leaves on a Stream",
+      "id": "cognitive_102_v2",
+      "internal_name": "leaf_on_stream_defusion",
+      "display": {
+        "title": "Листя на струмку",
+        "description": "Техніка когнітивної дефузії (дистанціювання) для спостереження за думками без залучення.",
+        "instructions": "1. Закрийте очі та уявіть струмок.\n2. Помітьте думку в голові.\n3. Уявіть як ви кладете її на листок що пливе повз.\n4. Дозвольте листку попливти за течію.\n5. Повторюйте з кожною думкою.",
+        "scientific_rationale": "Створення метафоричної дистанції між \"собою\" та \"думкою\" знижує злиття (fusion) що дозволяє перестати сприймати думки як накази або абсолютну істину.",
+        "duration_estimate": "10 хвилин"
+      },
       "logic_tags": {
-        "difficulty": 1,
-        "energy_cost": "LOW",
         "category": "cognitive",
         "impact_areas": [
-          "overthinking",
-          "rumination",
-          "distancing"
-        ],
-        "priority_tier": "SUPPORT",
-        "min_plan_duration": 1
-      },
-      "balancing": {
-        "base_weight": 1.0,
-        "is_active": true,
-        "cooldown_days": 2
-      },
-      "content_payload": {
-        "title_uk": "Листочки на потоці",
-        "card_description": "Метод роз’єднання з думками.",
-        "full_instruction": "Уявляйте, що кожна думка — листок, який пливе по струмку. Не чіпляйтесь, просто спостерігайте.",
-        "scientific_rationale": "Створює дистанцію між особистістю та думками [cite: https://www.drolsonmadden.com/post/coping-techniques-for-perfectionism]",
-        "resource": {
-          "type": "external_link",
-          "url": "https://www.drolsonmadden.com/post/coping-techniques-for-perfectionism",
-          "button_text": "Читати: Як це працює"
-        }
-      }
-    },
-    {
-      "id": "BR_COG_L1_02",
-      "internal_name": "Self-Compassion Break",
-      "logic_tags": {
-        "difficulty": 1,
-        "energy_cost": "LOW",
-        "category": "cognitive",
-        "impact_areas": [
-          "shame",
-          "guilt",
-          "emotional_pain"
+          "present_moment",
+          "cognitive_flexibility"
         ],
         "priority_tier": "CORE",
-        "min_plan_duration": 1
+        "difficulty": 1,
+        "energy_cost": "low"
       },
       "balancing": {
-        "base_weight": 1.2,
+        "cooldown_days": 0,
         "is_active": true,
-        "cooldown_days": 2
-      },
-      "content_payload": {
-        "title_uk": "Хвилинка самоспівчуття",
-        "card_description": "Невелика пауза для доброти до себе.",
-        "full_instruction": "Покладіть руку на серце й скажіть: «Це важко… Я не один… Хай я буду добрим до себе».",
-        "scientific_rationale": "Формує внутрішню підтримку замість критики [cite: https://www.drolsonmadden.com/post/coping-techniques-for-perfectionism]",
-        "resource": {
-          "type": "external_link",
-          "url": "https://www.drolsonmadden.com/post/coping-techniques-for-perfectionism",
-          "button_text": "Читати: Як це працює"
-        }
+        "base_weight": 1.4
       }
     },
     {
-      "id": "BR_BOU_L3_01",
-      "internal_name": "Assertive \"No\"",
+      "id": "cognitive_103_v2",
+      "internal_name": "labels_not_facts",
+      "display": {
+        "title": "Я помічаю що думаю...",
+        "description": "Вправа на вербальне роз'єднання з нав'язливими переконаннями.",
+        "instructions": "1. Візьміть думку \"Я невдаха\".\n2. Перефразуйте: \"У мене є думка що я невдаха\".\n3. Перефразуйте ще раз: \"Я помічаю що у мене є думка що я невдаха\".\n4. Відчуйте як думка стає просто набором слів.",
+        "scientific_rationale": "Ця лінгвістична маніпуляція допомагає мозку класифікувати думку як ментальну подію а не як об'єктивну реальність зменшуючи її вплив на самооцінку.",
+        "duration_estimate": "5 хвилин"
+      },
       "logic_tags": {
+        "category": "cognitive",
+        "impact_areas": [
+          "cognitive_flexibility",
+          "acceptance"
+        ],
+        "priority_tier": "CORE",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.3
+      }
+    },
+    {
+      "id": "cognitive_104_v2",
+      "internal_name": "socratic_questioning_logic",
+      "display": {
+        "title": "Сократівські питання",
+        "description": "Набір запитань для самостійного виявлення когнітивних викривлень.",
+        "instructions": "1. Чи є ця думка на 100% істиною?\n2. Що б я сказав другу в такій ситуації?\n3. Які є інші пояснення цієї події?\n4. Чи допомагає мені ця думка бути щасливим?\n5. Який найгірший та найкращий сценарії?",
+        "scientific_rationale": "Структурований сумнів активує критичне мислення що запобігає емоційному \"затопленню\" та сприяє формуванню гнучких когнітивних схем.",
+        "duration_estimate": "15 хвилин"
+      },
+      "logic_tags": {
+        "category": "cognitive",
+        "impact_areas": [
+          "cognitive_flexibility",
+          "emotional_regulation"
+        ],
+        "priority_tier": "SUPPORT",
+        "difficulty": 2,
+        "energy_cost": "medium"
+      },
+      "balancing": {
+        "cooldown_days": 1,
+        "is_active": true,
+        "base_weight": 1.2
+      }
+    },
+    {
+      "id": "cognitive_106_v2",
+      "internal_name": "fact_vs_assumption_check",
+      "display": {
+        "title": "Факт чи Припущення?",
+        "description": "Вправа на розрізнення об'єктивної реальності та внутрішніх інтерпретацій.",
+        "instructions": "1. Запишіть ситуацію одним реченням.\n2. Підкресліть слова які є фактами (можна зняти на камеру).\n3. Випишіть слова які є вашими оцінками або припущеннями.\n4. Перепишіть ситуацію використовуючи тільки факти.",
+        "scientific_rationale": "Розрізнення фактів та оцінок знижує рівень суб'єктивного стресу оскільки більшість страждань виникає не від подій а від їх катастрофічних інтерпретацій.",
+        "duration_estimate": "10 хвилин"
+      },
+      "logic_tags": {
+        "category": "cognitive",
+        "impact_areas": [
+          "cognitive_flexibility",
+          "self_awareness"
+        ],
+        "priority_tier": "CORE",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 1,
+        "is_active": true,
+        "base_weight": 1.4
+      }
+    },
+    {
+      "id": "boundaries_101_v2",
+      "internal_name": "dear_man_assertive_request",
+      "display": {
+        "title": "Техніка DEAR MAN",
+        "description": "Алгоритм для того щоб попросити про щось або відмовити зберігаючи стосунки.",
+        "instructions": "1. Describe (Опишіть факти).\n2. Express (Висловіть почуття через \"Я-повідомлення\").\n3. Assert (Ясно попросіть або скажіть \"ні\").\n4. Reinforce (Поясніть вигоду для іншого).\n5. Mindful (Тримайтеся позиції).\n6. Appear confident.\n7. Negotiate.",
+        "scientific_rationale": "Структурований підхід знижує конфліктність та підвищує ймовірність досягнення мети без почуття провини або агресії.",
+        "duration_estimate": "15 хвилин"
+      },
+      "logic_tags": {
+        "category": "boundaries",
+        "impact_areas": [
+          "interpersonal",
+          "self_compassion"
+        ],
+        "priority_tier": "CORE",
         "difficulty": 3,
-        "energy_cost": "HIGH",
-        "category": "boundaries",
-        "impact_areas": [
-          "overload",
-          "people_pleasing",
-          "stress"
-        ],
-        "priority_tier": "CORE",
-        "min_plan_duration": 4
+        "energy_cost": "high"
       },
       "balancing": {
-        "base_weight": 1.0,
+        "cooldown_days": 2,
         "is_active": true,
-        "cooldown_days": 4
-      },
-      "content_payload": {
-        "title_uk": "Ассертивне «Ні»",
-        "card_description": "Навичка м’яко, але твердо відмовляти.",
-        "full_instruction": "Визначте одне неважливе прохання та відмовте ввічливо, без вибачень.",
-        "scientific_rationale": "Ассертивність знижує перевантаження та ризик вигорання [cite: https://www.researchgate.net/publication/285370047_Effect_of_Assertiveness_Skills_on_Job_Burnout]",
-        "resource": {
-          "type": "external_link",
-          "url": "https://www.researchgate.net/publication/285370047_Effect_of_Assertiveness_Skills_on_Job_Burnout",
-          "button_text": "Читати: Як це працює"
-        }
+        "base_weight": 1.5
       }
     },
     {
-      "id": "BR_BOU_L2_01",
-      "internal_name": "Task Prioritization",
+      "id": "boundaries_102_v2",
+      "internal_name": "give_skill_gentle_listen",
+      "display": {
+        "title": "Навичка GIVE",
+        "description": "Як підтримувати стосунки та прихильність партнера під час важких розмов.",
+        "instructions": "1. Gentle (Будьте м'якими без атак).\n2. Interested (Слухайте іншого уважно).\n3. Validate (Покажіть що розумієте почуття іншого).\n4. Easy manner (Використовуйте гумор або легкість).",
+        "scientific_rationale": "Використання GIVE допомагає зберегти прихильність партнера та знижує напругу що дозволяє вирішувати проблеми конструктивно.",
+        "duration_estimate": "10 хвилин"
+      },
       "logic_tags": {
+        "category": "boundaries",
+        "impact_areas": [
+          "interpersonal",
+          "emotional_regulation"
+        ],
+        "priority_tier": "SUPPORT",
         "difficulty": 2,
-        "energy_cost": "MED",
-        "category": "boundaries",
-        "impact_areas": [
-          "time_management",
-          "overwhelm",
-          "focus"
-        ],
-        "priority_tier": "CORE",
-        "min_plan_duration": 2
+        "energy_cost": "medium"
       },
       "balancing": {
-        "base_weight": 1.0,
+        "cooldown_days": 1,
         "is_active": true,
-        "cooldown_days": 2
-      },
-      "content_payload": {
-        "title_uk": "Пріоритизація задач",
-        "card_description": "Метод сортування справ за важливістю.",
-        "full_instruction": "Розбий завдання на 4 категорії: термінові, важливі, делеговані, сміття.",
-        "scientific_rationale": "Ясне структурування зменшує когнітивне навантаження [cite: https://niceday.app/en/library/burn-out/exercises-en/exercises-for-time-management-burnout/]",
-        "resource": {
-          "type": "external_link",
-          "url": "https://niceday.app/en/library/burn-out/exercises-en/exercises-for-time-management-burnout/",
-          "button_text": "Читати: Як це працює"
-        }
+        "base_weight": 1.3
       }
     },
     {
-      "id": "BR_BOU_L2_02",
-      "internal_name": "Work Detachment",
+      "id": "boundaries_103_v2",
+      "internal_name": "i_statements_communication",
+      "display": {
+        "title": "Я-повідомлення",
+        "description": "Спосіб висловити невдоволення без звинувачень та провокування захисної реакції.",
+        "instructions": "1. Коли стається [факт]...\n2. Я відчуваю [емоція]...\n3. Тому що мені важливо [потреба/цінність]...\n4. Будь ласка чи міг би ти [прохання]...",
+        "scientific_rationale": "Фокус на власних відчуттях замість атак на особистість іншого знижує опір співрозмовника та сприяє взаєморозумінню.",
+        "duration_estimate": "5 хвилин"
+      },
       "logic_tags": {
+        "category": "boundaries",
+        "impact_areas": [
+          "interpersonal",
+          "emotional_regulation"
+        ],
+        "priority_tier": "CORE",
+        "difficulty": 1,
+        "energy_cost": "medium"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.4
+      }
+    },
+    {
+      "id": "boundaries_104_v2",
+      "internal_name": "broken_record_persistence",
+      "display": {
+        "title": "Заїзджена платівка",
+        "description": "Спосіб впевнено стояти на своєму при тиску з боку оточуючих.",
+        "instructions": "1. Сформулюйте коротку відмову (наприклад \"Я не позичу гроші\").\n2. Повторюйте її спокійно на кожну спробу переконати вас.\n3. Не додавайте нових аргументів - вони дають привід для спору.\n4. Тримайте нейтральний тон.",
+        "scientific_rationale": "Повторення без варіацій показує опоненту вашу непохитність і не дає йому \"зачепитися\" за ваші пояснення для маніпуляції.",
+        "duration_estimate": "5 хвилин"
+      },
+      "logic_tags": {
+        "category": "boundaries",
+        "impact_areas": [
+          "interpersonal",
+          "stress_reduction"
+        ],
+        "priority_tier": "SUPPORT",
         "difficulty": 2,
-        "energy_cost": "MED",
-        "category": "boundaries",
-        "impact_areas": [
-          "mental_recovery",
-          "exhaustion",
-          "work_life_balance"
-        ],
-        "priority_tier": "SUPPORT",
-        "min_plan_duration": 2
+        "energy_cost": "medium"
       },
       "balancing": {
-        "base_weight": 0.9,
+        "cooldown_days": 1,
         "is_active": true,
-        "cooldown_days": 3
-      },
-      "content_payload": {
-        "title_uk": "Відключення від роботи",
-        "card_description": "Час без месенджерів і задач.",
-        "full_instruction": "Встанови «м’який кордон»: не перевіряй пошту після 19:00.",
-        "scientific_rationale": "Дистанціювання від роботи в неробочий час знижує емоційне виснаження [cite: https://doi.org/10.3389/fpsyg.2020.00824]",
-        "resource": {
-          "type": "external_link",
-          "url": "https://doi.org/10.3389/fpsyg.2020.00824",
-          "button_text": "Читати: Як це працює"
-        }
+        "base_weight": 1.2
       }
     },
     {
-      "id": "BR_BOU_L2_03",
-      "internal_name": "Delegation/Help",
+      "id": "rest_101_v2",
+      "internal_name": "nsdr_yoga_nidra_basic",
+      "display": {
+        "title": "Глибокий спокій (NSDR)",
+        "description": "Протокол для швидкого відновлення нервової системи без засинання.",
+        "instructions": "1. Ляжте на спину в тиші.\n2. Закрийте очі та слідуйте за відчуттями в тілі (сканування).\n3. Робите довгі видихи.\n4. Уявіть як ваше тіло стає важким і занурюється в підлогу.\n5. Залишайтеся в цьому стані 10-20 хвилин.",
+        "scientific_rationale": "NSDR (Non-Sleep Deep Rest) переводить мозок у стан альфа- та тета-хвиль що сприяє відновленню рівня дофаміну та покращує когнітивні функції на рівні з коротким сном.",
+        "duration_estimate": "20 хвилин"
+      },
       "logic_tags": {
+        "category": "rest",
+        "impact_areas": [
+          "energy_management",
+          "cognitive_flexibility"
+        ],
+        "priority_tier": "REST",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.5
+      }
+    },
+    {
+      "id": "rest_102_v2",
+      "internal_name": "sleep_sanctuary_setup",
+      "display": {
+        "title": "Облаштування місця сну",
+        "description": "Технічне налаштування середовища для максимального виробленння мелатоніну.",
+        "instructions": "1. Перевірте температуру в кімнаті (оптимально 18°C).\n2. Повністю закрийте вікна (blackout).\n3. Приберіть усі електронні пристрої з ліжка.\n4. Використовуйте тільки тепле тьмяне світло ввечері.",
+        "scientific_rationale": "Темрява та прохолода є критичними сигналами для шишкоподібної залози щодо початку синтезу мелатоніну що забезпечує глибокі фази сну для детоксикації мозку.",
+        "duration_estimate": "15 хвилин"
+      },
+      "logic_tags": {
+        "category": "rest",
+        "impact_areas": [
+          "sleep_quality",
+          "stress_reduction"
+        ],
+        "priority_tier": "REST",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 3,
+        "is_active": true,
+        "base_weight": 1.3
+      }
+    },
+    {
+      "id": "rest_103_v2",
+      "internal_name": "digital_detox_evening",
+      "display": {
+        "title": "Цифровий детокс перед сном",
+        "description": "Захист циркадних ритмів від впливу синього світла та інформаційного перевантаження.",
+        "instructions": "1. За 60 хвилин до сну вимкніть смартфон.\n2. Займіться чимось аналоговим: душ книга розмова.\n3. Якщо треба екран - використовуйте червоний фільтр.",
+        "scientific_rationale": "Синє світло екранів пригнічує мелатонін на 2-3 години зміщуючи фазу засинання та погіршуючи якість REM-сну необхідного для емоційної переробки стресу.",
+        "duration_estimate": "60 хвилин"
+      },
+      "logic_tags": {
+        "category": "rest",
+        "impact_areas": [
+          "sleep_quality",
+          "emotional_regulation"
+        ],
+        "priority_tier": "REST",
         "difficulty": 2,
-        "energy_cost": "MED",
-        "category": "boundaries",
+        "energy_cost": "medium"
+      },
+      "balancing": {
+        "cooldown_days": 1,
+        "is_active": true,
+        "base_weight": 1.2
+      }
+    },
+    {
+      "id": "rest_104_v2",
+      "internal_name": "brain_dump_journal",
+      "display": {
+        "title": "Вивантаження думок (Brain Dump)",
+        "description": "Очищення робочої пам'яті мозку від справ та турбот перед сном.",
+        "instructions": "1. Візьміть аркуш паперу.\n2. Випишіть усі справи тривоги та плани на завтра які крутяться в голові.\n3. Скажіть собі: \"Я подумаю про це завтра вранці\".\n4. Відкладіть список.",
+        "scientific_rationale": "Перенесення планів на папір звільняє префронтальну кору від потреби постійно \"утримувати\" ці задачі що значно знижує латентність (час) засинання.",
+        "duration_estimate": "10 хвилин"
+      },
+      "logic_tags": {
+        "category": "rest",
         "impact_areas": [
-          "support",
-          "overload",
-          "collaboration"
+          "stress_reduction",
+          "sleep_quality"
+        ],
+        "priority_tier": "REST",
+        "difficulty": 2,
+        "energy_cost": "medium"
+      },
+      "balancing": {
+        "cooldown_days": 1,
+        "is_active": true,
+        "base_weight": 1.3
+      }
+    },
+    {
+      "id": "rest_105_v2",
+      "internal_name": "morning_sunlight_reset",
+      "display": {
+        "title": "Ранкове світло",
+        "description": "Налаштування внутрішнього годинника через природне освітлення.",
+        "instructions": "1. Протягом 30 хвилин після пробудження вийдіть на вулицю.\n2. Проведіть 5-10 хвилин під прямим або непрямим сонячним світлом.\n3. Не дивіться прямо на сонце просто будьте на світлі.",
+        "scientific_rationale": "Ранкові фотони світла потрапляючи на сітківку запускають таймер виробленняе мелатоніну який спрацює через 14-16 годин забезпечуючи легке засинання.",
+        "duration_estimate": "10 хвилин"
+      },
+      "logic_tags": {
+        "category": "rest",
+        "impact_areas": [
+          "sleep_quality",
+          "energy_management"
+        ],
+        "priority_tier": "REST",
+        "difficulty": 1,
+        "energy_cost": "low"
+      },
+      "balancing": {
+        "cooldown_days": 0,
+        "is_active": true,
+        "base_weight": 1.4
+      }
+    },
+    {
+      "id": "mixed_103_v2",
+      "internal_name": "mastery_small_win",
+      "display": {
+        "title": "Крок до майстерності",
+        "description": "Відновлення впевненості через завершення маленького складного завдання.",
+        "instructions": "1. Оберіть справу яку ви відкладали через страх.\n2. Розбийте її на мікро-кроки.\n3. Виконайте перший крок протягом 5 хвилин.\n4. Відсвяткуйте цю маленьку перемогу.",
+        "scientific_rationale": "Почуття майстерності (mastery) активує систему винагороди що знижує відчуття безпорадності та підвищує самоефективність.",
+        "duration_estimate": "10 хвилин"
+      },
+      "logic_tags": {
+        "category": "mixed",
+        "impact_areas": [
+          "behavioral_activation",
+          "self_compassion"
         ],
         "priority_tier": "SUPPORT",
-        "min_plan_duration": 2
+        "difficulty": 2,
+        "energy_cost": "medium"
       },
       "balancing": {
-        "base_weight": 1.1,
+        "cooldown_days": 1,
         "is_active": true,
-        "cooldown_days": 3
-      },
-      "content_payload": {
-        "title_uk": "Делегування / Допомога",
-        "card_description": "Запросити допомогу — теж скіл.",
-        "full_instruction": "Знайди одну задачу, яку можна передати іншому, і зроби це.",
-        "scientific_rationale": "Спільна відповідальність знижує навантаження та вигорання [cite: https://www.mdpi.com/2076-328X/14/8/727]",
-        "resource": {
-          "type": "external_link",
-          "url": "https://www.mdpi.com/2076-328X/14/8/727",
-          "button_text": "Читати: Як це працює"
-        }
+        "base_weight": 1.3
       }
     },
     {
-      "id": "BR_RES_L3_01",
-      "internal_name": "Values Journal",
-      "logic_tags": {
-        "difficulty": 3,
-        "energy_cost": "HIGH",
-        "category": "rest",
-        "impact_areas": [
-          "meaning",
-          "motivation",
-          "identity"
-        ],
-        "priority_tier": "CORE",
-        "min_plan_duration": 4
+      "id": "mixed_104_v2",
+      "internal_name": "five_minute_starter",
+      "display": {
+        "title": "Правило 5 хвилин",
+        "description": "Техніка подолання прокрастинації через зниження порогу входу.",
+        "instructions": "1. Оберіть справу яку не хочете робити.\n2. Домовтеся з собою робити її лише 5 хвилин.\n3. Через 5 хв ви маєте право зупинитися.\n4. Зазвичай мозок втягується в процес і продовжує.",
+        "scientific_rationale": "Найважче у будь-якій справі - це подолання інерції. Короткий час виконання знижує рівень тривоги перед \"великим завданням\".",
+        "duration_estimate": "5 хвилин"
       },
-      "balancing": {
-        "base_weight": 1.0,
-        "is_active": true,
-        "cooldown_days": 4
-      },
-      "content_payload": {
-        "title_uk": "Щоденник цінностей",
-        "card_description": "Пошук відповідей на питання «Хто я?»",
-        "full_instruction": "3 рази на тиждень: «Що для мене важливо?», «Ким я хочу бути?»",
-        "scientific_rationale": "Рефлексія допомагає знайти сенс і знижує вигорання [cite: https://www.psychologytoday.com/us/blog/anger-in-the-age-of-entitlement/202505/to-avoid-burnout-act-on-your-deeper-values]",
-        "resource": {
-          "type": "external_link",
-          "url": "https://www.psychologytoday.com/us/blog/anger-in-the-age-of-entitlement/202505/to-avoid-burnout-act-on-your-deeper-values",
-          "button_text": "Читати: Як це працює"
-        }
-      }
-    },
-    {
-      "id": "BR_RES_L1_01",
-      "internal_name": "Ten-Minute Recharge",
       "logic_tags": {
-        "difficulty": 1,
-        "energy_cost": "LOW",
-        "category": "rest",
+        "category": "mixed",
         "impact_areas": [
-          "restoration",
-          "autonomy",
-          "value_alignment"
+          "behavioral_activation",
+          "energy_management"
         ],
         "priority_tier": "SUPPORT",
-        "min_plan_duration": 1
-      },
-      "balancing": {
-        "base_weight": 1.2,
-        "is_active": true,
-        "cooldown_days": 2
-      },
-      "content_payload": {
-        "title_uk": "Перезарядка на 10 хвилин",
-        "card_description": "Маленька пауза, що має значення.",
-        "full_instruction": "Виділи 10 хв. на приємну активність без багатозадачності.",
-        "scientific_rationale": "Навіть короткі дії, пов'язані з цінностями, піднімають енергію [cite: https://www.drolsonmadden.com/post/act-specific-exercises-to-help-with-burnout-recovery]",
-        "resource": {
-          "type": "external_link",
-          "url": "https://www.drolsonmadden.com/post/act-specific-exercises-to-help-with-burnout-recovery",
-          "button_text": "Читати: Як це працює"
-        }
-      }
-    },
-    {
-      "id": "BR_RES_L1_02",
-      "internal_name": "Nature Break",
-      "logic_tags": {
         "difficulty": 1,
-        "energy_cost": "LOW",
-        "category": "rest",
-        "impact_areas": [
-          "nature",
-          "mood_boost",
-          "recovery"
-        ],
-        "priority_tier": "SUPPORT",
-        "min_plan_duration": 1
+        "energy_cost": "medium"
       },
       "balancing": {
-        "base_weight": 1.1,
+        "cooldown_days": 0,
         "is_active": true,
-        "cooldown_days": 2
-      },
-      "content_payload": {
-        "title_uk": "Природна перерва",
-        "card_description": "10 хвилин на природі — не розкіш.",
-        "full_instruction": "Прогуляйся чи просто посидь на вулиці, звертаючи увагу на деталі.",
-        "scientific_rationale": "Контакт із природою знижує стрес і покращує настрій [cite: https://uofuhealth.utah.edu/notes/2025/06/recreation-nature-cures-burnout]",
-        "resource": {
-          "type": "external_link",
-          "url": "https://uofuhealth.utah.edu/notes/2025/06/recreation-nature-cures-burnout",
-          "button_text": "Читати: Як це працює"
-        }
-      }
-    },
-    {
-      "id": "BR_RES_L1_03",
-      "internal_name": "Social Connection",
-      "logic_tags": {
-        "difficulty": 1,
-        "energy_cost": "LOW",
-        "category": "rest",
-        "impact_areas": [
-          "connection",
-          "support",
-          "belonging"
-        ],
-        "priority_tier": "CORE",
-        "min_plan_duration": 1
-      },
-      "balancing": {
-        "base_weight": 1.2,
-        "is_active": true,
-        "cooldown_days": 1
-      },
-      "content_payload": {
-        "title_uk": "Соціальний контакт",
-        "card_description": "Короткий зв’язок із близькою людиною.",
-        "full_instruction": "Напиши або подзвони другу. Контакт — це ресурс.",
-        "scientific_rationale": "Емоційна підтримка знижує рівень тривоги та вигорання [cite: https://uofuhealth.utah.edu/notes/2025/06/recreation-nature-cures-burnout]",
-        "resource": {
-          "type": "external_link",
-          "url": "https://uofuhealth.utah.edu/notes/2025/06/recreation-nature-cures-burnout",
-          "button_text": "Читати: Як це працює"
-        }
-      }
-    },
-    {
-      "id": "BR_RES_L1_04",
-      "internal_name": "Gratitude Journal",
-      "logic_tags": {
-        "difficulty": 1,
-        "energy_cost": "LOW",
-        "category": "rest",
-        "impact_areas": [
-          "positive_focus",
-          "resilience",
-          "mental_hygiene"
-        ],
-        "priority_tier": "SUPPORT",
-        "min_plan_duration": 1
-      },
-      "balancing": {
-        "base_weight": 1.0,
-        "is_active": true,
-        "cooldown_days": 2
-      },
-      "content_payload": {
-        "title_uk": "Щоденник подяки",
-        "card_description": "Фіксація хорошого — як щит.",
-        "full_instruction": "Щовечора запиши 3 речі, за які вдячний, і чому саме.",
-        "scientific_rationale": "Практика вдячності знижує рівень стресу [cite: https://ojin.nursingworld.org/table-of-contents/volume-28-2023/number-3-september-2023/articles-on-previously-published-topics/gratitude-practice-to-decrease-stress/]",
-        "resource": {
-          "type": "external_link",
-          "url": "https://ojin.nursingworld.org/table-of-contents/volume-28-2023/number-3-september-2023/articles-on-previously-published-topics/gratitude-practice-to-decrease-stress/",
-          "button_text": "Читати: Як це працює"
-        }
+        "base_weight": 1.2
       }
     }
   ],
   "blueprints": [
     {
-      "id": "PLAN_SOMATIC_RESET_MASTER",
-      "internal_name": "Somatic Reset Protocol (Multi-Duration)",
-      "target_module": "BURNOUT_PHYSICAL",
-      "stats": {
-        "popularity_score": 100,
-        "completion_rate": 0.0
-      },
-      "display_info": {
-        "title_uk": "Соматичне Відновлення",
-        "description": "Повертаємо зв'язок з тілом. Оберіть темп, який вам підходить.",
-        "difficulty_label": "Адаптивний"
-      },
+      "id": "blueprint_somatic_lite",
+      "target_module": "burnout_prevention",
+      "focus": "somatic",
+      "load": "LITE",
       "duration_variants": {
         "SHORT": {
-          "total_days": 7,
-          "display_tag": "Швидка допомога",
-          "schedule_rules": [
-            {
-              "phase_name": "Інтенсивна стабілізація",
-              "days_range": [
-                1,
-                7
-              ],
-              "slots": [
-                {
-                  "slot_id": "daily_SOS",
-                  "slot_type": "ANYTIME",
-                  "min_intensity_mode": "LITE",
-                  "query_criteria": {
-                    "category": "somatic",
-                    "impact_areas": [
-                      "parasympathetic"
-                    ],
-                    "energy_cost": [
-                      "LOW"
-                    ],
-                    "priority_tier": "CORE"
-                  }
-                }
-              ]
-            }
-          ]
+          "days": 10,
+          "difficulty_pattern": "flat"
         },
         "STANDARD": {
-          "total_days": 21,
-          "display_tag": "Формування звички",
-          "schedule_rules": [
-            {
-              "phase_name": "Тиждень 1: Вхід",
-              "days_range": [
-                1,
-                7
-              ],
-              "slots": [
-                {
-                  "slot_id": "daily_intro",
-                  "slot_type": "ANYTIME",
-                  "min_intensity_mode": "LITE",
-                  "query_criteria": {
-                    "category": "somatic",
-                    "energy_cost": [
-                      "LOW"
-                    ],
-                    "priority_tier": "CORE"
-                  }
-                }
-              ]
-            },
-            {
-              "phase_name": "Тиждень 2-3: Поглиблення",
-              "days_range": [
-                8,
-                21
-              ],
-              "slots": [
-                {
-                  "slot_id": "morning_routine",
-                  "slot_type": "MORNING",
-                  "min_intensity_mode": "LITE",
-                  "query_criteria": {
-                    "category": "somatic",
-                    "priority_tier": "CORE"
-                  }
-                }
-              ]
-            },
-            {
-              "phase_name": "Тиждень 2-3: Когнітивне Підсилення",
-              "days_range": [
-                8,
-                21
-              ],
-              "slots": [
-                {
-                  "slot_id": "cognitive_activation",
-                  "slot_type": "AFTERNOON",
-                  "min_intensity_mode": "MID",
-                  "query_criteria": {
-                    "category": "cognitive",
-                    "priority_tier": "CORE"
-                  }
-                }
-              ]
-            }
-          ]
+          "days": 21,
+          "difficulty_pattern": "progressive"
         },
         "LONG": {
-          "total_days": 90,
-          "display_tag": "Зміна способу життя",
-          "schedule_rules": [
-            {
-              "phase_name": "Місяць 1: Фундамент",
-              "days_range": [
-                1,
-                30
-              ],
-              "slots": [
-                {
-                  "slot_id": "daily_base",
-                  "slot_type": "MORNING",
-                  "min_intensity_mode": "LITE",
-                  "query_criteria": {
-                    "category": "somatic",
-                    "energy_cost": [
-                      "LOW"
-                    ],
-                    "priority_tier": "CORE"
-                  }
-                }
-              ]
-            },
-            {
-              "phase_name": "Місяць 2: Інтеграція та Ускладнення",
-              "days_range": [
-                31,
-                60
-              ],
-              "slots": [
-                {
-                  "slot_id": "advanced_practice",
-                  "slot_type": "MORNING",
-                  "min_intensity_mode": "MID",
-                  "query_criteria": {
-                    "category": "somatic",
-                    "energy_cost": [
-                      "MED"
-                    ],
-                    "priority_tier": "SUPPORT"
-                  }
-                }
-              ]
-            },
-            {
-              "phase_name": "Місяць 3: Автономність (Maintenance)",
-              "days_range": [
-                61,
-                90
-              ],
-              "slots": [
-                {
-                  "slot_id": "maintenance_check",
-                  "slot_type": "ANYTIME",
-                  "min_intensity_mode": "LITE",
-                  "query_criteria": {
-                    "category": "somatic",
-                    "impact_areas": [
-                      "resilience"
-                    ]
-                  }
-                }
-              ]
-            }
-          ]
+          "days": 90,
+          "difficulty_pattern": "wave"
+        }
+      },
+      "composition": {
+        "dominant_category": "somatic",
+        "dominant_percentage": 100,
+        "complementary": {}
+      }
+    },
+    {
+      "id": "blueprint_somatic_mid",
+      "target_module": "burnout_prevention",
+      "focus": "somatic",
+      "load": "MID",
+      "duration_variants": {
+        "SHORT": {
+          "days": 10,
+          "difficulty_pattern": "flat"
+        },
+        "STANDARD": {
+          "days": 21,
+          "difficulty_pattern": "progressive"
+        },
+        "LONG": {
+          "days": 90,
+          "difficulty_pattern": "wave"
+        }
+      },
+      "composition": {
+        "dominant_category": "somatic",
+        "dominant_percentage": 80,
+        "complementary": {
+          "cognitive": 10,
+          "rest": 10
+        }
+      }
+    },
+    {
+      "id": "blueprint_somatic_intensive",
+      "target_module": "burnout_prevention",
+      "focus": "somatic",
+      "load": "INTENSIVE",
+      "duration_variants": {
+        "SHORT": {
+          "days": 10,
+          "difficulty_pattern": "flat"
+        },
+        "STANDARD": {
+          "days": 21,
+          "difficulty_pattern": "progressive"
+        },
+        "LONG": {
+          "days": 90,
+          "difficulty_pattern": "wave"
+        }
+      },
+      "composition": {
+        "dominant_category": "somatic",
+        "dominant_percentage": 80,
+        "complementary": {
+          "cognitive": 10,
+          "rest": 10
+        }
+      }
+    },
+    {
+      "id": "blueprint_cognitive_lite",
+      "target_module": "burnout_prevention",
+      "focus": "cognitive",
+      "load": "LITE",
+      "duration_variants": {
+        "SHORT": {
+          "days": 10,
+          "difficulty_pattern": "flat"
+        },
+        "STANDARD": {
+          "days": 21,
+          "difficulty_pattern": "progressive"
+        },
+        "LONG": {
+          "days": 90,
+          "difficulty_pattern": "wave"
+        }
+      },
+      "composition": {
+        "dominant_category": "cognitive",
+        "dominant_percentage": 100,
+        "complementary": {}
+      }
+    },
+    {
+      "id": "blueprint_cognitive_mid",
+      "target_module": "burnout_prevention",
+      "focus": "cognitive",
+      "load": "MID",
+      "duration_variants": {
+        "SHORT": {
+          "days": 10,
+          "difficulty_pattern": "flat"
+        },
+        "STANDARD": {
+          "days": 21,
+          "difficulty_pattern": "progressive"
+        },
+        "LONG": {
+          "days": 90,
+          "difficulty_pattern": "wave"
+        }
+      },
+      "composition": {
+        "dominant_category": "cognitive",
+        "dominant_percentage": 80,
+        "complementary": {
+          "somatic": 10,
+          "boundaries": 10
+        }
+      }
+    },
+    {
+      "id": "blueprint_cognitive_intensive",
+      "target_module": "burnout_prevention",
+      "focus": "cognitive",
+      "load": "INTENSIVE",
+      "duration_variants": {
+        "SHORT": {
+          "days": 10,
+          "difficulty_pattern": "flat"
+        },
+        "STANDARD": {
+          "days": 21,
+          "difficulty_pattern": "progressive"
+        },
+        "LONG": {
+          "days": 90,
+          "difficulty_pattern": "wave"
+        }
+      },
+      "composition": {
+        "dominant_category": "cognitive",
+        "dominant_percentage": 80,
+        "complementary": {
+          "somatic": 10,
+          "boundaries": 10
+        }
+      }
+    },
+    {
+      "id": "blueprint_boundaries_lite",
+      "target_module": "burnout_prevention",
+      "focus": "boundaries",
+      "load": "LITE",
+      "duration_variants": {
+        "SHORT": {
+          "days": 10,
+          "difficulty_pattern": "flat"
+        },
+        "STANDARD": {
+          "days": 21,
+          "difficulty_pattern": "progressive"
+        },
+        "LONG": {
+          "days": 90,
+          "difficulty_pattern": "wave"
+        }
+      },
+      "composition": {
+        "dominant_category": "boundaries",
+        "dominant_percentage": 100,
+        "complementary": {}
+      }
+    },
+    {
+      "id": "blueprint_boundaries_mid",
+      "target_module": "burnout_prevention",
+      "focus": "boundaries",
+      "load": "MID",
+      "duration_variants": {
+        "SHORT": {
+          "days": 10,
+          "difficulty_pattern": "flat"
+        },
+        "STANDARD": {
+          "days": 21,
+          "difficulty_pattern": "progressive"
+        },
+        "LONG": {
+          "days": 90,
+          "difficulty_pattern": "wave"
+        }
+      },
+      "composition": {
+        "dominant_category": "boundaries",
+        "dominant_percentage": 80,
+        "complementary": {
+          "cognitive": 15,
+          "rest": 5
+        }
+      }
+    },
+    {
+      "id": "blueprint_boundaries_intensive",
+      "target_module": "burnout_prevention",
+      "focus": "boundaries",
+      "load": "INTENSIVE",
+      "duration_variants": {
+        "SHORT": {
+          "days": 10,
+          "difficulty_pattern": "flat"
+        },
+        "STANDARD": {
+          "days": 21,
+          "difficulty_pattern": "progressive"
+        },
+        "LONG": {
+          "days": 90,
+          "difficulty_pattern": "wave"
+        }
+      },
+      "composition": {
+        "dominant_category": "boundaries",
+        "dominant_percentage": 80,
+        "complementary": {
+          "cognitive": 15,
+          "rest": 5
+        }
+      }
+    },
+    {
+      "id": "blueprint_rest_lite",
+      "target_module": "burnout_prevention",
+      "focus": "rest",
+      "load": "LITE",
+      "duration_variants": {
+        "SHORT": {
+          "days": 10,
+          "difficulty_pattern": "flat"
+        },
+        "STANDARD": {
+          "days": 21,
+          "difficulty_pattern": "progressive"
+        },
+        "LONG": {
+          "days": 90,
+          "difficulty_pattern": "wave"
+        }
+      },
+      "composition": {
+        "dominant_category": "rest",
+        "dominant_percentage": 100,
+        "complementary": {}
+      }
+    },
+    {
+      "id": "blueprint_rest_mid",
+      "target_module": "burnout_prevention",
+      "focus": "rest",
+      "load": "MID",
+      "duration_variants": {
+        "SHORT": {
+          "days": 10,
+          "difficulty_pattern": "flat"
+        },
+        "STANDARD": {
+          "days": 21,
+          "difficulty_pattern": "progressive"
+        },
+        "LONG": {
+          "days": 90,
+          "difficulty_pattern": "wave"
+        }
+      },
+      "composition": {
+        "dominant_category": "rest",
+        "dominant_percentage": 90,
+        "complementary": {
+          "somatic": 10
+        }
+      }
+    },
+    {
+      "id": "blueprint_rest_intensive",
+      "target_module": "burnout_prevention",
+      "focus": "rest",
+      "load": "INTENSIVE",
+      "duration_variants": {
+        "SHORT": {
+          "days": 10,
+          "difficulty_pattern": "flat"
+        },
+        "STANDARD": {
+          "days": 21,
+          "difficulty_pattern": "progressive"
+        },
+        "LONG": {
+          "days": 90,
+          "difficulty_pattern": "wave"
+        }
+      },
+      "composition": {
+        "dominant_category": "rest",
+        "dominant_percentage": 90,
+        "complementary": {
+          "somatic": 10
+        }
+      }
+    },
+    {
+      "id": "blueprint_mixed_lite",
+      "target_module": "burnout_prevention",
+      "focus": "mixed",
+      "load": "LITE",
+      "duration_variants": {
+        "SHORT": {
+          "days": 10,
+          "difficulty_pattern": "flat"
+        },
+        "STANDARD": {
+          "days": 21,
+          "difficulty_pattern": "progressive"
+        },
+        "LONG": {
+          "days": 90,
+          "difficulty_pattern": "wave"
+        }
+      },
+      "composition": {
+        "dominant_category": "mixed",
+        "dominant_percentage": 40,
+        "complementary": {
+          "somatic": 20,
+          "cognitive": 20,
+          "boundaries": 10,
+          "rest": 10
+        }
+      }
+    },
+    {
+      "id": "blueprint_mixed_mid",
+      "target_module": "burnout_prevention",
+      "focus": "mixed",
+      "load": "MID",
+      "duration_variants": {
+        "SHORT": {
+          "days": 10,
+          "difficulty_pattern": "flat"
+        },
+        "STANDARD": {
+          "days": 21,
+          "difficulty_pattern": "progressive"
+        },
+        "LONG": {
+          "days": 90,
+          "difficulty_pattern": "wave"
+        }
+      },
+      "composition": {
+        "dominant_category": "mixed",
+        "dominant_percentage": 40,
+        "complementary": {
+          "somatic": 25,
+          "cognitive": 25,
+          "boundaries": 10
+        }
+      }
+    },
+    {
+      "id": "blueprint_mixed_intensive",
+      "target_module": "burnout_prevention",
+      "focus": "mixed",
+      "load": "INTENSIVE",
+      "duration_variants": {
+        "SHORT": {
+          "days": 10,
+          "difficulty_pattern": "flat"
+        },
+        "STANDARD": {
+          "days": 21,
+          "difficulty_pattern": "progressive"
+        },
+        "LONG": {
+          "days": 90,
+          "difficulty_pattern": "wave"
+        }
+      },
+      "composition": {
+        "dominant_category": "mixed",
+        "dominant_percentage": 40,
+        "complementary": {
+          "somatic": 25,
+          "cognitive": 25,
+          "boundaries": 10
         }
       }
     }
