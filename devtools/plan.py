@@ -67,7 +67,6 @@ def _format_metric(value: Optional[float]) -> str:
 
 def _dry_run_adaptation(user_id: int, adaptation_type: str) -> None:
     data = _load_active_plan_context(user_id)
-    user = data["user"]
     plan = data["plan"]
     plan_context = data["plan_context"]
 
@@ -77,7 +76,7 @@ def _dry_run_adaptation(user_id: int, adaptation_type: str) -> None:
         adaptation_type=adaptation_type,
         duration_days=len(plan.days) or 21,
         focus="Mixed",
-        load=user.current_load,
+        load=plan.load,
         goal=plan.goal_description or "burnout_recovery",
     )
 

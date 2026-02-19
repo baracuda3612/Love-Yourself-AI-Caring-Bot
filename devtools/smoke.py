@@ -37,7 +37,7 @@ def _generate_plan(db: Any, user: Any) -> None:
         adaptation_type=None,
         duration_days=21,
         focus="Somatic",
-        load=user.current_load,
+        load="LITE",
         goal="burnout_recovery",
     )
     response = asyncio.run(_call_plan_agent(payload))
@@ -65,7 +65,7 @@ def _apply_structural_adaptation(db: Any, user: Any, adaptation_type: str) -> No
         adaptation_type=adaptation_type,
         duration_days=len(plan.days) or 21,
         focus="Mixed",
-        load=user.current_load,
+        load=active_plan.load,
         goal=plan.goal_description or "burnout_recovery",
     )
     response = asyncio.run(_call_plan_agent(payload))
