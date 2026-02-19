@@ -235,17 +235,9 @@ def finalize_plan(
             logger.error("Attempted to activate plan without load")
             raise RuntimeError("Active plan must have non-null load")
 
-        user.current_load = plan.load.strip().upper()
-
         db.add(plan)
         db.flush()
 
-        logger.info(
-            "User %s load synchronized to %s (plan %s)",
-            user.id,
-            user.current_load,
-            plan.id,
-        )
         logger.info(
             "Plan %s activated with load=%s for user %s",
             plan.id,

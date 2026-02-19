@@ -21,16 +21,15 @@ class RuleEngine:
     def evaluate(
         self,
         *,
-        current_load: Optional[str],
+        load: str,
         skip_streak: int,
     ) -> Optional[str]:
         """Return the proposal signal based on strict skip thresholds."""
-        normalized_load = (current_load or "").strip().upper()
-        threshold = self.LOAD_THRESHOLDS.get(normalized_load)
+        threshold = self.LOAD_THRESHOLDS.get(load)
         if threshold is None:
             return None
         if skip_streak >= threshold:
-            if normalized_load == "LITE":
+            if load == "LITE":
                 return self.PROPOSAL_OBSERVATION
             return self.PROPOSAL_REDUCE_LOAD
 

@@ -356,7 +356,7 @@ def _maybe_emit_system_prompt(
         return
 
     proposal = RuleEngine().evaluate(
-        current_load=normalized_load,
+        load=normalized_load,
         skip_streak=skip_streak,
     )
     if not proposal:

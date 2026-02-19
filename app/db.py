@@ -103,10 +103,6 @@ class User(Base):
             ") OR current_state LIKE 'ONBOARDING:%'",
             name="ck_users_current_state",
         ),
-        CheckConstraint(
-            "current_load IN ('LITE','MID','INTENSIVE')",
-            name="ck_users_current_load",
-        ),
     )
 
     id = Column(Integer, primary_key=True)
@@ -114,7 +110,6 @@ class User(Base):
     username = Column(String)
     first_name = Column(String)
     current_state = Column(String, default="IDLE_NEW", index=True)
-    current_load = Column(String, default="LITE", nullable=False)
     last_active_at = Column(DateTime(timezone=True), nullable=True)
     plan_end_date = Column(DateTime(timezone=True), nullable=True)
 

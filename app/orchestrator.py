@@ -1229,8 +1229,6 @@ async def handle_incoming_message(
                             user.plan_end_date = datetime.fromisoformat(str(raw_end_date))
                         else:
                             user.plan_end_date = None
-                    if "current_load" in plan_updates:
-                        user.current_load = plan_updates.get("current_load")
                     db.commit()
                 except (ValueError, IntegrityError):
                     db.rollback()
@@ -1241,10 +1239,9 @@ async def handle_incoming_message(
                     )
                 else:
                     logger.info(
-                        "[PLAN] User %s updated: end=%s load=%s",
+                        "[PLAN] User %s updated: end=%s",
                         user_id,
                         user.plan_end_date,
-                        user.current_load,
                     )
 
     if transition_signal == "PLAN_FLOW:CONFIRMATION_PENDING":
