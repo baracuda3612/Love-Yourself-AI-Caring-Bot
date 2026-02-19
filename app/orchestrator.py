@@ -167,13 +167,12 @@ async def handle_confirmation_pending_action(
 
     if transition_signal is None and isinstance(plan_updates, dict):
         parameters_for_draft = context_payload.get("known_parameters") or {}
-        seed_suffix = ""
         action = None
         if plan_updates:
             action = "plan_draft_rebuilt_parameters"
         if action:
             try:
-                draft = build_plan_draft(parameters_for_draft, seed_suffix=seed_suffix)
+                draft = build_plan_draft(parameters_for_draft, user_id=str(user_id))
                 with SessionLocal() as db:
                     overwrite_plan_draft(db, user_id, draft)
                     db.commit()
@@ -993,7 +992,7 @@ async def build_plan_draft_preview(
     parameters_for_draft: Dict[str, Any],
 ) -> str:
     try:
-        draft = build_plan_draft(parameters_for_draft)
+        draft = build_plan_draft(parameters_for_draft, user_id=str(user_id))
         with SessionLocal() as db:
             persist_plan_draft(db, user_id, draft)
             db.commit()
@@ -1425,6 +1424,7 @@ async def handle_incoming_message(
         if normalized_reply is not None:
             return await _finalize_reply(**normalized_reply)
         if transition_signal == "PLAN_FLOW:FINALIZATION":
+            await _finalize_reply("⏳ План генерується…")
             try:
                 with SessionLocal.begin() as db:
                     draft = validate_for_finalization(db, user_id)

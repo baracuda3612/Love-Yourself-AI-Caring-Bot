@@ -214,6 +214,7 @@ def regenerate_plan_for_activation(
         else:
             slot_types = day1_slot_structure
 
+        used_slots_today = []
         for slot_index, slot_type in enumerate(slot_types):
             if len(steps) >= total_slots:
                 break
@@ -229,7 +230,7 @@ def regenerate_plan_for_activation(
                 slot_type=slot_type,
                 max_difficulty=max_difficulty,
                 params=params,
-                seed_suffix=seed_suffix,
+                seed_key=f"{seed_suffix}:{day_number}:{slot_index}",
             )
             if not exercise:
                 exercise = select_exercise_with_fallback(
@@ -238,7 +239,7 @@ def regenerate_plan_for_activation(
                     slot_type=slot_type,
                     max_difficulty=max_difficulty,
                     params=params,
-                    seed_suffix=seed_suffix,
+                    seed_key=f"{seed_suffix}:{day_number}:{slot_index}",
                 )
             if not exercise:
                 raise ValueError("exercise_selection_failed")
@@ -246,10 +247,13 @@ def regenerate_plan_for_activation(
             if day_number == 1 and day1_is_today:
                 time_slot = day1_time_slots[slot_index]
             else:
-                time_slot = get_time_slot_for_slot_type(
+                time_slot_enum = get_time_slot_for_slot_type(
                     slot_type,
                     params.user_policy.preferred_time_slots if params.user_policy else None,
-                ).value
+                    already_used_slots=used_slots_today,
+                )
+                used_slots_today.append(time_slot_enum)
+                time_slot = time_slot_enum.value
 
             steps.append(
                 RegeneratedPlanStep(
