@@ -130,6 +130,12 @@ class DraftBuilder:
         if pillar_errors:
             raise DraftValidationError(pillar_errors)
 
+        expected_slots = EXPECTED_SLOTS_PER_DAY[params.load]
+        if not params.user_policy or not params.user_policy.preferred_time_slots:
+            raise RuntimeError("preferred_time_slots required")
+        if len(params.user_policy.preferred_time_slots) != expected_slots:
+            raise RuntimeError("Invalid number of time slots for selected load")
+
         total_days = get_total_days(params.duration)
 
         slots_per_day = len(get_daily_slot_structure(params.load))

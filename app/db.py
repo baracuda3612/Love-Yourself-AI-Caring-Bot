@@ -388,7 +388,7 @@ class PlanExecutionWindow(Base):
     engagement_status = Column(Enum(EngagementStatus), nullable=False, default=EngagementStatus.ACTIVE)
     start_date = Column(DateTime(timezone=True), server_default=func.now())
     end_date = Column(DateTime(timezone=True), nullable=True)
-    active_load_mode = Column(String, default="LITE")
+    current_load_mode = Column(String, default="LITE")
     adaptation_requests_count = Column(Integer, default=0)
     batch_completion_count = Column(Integer, default=0)
     hidden_compensation_score = Column(Float, default=0.0)

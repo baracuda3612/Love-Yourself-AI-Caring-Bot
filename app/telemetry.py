@@ -479,7 +479,7 @@ def log_user_event(
 
     if event_type == "parameter_set":
         if event_context.get("parameter") == "load_mode":
-            window.active_load_mode = str(event_context.get("new_value") or window.active_load_mode)
+            window.current_load_mode = str(event_context.get("new_value") or window.current_load_mode)
 
     if event_type == "task_completed":
         _maybe_increment_batch_completion(db, window, server_now)

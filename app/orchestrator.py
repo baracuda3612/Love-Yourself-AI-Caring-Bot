@@ -49,7 +49,6 @@ from app.plan_finalization import (
     finalize_plan,
     validate_for_finalization,
 )
-from app.ux.plan_messages import build_activation_info_message
 from app.workers.coach_agent import coach_agent
 from app.fsm.guards import can_transition
 from app.fsm.states import (
@@ -83,15 +82,22 @@ PLAN_GENERATION_WAIT_MESSAGE = "⏳ План генерується…"
 PLAN_GENERATION_ERROR_MESSAGE = (
     "⚠️ Не вдалося згенерувати план.\nСпробуй ще раз або зміни параметри."
 )
-PLAN_ACTIVATION_MESSAGE = (
-    "✅ План активовано.\n"
-    "Перші завдання надійдуть згідно з обраними часовими слотами."
-)
 PLAN_FINALIZATION_ERROR_MESSAGE = "⚠️ Не вдалося активувати план."
 PLAN_DURATION_VALUES = {"SHORT", "STANDARD", "LONG"}
 PLAN_FOCUS_VALUES = {"SOMATIC", "COGNITIVE", "BOUNDARIES", "REST", "MIXED"}
 PLAN_LOAD_VALUES = {"LITE", "MID", "INTENSIVE"}
 PLAN_TIME_SLOT_VALUES = {"MORNING", "DAY", "EVENING"}
+INTENSIVE_AUTO_SLOTS = ["MORNING", "DAY", "EVENING"]
+
+
+def _expected_time_slots_for_load(load: str | None) -> int | None:
+    if load == "LITE":
+        return 1
+    if load == "MID":
+        return 2
+    if load == "INTENSIVE":
+        return 3
+    return None
 
 
 def _plan_agent_fallback_envelope() -> Dict[str, Any]:
@@ -180,7 +186,7 @@ async def handle_confirmation_pending_action(
                 preview = build_confirmation_preview(draft, parameters_for_draft)
                 rendered_preview = render_confirmation_preview(preview)
                 return {"reply_text": rendered_preview, "show_plan_actions": True}
-            except DraftValidationError as exc:
+            except (DraftValidationError, RuntimeError) as exc:
                 logger.error(
                     "[PLAN_DRAFT] Draft update validation failed for user %s: %s (duration=%s focus=%s load=%s slots=%s)",
                     user_id,
@@ -996,7 +1002,7 @@ async def build_plan_draft_preview(
         with SessionLocal() as db:
             persist_plan_draft(db, user_id, draft)
             db.commit()
-    except DraftValidationError as exc:
+    except (DraftValidationError, RuntimeError) as exc:
         logger.error(
             "[PLAN_DRAFT] Draft creation validation failed for user %s: %s (duration=%s focus=%s load=%s slots=%s)",
             user_id,
@@ -1392,6 +1398,7 @@ async def handle_incoming_message(
             context_payload["known_parameters"] = updated_parameters
             draft_parameters = updated_parameters
     transition_signal = worker_result.get("transition_signal")
+    data_collection_notice: str | None = None
     if target_agent == "plan" and current_state == "PLAN_FLOW:DATA_COLLECTION":
         transition_signal = None
         if isinstance(plan_updates, dict):
@@ -1403,15 +1410,48 @@ async def handle_incoming_message(
                 await session_memory.set_plan_parameters(user_id, updated_parameters)
                 context_payload["known_parameters"] = updated_parameters
                 draft_parameters = updated_parameters
+
         persistent_parameters = normalize_plan_parameters(
             await session_memory.get_plan_parameters(user_id)
         )
-        required_keys = ("duration", "focus", "load", "preferred_time_slots")
-        has_all_parameters = all(
-            persistent_parameters.get(key) is not None for key in required_keys
-        )
-        if has_all_parameters:
-            transition_signal = "PLAN_FLOW:CONFIRMATION_PENDING"
+
+        duration = persistent_parameters.get("duration")
+        focus = persistent_parameters.get("focus")
+        load = persistent_parameters.get("load")
+        slots = persistent_parameters.get("preferred_time_slots")
+        normalized_slots = [slot for slot in (slots or []) if slot in PLAN_TIME_SLOT_VALUES]
+
+        if load == "INTENSIVE":
+            if normalized_slots != INTENSIVE_AUTO_SLOTS:
+                persistent_parameters["preferred_time_slots"] = INTENSIVE_AUTO_SLOTS.copy()
+                await session_memory.set_plan_parameters(user_id, persistent_parameters)
+                context_payload["known_parameters"] = persistent_parameters
+                draft_parameters = persistent_parameters
+            data_collection_notice = (
+                "Для інтенсивного плану автоматично призначено 3 слоти:\nMORNING / DAY / EVENING"
+            )
+
+        if duration is not None and focus is not None and load is not None:
+            expected_slots = _expected_time_slots_for_load(load)
+            if load in {"LITE", "MID"}:
+                if len(normalized_slots) != (expected_slots or 0):
+                    transition_signal = None
+                    if load == "MID":
+                        reply_text = (
+                            "Потрібно обрати рівно 2 часові слоти для MID.\n"
+                            "Які 2 часові слоти підходять?\n"
+                            "MORNING / DAY / EVENING"
+                        )
+                    else:
+                        reply_text = (
+                            "Потрібно обрати рівно 1 часовий слот для LITE.\n"
+                            "Який часовий слот підходить?\n"
+                            "MORNING / DAY / EVENING"
+                        )
+                else:
+                    transition_signal = "PLAN_FLOW:CONFIRMATION_PENDING"
+            elif load == "INTENSIVE":
+                transition_signal = "PLAN_FLOW:CONFIRMATION_PENDING"
     if target_agent == "plan" and current_state == "PLAN_FLOW:CONFIRMATION_PENDING":
         confirmation_reply = await handle_confirmation_pending_action(
             user_id,
@@ -1424,52 +1464,35 @@ async def handle_incoming_message(
         if normalized_reply is not None:
             return await _finalize_reply(**normalized_reply)
         if transition_signal == "PLAN_FLOW:FINALIZATION":
-            await _finalize_reply("⏳ План генерується…")
-            try:
-                with SessionLocal.begin() as db:
-                    draft = validate_for_finalization(db, user_id)
-                    activation_time_utc = datetime.now(timezone.utc)
-                    plan = finalize_plan(
-                        db,
-                        user_id,
-                        draft,
-                        activation_time_utc=activation_time_utc,
-                    )
-                async def _run_side_effects() -> None:
+            async def _run_finalization() -> None:
+                try:
+                    with SessionLocal.begin() as db:
+                        draft = validate_for_finalization(db, user_id)
+                        activation_time_utc = datetime.now(timezone.utc)
+                        plan = finalize_plan(
+                            db,
+                            user_id,
+                            draft,
+                            activation_time_utc=activation_time_utc,
+                        )
                     await asyncio.to_thread(activate_plan_side_effects, plan.id, user_id)
-
-                asyncio.create_task(_run_side_effects())
-                log_metric("plan_finalized", extra={"user_id": user_id, "plan_id": plan.id})
-                await _commit_fsm_transition(user_id, "plan", "ACTIVE")
-                context_payload["current_state"] = "ACTIVE"
-                selected_slots = [
-                    slot
-                    for slot in (context_payload.get("known_parameters") or {}).get(
-                        "preferred_time_slots", []
+                    log_metric("plan_finalized", extra={"user_id": user_id, "plan_id": plan.id})
+                    await _commit_fsm_transition(user_id, "plan", "ACTIVE")
+                    await session_memory.clear_plan_parameters(user_id)
+                except (
+                    DraftNotFoundError,
+                    InvalidDraftError,
+                    ActivePlanExistsError,
+                    FinalizationError,
+                ) as exc:
+                    logger.error(
+                        "[PLAN_FINALIZATION] Failed to finalize plan for user %s: %s",
+                        user_id,
+                        exc,
                     )
-                    if slot in PLAN_TIME_SLOT_VALUES
-                ]
-                followup = build_activation_info_message(
-                    selected_slots,
-                    (context_payload.get("profile_snapshot") or {}).get("timezone"),
-                )
-                await session_memory.clear_plan_parameters(user_id)
-                return await _finalize_reply(
-                    PLAN_ACTIVATION_MESSAGE,
-                    followup_messages=[followup],
-                )
-            except (
-                DraftNotFoundError,
-                InvalidDraftError,
-                ActivePlanExistsError,
-                FinalizationError,
-            ) as exc:
-                logger.error(
-                    "[PLAN_FINALIZATION] Failed to finalize plan for user %s: %s",
-                    user_id,
-                    exc,
-                )
-                return await _finalize_reply(PLAN_FINALIZATION_ERROR_MESSAGE)
+
+            asyncio.create_task(_run_finalization())
+            return await _finalize_reply("⏳ План генерується…")
     if (
         plan_updates
         and isinstance(plan_updates, dict)
@@ -1593,11 +1616,16 @@ async def handle_incoming_message(
             reply_text = ""
             show_plan_actions = True
         else:
-            reply_text = await build_plan_draft_preview(user_id, parameters_for_draft)
-            if reply_text == PLAN_GENERATION_ERROR_MESSAGE:
+            preview_text = await build_plan_draft_preview(user_id, parameters_for_draft)
+            if preview_text == PLAN_GENERATION_ERROR_MESSAGE:
                 transition_signal = None
+                reply_text = preview_text
             else:
                 show_plan_actions = True
+                if data_collection_notice:
+                    reply_text = f"{data_collection_notice}\n\n{preview_text}"
+                else:
+                    reply_text = preview_text
     if transition_signal == "PLAN_FLOW:DATA_COLLECTION":
         if context_payload.get("current_state") in {"ACTIVE", "ACTIVE_PAUSED", "ACTIVE_PAUSED_CONFIRMATION"}:
             did_drop = _auto_drop_plan_for_new_flow(user_id)
