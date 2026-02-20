@@ -184,7 +184,7 @@
         "energy_cost": "low"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.5
       }
@@ -238,7 +238,7 @@
         "energy_cost": "low"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.5
       }
@@ -264,7 +264,7 @@
         "energy_cost": "low"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.3
       }
@@ -291,7 +291,7 @@
         "energy_cost": "low"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.5
       }
@@ -398,7 +398,7 @@
         "energy_cost": "low"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.4
       }
@@ -425,7 +425,7 @@
         "energy_cost": "low"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.3
       }
@@ -452,7 +452,7 @@
         "energy_cost": "low"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.4
       }
@@ -479,7 +479,7 @@
         "energy_cost": "low"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.5
       }
@@ -641,7 +641,7 @@
         "energy_cost": "low"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.4
       }
@@ -695,7 +695,7 @@
         "energy_cost": "low"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.5
       }
@@ -749,7 +749,7 @@
         "energy_cost": "low"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.4
       }
@@ -776,7 +776,7 @@
         "energy_cost": "low"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.5
       }
@@ -802,7 +802,7 @@
         "energy_cost": "low"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.3
       }
@@ -856,7 +856,7 @@
         "energy_cost": "low"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.4
       }
@@ -883,7 +883,7 @@
         "energy_cost": "medium"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.3
       }
@@ -910,7 +910,7 @@
         "energy_cost": "low"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.5
       }
@@ -937,7 +937,7 @@
         "energy_cost": "low"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.3
       }
@@ -964,7 +964,7 @@
         "energy_cost": "low"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.4
       }
@@ -1045,7 +1045,7 @@
         "energy_cost": "low"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.5
       }
@@ -1072,7 +1072,7 @@
         "energy_cost": "low"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.5
       }
@@ -1099,7 +1099,7 @@
         "energy_cost": "low"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.5
       }
@@ -1365,7 +1365,7 @@
         "energy_cost": "low"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.4
       }
@@ -1391,7 +1391,7 @@
         "energy_cost": "low"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.3
       }
@@ -1521,7 +1521,7 @@
         "energy_cost": "medium"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.4
       }
@@ -1729,7 +1729,7 @@
         "energy_cost": "medium"
       },
       "balancing": {
-        "cooldown_days": 0,
+        "cooldown_days": 1,
         "is_active": true,
         "base_weight": 1.2
       }

@@ -41,3 +41,7 @@ def create_fsm_storage(redis_client: redis.Redis | None = None) -> RedisStorage 
 
     return RedisStorage(redis=client, key_builder=DefaultKeyBuilder(with_bot_id=True))
 
+
+
+# Shared app-wide Redis client instance
+redis_client = create_redis_client()

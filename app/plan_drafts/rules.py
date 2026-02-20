@@ -3,8 +3,8 @@ Plan composition rules from PLAN COMPOSITION RULES & LOGIC MATRIX.
 Pure functions - no side effects, no LLM calls.
 """
 
-import hashlib
-from typing import Dict, List
+import random
+from typing import Dict, List, Optional
 
 from app.plan_drafts.plan_types import Duration, Exercise, Focus, Load, PlanParameters, SlotType, TimeSlot
 
@@ -111,7 +111,9 @@ def get_daily_slot_structure(load: Load) -> List[SlotType]:
 
 
 def get_time_slot_for_slot_type(
-    slot_type: SlotType, user_preferences: List[str] | None = None
+    slot_type: SlotType,
+    user_preferences: List[str] | None = None,
+    already_used_slots: Optional[List[TimeSlot]] = None,
 ) -> TimeSlot:
     """
     Rule 11: Assign time slot based on slot type.
@@ -119,16 +121,32 @@ def get_time_slot_for_slot_type(
     """
 
     preferred_times = SLOT_TIME_PREFERENCES.get(slot_type, [TimeSlot.DAY])
+    used_slots = set(already_used_slots or [])
+
+    def _pick_unused(candidates: List[TimeSlot]) -> TimeSlot | None:
+        for candidate in candidates:
+            if candidate not in used_slots:
+                return candidate
+        return None
+
+    # Priority 1: user preferences, unused first
     if user_preferences:
         normalized_preferences = [
-            slot for slot in user_preferences if slot in {time_slot.value for time_slot in TimeSlot}
+            TimeSlot(slot) for slot in user_preferences if slot in {ts.value for ts in TimeSlot}
         ]
         if normalized_preferences:
-            for preferred in normalized_preferences:
-                for slot in preferred_times:
-                    if slot.value == preferred:
-                        return slot
-            return TimeSlot(normalized_preferences[0])
+            unused_pref = _pick_unused(normalized_preferences)
+            if unused_pref:
+                return unused_pref
+            # All user-preferred slots used — return first preference (allow repeat)
+            return normalized_preferences[0]
+
+    # Priority 2: avoid repeating slots within same day
+    distinct = _pick_unused(preferred_times)
+    if distinct:
+        return distinct
+
+    # Priority 3: fallback
     return preferred_times[0]
 
 
@@ -262,13 +280,14 @@ def select_exercise_with_fallback(
     slot_type: SlotType,
     max_difficulty: int,
     params: PlanParameters,
-    seed_suffix: str = "",
+    seed_key: str = "",
 ) -> Exercise | None:
     """
-    Rule 5: IMPACT AREA MATCHING (Smart Fallback)
+    Rule 5: Smart fallback with progressive relaxation.
 
-    Try to find exercise in preferred category.
-    If blocked, fallback to ANY category with matching impact areas.
+    1) Preferred category + priority tier + max difficulty
+    2) Any category + priority tier + max difficulty
+    3) Any category + max difficulty
     """
 
     available = [e for e in exercises if should_use_exercise(e, params)]
@@ -284,53 +303,36 @@ def select_exercise_with_fallback(
     )
 
     if preferred:
-        return _deterministic_choice(preferred, seed_suffix=seed_suffix)
+        return _weighted_choice(preferred, seed_key=seed_key)
 
-    category_exercises = filter_exercises_by_criteria(exercises, category=preferred_category)
-
-    if category_exercises:
-        common_impacts = set()
-        for exercise in category_exercises[:5]:
-            common_impacts.update(exercise.impact_areas)
-
-        fallback = filter_exercises_by_criteria(
-            available,
-            priority_tier=slot_type,
-            max_difficulty=max_difficulty,
-            impact_areas=list(common_impacts),
-        )
-
-        if fallback:
-            return _deterministic_choice(fallback, seed_suffix=seed_suffix)
-
-    last_resort = filter_exercises_by_criteria(
+    tier_match = filter_exercises_by_criteria(
         available,
         priority_tier=slot_type,
         max_difficulty=max_difficulty,
     )
+    if tier_match:
+        return _weighted_choice(tier_match, seed_key=seed_key)
 
-    return _deterministic_choice(last_resort, seed_suffix=seed_suffix) if last_resort else None
+    difficulty_match = filter_exercises_by_criteria(
+        available,
+        max_difficulty=max_difficulty,
+    )
+    if difficulty_match:
+        return _weighted_choice(difficulty_match, seed_key=seed_key)
+
+    return None
 
 
-def _deterministic_choice(exercises: List[Exercise], seed_suffix: str = "") -> Exercise | None:
+def _weighted_choice(exercises: List[Exercise], seed_key: str = "") -> Exercise | None:
     """
-    Deterministic selection by base_weight, then internal_name, then id.
+    Seeded weighted selection.
+    Same seed_key produces deterministic choice while preserving weighted probability.
     """
 
     if not exercises:
         return None
 
-    if seed_suffix:
-        def _seeded_hash(exercise: Exercise) -> str:
-            raw = f"{seed_suffix}:{exercise.id}".encode("utf-8")
-            return hashlib.sha256(raw).hexdigest()
-
-        return sorted(
-            exercises,
-            key=lambda e: (-float(e.base_weight), _seeded_hash(e), str(e.internal_name), str(e.id)),
-        )[0]
-
-    return sorted(
-        exercises,
-        key=lambda e: (-float(e.base_weight), str(e.internal_name), str(e.id)),
-    )[0]
+    weighted_pool = sorted(exercises, key=lambda e: (str(e.internal_name), str(e.id)))
+    rng = random.Random(seed_key)
+    weights = [float(e.base_weight or 1.0) for e in weighted_pool]
+    return rng.choices(weighted_pool, weights=weights, k=1)[0]

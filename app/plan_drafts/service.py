@@ -98,14 +98,14 @@ def _serialize_draft(draft: PlanDraft) -> Dict[str, Any]:
     }
 
 
-def build_plan_draft(parameters: Dict[str, Any], seed_suffix: str = "") -> PlanDraft:
+def build_plan_draft(parameters: Dict[str, Any], user_id: str = "") -> PlanDraft:
     plan_parameters = _build_plan_parameters(parameters)
     try:
         # TODO: Replace file-based library loading with repository injection post-MVP.
         library = ContentLibrary(str(CONTENT_LIBRARY_PATH))
     except (FileNotFoundError, OSError, ValueError) as exc:
         raise InsufficientLibraryError(str(exc)) from exc
-    builder = DraftBuilder(library, seed_suffix=seed_suffix)
+    builder = DraftBuilder(library, user_id=user_id)
     return builder.build_plan_draft(plan_parameters)
 
 
