@@ -129,32 +129,24 @@ def get_time_slot_for_slot_type(
                 return candidate
         return None
 
-    if len(preferred_times) == 2 and len(used_slots) >= 1:
-        distinct_choice = _pick_unused(preferred_times)
-        if distinct_choice:
-            return distinct_choice
+    # Priority 1: user preferences, unused first
     if user_preferences:
         normalized_preferences = [
-            slot for slot in user_preferences if slot in {time_slot.value for time_slot in TimeSlot}
+            TimeSlot(slot) for slot in user_preferences if slot in {ts.value for ts in TimeSlot}
         ]
         if normalized_preferences:
-            preference_matched_slots = [
-                slot for preferred in normalized_preferences for slot in preferred_times if slot.value == preferred
-            ]
-            preferred_choice = _pick_unused(preference_matched_slots)
-            if preferred_choice:
-                return preferred_choice
-            if preference_matched_slots:
-                return preference_matched_slots[0]
-            normalized_time_slots = [TimeSlot(preferred) for preferred in normalized_preferences]
-            normalized_choice = _pick_unused(normalized_time_slots)
-            if normalized_choice:
-                return normalized_choice
-            return normalized_time_slots[0]
+            unused_pref = _pick_unused(normalized_preferences)
+            if unused_pref:
+                return unused_pref
+            # All user-preferred slots used — return first preference (allow repeat)
+            return normalized_preferences[0]
 
-    fallback_choice = _pick_unused(preferred_times)
-    if fallback_choice:
-        return fallback_choice
+    # Priority 2: avoid repeating slots within same day
+    distinct = _pick_unused(preferred_times)
+    if distinct:
+        return distinct
+
+    # Priority 3: fallback
     return preferred_times[0]
 
 

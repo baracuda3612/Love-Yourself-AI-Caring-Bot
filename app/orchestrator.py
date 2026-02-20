@@ -31,6 +31,7 @@ from app.scheduler import cancel_plan_step_jobs, reschedule_plan_steps
 from app.redis_client import redis_client
 from app.session_memory import SessionMemory
 from app.time_slots import compute_scheduled_for, resolve_daily_time_slots
+from app.ux.plan_messages import build_activation_info_message
 from app.plan_drafts.service import (
     DraftValidationError,
     InsufficientLibraryError,
@@ -187,7 +188,7 @@ async def handle_confirmation_pending_action(
                 preview = build_confirmation_preview(draft, parameters_for_draft)
                 rendered_preview = render_confirmation_preview(preview)
                 return {"reply_text": rendered_preview, "show_plan_actions": True}
-            except (DraftValidationError, RuntimeError) as exc:
+            except DraftValidationError as exc:
                 logger.error(
                     "[PLAN_DRAFT] Draft update validation failed for user %s: %s (duration=%s focus=%s load=%s slots=%s)",
                     user_id,
@@ -1003,7 +1004,7 @@ async def build_plan_draft_preview(
         with SessionLocal() as db:
             persist_plan_draft(db, user_id, draft)
             db.commit()
-    except (DraftValidationError, RuntimeError) as exc:
+    except DraftValidationError as exc:
         logger.error(
             "[PLAN_DRAFT] Draft creation validation failed for user %s: %s (duration=%s focus=%s load=%s slots=%s)",
             user_id,
@@ -1436,6 +1437,14 @@ async def handle_incoming_message(
                 "Для інтенсивного плану автоматично призначено 3 слоти:\nMORNING / DAY / EVENING"
             )
         elif load == "MID" and "preferred_time_slots" in clean_updates and len(normalized_slots) != 2:
+            params_to_save = {k: v for k, v in proposed_parameters.items() if k != "preferred_time_slots"}
+            persistent_without_slots = {
+                k: v for k, v in persistent_parameters.items() if k != "preferred_time_slots"
+            }
+            if params_to_save != persistent_without_slots:
+                await session_memory.set_plan_parameters(user_id, params_to_save)
+                context_payload["known_parameters"] = params_to_save
+                draft_parameters = params_to_save
             reply_text = (
                 "Для MID потрібно обрати рівно 2 часові слоти.\n\n"
                 "Якщо хочеш 3 слоти — обери INTENSIVE.\n"
@@ -1445,6 +1454,14 @@ async def handle_incoming_message(
             )
             return await _finalize_reply(reply_text)
         elif load == "LITE" and "preferred_time_slots" in clean_updates and len(normalized_slots) != 1:
+            params_to_save = {k: v for k, v in proposed_parameters.items() if k != "preferred_time_slots"}
+            persistent_without_slots = {
+                k: v for k, v in persistent_parameters.items() if k != "preferred_time_slots"
+            }
+            if params_to_save != persistent_without_slots:
+                await session_memory.set_plan_parameters(user_id, params_to_save)
+                context_payload["known_parameters"] = params_to_save
+                draft_parameters = params_to_save
             reply_text = (
                 "Для LITE потрібно обрати рівно 1 часовий слот.\n\n"
                 "Якщо хочеш 2 слоти — обери MID.\n"
@@ -1536,7 +1553,33 @@ async def handle_incoming_message(
                     await asyncio.to_thread(activate_plan_side_effects, plan.id, user_id)
                     log_metric("plan_finalized", extra={"user_id": user_id, "plan_id": plan.id})
                     await _commit_fsm_transition(user_id, "plan", "ACTIVE")
+                    current_parameters = normalize_plan_parameters(
+                        await session_memory.get_plan_parameters(user_id)
+                    )
+                    selected_slots = [
+                        slot
+                        for slot in (current_parameters.get("preferred_time_slots") or [])
+                        if slot in PLAN_TIME_SLOT_VALUES
+                    ]
                     await session_memory.clear_plan_parameters(user_id)
+                    try:
+                        from app.telegram import bot as tg_bot
+                        with SessionLocal() as db:
+                            user = db.query(User).filter(User.id == user_id).first()
+                            tg_id = user.tg_id if user else None
+                        if tg_id:
+                            activation_msg = (
+                                "✅ План активовано.\n"
+                                "Перші завдання надійдуть згідно з обраними часовими слотами."
+                            )
+                            activation_info = build_activation_info_message(selected_slots, None)
+                            await tg_bot.send_message(tg_id, f"{activation_msg}\n\n{activation_info}")
+                    except Exception as notify_exc:
+                        logger.error(
+                            "[PLAN_FINALIZATION] Failed to send activation confirmation to user %s: %s",
+                            user_id,
+                            notify_exc,
+                        )
                 except (
                     DraftNotFoundError,
                     InvalidDraftError,
@@ -1552,8 +1595,9 @@ async def handle_incoming_message(
                         from app.telegram import bot as tg_bot
                         with SessionLocal() as db:
                             user = db.query(User).filter(User.id == user_id).first()
-                        if user and user.tg_id:
-                            await tg_bot.send_message(user.tg_id, PLAN_FINALIZATION_ERROR_MESSAGE)
+                            tg_id = user.tg_id if user else None
+                        if tg_id:
+                            await tg_bot.send_message(tg_id, PLAN_FINALIZATION_ERROR_MESSAGE)
                     except Exception as send_exc:
                         logger.error(
                             "[PLAN_FINALIZATION] Failed to send finalization error to user %s: %s",

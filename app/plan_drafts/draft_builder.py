@@ -132,9 +132,14 @@ class DraftBuilder:
 
         expected_slots = EXPECTED_SLOTS_PER_DAY[params.load]
         if not params.user_policy or not params.user_policy.preferred_time_slots:
-            raise RuntimeError("preferred_time_slots required")
+            raise DraftValidationError(["preferred_time_slots required"])
         if len(params.user_policy.preferred_time_slots) != expected_slots:
-            raise RuntimeError("Invalid number of time slots for selected load")
+            raise DraftValidationError(
+                [
+                    f"Expected {expected_slots} time slots for load {params.load.value}, "
+                    f"got {len(params.user_policy.preferred_time_slots)}"
+                ]
+            )
 
         total_days = get_total_days(params.duration)
 
