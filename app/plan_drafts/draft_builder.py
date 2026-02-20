@@ -45,6 +45,12 @@ class InsufficientLibraryError(Exception):
     """Content library too small for requested plan"""
 
 
+EXPECTED_SLOTS_PER_DAY = {
+    Load.LITE: 1,
+    Load.MID: 2,
+    Load.INTENSIVE: 3,
+}
+
 @dataclass
 class Blueprint:
     id: str
@@ -91,10 +97,10 @@ class DraftBuilder:
     Applies all rules from PLAN COMPOSITION RULES & LOGIC MATRIX.
     """
 
-    def __init__(self, content_library: ContentLibrary, seed_suffix: str = ""):
+    def __init__(self, content_library: ContentLibrary, user_id: str = ""):
         self.library = content_library
         self.exercise_last_used: Dict[str, int] = {}
-        self.seed_suffix = seed_suffix
+        self.user_id = user_id
 
     def _is_in_cooldown(self, exercise_id: str, current_day: int, cooldown_days: int) -> bool:
         """
@@ -124,6 +130,12 @@ class DraftBuilder:
         if pillar_errors:
             raise DraftValidationError(pillar_errors)
 
+        expected_slots = EXPECTED_SLOTS_PER_DAY[params.load]
+        if not params.user_policy or not params.user_policy.preferred_time_slots:
+            raise RuntimeError("preferred_time_slots required")
+        if len(params.user_policy.preferred_time_slots) != expected_slots:
+            raise RuntimeError("Invalid number of time slots for selected load")
+
         total_days = get_total_days(params.duration)
 
         slots_per_day = len(get_daily_slot_structure(params.load))
@@ -140,6 +152,10 @@ class DraftBuilder:
             max_difficulty = get_difficulty_for_week(week_number, params.duration)
 
             slot_structure = get_daily_slot_structure(params.load)
+            expected_count = EXPECTED_SLOTS_PER_DAY[params.load]
+            assert len(slot_structure) == expected_count
+
+            used_slots_today: List[TimeSlot] = []
 
             for slot_index, slot_type in enumerate(slot_structure):
                 category = self._pick_category_for_slot(category_distribution, params.focus)
@@ -150,23 +166,29 @@ class DraftBuilder:
                     if not self._is_in_cooldown(e.id, day, e.cooldown_days)
                 ]
 
+                seed_key = f"{self.user_id}:{day}:{slot_index}"
                 exercise = select_exercise_with_fallback(
                     available_exercises_now,
                     preferred_category=category,
                     slot_type=slot_type,
                     max_difficulty=max_difficulty,
                     params=params,
-                    seed_suffix=self.seed_suffix,
+                    seed_key=seed_key,
                 )
 
                 if not exercise:
+                    fallback_candidates = [
+                        e
+                        for e in available_exercises
+                        if not self._is_in_cooldown(e.id, day, e.cooldown_days)
+                    ]
                     exercise = select_exercise_with_fallback(
-                        available_exercises,
+                        fallback_candidates,
                         preferred_category=category,
                         slot_type=slot_type,
                         max_difficulty=max_difficulty,
                         params=params,
-                        seed_suffix=self.seed_suffix,
+                        seed_key=seed_key,
                     )
 
                 if not exercise:
@@ -177,7 +199,9 @@ class DraftBuilder:
                 time_slot = get_time_slot_for_slot_type(
                     slot_type,
                     params.user_policy.preferred_time_slots if params.user_policy else None,
+                    already_used_slots=used_slots_today,
                 )
+                used_slots_today.append(time_slot)
 
                 step = PlanStep(
                     step_id=f"step_{day}_{slot_index}",
@@ -245,7 +269,7 @@ def create_plan_draft(
     load: str,
     library_path: str,
     user_policy: dict | None = None,
-    seed_suffix: str = "",
+    user_id: str = "",
 ) -> dict:
     """
     Convenience function for creating plan draft.
@@ -272,7 +296,7 @@ def create_plan_draft(
 
     library = ContentLibrary(library_path)
 
-    builder = DraftBuilder(library, seed_suffix=seed_suffix)
+    builder = DraftBuilder(library, user_id=user_id)
     draft = builder.build_plan_draft(params)
 
     return {
