@@ -1401,56 +1401,93 @@ async def handle_incoming_message(
     data_collection_notice: str | None = None
     if target_agent == "plan" and current_state == "PLAN_FLOW:DATA_COLLECTION":
         transition_signal = None
-        if isinstance(plan_updates, dict):
-            clean_updates = _sanitize_plan_updates(plan_updates)
-            persistent_parameters = await session_memory.get_plan_parameters(user_id)
-            updated_parameters = dict(persistent_parameters)
-            if clean_updates:
-                updated_parameters.update(clean_updates)
-                await session_memory.set_plan_parameters(user_id, updated_parameters)
-                context_payload["known_parameters"] = updated_parameters
-                draft_parameters = updated_parameters
-
         persistent_parameters = normalize_plan_parameters(
             await session_memory.get_plan_parameters(user_id)
         )
 
-        duration = persistent_parameters.get("duration")
-        focus = persistent_parameters.get("focus")
-        load = persistent_parameters.get("load")
-        slots = persistent_parameters.get("preferred_time_slots")
-        normalized_slots = [slot for slot in (slots or []) if slot in PLAN_TIME_SLOT_VALUES]
+        clean_updates: Dict[str, Any] = {}
+        if isinstance(plan_updates, dict):
+            clean_updates = _sanitize_plan_updates(plan_updates) or {}
+
+        proposed_parameters = dict(persistent_parameters)
+        if clean_updates:
+            if "duration" in clean_updates:
+                proposed_parameters["duration"] = clean_updates["duration"]
+            if "focus" in clean_updates:
+                proposed_parameters["focus"] = clean_updates["focus"]
+            if "load" in clean_updates:
+                proposed_parameters["load"] = clean_updates["load"]
+                proposed_parameters.pop("preferred_time_slots", None)
+            if "preferred_time_slots" in clean_updates:
+                proposed_slots = [
+                    slot for slot in clean_updates["preferred_time_slots"] if slot in PLAN_TIME_SLOT_VALUES
+                ]
+                proposed_parameters["preferred_time_slots"] = proposed_slots
+
+        load = proposed_parameters.get("load")
+        slots = proposed_parameters.get("preferred_time_slots") or []
+        normalized_slots = [slot for slot in slots if slot in PLAN_TIME_SLOT_VALUES]
 
         if load == "INTENSIVE":
-            if normalized_slots != INTENSIVE_AUTO_SLOTS:
-                persistent_parameters["preferred_time_slots"] = INTENSIVE_AUTO_SLOTS.copy()
-                await session_memory.set_plan_parameters(user_id, persistent_parameters)
-                context_payload["known_parameters"] = persistent_parameters
-                draft_parameters = persistent_parameters
+            proposed_parameters["preferred_time_slots"] = INTENSIVE_AUTO_SLOTS.copy()
+            normalized_slots = INTENSIVE_AUTO_SLOTS.copy()
             data_collection_notice = (
                 "Для інтенсивного плану автоматично призначено 3 слоти:\nMORNING / DAY / EVENING"
             )
+        elif load == "MID" and "preferred_time_slots" in clean_updates and len(normalized_slots) != 2:
+            reply_text = (
+                "Для MID потрібно обрати рівно 2 часові слоти.\n\n"
+                "Якщо хочеш 3 слоти — обери INTENSIVE.\n"
+                "Якщо 1 слот — обери LITE.\n\n"
+                "Які 2 часові слоти підходять?\n"
+                "MORNING / DAY / EVENING"
+            )
+            return await _finalize_reply(reply_text)
+        elif load == "LITE" and "preferred_time_slots" in clean_updates and len(normalized_slots) != 1:
+            reply_text = (
+                "Для LITE потрібно обрати рівно 1 часовий слот.\n\n"
+                "Якщо хочеш 2 слоти — обери MID.\n"
+                "Якщо 3 — обери INTENSIVE.\n\n"
+                "Який часовий слот підходить?\n"
+                "MORNING / DAY / EVENING"
+            )
+            return await _finalize_reply(reply_text)
+
+        if proposed_parameters != persistent_parameters:
+            await session_memory.set_plan_parameters(user_id, proposed_parameters)
+            context_payload["known_parameters"] = proposed_parameters
+            draft_parameters = proposed_parameters
+
+        persistent_parameters = normalize_plan_parameters(
+            await session_memory.get_plan_parameters(user_id)
+        )
+        duration = persistent_parameters.get("duration")
+        focus = persistent_parameters.get("focus")
+        load = persistent_parameters.get("load")
+        slots = persistent_parameters.get("preferred_time_slots") or []
+        normalized_slots = [slot for slot in slots if slot in PLAN_TIME_SLOT_VALUES]
 
         if duration is not None and focus is not None and load is not None:
             expected_slots = _expected_time_slots_for_load(load)
-            if load in {"LITE", "MID"}:
-                if len(normalized_slots) != (expected_slots or 0):
-                    transition_signal = None
-                    if load == "MID":
-                        reply_text = (
-                            "Потрібно обрати рівно 2 часові слоти для MID.\n"
-                            "Які 2 часові слоти підходять?\n"
-                            "MORNING / DAY / EVENING"
-                        )
-                    else:
-                        reply_text = (
-                            "Потрібно обрати рівно 1 часовий слот для LITE.\n"
-                            "Який часовий слот підходить?\n"
-                            "MORNING / DAY / EVENING"
-                        )
-                else:
-                    transition_signal = "PLAN_FLOW:CONFIRMATION_PENDING"
-            elif load == "INTENSIVE":
+            if load == "MID" and len(normalized_slots) != 2:
+                reply_text = (
+                    "Для MID потрібно обрати рівно 2 часові слоти.\n\n"
+                    "Якщо хочеш 3 слоти — обери INTENSIVE.\n"
+                    "Якщо 1 слот — обери LITE.\n\n"
+                    "Які 2 часові слоти підходять?\n"
+                    "MORNING / DAY / EVENING"
+                )
+            elif load == "LITE" and len(normalized_slots) != 1:
+                reply_text = (
+                    "Для LITE потрібно обрати рівно 1 часовий слот.\n\n"
+                    "Якщо хочеш 2 слоти — обери MID.\n"
+                    "Якщо 3 — обери INTENSIVE.\n\n"
+                    "Який часовий слот підходить?\n"
+                    "MORNING / DAY / EVENING"
+                )
+            elif load == "INTENSIVE" and normalized_slots != INTENSIVE_AUTO_SLOTS:
+                transition_signal = None
+            elif expected_slots is not None and len(normalized_slots) == expected_slots:
                 transition_signal = "PLAN_FLOW:CONFIRMATION_PENDING"
     if target_agent == "plan" and current_state == "PLAN_FLOW:CONFIRMATION_PENDING":
         confirmation_reply = await handle_confirmation_pending_action(
