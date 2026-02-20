@@ -1485,8 +1485,17 @@ async def handle_incoming_message(
                     "Який часовий слот підходить?\n"
                     "MORNING / DAY / EVENING"
                 )
-            elif load == "INTENSIVE" and normalized_slots != INTENSIVE_AUTO_SLOTS:
-                transition_signal = None
+            elif load == "INTENSIVE":
+                if normalized_slots != INTENSIVE_AUTO_SLOTS:
+                    persistent_parameters["preferred_time_slots"] = INTENSIVE_AUTO_SLOTS.copy()
+                    await session_memory.set_plan_parameters(user_id, persistent_parameters)
+                    context_payload["known_parameters"] = persistent_parameters
+                    draft_parameters = persistent_parameters
+                    normalized_slots = INTENSIVE_AUTO_SLOTS.copy()
+                    reply_text = (
+                        "В інтенсивному режимі завжди використовується 3 часові слоти:\nMORNING / DAY / EVENING"
+                    )
+                transition_signal = "PLAN_FLOW:CONFIRMATION_PENDING"
             elif expected_slots is not None and len(normalized_slots) == expected_slots:
                 transition_signal = "PLAN_FLOW:CONFIRMATION_PENDING"
     if target_agent == "plan" and current_state == "PLAN_FLOW:CONFIRMATION_PENDING":
