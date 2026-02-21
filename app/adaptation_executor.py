@@ -41,7 +41,7 @@ class AdaptationExecutor:
         elif intent == AdaptationIntent.REDUCE_DAILY_LOAD:
             self._reduce_daily_load(db, plan_id, params)
         elif intent == AdaptationIntent.INCREASE_DAILY_LOAD:
-            self._increase_daily_load(db, plan_id, params)
+            return self._increase_daily_load(db, plan_id, params)
         elif intent == AdaptationIntent.LOWER_DIFFICULTY:
             self._lower_difficulty(db, plan_id)
         elif intent == AdaptationIntent.INCREASE_DIFFICULTY:
@@ -126,7 +126,7 @@ class AdaptationExecutor:
         if canceled_ids:
             cancel_plan_step_jobs(canceled_ids)
 
-    def _increase_daily_load(self, db: Session, plan_id: int, params: dict | None = None) -> None:
+    def _increase_daily_load(self, db: Session, plan_id: int, params: dict | None = None) -> list[int]:
         from app.plan_adaptations import _iter_future_steps
         from app.db import ContentLibrary as ContentLibraryModel
 
@@ -245,6 +245,10 @@ class AdaptationExecutor:
                 "new_load": plan.load,
             },
         )
+
+        # Повертаємо added_ids для post-commit reschedule в orchestrator.
+        # Scheduler перевіряє plan.status == "active" тому reschedule має відбутись після commit.
+        return added_ids
 
     def _lower_difficulty(self, db: Session, plan_id: int) -> None:
         """Lower difficulty by 1 level (TASK-3.5)."""

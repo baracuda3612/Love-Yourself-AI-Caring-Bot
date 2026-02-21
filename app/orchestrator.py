@@ -813,7 +813,16 @@ def get_daily_task_count(db: Session, plan: AIPlan) -> int:
     )
     if not first_day:
         return 0
-    return db.query(AIPlanStep).filter(AIPlanStep.day_id == first_day.id).count()
+    return (
+        db.query(AIPlanStep)
+        .filter(
+            AIPlanStep.day_id == first_day.id,
+            AIPlanStep.canceled_by_adaptation == False,
+            AIPlanStep.skipped == False,
+            AIPlanStep.is_completed == False,
+        )
+        .count()
+    )
 
 
 def get_avg_difficulty(db: Session, plan: AIPlan) -> int:

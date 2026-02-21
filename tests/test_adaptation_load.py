@@ -293,3 +293,41 @@ def test_increase_creates_plan_version():
     assert version.diff["slot_added"] == "EVENING"
     assert version.diff["added_step_ids"] == [321]
     assert version.diff["new_load"] == "MID"
+
+
+def test_increase_returns_added_step_ids_for_reschedule():
+    """execute() must return added_ids so orchestrator can reschedule after commit."""
+    day = SimpleNamespace(
+        id=9,
+        steps=[
+            SimpleNamespace(
+                exercise_id=1,
+                difficulty="EASY",
+                is_completed=False,
+                skipped=False,
+                canceled_by_adaptation=False,
+            )
+        ],
+    )
+    plan = _make_plan(slots=["MORNING"], load="LITE", days=[day])
+    db, content_query = _make_plan_db(plan)
+    content_query.filter.return_value.order_by.return_value.first.return_value = SimpleNamespace(id=2)
+
+    added_steps = []
+
+    def _add(obj):
+        if isinstance(obj, AIPlanStep):
+            obj.id = 999
+            added_steps.append(obj)
+
+    db.add.side_effect = _add
+
+    with patch("app.adaptation_executor.log_user_event"):
+        result = AdaptationExecutor().execute(
+            db,
+            plan.id,
+            AdaptationIntent.INCREASE_DAILY_LOAD,
+            params={"slot_to_add": "EVENING"},
+        )
+
+    assert result == [999]  # повернуто для post-commit reschedule
