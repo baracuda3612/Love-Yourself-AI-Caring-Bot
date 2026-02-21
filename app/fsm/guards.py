@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.fsm.states import (
+    ADAPTATION_CONFIRMATION,
     ADAPTATION_FLOW_ALLOWED_TRANSITIONS,
     ADAPTATION_FLOW_STATES,
     ADAPTATION_SELECTION,
@@ -33,6 +34,8 @@ def can_transition(from_state: str, to_state: str) -> bool:
     if to_state == ADAPTATION_SELECTION and from_state in {"ACTIVE", "ACTIVE_PAUSED"}:
         return True
     if from_state in ADAPTATION_FLOW_STATES and to_state == "ACTIVE":
+        return True
+    if from_state == ADAPTATION_CONFIRMATION and to_state == "ACTIVE_PAUSED":
         return True
 
     if to_state == "PLAN_FLOW:DATA_COLLECTION" and from_state in PLAN_FLOW_ENTRYPOINTS:

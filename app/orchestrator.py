@@ -970,7 +970,10 @@ async def handle_adaptation_response(
             reason="adaptation_executed",
         )
 
-        # Reschedule ТІЛЬКИ після commit — scheduler перевіряє plan.status == "active"
+        # 🔒 Explicit commit before any scheduler interaction
+        db.commit()
+
+        # 🕒 Post-commit side effects only
         if step_ids_to_reschedule:
             try:
                 reschedule_plan_steps(step_ids_to_reschedule)
