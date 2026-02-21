@@ -69,7 +69,7 @@ def _iter_future_steps(
 ) -> Iterable[Tuple[AIPlanDay, AIPlanStep]]:
     for day in plan.days:
         for step in day.steps:
-            if step.is_completed or step.skipped:
+            if step.is_completed or step.skipped or step.canceled_by_adaptation:
                 continue
             if _resolve_step_anchor(plan, day, step) >= effective_from:
                 yield day, step
