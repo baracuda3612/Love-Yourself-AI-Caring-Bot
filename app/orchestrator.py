@@ -942,8 +942,10 @@ async def handle_adaptation_response(
             pass
 
         step_ids_to_reschedule: list[int] = []
+        adaptation_applied = False
         try:
             step_ids_to_reschedule = await execute_adaptation(user_id, llm_response, db)
+            adaptation_applied = True
             followups.append("Зміни успішно застосовано! ✅")
         except AdaptationNotEligibleError as exc:
             logger.warning(
@@ -961,29 +963,30 @@ async def handle_adaptation_response(
             followups.append("Не вдалось застосувати зміни. Спробуй пізніше.")
             next_state_after = current_state
 
-        # FSM transition — commits user.current_state + plan.status зміни разом
-        await _commit_fsm_transition(
-            user_id=user_id,
-            target_agent="plan",
-            next_state=next_state_after,
-            db=db,
-            reason="adaptation_executed",
-        )
+        if adaptation_applied:
+            # FSM transition — commits user.current_state + plan.status зміни разом
+            await _commit_fsm_transition(
+                user_id=user_id,
+                target_agent="plan",
+                next_state=next_state_after,
+                db=db,
+                reason="adaptation_executed",
+            )
 
-        # 🔒 Explicit commit before any scheduler interaction
-        db.commit()
+            # 🔒 Explicit commit before any scheduler interaction
+            db.commit()
 
-        # 🕒 Post-commit side effects only
-        if step_ids_to_reschedule:
-            try:
-                reschedule_plan_steps(step_ids_to_reschedule)
-            except Exception:
-                logger.error(
-                    "[ADAPTATION] reschedule failed after resume for user %s, step_ids=%s",
-                    user_id,
-                    step_ids_to_reschedule,
-                    exc_info=True,
-                )
+            # 🕒 Post-commit side effects only
+            if step_ids_to_reschedule:
+                try:
+                    reschedule_plan_steps(step_ids_to_reschedule)
+                except Exception:
+                    logger.error(
+                        "[ADAPTATION] reschedule failed after resume for user %s, step_ids=%s",
+                        user_id,
+                        step_ids_to_reschedule,
+                        exc_info=True,
+                    )
 
         await session_memory.clear_adaptation_context(user_id)
         return reply_text, followups

@@ -114,7 +114,7 @@ def test_resume_does_not_call_reschedule_directly():
 
     with patch("app.adaptation_executor.apply_plan_adaptation", return_value=result), \
          patch("app.adaptation_executor.log_user_event"), \
-         patch("app.adaptation_executor.reschedule_plan_steps") as mock_reschedule:
+         patch("app.scheduler.reschedule_plan_steps") as mock_reschedule:
 
         AdaptationExecutor().execute(db, plan.id, AdaptationIntent.RESUME_PLAN)
 

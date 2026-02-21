@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.adaptation_types import AdaptationIntent, AdaptationNotEligibleError
 from app.db import AIPlan, AIPlanDay, AIPlanStep
 from app.plan_adaptations import apply_plan_adaptation
-from app.scheduler import cancel_plan_step_jobs, reschedule_plan_steps
+from app.scheduler import cancel_plan_step_jobs
 from app.telemetry import log_user_event
 
 logger = logging.getLogger(__name__)
