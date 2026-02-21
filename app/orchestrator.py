@@ -25,7 +25,7 @@ from app.db import (
 from app.logging.router_logging import log_metric, log_router_decision
 from app.plan_adaptations import PlanAdaptationError, apply_plan_adaptation
 from app.adaptation_executor import AdaptationExecutor
-from app.adaptation_types import AdaptationIntent
+from app.adaptation_types import AdaptationIntent, AdaptationNotEligibleError
 from app.plan_parameters import normalize_plan_parameters
 from app.scheduler import cancel_plan_step_jobs, reschedule_plan_steps
 from app.redis_client import redis_client
@@ -884,7 +884,12 @@ async def build_adaptation_payload(
     return payload
 
 
-async def execute_adaptation(user_id: int, llm_response: Dict[str, Any], db: Session) -> None:
+async def execute_adaptation(
+    user_id: int,
+    llm_response: Dict[str, Any],
+    db: Session,
+) -> list[int]:
+    """Returns step_ids to reschedule after DB commit."""
     adaptation_intent_str = llm_response.get("adaptation_intent")
     adaptation_params = llm_response.get("adaptation_params")
 
@@ -899,7 +904,7 @@ async def execute_adaptation(user_id: int, llm_response: Dict[str, Any], db: Ses
         raise ValueError("No active plan for adaptation")
 
     executor = AdaptationExecutor()
-    executor.execute(
+    return executor.execute(
         db=db,
         plan_id=active_plan.id,
         intent=intent,
@@ -927,24 +932,62 @@ async def handle_adaptation_response(
         )
 
     if transition_signal == "EXECUTE_ADAPTATION":
+        adaptation_intent_str = llm_response.get("adaptation_intent")
+        next_state_after = "ACTIVE"
         try:
-            await execute_adaptation(user_id, llm_response, db)
+            _intent = AdaptationIntent(adaptation_intent_str)
+            if _intent == AdaptationIntent.PAUSE_PLAN:
+                next_state_after = "ACTIVE_PAUSED"
+        except (ValueError, TypeError):
+            pass
+
+        step_ids_to_reschedule: list[int] = []
+        adaptation_applied = False
+        try:
+            step_ids_to_reschedule = await execute_adaptation(user_id, llm_response, db)
+            adaptation_applied = True
             followups.append("Зміни успішно застосовано! ✅")
+        except AdaptationNotEligibleError as exc:
+            logger.warning(
+                "[ADAPTATION] Not eligible for user %s: %s", user_id, exc.reason
+            )
+            followups.append(f"Ця дія недоступна: {exc.reason}")
+            next_state_after = current_state
         except NotImplementedError:
             db.rollback()
-            followups.append("Ця адаптація ще в розробці (Phase 3). Спробуй іншу зміну.")
+            followups.append("Ця адаптація ще в розробці. Спробуй іншу зміну.")
+            next_state_after = current_state
         except Exception:
             db.rollback()
             logger.exception("Adaptation execution failed for user %s", user_id)
             followups.append("Не вдалось застосувати зміни. Спробуй пізніше.")
+            next_state_after = current_state
 
-        await _commit_fsm_transition(
-            user_id=user_id,
-            target_agent="plan",
-            next_state="ACTIVE",
-            db=db,
-            reason="adaptation_executed",
-        )
+        if adaptation_applied:
+            # FSM transition — commits user.current_state + plan.status зміни разом
+            await _commit_fsm_transition(
+                user_id=user_id,
+                target_agent="plan",
+                next_state=next_state_after,
+                db=db,
+                reason="adaptation_executed",
+            )
+
+            # 🔒 Explicit commit before any scheduler interaction
+            db.commit()
+
+            # 🕒 Post-commit side effects only
+            if step_ids_to_reschedule:
+                try:
+                    reschedule_plan_steps(step_ids_to_reschedule)
+                except Exception:
+                    logger.error(
+                        "[ADAPTATION] reschedule failed after resume for user %s, step_ids=%s",
+                        user_id,
+                        step_ids_to_reschedule,
+                        exc_info=True,
+                    )
+
         await session_memory.clear_adaptation_context(user_id)
         return reply_text, followups
 

@@ -165,3 +165,11 @@ def get_non_structural_intents() -> Set[AdaptationIntent]:
         for intent, meta in ADAPTATION_METADATA.items()
         if not meta["affects_structure"]
     }
+
+
+class AdaptationNotEligibleError(ValueError):
+    """Raised when adaptation cannot be applied due to current plan state."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
