@@ -117,6 +117,9 @@ class AdaptationExecutor:
         )
 
         if result.canceled_step_ids:
+            # cancel is idempotent and safe to call before commit.
+            # If commit later fails, scheduler reconciliation on restart
+            # will restore jobs for active plans.
             cancel_plan_step_jobs(result.canceled_step_ids)
 
         return []

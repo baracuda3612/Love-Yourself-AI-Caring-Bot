@@ -972,7 +972,15 @@ async def handle_adaptation_response(
 
         # Reschedule ТІЛЬКИ після commit — scheduler перевіряє plan.status == "active"
         if step_ids_to_reschedule:
-            reschedule_plan_steps(step_ids_to_reschedule)
+            try:
+                reschedule_plan_steps(step_ids_to_reschedule)
+            except Exception:
+                logger.error(
+                    "[ADAPTATION] reschedule failed after resume for user %s, step_ids=%s",
+                    user_id,
+                    step_ids_to_reschedule,
+                    exc_info=True,
+                )
 
         await session_memory.clear_adaptation_context(user_id)
         return reply_text, followups
