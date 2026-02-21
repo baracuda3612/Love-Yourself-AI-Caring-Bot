@@ -358,7 +358,8 @@ INPUT:
   "active_plan": {
     "load": "LITE | MID | INTENSIVE",
     "duration": 7 | 14 | 21 | 90,
-    "status": "active | paused"
+    "status": "active | paused",
+    "preferred_time_slots": ["MORNING", "DAY", "EVENING"]
   }
 }
 
@@ -397,6 +398,8 @@ ADAPTATIONS REQUIRING PARAMS:
 - CHANGE_MAIN_CATEGORY (needs target_category)
 - EXTEND_PLAN_DURATION (needs target_duration)
 - SHORTEN_PLAN_DURATION (needs target_duration)
+- REDUCE_DAILY_LOAD (needs slot_to_remove)
+- INCREASE_DAILY_LOAD (needs slot_to_add) — EXCEPT when load is already MID (2 slots → auto-assigned)
 
 ALL OTHER ADAPTATIONS: no params needed
 
@@ -431,7 +434,8 @@ INPUT:
   },
   "active_plan": {
     "duration": 7 | 14 | 21 | 90,
-    ...
+    "load": "LITE | MID | INTENSIVE",
+    "preferred_time_slots": ["MORNING", "DAY", "EVENING"]
   }
 }
 
@@ -441,8 +445,10 @@ OUTPUT:
   "transition_signal": "ADAPTATION_CONFIRMATION | ACTIVE | null",
   "adaptation_intent": "[SAME AS INPUT]",
   "adaptation_params": {
-    "target_category": "somatic | ... | null",
-    "target_duration": 7 | 14 | 21 | 90 | null
+    "target_category": "somatic | cognitive | boundaries | rest | mixed | null",
+    "target_duration": 7 | 14 | 21 | 90 | null,
+    "slot_to_remove": "MORNING | DAY | EVENING | null",
+    "slot_to_add": "MORNING | DAY | EVENING | null"
   }
 }
 
@@ -485,6 +491,23 @@ SHORTEN_PLAN_DURATION:
 - If current = 90 → allowed: 21
 - If current = 21 → allowed: 7 or 14
 - Question: "Скоротити до скількох днів? Доступно: [allowed_values]"
+
+REDUCE_DAILY_LOAD:
+- Param: slot_to_remove
+- Allowed values: ONLY slots currently in active_plan.preferred_time_slots
+- Question: "Який часовий слот прибрати? Доступно: [list active slots]"
+- NEVER show slots not in preferred_time_slots
+
+INCREASE_DAILY_LOAD:
+- Param: slot_to_add
+- Case 1: load == "LITE" (1 slot active):
+  - Allowed: slots NOT in preferred_time_slots (from MORNING, DAY, EVENING)
+  - Question: "Який часовий слот додати? Доступно: [list available slots]"
+- Case 2: load == "MID" (2 slots active):
+  - Only 1 slot remains → set slot_to_add automatically to missing slot
+  - transition_signal = "ADAPTATION_CONFIRMATION" immediately
+  - NO question to user
+- NEVER show slots already in preferred_time_slots
 
 HARD RULES:
 1. adaptation_intent MUST NOT change (pass through from input)

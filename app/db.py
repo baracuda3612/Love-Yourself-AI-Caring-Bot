@@ -208,6 +208,7 @@ class AIPlan(Base):
     duration = Column(String(20), nullable=True)
     focus = Column(String(20), nullable=True)
     load = Column(String(20), nullable=False)
+    preferred_time_slots = Column(JSONB, default=list, nullable=False)
     total_days = Column(Integer, nullable=True)
     
     # Versioning for Adaptation
@@ -285,6 +286,8 @@ class AIPlanStep(Base):
     is_completed = Column(Boolean, default=False)
     completed_at = Column(DateTime(timezone=True), nullable=True)
     skipped = Column(Boolean, default=False)
+    canceled_by_adaptation = Column(Boolean, default=False, nullable=False)
+    slot_type = Column(String(20), default="CORE", nullable=False)
     
     day = relationship("AIPlanDay", back_populates="steps")
 

@@ -756,9 +756,10 @@ def get_active_plan(db: Session, user_id: int) -> Optional[AIPlan]:
 def compute_available_adaptations(db: Session, plan: AIPlan) -> List[AdaptationIntent]:
     available: List[AdaptationIntent] = []
 
-    if plan.load in {"MID", "INTENSIVE"}:
+    current_daily_count = get_daily_task_count(db, plan)
+    if current_daily_count > 1:
         available.append(AdaptationIntent.REDUCE_DAILY_LOAD)
-    if plan.load in {"LITE", "MID"}:
+    if current_daily_count < 3:
         available.append(AdaptationIntent.INCREASE_DAILY_LOAD)
 
     steps = (
@@ -812,7 +813,16 @@ def get_daily_task_count(db: Session, plan: AIPlan) -> int:
     )
     if not first_day:
         return 0
-    return db.query(AIPlanStep).filter(AIPlanStep.day_id == first_day.id).count()
+    return (
+        db.query(AIPlanStep)
+        .filter(
+            AIPlanStep.day_id == first_day.id,
+            AIPlanStep.canceled_by_adaptation == False,
+            AIPlanStep.skipped == False,
+            AIPlanStep.is_completed == False,
+        )
+        .count()
+    )
 
 
 def get_avg_difficulty(db: Session, plan: AIPlan) -> int:
@@ -866,10 +876,13 @@ async def build_adaptation_payload(
             "load": active_plan.load,
             "duration": active_plan.total_days,
             "status": active_plan.status,
+            "preferred_time_slots": active_plan.preferred_time_slots or [],
         }
     elif current_state == ADAPTATION_PARAMS:
         payload["active_plan"] = {
             "duration": active_plan.total_days,
+            "load": active_plan.load,
+            "preferred_time_slots": active_plan.preferred_time_slots or [],
         }
     elif current_state == ADAPTATION_CONFIRMATION:
         payload["active_plan"] = {
@@ -1593,12 +1606,18 @@ async def handle_incoming_message(
                             draft,
                             activation_time_utc=activation_time_utc,
                         )
+                        current_parameters = normalize_plan_parameters(
+                            await session_memory.get_plan_parameters(user_id)
+                        )
+                        active_plan = get_active_plan(db, user_id)
+                        _slots = (current_parameters or {}).get("preferred_time_slots") or []
+                        if _slots and active_plan:
+                            active_plan.preferred_time_slots = [
+                                s for s in ["MORNING", "DAY", "EVENING"] if s in _slots
+                            ]
                     await asyncio.to_thread(activate_plan_side_effects, plan.id, user_id)
                     log_metric("plan_finalized", extra={"user_id": user_id, "plan_id": plan.id})
                     await _commit_fsm_transition(user_id, "plan", "ACTIVE")
-                    current_parameters = normalize_plan_parameters(
-                        await session_memory.get_plan_parameters(user_id)
-                    )
                     selected_slots = [
                         slot
                         for slot in (current_parameters.get("preferred_time_slots") or [])

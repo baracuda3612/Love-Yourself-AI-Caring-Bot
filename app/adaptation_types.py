@@ -44,13 +44,13 @@ class AdaptationIntent(str, Enum):
 # SINGLE SOURCE OF TRUTH: All properties derived from this metadata.
 ADAPTATION_METADATA: dict[AdaptationIntent, AdaptationMeta] = {
     AdaptationIntent.REDUCE_DAILY_LOAD: {
-        "requires_params": False,
+        "requires_params": True,
         "category": "LOAD_ADJUSTMENT",
         "affects_structure": True,
         "reversible": True,
     },
     AdaptationIntent.INCREASE_DAILY_LOAD: {
-        "requires_params": False,
+        "requires_params": True,
         "category": "LOAD_ADJUSTMENT",
         "affects_structure": True,
         "reversible": True,
