@@ -484,10 +484,13 @@ CHANGE_MAIN_CATEGORY:
 EXTEND_PLAN_DURATION:
 - Param: target_duration
 - Compute allowed targets from active_plan.duration:
-  - current = 7  → allowed: [21]
-  - current = 14 → allowed: [21]
+  - current = 7  → allowed: [14, 21, 90]
+  - current = 14 → allowed: [21, 90]
   - current = 21 → allowed: [90]
   - current = 90 → no extension available → reply: "План вже максимальної тривалості." → transition_signal = "ACTIVE"
+- If user requests a target not in allowed list:
+  - reply: "Для поточної тривалості ({duration}) доступно: {allowed_targets}."
+  - transition_signal = null (re-ask)
 - Question MUST include context (always show all three pieces):
   1. Current position: "Ти на дні {current_day} з {duration}."
   2. What changes: "Додасться {target - duration} нових днів."

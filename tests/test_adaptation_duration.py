@@ -420,3 +420,32 @@ def test_shorten_executor_blocks_target_below_current_day():
         )
 
     assert exc.value.reason == "current_day_exceeds_target"
+
+
+def test_extend_from_7_to_14_is_allowed():
+    plan = _make_plan(total_days=7, current_day=3, start_date=datetime(2025, 1, 1, tzinfo=timezone.utc))
+    user = SimpleNamespace(id=42, timezone="UTC", plan_end_date=None, profile=None)
+    db = _make_db(plan, user)
+
+    draft = SimpleNamespace(steps=[_DraftStep(day, 800 + day) for day in range(1, 15)])
+
+    def _add(obj):
+        if isinstance(obj, AIPlanDay):
+            obj.id = 1400
+        if isinstance(obj, AIPlanStep):
+            obj.id = 1500 + obj.exercise_id
+
+    db.add.side_effect = _add
+
+    with patch("app.plan_drafts.service.build_plan_draft", return_value=draft), \
+         patch("app.adaptation_executor.resolve_daily_time_slots", return_value={}), \
+         patch("app.adaptation_executor.compute_scheduled_for", return_value=datetime.now(timezone.utc)), \
+         patch("app.adaptation_executor.log_user_event"):
+        AdaptationExecutor().execute(
+            db,
+            plan.id,
+            AdaptationIntent.EXTEND_PLAN_DURATION,
+            params={"target_duration": 14},
+        )
+
+    assert plan.total_days == 14

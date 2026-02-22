@@ -274,7 +274,7 @@ class AdaptationExecutor:
             raise AdaptationNotEligibleError("plan_not_active")
 
         target_days = int((params or {}).get("target_duration", 0))
-        if target_days not in {21, 90}:
+        if target_days not in {14, 21, 90}:
             raise AdaptationNotEligibleError("invalid_target_duration")
 
         current_total = plan.total_days or 0
@@ -288,7 +288,7 @@ class AdaptationExecutor:
             raise AdaptationNotEligibleError("plan_has_no_start_date")
 
         # Duration mapping для DraftBuilder
-        target_duration_map = {21: "STANDARD", 90: "LONG"}
+        target_duration_map = {14: "SHORT", 21: "STANDARD", 90: "LONG"}
         draft_duration = target_duration_map[target_days]
 
         slot_strings = plan.preferred_time_slots or []
