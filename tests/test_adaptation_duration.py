@@ -24,7 +24,7 @@ class _DraftStep:
         self.difficulty = "EASY"
 
 
-def _make_plan(*, total_days: int, current_day: int, start_date=None):
+def _make_plan(*, total_days: int, current_day: int, start_date=datetime(2025, 1, 1, tzinfo=timezone.utc)):
     return SimpleNamespace(
         id=1,
         user_id=42,
@@ -359,3 +359,64 @@ def test_extend_creates_plan_version():
     assert version.diff["new_total_days"] == 21
     assert version.diff["days_added"] == 7
     assert version.diff["extended_from_day"] == 7
+
+
+def test_extend_raises_if_no_start_date():
+    plan = _make_plan(total_days=14, current_day=5, start_date=None)
+    user = SimpleNamespace(id=42, timezone="UTC", plan_end_date=None, profile=None)
+    db = _make_db(plan, user)
+
+    with pytest.raises(AdaptationNotEligibleError) as exc:
+        AdaptationExecutor().execute(
+            db,
+            plan.id,
+            AdaptationIntent.EXTEND_PLAN_DURATION,
+            params={"target_duration": 21},
+        )
+
+    assert exc.value.reason == "plan_has_no_start_date"
+
+
+def test_extend_accepts_any_valid_target_greater_than_current():
+    plan = _make_plan(total_days=7, current_day=3, start_date=datetime(2025, 1, 1, tzinfo=timezone.utc))
+    user = SimpleNamespace(id=42, timezone="UTC", plan_end_date=None, profile=None)
+    db = _make_db(plan, user)
+
+    draft = SimpleNamespace(steps=[_DraftStep(day, 500 + day) for day in range(1, 22)])
+
+    def _add(obj):
+        if isinstance(obj, AIPlanDay):
+            obj.id = 1000
+        if isinstance(obj, AIPlanStep):
+            obj.id = 1100 + obj.exercise_id
+
+    db.add.side_effect = _add
+
+    with patch("app.plan_drafts.service.build_plan_draft", return_value=draft), \
+         patch("app.adaptation_executor.resolve_daily_time_slots", return_value={}), \
+         patch("app.adaptation_executor.compute_scheduled_for", return_value=datetime.now(timezone.utc)), \
+         patch("app.adaptation_executor.log_user_event"):
+        AdaptationExecutor().execute(
+            db,
+            plan.id,
+            AdaptationIntent.EXTEND_PLAN_DURATION,
+            params={"target_duration": 21},
+        )
+
+    assert plan.total_days == 21
+
+
+def test_shorten_executor_blocks_target_below_current_day():
+    plan = _make_plan(total_days=90, current_day=25)
+    user = SimpleNamespace(id=42, timezone="UTC", plan_end_date=None, profile=None)
+    db = _make_db(plan, user)
+
+    with pytest.raises(AdaptationNotEligibleError) as exc:
+        AdaptationExecutor().execute(
+            db,
+            plan.id,
+            AdaptationIntent.SHORTEN_PLAN_DURATION,
+            params={"target_duration": 21},
+        )
+
+    assert exc.value.reason == "current_day_exceeds_target"

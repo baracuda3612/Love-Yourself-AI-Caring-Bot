@@ -260,7 +260,6 @@ class AdaptationExecutor:
         raise NotImplementedError("INCREASE_DIFFICULTY implementation in TASK-3.5")
 
     def _extend_plan_duration(self, db: Session, plan_id: int, params: dict | None) -> list[int]:
-        from app.plan_drafts.plan_types import Duration, Focus, Load, PlanParameters, TimeSlot, UserPolicy
         from app.plan_drafts.service import build_plan_draft
 
         plan = (
@@ -285,29 +284,27 @@ class AdaptationExecutor:
         user = db.query(User).filter(User.id == plan.user_id).first()
         if not user:
             raise AdaptationNotEligibleError("user_not_found")
+        if not plan.start_date:
+            raise AdaptationNotEligibleError("plan_has_no_start_date")
 
         # Duration mapping для DraftBuilder
         target_duration_map = {21: "STANDARD", 90: "LONG"}
         draft_duration = target_duration_map[target_days]
 
         slot_strings = plan.preferred_time_slots or []
-        try:
-            preferred_slots = [TimeSlot(s) for s in slot_strings]
-        except ValueError:
-            preferred_slots = [TimeSlot.DAY]
 
-        params_for_builder = PlanParameters(
-            duration=Duration(draft_duration),
-            focus=Focus(plan.focus or "somatic"),
-            load=Load(plan.load),
-            user_policy=UserPolicy(preferred_time_slots=preferred_slots),
-        )
+        params_dict = {
+            "duration": draft_duration,
+            "focus": plan.focus or "somatic",
+            "load": plan.load,
+            "preferred_time_slots": slot_strings,
+        }
 
         # Генеруємо повний план для target_days.
         # TODO: TASK-extend-cooldown — pass exercise_last_used from existing plan steps
         # into DraftBuilder so cooldown tracking is continuous across old and new days.
         # Current behavior: new days may repeat exercises from last ~cooldown_days of existing plan.
-        draft = build_plan_draft(params_for_builder)
+        draft = build_plan_draft(params_dict)
 
         # Беремо тільки нові дні — після current_total
         new_steps = [s for s in draft.steps if s.day_number > current_total]
@@ -350,7 +347,7 @@ class AdaptationExecutor:
                     order_in_day=index,
                     time_slot=step.time_slot.value if hasattr(step.time_slot, "value") else str(step.time_slot),
                     slot_type=step.slot_type.value if hasattr(step.slot_type, "value") else str(step.slot_type),
-                    difficulty=step.difficulty,
+                    difficulty=self._int_to_difficulty(step.difficulty),
                     scheduled_for=scheduled_for,
                     canceled_by_adaptation=False,
                 )
@@ -572,6 +569,15 @@ class AdaptationExecutor:
         """Return slots in canonical MORNING → DAY → EVENING order."""
         order = ["MORNING", "DAY", "EVENING"]
         return [s for s in order if s in slots]
+
+    @staticmethod
+    def _int_to_difficulty(value) -> str:
+        """Convert DraftBuilder int difficulty (1/2/3) to AIPlanStep enum string."""
+        mapping = {1: "EASY", 2: "MEDIUM", 3: "HARD"}
+        try:
+            return mapping.get(int(value), "EASY")
+        except (TypeError, ValueError):
+            return str(value) if value else "EASY"
 
     def _change_main_category(self, db: Session, plan_id: int, params: dict | None) -> None:
         """Change main focus category (TASK-3.6)."""
