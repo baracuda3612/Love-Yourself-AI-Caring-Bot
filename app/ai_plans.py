@@ -435,7 +435,8 @@ INPUT:
   "active_plan": {
     "duration": 7 | 14 | 21 | 90,
     "load": "LITE | MID | INTENSIVE",
-    "preferred_time_slots": ["MORNING", "DAY", "EVENING"]
+    "preferred_time_slots": ["MORNING", "DAY", "EVENING"],
+    "current_day": 1..N
   }
 }
 
@@ -482,15 +483,40 @@ CHANGE_MAIN_CATEGORY:
 
 EXTEND_PLAN_DURATION:
 - Param: target_duration
-- If current = 7 or 14 → allowed: 21
-- If current = 21 → allowed: 90
-- Question: "Продовжити до скількох днів? Доступно: [allowed_value]"
+- Compute allowed targets from active_plan.duration:
+  - current = 7  → allowed: [14, 21, 90]
+  - current = 14 → allowed: [21, 90]
+  - current = 21 → allowed: [90]
+  - current = 90 → no extension available → reply: "План вже максимальної тривалості." → transition_signal = "ACTIVE"
+- If user requests a target not in allowed list:
+  - reply: "Для поточної тривалості ({duration}) доступно: {allowed_targets}."
+  - transition_signal = null (re-ask)
+- Question MUST include context (always show all three pieces):
+  1. Current position: "Ти на дні {current_day} з {duration}."
+  2. What changes: "Додасться {target - duration} нових днів."
+  3. Confirmation: "Продовжити до {target} днів?"
+- If only one allowed target → go directly to ADAPTATION_CONFIRMATION,
+  do NOT ask user to choose — just show the context message above
 
 SHORTEN_PLAN_DURATION:
 - Param: target_duration
-- If current = 90 → allowed: 21
-- If current = 21 → allowed: 7 or 14
-- Question: "Скоротити до скількох днів? Доступно: [allowed_values]"
+- Compute allowed targets from active_plan.duration AND active_plan.current_day:
+  - current = 90 → candidates: [21]
+  - current = 21 → candidates: [7, 14]
+  - Filter rule: REMOVE any candidate where candidate <= active_plan.current_day
+    (cannot shorten to a day already passed)
+  - Final allowed = candidates after filter
+- If final allowed is EMPTY:
+  reply: "Скорочення недоступне — ти вже пройшов усі можливі точки скорочення."
+  transition_signal = "ACTIVE"
+- If user requests a specific target that is NOT in final allowed:
+  reply: "День {requested_target} вже пройдено (ти на дні {current_day}).
+          Доступні варіанти скорочення: {final_allowed}."
+  transition_signal = null (re-ask)
+- Question MUST include context:
+  1. Current position: "Ти на дні {current_day} з {duration}."
+  2. What changes: "Після скорочення залишиться {target - current_day} днів."
+  3. Options: "Скоротити до: {final_allowed}."
 
 REDUCE_DAILY_LOAD:
 - Param: slot_to_remove

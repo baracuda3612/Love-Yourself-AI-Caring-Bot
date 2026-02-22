@@ -6,10 +6,11 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session, selectinload
 
 from app.adaptation_types import AdaptationIntent, AdaptationNotEligibleError
-from app.db import AIPlan, AIPlanDay, AIPlanStep, AIPlanVersion
+from app.db import AIPlan, AIPlanDay, AIPlanStep, AIPlanVersion, User
 from app.plan_adaptations import apply_plan_adaptation
 from app.scheduler import cancel_plan_step_jobs
 from app.telemetry import log_user_event
+from app.time_slots import compute_scheduled_for, resolve_daily_time_slots
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +48,9 @@ class AdaptationExecutor:
         elif intent == AdaptationIntent.INCREASE_DIFFICULTY:
             self._increase_difficulty(db, plan_id)
         elif intent == AdaptationIntent.EXTEND_PLAN_DURATION:
-            self._extend_plan_duration(db, plan_id, params)
+            return self._extend_plan_duration(db, plan_id, params)
         elif intent == AdaptationIntent.SHORTEN_PLAN_DURATION:
-            self._shorten_plan_duration(db, plan_id, params)
+            return self._shorten_plan_duration(db, plan_id, params)
         elif intent == AdaptationIntent.CHANGE_MAIN_CATEGORY:
             self._change_main_category(db, plan_id, params)
         else:
@@ -258,13 +259,225 @@ class AdaptationExecutor:
         """Increase difficulty by 1 level (TASK-3.5)."""
         raise NotImplementedError("INCREASE_DIFFICULTY implementation in TASK-3.5")
 
-    def _extend_plan_duration(self, db: Session, plan_id: int, params: dict | None) -> None:
-        """Extend plan duration (TASK-3.4)."""
-        raise NotImplementedError("EXTEND_PLAN_DURATION implementation in TASK-3.4")
+    def _extend_plan_duration(self, db: Session, plan_id: int, params: dict | None) -> list[int]:
+        from app.plan_drafts.service import build_plan_draft
 
-    def _shorten_plan_duration(self, db: Session, plan_id: int, params: dict | None) -> None:
-        """Shorten plan duration (TASK-3.4)."""
-        raise NotImplementedError("SHORTEN_PLAN_DURATION implementation in TASK-3.4")
+        plan = (
+            db.query(AIPlan)
+            .options(selectinload(AIPlan.days).selectinload(AIPlanDay.steps))
+            .filter(AIPlan.id == plan_id)
+            .first()
+        )
+        if not plan:
+            raise AdaptationNotEligibleError("plan_not_found")
+        if plan.status != "active":
+            raise AdaptationNotEligibleError("plan_not_active")
+
+        target_days = int((params or {}).get("target_duration", 0))
+        if target_days not in {14, 21, 90}:
+            raise AdaptationNotEligibleError("invalid_target_duration")
+
+        current_total = plan.total_days or 0
+        if target_days <= current_total:
+            raise AdaptationNotEligibleError("target_not_greater_than_current")
+
+        user = db.query(User).filter(User.id == plan.user_id).first()
+        if not user:
+            raise AdaptationNotEligibleError("user_not_found")
+        if not plan.start_date:
+            raise AdaptationNotEligibleError("plan_has_no_start_date")
+
+        # Duration mapping для DraftBuilder
+        target_duration_map = {14: "SHORT", 21: "STANDARD", 90: "LONG"}
+        draft_duration = target_duration_map[target_days]
+
+        slot_strings = plan.preferred_time_slots or []
+
+        params_dict = {
+            "duration": draft_duration,
+            "focus": plan.focus or "somatic",
+            "load": plan.load,
+            "preferred_time_slots": slot_strings,
+        }
+
+        # Генеруємо повний план для target_days.
+        # TODO: TASK-extend-cooldown — pass exercise_last_used from existing plan steps
+        # into DraftBuilder so cooldown tracking is continuous across old and new days.
+        # Current behavior: new days may repeat exercises from last ~cooldown_days of existing plan.
+        draft = build_plan_draft(params_dict)
+
+        # Беремо тільки нові дні — після current_total
+        new_steps = [s for s in draft.steps if s.day_number > current_total]
+        if not new_steps:
+            raise AdaptationNotEligibleError("draft_builder_returned_no_new_days")
+
+        daily_time_slots = resolve_daily_time_slots(user.profile)
+        plan_start = plan.start_date
+
+        # Групуємо по day_number
+        days_dict: dict[int, list] = {}
+        for step in new_steps:
+            days_dict.setdefault(step.day_number, []).append(step)
+
+        added_step_ids: list[int] = []
+
+        for day_number in sorted(days_dict.keys()):
+            day_steps = days_dict[day_number]
+
+            day_record = AIPlanDay(
+                plan_id=plan_id,
+                day_number=day_number,
+                focus_theme=plan.focus or "",
+            )
+            db.add(day_record)
+            db.flush()
+
+            for index, step in enumerate(day_steps):
+                scheduled_for = compute_scheduled_for(
+                    plan_start=plan_start,
+                    day_number=day_number,
+                    time_slot=step.time_slot.value if hasattr(step.time_slot, "value") else str(step.time_slot),
+                    timezone_name=user.timezone,
+                    daily_time_slots=daily_time_slots,
+                )
+                new_step = AIPlanStep(
+                    day_id=day_record.id,
+                    exercise_id=step.exercise_id,
+                    title=step.exercise_name or "",
+                    order_in_day=index,
+                    time_slot=step.time_slot.value if hasattr(step.time_slot, "value") else str(step.time_slot),
+                    slot_type=step.slot_type.value if hasattr(step.slot_type, "value") else str(step.slot_type),
+                    difficulty=self._int_to_difficulty(step.difficulty),
+                    scheduled_for=scheduled_for,
+                    canceled_by_adaptation=False,
+                )
+                db.add(new_step)
+                db.flush()
+                added_step_ids.append(new_step.id)
+
+        old_total = plan.total_days
+        plan.total_days = target_days
+
+        # end_date offset: day_number=N maps to start_date + (N-1).
+        # end_date = start_date + total_days is intentional +1 over last task day.
+        # Consistent with _derive_plan_end_date in orchestrator.
+        if plan.start_date:
+            from datetime import timedelta
+
+            plan.end_date = plan.start_date + timedelta(days=target_days)
+            user.plan_end_date = plan.end_date
+
+        db.add(
+            AIPlanVersion(
+                plan_id=plan_id,
+                applied_adaptation_type="EXTEND_PLAN_DURATION",
+                diff={
+                    "old_total_days": old_total,
+                    "new_total_days": target_days,
+                    "days_added": target_days - old_total,
+                    "extended_from_day": plan.current_day or 1,
+                    "added_step_ids": added_step_ids,
+                },
+            )
+        )
+
+        log_user_event(
+            db=db,
+            user_id=plan.user_id,
+            event_type="plan_adapted",
+            context={
+                "plan_id": plan_id,
+                "adaptation_type": "EXTEND_PLAN_DURATION",
+                "old_total_days": old_total,
+                "new_total_days": target_days,
+                "added_step_count": len(added_step_ids),
+            },
+        )
+
+        return added_step_ids
+
+    def _shorten_plan_duration(self, db: Session, plan_id: int, params: dict | None) -> list[int]:
+        from app.plan_adaptations import _iter_future_steps
+
+        plan = (
+            db.query(AIPlan)
+            .options(selectinload(AIPlan.days).selectinload(AIPlanDay.steps))
+            .filter(AIPlan.id == plan_id)
+            .first()
+        )
+        if not plan:
+            raise AdaptationNotEligibleError("plan_not_found")
+        if plan.status != "active":
+            raise AdaptationNotEligibleError("plan_not_active")
+
+        target_days = int((params or {}).get("target_duration", 0))
+        if target_days not in {7, 14, 21}:
+            raise AdaptationNotEligibleError("invalid_target_duration")
+
+        current_total = plan.total_days or 0
+        if target_days >= current_total:
+            raise AdaptationNotEligibleError("target_not_less_than_current")
+
+        current_day = plan.current_day or 1
+        if current_day > target_days:
+            raise AdaptationNotEligibleError("current_day_exceeds_target")
+
+        user = db.query(User).filter(User.id == plan.user_id).first()
+        if not user:
+            raise AdaptationNotEligibleError("user_not_found")
+
+        effective_from = datetime.now(timezone.utc)
+
+        # Скасовуємо тільки future steps на днях > target_days.
+        # Completed days за межею не чіпаємо — вони historical record.
+        canceled_ids: list[int] = []
+        for day, step in _iter_future_steps(plan, effective_from):
+            if day.day_number > target_days:
+                step.canceled_by_adaptation = True
+                step.scheduled_for = None
+                canceled_ids.append(step.id)
+
+        old_total = plan.total_days
+        plan.total_days = target_days
+
+        # Consistent offset — see _derive_plan_end_date in orchestrator
+        if plan.start_date:
+            from datetime import timedelta
+
+            plan.end_date = plan.start_date + timedelta(days=target_days)
+            user.plan_end_date = plan.end_date
+
+        db.add(
+            AIPlanVersion(
+                plan_id=plan_id,
+                applied_adaptation_type="SHORTEN_PLAN_DURATION",
+                diff={
+                    "old_total_days": old_total,
+                    "new_total_days": target_days,
+                    "days_removed": old_total - target_days,
+                    "shortened_from_day": current_day,
+                    "canceled_step_ids": canceled_ids,
+                },
+            )
+        )
+
+        log_user_event(
+            db=db,
+            user_id=plan.user_id,
+            event_type="plan_adapted",
+            context={
+                "plan_id": plan_id,
+                "adaptation_type": "SHORTEN_PLAN_DURATION",
+                "old_total_days": old_total,
+                "new_total_days": target_days,
+                "canceled_step_count": len(canceled_ids),
+            },
+        )
+
+        if canceled_ids:
+            cancel_plan_step_jobs(canceled_ids)
+
+        return []
 
     def _pause_plan(self, db: Session, plan_id: int) -> list[int]:
         plan = (
@@ -356,6 +569,15 @@ class AdaptationExecutor:
         """Return slots in canonical MORNING → DAY → EVENING order."""
         order = ["MORNING", "DAY", "EVENING"]
         return [s for s in order if s in slots]
+
+    @staticmethod
+    def _int_to_difficulty(value) -> str:
+        """Convert DraftBuilder int difficulty (1/2/3) to AIPlanStep enum string."""
+        mapping = {1: "EASY", 2: "MEDIUM", 3: "HARD"}
+        try:
+            return mapping.get(int(value), "EASY")
+        except (TypeError, ValueError):
+            return str(value) if value else "EASY"
 
     def _change_main_category(self, db: Session, plan_id: int, params: dict | None) -> None:
         """Change main focus category (TASK-3.6)."""

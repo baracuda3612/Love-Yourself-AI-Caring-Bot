@@ -787,12 +787,15 @@ def compute_available_adaptations(db: Session, plan: AIPlan) -> List[AdaptationI
         if min_difficulty < 3:
             available.append(AdaptationIntent.INCREASE_DIFFICULTY)
 
-    if plan.total_days in {7, 14}:
+    current_day = plan.current_day or 1
+
+    # EXTEND: дозволено якщо є куди розширювати
+    if plan.total_days in {7, 14, 21}:
         available.append(AdaptationIntent.EXTEND_PLAN_DURATION)
-    elif plan.total_days == 21:
-        available.append(AdaptationIntent.EXTEND_PLAN_DURATION)
-        available.append(AdaptationIntent.SHORTEN_PLAN_DURATION)
-    elif plan.total_days == 90:
+
+    # SHORTEN: показуємо якщо current_day < total_days.
+    # Детальна перевірка current_day > target_days — в executor.
+    if plan.total_days in {21, 90} and current_day < plan.total_days:
         available.append(AdaptationIntent.SHORTEN_PLAN_DURATION)
 
     if plan.status == "active":
@@ -883,6 +886,7 @@ async def build_adaptation_payload(
             "duration": active_plan.total_days,
             "load": active_plan.load,
             "preferred_time_slots": active_plan.preferred_time_slots or [],
+            "current_day": active_plan.current_day or 1,
         }
     elif current_state == ADAPTATION_CONFIRMATION:
         payload["active_plan"] = {
