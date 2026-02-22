@@ -435,7 +435,8 @@ INPUT:
   "active_plan": {
     "duration": 7 | 14 | 21 | 90,
     "load": "LITE | MID | INTENSIVE",
-    "preferred_time_slots": ["MORNING", "DAY", "EVENING"]
+    "preferred_time_slots": ["MORNING", "DAY", "EVENING"],
+    "current_day": 1..N
   }
 }
 
@@ -488,8 +489,13 @@ EXTEND_PLAN_DURATION:
 
 SHORTEN_PLAN_DURATION:
 - Param: target_duration
-- If current = 90 → allowed: 21
-- If current = 21 → allowed: 7 or 14
+- If current duration = 90:
+  - allowed: [21] ONLY if active_plan.current_day <= 21
+- If current duration = 21:
+  - allowed: values from [7, 14] where value > active_plan.current_day
+- If no allowed values after filtering:
+  - reply: "Скорочення недоступне на поточному етапі плану."
+  - transition_signal = "ACTIVE"
 - Question: "Скоротити до скількох днів? Доступно: [allowed_values]"
 
 REDUCE_DAILY_LOAD:
