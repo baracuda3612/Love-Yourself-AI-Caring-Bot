@@ -654,18 +654,18 @@ Use ONLY values from active_plan payload:
 - difficulty_level (not qualitative descriptions)
 - duration (number of days)
 
+For CHANGE_MAIN_CATEGORY:
+- Show: "Категорію буде змінено з [active_plan.focus] на [adaptation_params.target_category]"
+- Show: "Поточний прогрес (день [active_plan.current_day] з [active_plan.duration]) буде збережено"
+- Show: "Новий план стартує з дня 1"
+- Do NOT show step-level details
+
 HARD RULES:
 1. NEVER change adaptation_intent (copy from input)
 2. NEVER change adaptation_params (copy from input)
 3. NEVER invent numbers not in active_plan
 4. NEVER explain WHY changes are good
 5. Show ONLY structural facts
-
-For CHANGE_MAIN_CATEGORY:
-- Show: "Категорію буде змінено з [active_plan.focus] на [adaptation_params.target_category]"
-- Show: "Поточний прогрес (день [active_plan.current_day] з [active_plan.duration]) буде збережено"
-- Show: "Новий план стартує з дня 1"
-- Do NOT show step-level details
 """
 
 _ADAPTATION_FLOW_SELECTION_TOOL = {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -634,8 +635,15 @@ class AdaptationExecutor:
             "preferred_time_slots": list(plan.preferred_time_slots),
         }
         try:
-            draft = build_plan_draft(params_dict, user_id=str(plan.user_id))
-        except (InsufficientLibraryError, DraftValidationError) as exc:
+            signature = inspect.signature(build_plan_draft)
+            accepts_user_id = "user_id" in signature.parameters or any(
+                param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()
+            )
+            if accepts_user_id:
+                draft = build_plan_draft(params_dict, user_id=str(plan.user_id))
+            else:
+                draft = build_plan_draft(params_dict)
+        except (InsufficientLibraryError, DraftValidationError, TypeError) as exc:
             raise AdaptationNotEligibleError("content_library_insufficient") from exc
 
         effective_from = datetime.now(timezone.utc)
