@@ -618,18 +618,8 @@ class AdaptationExecutor:
         if other_active:
             raise AdaptationNotEligibleError("another_active_plan_exists")
 
-        days_to_duration = {7: "SHORT", 14: "SHORT", 21: "STANDARD", 90: "LONG"}
-        draft_duration = days_to_duration.get(plan.total_days)
-        if draft_duration is None:
-            logger.warning(
-                "[CHANGE_MAIN_CATEGORY] Unexpected total_days=%s for plan %s, fallback to STANDARD",
-                plan.total_days,
-                plan_id,
-            )
-            draft_duration = "STANDARD"
-
         params_dict = {
-            "duration": draft_duration,
+            "duration": plan.total_days,
             "focus": target_category,
             "load": plan.load,
             "preferred_time_slots": list(plan.preferred_time_slots),
@@ -646,6 +636,9 @@ class AdaptationExecutor:
         except (InsufficientLibraryError, DraftValidationError, TypeError) as exc:
             raise AdaptationNotEligibleError("content_library_insufficient") from exc
 
+        if draft.total_days < plan.total_days:
+            raise AdaptationNotEligibleError("content_library_insufficient")
+
         effective_from = datetime.now(timezone.utc)
         canceled_ids: list[int] = []
         for _day, step in _iter_future_steps(plan, effective_from):
@@ -656,7 +649,7 @@ class AdaptationExecutor:
         old_focus = plan.focus
         plan.status = "paused"
 
-        new_total_days = draft.total_days
+        new_total_days = plan.total_days
         new_start = datetime.now(timezone.utc)
         new_end = new_start + timedelta(days=new_total_days)
 
@@ -685,8 +678,10 @@ class AdaptationExecutor:
         daily_time_slots = resolve_daily_time_slots(user.profile)
         added_step_ids: list[int] = []
 
+        filtered_steps = [step for step in draft.steps if step.day_number <= new_total_days]
+
         days_dict: dict[int, list] = {}
-        for step in draft.steps:
+        for step in filtered_steps:
             days_dict.setdefault(step.day_number, []).append(step)
 
         for day_number in sorted(days_dict.keys()):

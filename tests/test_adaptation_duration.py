@@ -603,7 +603,7 @@ def test_change_category_works_when_builder_has_no_user_id_param():
     old_step = SimpleNamespace(id=701, canceled_by_adaptation=False, is_completed=False, skipped=False, scheduled_for="x")
     iter_rows = [(SimpleNamespace(day_number=9), old_step)]
 
-    draft = SimpleNamespace(total_days=7, steps=[_DraftStep(1, 9101)])
+    draft = SimpleNamespace(total_days=21, steps=[_DraftStep(1, 9101)])
 
     def _build_without_user_id(parameters):
         return draft
@@ -632,3 +632,67 @@ def test_change_category_works_when_builder_has_no_user_id_param():
 
     assert plan.status == "paused"
     assert added_ids == [2200]
+
+
+def test_change_category_preserves_duration():
+    plan = _make_plan(total_days=7, current_day=3)
+    plan.id = 13
+    plan.module_id = "BURNOUT_RECOVERY"
+    user = SimpleNamespace(id=42, timezone="UTC", plan_end_date=None, profile=None)
+
+    db = MagicMock()
+    plan_query_main = MagicMock()
+    plan_query_main.options.return_value.filter.return_value.first.return_value = plan
+    plan_query_guard = MagicMock()
+    plan_query_guard.filter.return_value.first.return_value = None
+    user_query = MagicMock()
+    user_query.filter.return_value.first.return_value = user
+
+    def _query(model):
+        if getattr(model, "__name__", "") == "AIPlan":
+            if not hasattr(_query, "count"):
+                _query.count = 0
+            _query.count += 1
+            return plan_query_main if _query.count == 1 else plan_query_guard
+        if getattr(model, "__name__", "") == "User":
+            return user_query
+        return MagicMock()
+
+    db.query.side_effect = _query
+
+    old_step = SimpleNamespace(id=801, canceled_by_adaptation=False, is_completed=False, skipped=False, scheduled_for="x")
+    iter_rows = [(SimpleNamespace(day_number=5), old_step)]
+
+    draft = SimpleNamespace(total_days=10, steps=[_DraftStep(day, 9200 + day) for day in range(1, 11)])
+
+    created_plans = []
+    created_days = []
+
+    def _add(obj):
+        if obj.__class__.__name__ == "AIPlan":
+            if getattr(obj, "id", None) is None:
+                obj.id = 99
+            created_plans.append(obj)
+        if isinstance(obj, AIPlanDay):
+            obj.id = 1300 + len(created_days)
+            created_days.append(obj)
+        if isinstance(obj, AIPlanStep):
+            obj.id = 2300 + obj.exercise_id
+
+    db.add.side_effect = _add
+
+    with patch("app.plan_adaptations._iter_future_steps", return_value=iter_rows), \
+         patch("app.plan_drafts.service.build_plan_draft", return_value=draft), \
+         patch("app.adaptation_executor.resolve_daily_time_slots", return_value={}), \
+         patch("app.adaptation_executor.compute_scheduled_for", return_value=datetime.now(timezone.utc)), \
+         patch("app.adaptation_executor.log_user_event"), \
+         patch("app.adaptation_executor.cancel_plan_step_jobs"):
+        AdaptationExecutor()._change_main_category(
+            db,
+            plan.id,
+            params={"target_category": "cognitive"},
+        )
+
+    assert created_plans
+    assert created_plans[0].total_days == 7
+    assert max(day.day_number for day in created_days) == 7
