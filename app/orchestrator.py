@@ -887,6 +887,7 @@ async def build_adaptation_payload(
             "load": active_plan.load,
             "preferred_time_slots": active_plan.preferred_time_slots or [],
             "current_day": active_plan.current_day or 1,
+            "focus": (active_plan.focus or "").lower(),
         }
     elif current_state == ADAPTATION_CONFIRMATION:
         payload["active_plan"] = {

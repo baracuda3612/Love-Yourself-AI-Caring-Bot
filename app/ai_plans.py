@@ -436,7 +436,8 @@ INPUT:
     "duration": 7 | 14 | 21 | 90,
     "load": "LITE | MID | INTENSIVE",
     "preferred_time_slots": ["MORNING", "DAY", "EVENING"],
-    "current_day": 1..N
+    "current_day": 1..N,
+    "focus": "somatic | cognitive | boundaries | rest | mixed"
   }
 }
 
@@ -478,8 +479,15 @@ PARAMETER RULES:
 
 CHANGE_MAIN_CATEGORY:
 - Param: target_category
-- Allowed: somatic, cognitive, boundaries, rest, mixed
-- Question: "Обери нову категорію: somatic / cognitive / boundaries / rest / mixed"
+- All categories: somatic, cognitive, boundaries, rest, mixed
+- Allowed = All categories MINUS active_plan.focus
+- NEVER show active_plan.focus as an option
+- Question: "Обери нову категорію: [allowed list without current focus]"
+- If user picks active_plan.focus:
+  reply: "Ця категорія вже активна. Обери іншу: [allowed list]"
+  transition_signal = null (re-ask)
+- After valid category selected:
+  transition_signal = "ADAPTATION_CONFIRMATION"
 
 EXTEND_PLAN_DURATION:
 - Param: target_duration
@@ -652,6 +660,12 @@ HARD RULES:
 3. NEVER invent numbers not in active_plan
 4. NEVER explain WHY changes are good
 5. Show ONLY structural facts
+
+For CHANGE_MAIN_CATEGORY:
+- Show: "Категорію буде змінено з [active_plan.focus] на [adaptation_params.target_category]"
+- Show: "Поточний прогрес (день [active_plan.current_day] з [active_plan.duration]) буде збережено"
+- Show: "Новий план стартує з дня 1"
+- Do NOT show step-level details
 """
 
 _ADAPTATION_FLOW_SELECTION_TOOL = {

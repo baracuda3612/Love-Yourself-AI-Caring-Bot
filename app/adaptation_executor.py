@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session, selectinload
 
@@ -52,7 +52,7 @@ class AdaptationExecutor:
         elif intent == AdaptationIntent.SHORTEN_PLAN_DURATION:
             return self._shorten_plan_duration(db, plan_id, params)
         elif intent == AdaptationIntent.CHANGE_MAIN_CATEGORY:
-            self._change_main_category(db, plan_id, params)
+            return self._change_main_category(db, plan_id, params)
         else:
             raise ValueError(f"Unknown adaptation intent: {intent}")
         return []
@@ -579,6 +579,177 @@ class AdaptationExecutor:
         except (TypeError, ValueError):
             return str(value) if value else "EASY"
 
-    def _change_main_category(self, db: Session, plan_id: int, params: dict | None) -> None:
-        """Change main focus category (TASK-3.6)."""
-        raise NotImplementedError("CHANGE_MAIN_CATEGORY implementation in TASK-3.6")
+    def _change_main_category(self, db: Session, plan_id: int, params: dict | None) -> list[int]:
+        """Change main focus category by pausing old plan and creating new active plan."""
+        from app.plan_adaptations import _iter_future_steps
+        from app.plan_drafts.draft_builder import DraftValidationError
+        from app.plan_drafts.service import InsufficientLibraryError, build_plan_draft
+
+        plan = (
+            db.query(AIPlan)
+            .options(selectinload(AIPlan.days).selectinload(AIPlanDay.steps))
+            .filter(AIPlan.id == plan_id)
+            .first()
+        )
+        if not plan:
+            raise AdaptationNotEligibleError("plan_not_found")
+        if plan.status != "active":
+            raise AdaptationNotEligibleError("plan_not_active")
+
+        user = db.query(User).filter(User.id == plan.user_id).first()
+        if not user:
+            raise AdaptationNotEligibleError("user_not_found")
+
+        target_category = ((params or {}).get("target_category") or "").lower().strip()
+        allowed_categories = {"somatic", "cognitive", "boundaries", "rest", "mixed"}
+        if target_category not in allowed_categories:
+            raise AdaptationNotEligibleError("invalid_target_category")
+        if target_category == (plan.focus or "").lower():
+            raise AdaptationNotEligibleError("same_category_as_current")
+        if not plan.preferred_time_slots:
+            raise AdaptationNotEligibleError("plan_has_no_time_slots")
+
+        other_active = (
+            db.query(AIPlan)
+            .filter(AIPlan.user_id == plan.user_id, AIPlan.status == "active", AIPlan.id != plan_id)
+            .first()
+        )
+        if other_active:
+            raise AdaptationNotEligibleError("another_active_plan_exists")
+
+        days_to_duration = {7: "SHORT", 14: "SHORT", 21: "STANDARD", 90: "LONG"}
+        draft_duration = days_to_duration.get(plan.total_days)
+        if draft_duration is None:
+            logger.warning(
+                "[CHANGE_MAIN_CATEGORY] Unexpected total_days=%s for plan %s, fallback to STANDARD",
+                plan.total_days,
+                plan_id,
+            )
+            draft_duration = "STANDARD"
+
+        params_dict = {
+            "duration": draft_duration,
+            "focus": target_category,
+            "load": plan.load,
+            "preferred_time_slots": list(plan.preferred_time_slots),
+        }
+        try:
+            draft = build_plan_draft(params_dict, user_id=str(plan.user_id))
+        except (InsufficientLibraryError, DraftValidationError) as exc:
+            raise AdaptationNotEligibleError("content_library_insufficient") from exc
+
+        effective_from = datetime.now(timezone.utc)
+        canceled_ids: list[int] = []
+        for _day, step in _iter_future_steps(plan, effective_from):
+            step.canceled_by_adaptation = True
+            step.scheduled_for = None
+            canceled_ids.append(step.id)
+
+        old_focus = plan.focus
+        plan.status = "paused"
+
+        new_total_days = draft.total_days
+        new_start = datetime.now(timezone.utc)
+        new_end = new_start + timedelta(days=new_total_days)
+
+        new_plan_kwargs = {
+            "user_id": plan.user_id,
+            "title": f"Plan: {target_category}",
+            "status": "active",
+            "focus": target_category,
+            "load": plan.load,
+            "preferred_time_slots": list(plan.preferred_time_slots),
+            "total_days": new_total_days,
+            "start_date": new_start,
+            "end_date": new_end,
+            "current_day": 1,
+            "adaptation_version": 1,
+        }
+        if hasattr(plan, "module_id"):
+            new_plan_kwargs["module_id"] = plan.module_id
+
+        new_plan = AIPlan(**new_plan_kwargs)
+        db.add(new_plan)
+        db.flush()
+
+        user.plan_end_date = new_end
+
+        daily_time_slots = resolve_daily_time_slots(user.profile)
+        added_step_ids: list[int] = []
+
+        days_dict: dict[int, list] = {}
+        for step in draft.steps:
+            days_dict.setdefault(step.day_number, []).append(step)
+
+        for day_number in sorted(days_dict.keys()):
+            day_steps = days_dict[day_number]
+
+            day_record = AIPlanDay(
+                plan_id=new_plan.id,
+                day_number=day_number,
+                focus_theme=target_category,
+            )
+            db.add(day_record)
+            db.flush()
+
+            for index, step in enumerate(day_steps):
+                time_slot_str = step.time_slot.value if hasattr(step.time_slot, "value") else str(step.time_slot)
+                slot_type_str = step.slot_type.value if hasattr(step.slot_type, "value") else str(step.slot_type)
+
+                scheduled_for = compute_scheduled_for(
+                    plan_start=new_start,
+                    day_number=day_number,
+                    time_slot=time_slot_str,
+                    timezone_name=user.timezone,
+                    daily_time_slots=daily_time_slots,
+                )
+
+                new_step = AIPlanStep(
+                    day_id=day_record.id,
+                    exercise_id=step.exercise_id,
+                    title=step.exercise_name or "",
+                    order_in_day=index,
+                    time_slot=time_slot_str,
+                    slot_type=slot_type_str,
+                    difficulty=self._int_to_difficulty(step.difficulty),
+                    scheduled_for=scheduled_for,
+                    canceled_by_adaptation=False,
+                )
+                db.add(new_step)
+                db.flush()
+                added_step_ids.append(new_step.id)
+
+        db.add(
+            AIPlanVersion(
+                plan_id=plan_id,
+                applied_adaptation_type="CHANGE_MAIN_CATEGORY",
+                diff={
+                    "old_focus": old_focus,
+                    "new_focus": target_category,
+                    "new_plan_id": new_plan.id,
+                    "canceled_step_ids": canceled_ids,
+                    "canceled_step_count": len(canceled_ids),
+                    "added_step_count": len(added_step_ids),
+                },
+            )
+        )
+
+        log_user_event(
+            db=db,
+            user_id=plan.user_id,
+            event_type="plan_adapted",
+            context={
+                "plan_id": plan_id,
+                "adaptation_type": "CHANGE_MAIN_CATEGORY",
+                "old_focus": old_focus,
+                "new_focus": target_category,
+                "new_plan_id": new_plan.id,
+                "canceled_step_count": len(canceled_ids),
+                "added_step_count": len(added_step_ids),
+            },
+        )
+
+        if canceled_ids:
+            cancel_plan_step_jobs(canceled_ids)
+
+        return added_step_ids
