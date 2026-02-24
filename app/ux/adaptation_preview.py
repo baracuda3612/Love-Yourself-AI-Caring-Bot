@@ -214,7 +214,11 @@ def build_adaptation_success_message(intent: str) -> str:
     Never raises.
     """
     label = _INTENT_SUCCESS_LABEL.get(intent, "Зміни застосовано")
-    return f"✅ {label}.\n\nПлан оновлено і вже активний."
+    if intent == "PAUSE_PLAN":
+        status_line = "План поставлено на паузу."
+    else:
+        status_line = "План оновлено і вже активний."
+    return f"✅ {label}.\n\n{status_line}"
 
 
 __all__ = ["build_adaptation_preview", "build_adaptation_success_message"]
