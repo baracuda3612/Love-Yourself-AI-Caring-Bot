@@ -32,7 +32,7 @@ from app.redis_client import redis_client
 from app.session_memory import SessionMemory
 from app.time_slots import compute_scheduled_for, resolve_daily_time_slots
 from app.ux.plan_messages import build_activation_info_message
-from app.ux.adaptation_preview import build_adaptation_preview
+from app.ux.adaptation_preview import build_adaptation_preview, build_adaptation_success_message
 from app.plan_drafts.service import (
     DraftValidationError,
     InsufficientLibraryError,
@@ -992,6 +992,14 @@ async def handle_adaptation_response(
 
         if adaptation_applied:
             # FSM transition — commits user.current_state + plan.status зміни разом
+            if not can_transition(current_state, next_state_after):
+                logger.error(
+                    "[FSM] Blocked illegal transition %s -> %s",
+                    current_state,
+                    next_state_after,
+                )
+                await session_memory.clear_adaptation_context(user_id)
+                return reply_text or "Помилка переходу. Спробуй ще раз.", followups
             await _commit_fsm_transition(
                 user_id=user_id,
                 target_agent="plan",
@@ -1015,10 +1023,14 @@ async def handle_adaptation_response(
                         exc_info=True,
                     )
 
+            adaptation_intent_str = llm_response.get("adaptation_intent") or ""
+            reply_text = build_adaptation_success_message(adaptation_intent_str)
+
         await session_memory.clear_adaptation_context(user_id)
         return reply_text, followups
 
     if transition_signal == "ACTIVE":
+        # TASK-4.3: guard already present (validated by _commit_fsm_transition).
         await _commit_fsm_transition(
             user_id=user_id,
             target_agent="plan",
@@ -1030,6 +1042,7 @@ async def handle_adaptation_response(
         return reply_text, followups
 
     if transition_signal in ADAPTATION_FLOW_STATES:
+        # TASK-4.3: guard already present (validated by _commit_fsm_transition).
         await _commit_fsm_transition(
             user_id=user_id,
             target_agent="plan",
@@ -1043,6 +1056,7 @@ async def handle_adaptation_response(
         return reply_text, followups
 
     logger.error("Unknown adaptation transition_signal: %s", transition_signal)
+    # TASK-4.3: guard already present (validated by _commit_fsm_transition).
     await _commit_fsm_transition(
         user_id=user_id,
         target_agent="plan",
@@ -1343,6 +1357,7 @@ async def handle_incoming_message(
                         user_id,
                     )
                     transition_signal = None
+        # TASK-4.3: PLAN_FLOW guard enforced via _guard_fsm_transition/can_transition.
         next_state, rejection_reason = _guard_fsm_transition(
             current_state,
             transition_signal,
@@ -1862,6 +1877,7 @@ async def handle_incoming_message(
                     user_id,
                 )
                 transition_signal = None
+    # TASK-4.3: PLAN_FLOW guard enforced via _guard_fsm_transition/can_transition.
     next_state, rejection_reason = _guard_fsm_transition(
         context_payload.get("current_state"),
         transition_signal,

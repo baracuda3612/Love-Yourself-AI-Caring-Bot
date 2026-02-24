@@ -25,6 +25,15 @@ _CATEGORY_LABEL = {
 }
 _SLOT_LABEL = {"MORNING": "Ранок", "DAY": "День", "EVENING": "Вечір"}
 _DIVIDER = "──────────────────"
+_INTENT_SUCCESS_LABEL = {
+    "REDUCE_DAILY_LOAD": "Навантаження зменшено",
+    "INCREASE_DAILY_LOAD": "Навантаження збільшено",
+    "PAUSE_PLAN": "План поставлено на паузу",
+    "RESUME_PLAN": "План відновлено",
+    "EXTEND_PLAN_DURATION": "Тривалість плану збільшено",
+    "SHORTEN_PLAN_DURATION": "Тривалість плану скорочено",
+    "CHANGE_MAIN_CATEGORY": "Категорію плану змінено",
+}
 
 
 def build_adaptation_preview(
@@ -198,4 +207,14 @@ def _format_card(
     return "\n".join(lines)
 
 
-__all__ = ["build_adaptation_preview"]
+def build_adaptation_success_message(intent: str) -> str:
+    """Build post-adaptation confirmation message shown after successful execution.
+
+    Simple, deterministic. No plan data needed — just the intent.
+    Never raises.
+    """
+    label = _INTENT_SUCCESS_LABEL.get(intent, "Зміни застосовано")
+    return f"✅ {label}.\n\nПлан оновлено і вже активний."
+
+
+__all__ = ["build_adaptation_preview", "build_adaptation_success_message"]
