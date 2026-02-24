@@ -20,7 +20,6 @@ from app.orchestrator import (
     session_memory,
 )
 from app.plan_guards import validate_step_action
-from app.session_memory import SessionMemory
 from app.scheduler import schedule_plan_step
 from app.redis_client import create_fsm_storage, create_redis_client
 from app.telemetry import log_user_event
@@ -33,7 +32,6 @@ dp = Dispatcher(storage=storage)
 router = Router()
 dp.include_router(router)
 logger = logging.getLogger(__name__)
-session_memory = SessionMemory(limit=20)
 
 _PLAN_ACTIONS = [
     ("✅ Confirm plan", "plan_confirm", "підтвердь план"),
@@ -379,6 +377,12 @@ async def handle_task_skipped(callback_query: CallbackQuery):
 
 
 async def _send_agent_response(message: Message, user_id: int, response: dict) -> None:
+    # Читаємо актуальний стан юзера один раз на початку.
+    # Orchestrator вже зробив FSM transition і commit до цього виклику.
+    with SessionLocal() as db:
+        _state_row = db.query(User.current_state).filter(User.id == user_id).first()
+        _user_state = _state_row[0] if _state_row else None
+
     if response.get("defer_plan_draft"):
         wait_text = _sanitize_message_text(PLAN_GENERATION_WAIT_MESSAGE)
         await message.answer(wait_text)
@@ -394,11 +398,6 @@ async def _send_agent_response(message: Message, user_id: int, response: dict) -
             response.get("plan_draft_parameters") or {},
         )
         preview_text = _sanitize_message_text(preview_text)
-        # Читаємо актуальний стан юзера після FSM transition (orchestrator вже зробив commit)
-        with SessionLocal() as db:
-            _state_row = db.query(User.current_state).filter(User.id == user_id).first()
-            _user_state = _state_row[0] if _state_row else None
-
         if response.get("show_plan_actions"):
             reply_markup = _build_plan_action_keyboard()
         elif _user_state == "ADAPTATION_CONFIRMATION":
@@ -413,11 +412,6 @@ async def _send_agent_response(message: Message, user_id: int, response: dict) -
         return
 
     reply_text = _sanitize_message_text(response.get("reply_text"))
-    # Читаємо актуальний стан юзера після FSM transition (orchestrator вже зробив commit)
-    with SessionLocal() as db:
-        _state_row = db.query(User.current_state).filter(User.id == user_id).first()
-        _user_state = _state_row[0] if _state_row else None
-
     if response.get("show_plan_actions"):
         reply_markup = _build_plan_action_keyboard()
     elif _user_state == "ADAPTATION_CONFIRMATION":

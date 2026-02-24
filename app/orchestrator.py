@@ -1066,20 +1066,26 @@ async def handle_adaptation_flow(
         user_id, llm_response, current_state, db
     )
 
-    # TASK-4.1: inject deterministic Before/After preview in ADAPTATION_CONFIRMATION.
-    # Inject only when LLM is asking for confirmation (not executing or aborting).
-    # Preview prepended so card appears first, LLM reply_text ("Підтвердити?") follows.
     transition = llm_response.get("transition_signal")
-    if current_state == ADAPTATION_CONFIRMATION and transition not in {
-        "EXECUTE_ADAPTATION", "ACTIVE", "IDLE_PLAN_ABORTED", "ADAPTATION_SELECTION",
-    }:
+    # Inject preview ONLY when staying in ADAPTATION_CONFIRMATION.
+    # Exclude all transitions: executing, aborting, going back to params or selection.
+    _no_preview_transitions = {
+        "EXECUTE_ADAPTATION",
+        "ACTIVE",
+        "IDLE_PLAN_ABORTED",
+        "ADAPTATION_SELECTION",
+        "ADAPTATION_PARAMS",  # user asked to edit params — don't show stale confirm card
+    }
+    if current_state == ADAPTATION_CONFIRMATION and transition not in _no_preview_transitions:
         adaptation_context = await session_memory.get_adaptation_context(user_id) or {}
         intent = adaptation_context.get("intent")
         params = adaptation_context.get("params") or {}
         active_plan_data = payload.get("active_plan") or {}
         if intent:
             preview_text = build_adaptation_preview(intent, params, active_plan_data)
-            reply_text = f"{preview_text}\n\n{reply_text}" if reply_text else preview_text
+            # Replace reply_text entirely: preview card already ends with "Підтвердити?"
+            # so LLM's conversational line is redundant and causes visual duplication.
+            reply_text = preview_text
 
     return reply_text, followups
 
