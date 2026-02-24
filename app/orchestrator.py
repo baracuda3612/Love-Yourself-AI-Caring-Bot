@@ -998,6 +998,7 @@ async def handle_adaptation_response(
                     current_state,
                     next_state_after,
                 )
+                db.rollback()  # 🔒 Rollback mutated plan state
                 await session_memory.clear_adaptation_context(user_id)
                 return reply_text or "Помилка переходу. Спробуй ще раз.", followups
             await _commit_fsm_transition(
@@ -1036,6 +1037,7 @@ async def handle_adaptation_response(
                 current_state,
                 "ACTIVE",
             )
+            db.rollback()
             await session_memory.clear_adaptation_context(user_id)
             return reply_text or "Помилка переходу. Спробуй ще раз.", followups
         await _commit_fsm_transition(
@@ -1055,6 +1057,7 @@ async def handle_adaptation_response(
                 current_state,
                 transition_signal,
             )
+            db.rollback()
             return reply_text or "Помилка переходу. Спробуй ще раз.", followups
         await _commit_fsm_transition(
             user_id=user_id,
@@ -1075,6 +1078,7 @@ async def handle_adaptation_response(
             current_state,
             "ACTIVE",
         )
+        db.rollback()
         await session_memory.clear_adaptation_context(user_id)
         return reply_text or "Помилка переходу. Спробуй ще раз.", followups
     await _commit_fsm_transition(
