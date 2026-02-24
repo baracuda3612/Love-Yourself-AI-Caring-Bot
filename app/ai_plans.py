@@ -800,7 +800,7 @@ _PLAN_FLOW_DATA_COLLECTION_TOOL = {
                 "properties": {
                     "duration": {
                         "type": ["string", "null"],
-                        "enum": ["SHORT", "STANDARD", "LONG", None],
+                        "enum": ["SHORT", "MEDIUM", "STANDARD", "LONG", None],
                     },
                     "focus": {
                         "type": ["string", "null"],
@@ -841,7 +841,7 @@ _PLAN_FLOW_CONFIRMATION_PENDING_TOOL = {
                 "properties": {
                     "duration": {
                         "type": ["string", "null"],
-                        "enum": ["SHORT", "STANDARD", "LONG", None],
+                        "enum": ["SHORT", "MEDIUM", "STANDARD", "LONG", None],
                     },
                     "focus": {
                         "type": ["string", "null"],
