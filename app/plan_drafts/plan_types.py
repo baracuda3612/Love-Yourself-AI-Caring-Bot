@@ -11,7 +11,8 @@ from typing import Optional
 class Duration(str, Enum):
     """Plan duration types"""
 
-    SHORT = "SHORT"  # 7-14 days
+    SHORT = "SHORT"  # 7 days
+    MEDIUM = "MEDIUM"  # 14 days
     STANDARD = "STANDARD"  # 21 days
     LONG = "LONG"  # 90 days
 

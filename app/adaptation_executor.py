@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -12,6 +11,7 @@ from app.plan_adaptations import apply_plan_adaptation
 from app.scheduler import cancel_plan_step_jobs
 from app.telemetry import log_user_event
 from app.time_slots import compute_scheduled_for, resolve_daily_time_slots
+from app.plan_duration import DAYS_TO_DURATION, assert_canonical_total_days
 
 logger = logging.getLogger(__name__)
 
@@ -289,7 +289,7 @@ class AdaptationExecutor:
             raise AdaptationNotEligibleError("plan_has_no_start_date")
 
         # Duration mapping для DraftBuilder
-        target_duration_map = {14: "SHORT", 21: "STANDARD", 90: "LONG"}
+        target_duration_map = {14: "MEDIUM", 21: "STANDARD", 90: "LONG"}
         draft_duration = target_duration_map[target_days]
 
         slot_strings = plan.preferred_time_slots or []
@@ -618,21 +618,24 @@ class AdaptationExecutor:
         if other_active:
             raise AdaptationNotEligibleError("another_active_plan_exists")
 
+        _DAYS_TO_DURATION = DAYS_TO_DURATION
+        draft_duration = _DAYS_TO_DURATION.get(plan.total_days)
+        if draft_duration is None:
+            logger.error(
+                "[CHANGE_MAIN_CATEGORY] Invalid total_days=%s for plan %s",
+                plan.total_days,
+                plan_id,
+            )
+            raise AdaptationNotEligibleError("invalid_plan_duration")
+
         params_dict = {
-            "duration": plan.total_days,
+            "duration": draft_duration,
             "focus": target_category,
             "load": plan.load,
             "preferred_time_slots": list(plan.preferred_time_slots),
         }
         try:
-            signature = inspect.signature(build_plan_draft)
-            accepts_user_id = "user_id" in signature.parameters or any(
-                param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()
-            )
-            if accepts_user_id:
-                draft = build_plan_draft(params_dict, user_id=str(plan.user_id))
-            else:
-                draft = build_plan_draft(params_dict)
+            draft = build_plan_draft(params_dict, user_id=str(plan.user_id))
         except (InsufficientLibraryError, DraftValidationError, TypeError) as exc:
             raise AdaptationNotEligibleError("content_library_insufficient") from exc
 
@@ -650,6 +653,10 @@ class AdaptationExecutor:
         plan.status = "paused"
 
         new_total_days = plan.total_days
+        try:
+            assert_canonical_total_days(new_total_days)
+        except ValueError as exc:
+            raise AdaptationNotEligibleError("invalid_plan_duration") from exc
         new_start = datetime.now(timezone.utc)
         new_end = new_start + timedelta(days=new_total_days)
 

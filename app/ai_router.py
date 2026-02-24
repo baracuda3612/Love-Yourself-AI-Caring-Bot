@@ -352,7 +352,7 @@ Router receives a structured context snapshot from Orchestrator.
   "current_state": "PLAN_FLOW:DATA_COLLECTION",
   "latest_user_message": "hmm maybe 21 days?",
   "short_term_history": [
-    {"role": "assistant", "content": "Choose duration: 7, 21, or 90 days?"},
+    {"role": "assistant", "content": "Choose duration: 7, 14, 21, or 90 days?"},
     {"role": "user", "content": "hmm maybe 21 days?"}
   ]
 }

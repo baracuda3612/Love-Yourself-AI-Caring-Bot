@@ -156,7 +156,8 @@ def validate_plan_draft(draft: PlanDraft) -> List[str]:
         return errors
 
     expected_days = {
-        "SHORT": (7, 14),
+        "SHORT": (7, 7),
+        "MEDIUM": (14, 14),
         "STANDARD": (21, 21),
         "LONG": (90, 90),
     }
@@ -188,7 +189,7 @@ def get_clarifying_questions(params: PlanParameters) -> List[str]:
     if "duration" in missing:
         questions.append(
             "Як довго ти хочеш займатися практиками? "
-            "Обери: SHORT (7-14 днів), STANDARD (21 день) або LONG (90 днів)"
+            "Обери: SHORT (7 днів), MEDIUM (14 днів), STANDARD (21 день) або LONG (90 днів)"
         )
 
     if "focus" in missing:

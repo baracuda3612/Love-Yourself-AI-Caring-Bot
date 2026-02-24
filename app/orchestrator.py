@@ -74,6 +74,7 @@ from app.workers.mock_workers import (
     mock_safety_agent,
 )
 from app.schemas.planner import DifficultyLevel, GeneratedPlan, StepType
+from app.plan_duration import assert_canonical_total_days
 
 session_memory = SessionMemory(limit=20)
 logger = logging.getLogger(__name__)
@@ -85,7 +86,7 @@ PLAN_GENERATION_ERROR_MESSAGE = (
     "⚠️ Не вдалося згенерувати план.\nСпробуй ще раз або зміни параметри."
 )
 PLAN_FINALIZATION_ERROR_MESSAGE = "⚠️ Не вдалося активувати план."
-PLAN_DURATION_VALUES = {"SHORT", "STANDARD", "LONG"}
+PLAN_DURATION_VALUES = {"SHORT", "MEDIUM", "STANDARD", "LONG"}
 PLAN_FOCUS_VALUES = {"SOMATIC", "COGNITIVE", "BOUNDARIES", "REST", "MIXED"}
 PLAN_LOAD_VALUES = {"LITE", "MID", "INTENSIVE"}
 PLAN_TIME_SLOT_VALUES = {"MORNING", "DAY", "EVENING"}
@@ -533,6 +534,11 @@ def _persist_generated_plan(db: Session, user: User, plan_payload: Dict[str, Any
         logger.error("Attempted to activate plan without load")
         raise RuntimeError("Active plan must have non-null load")
 
+    try:
+        assert_canonical_total_days(parsed_plan.duration_days)
+    except ValueError as exc:
+        raise PlanAgentEnvelopeError("invalid_generated_plan_duration") from exc
+
     plan_start = datetime.now(timezone.utc)
     ai_plan = AIPlan(
         user_id=user.id,
@@ -543,6 +549,7 @@ def _persist_generated_plan(db: Session, user: User, plan_payload: Dict[str, Any
         load=normalized_plan_load,
         adaptation_version=adaptation_version,
         start_date=plan_start,
+        total_days=parsed_plan.duration_days,
     )
     db.add(ai_plan)
     db.flush()

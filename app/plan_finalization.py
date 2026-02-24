@@ -24,6 +24,7 @@ from app.time_slots import normalize_time_slot
 from app.telemetry import log_user_event
 from app.scheduler import schedule_plan_step
 from app.db import SessionLocal
+from app.plan_duration import assert_canonical_total_days
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +230,10 @@ def finalize_plan(
         if hasattr(AIPlan, "load"):
             plan.load = locked_draft.load
         if hasattr(AIPlan, "total_days"):
+            try:
+                assert_canonical_total_days(locked_draft.total_days)
+            except ValueError as exc:
+                raise FinalizationError("invalid_plan_duration") from exc
             plan.total_days = locked_draft.total_days
 
         if not plan.load:
