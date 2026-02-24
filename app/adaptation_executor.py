@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -618,21 +617,24 @@ class AdaptationExecutor:
         if other_active:
             raise AdaptationNotEligibleError("another_active_plan_exists")
 
+        _DAYS_TO_DURATION = {7: "SHORT", 14: "SHORT", 21: "STANDARD", 90: "LONG"}
+        draft_duration = _DAYS_TO_DURATION.get(plan.total_days)
+        if draft_duration is None:
+            logger.warning(
+                "[CHANGE_MAIN_CATEGORY] Unexpected total_days=%s for plan %s, fallback to STANDARD",
+                plan.total_days,
+                plan_id,
+            )
+            draft_duration = "STANDARD"
+
         params_dict = {
-            "duration": plan.total_days,
+            "duration": draft_duration,
             "focus": target_category,
             "load": plan.load,
             "preferred_time_slots": list(plan.preferred_time_slots),
         }
         try:
-            signature = inspect.signature(build_plan_draft)
-            accepts_user_id = "user_id" in signature.parameters or any(
-                param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()
-            )
-            if accepts_user_id:
-                draft = build_plan_draft(params_dict, user_id=str(plan.user_id))
-            else:
-                draft = build_plan_draft(params_dict)
+            draft = build_plan_draft(params_dict, user_id=str(plan.user_id))
         except (InsufficientLibraryError, DraftValidationError, TypeError) as exc:
             raise AdaptationNotEligibleError("content_library_insufficient") from exc
 
