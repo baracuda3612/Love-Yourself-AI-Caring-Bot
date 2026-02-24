@@ -32,6 +32,7 @@ from app.redis_client import redis_client
 from app.session_memory import SessionMemory
 from app.time_slots import compute_scheduled_for, resolve_daily_time_slots
 from app.ux.plan_messages import build_activation_info_message
+from app.ux.adaptation_preview import build_adaptation_preview
 from app.plan_drafts.service import (
     DraftValidationError,
     InsufficientLibraryError,
@@ -904,6 +905,7 @@ async def build_adaptation_payload(
             "daily_task_count": get_daily_task_count(db, active_plan),
             "difficulty_level": get_avg_difficulty(db, active_plan),
             "status": active_plan.status,
+            "current_day": active_plan.current_day or 1,
         }
 
     return payload
@@ -1060,7 +1062,26 @@ async def handle_adaptation_flow(
 ) -> Tuple[str, List[str]]:
     payload = await build_adaptation_payload(user_id, message_text, current_state, db)
     llm_response = await plan_agent(payload)
-    return await handle_adaptation_response(user_id, llm_response, current_state, db)
+    reply_text, followups = await handle_adaptation_response(
+        user_id, llm_response, current_state, db
+    )
+
+    # TASK-4.1: inject deterministic Before/After preview in ADAPTATION_CONFIRMATION.
+    # Inject only when LLM is asking for confirmation (not executing or aborting).
+    # Preview prepended so card appears first, LLM reply_text ("Підтвердити?") follows.
+    transition = llm_response.get("transition_signal")
+    if current_state == ADAPTATION_CONFIRMATION and transition not in {
+        "EXECUTE_ADAPTATION", "ACTIVE", "IDLE_PLAN_ABORTED", "ADAPTATION_SELECTION",
+    }:
+        adaptation_context = await session_memory.get_adaptation_context(user_id) or {}
+        intent = adaptation_context.get("intent")
+        params = adaptation_context.get("params") or {}
+        active_plan_data = payload.get("active_plan") or {}
+        if intent:
+            preview_text = build_adaptation_preview(intent, params, active_plan_data)
+            reply_text = f"{preview_text}\n\n{reply_text}" if reply_text else preview_text
+
+    return reply_text, followups
 
 
 async def build_plan_draft_preview(

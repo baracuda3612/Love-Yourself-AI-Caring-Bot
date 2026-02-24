@@ -42,6 +42,13 @@ _PLAN_ACTIONS = [
     ("🔄 Restart from scratch", "plan_restart", "почни спочатку"),
 ]
 
+_ADAPTATION_ACTIONS = [
+    ("✅ Підтвердити", "adapt_confirm", "підтверджую"),
+    ("✏️ Змінити параметр", "adapt_edit_params", "змінити параметр"),
+    ("🔀 Інша адаптація", "adapt_change_type", "скасувати"),
+    ("❌ Скасувати", "adapt_cancel", "скасувати"),
+]
+
 
 def _build_plan_action_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -50,6 +57,22 @@ def _build_plan_action_keyboard() -> InlineKeyboardMarkup:
             for label, callback, _ in _PLAN_ACTIONS
         ]
     )
+
+
+def _build_adaptation_action_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=label, callback_data=cb)]
+            for label, cb, _ in _ADAPTATION_ACTIONS
+        ]
+    )
+
+
+def _adaptation_action_text(callback_data: str) -> str:
+    for _, cb, text in _ADAPTATION_ACTIONS:
+        if cb == callback_data:
+            return text
+    return "скасувати"
 
 
 def _plan_action_text(callback_data: str) -> str:
@@ -237,6 +260,24 @@ async def on_plan_action(callback_query: CallbackQuery):
         await _send_agent_response(callback_query.message, user.id, response)
 
 
+@router.callback_query(F.data.in_([action[1] for action in _ADAPTATION_ACTIONS]))
+async def on_adaptation_action(callback_query: CallbackQuery):
+    cb_data = callback_query.data or ""
+    message_text = _adaptation_action_text(cb_data)
+
+    with SessionLocal() as db:
+        user, _ = _ensure_user(db, callback_query.from_user)
+        db.add(ChatHistory(user_id=user.id, role="user", text=message_text))
+        db.commit()
+
+    await callback_query.answer()
+    response = await handle_incoming_message(user.id, message_text, defer_plan_draft=True)
+    if not isinstance(response, dict) or "reply_text" not in response:
+        raise RuntimeError("handle_incoming_message response must include reply_text")
+    if callback_query.message:
+        await _send_agent_response(callback_query.message, user.id, response)
+
+
 @router.callback_query(F.data.startswith("task_complete:"))
 async def handle_task_completed(callback_query: CallbackQuery):
     """
@@ -353,7 +394,17 @@ async def _send_agent_response(message: Message, user_id: int, response: dict) -
             response.get("plan_draft_parameters") or {},
         )
         preview_text = _sanitize_message_text(preview_text)
-        reply_markup = _build_plan_action_keyboard() if response.get("show_plan_actions") else None
+        # Читаємо актуальний стан юзера після FSM transition (orchestrator вже зробив commit)
+        with SessionLocal() as db:
+            _state_row = db.query(User.current_state).filter(User.id == user_id).first()
+            _user_state = _state_row[0] if _state_row else None
+
+        if response.get("show_plan_actions"):
+            reply_markup = _build_plan_action_keyboard()
+        elif _user_state == "ADAPTATION_CONFIRMATION":
+            reply_markup = _build_adaptation_action_keyboard()
+        else:
+            reply_markup = None
         await message.answer(preview_text, reply_markup=reply_markup)
         with SessionLocal() as db:
             db.add(ChatHistory(user_id=user_id, role="assistant", text=preview_text))
@@ -362,7 +413,17 @@ async def _send_agent_response(message: Message, user_id: int, response: dict) -
         return
 
     reply_text = _sanitize_message_text(response.get("reply_text"))
-    reply_markup = _build_plan_action_keyboard() if response.get("show_plan_actions") else None
+    # Читаємо актуальний стан юзера після FSM transition (orchestrator вже зробив commit)
+    with SessionLocal() as db:
+        _state_row = db.query(User.current_state).filter(User.id == user_id).first()
+        _user_state = _state_row[0] if _state_row else None
+
+    if response.get("show_plan_actions"):
+        reply_markup = _build_plan_action_keyboard()
+    elif _user_state == "ADAPTATION_CONFIRMATION":
+        reply_markup = _build_adaptation_action_keyboard()
+    else:
+        reply_markup = None
     await message.answer(reply_text, reply_markup=reply_markup)
 
     with SessionLocal() as db:
