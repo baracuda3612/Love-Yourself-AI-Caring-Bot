@@ -973,7 +973,6 @@ async def handle_adaptation_response(
         try:
             step_ids_to_reschedule = await execute_adaptation(user_id, llm_response, db)
             adaptation_applied = True
-            followups.append("Зміни успішно застосовано! ✅")
         except AdaptationNotEligibleError as exc:
             logger.warning(
                 "[ADAPTATION] Not eligible for user %s: %s", user_id, exc.reason
@@ -991,6 +990,7 @@ async def handle_adaptation_response(
             next_state_after = current_state
 
         if adaptation_applied:
+            # next_state_after is final here (updated in exception branches when needed).
             # FSM transition — commits user.current_state + plan.status зміни разом
             if not can_transition(current_state, next_state_after):
                 logger.error(
@@ -1030,7 +1030,14 @@ async def handle_adaptation_response(
         return reply_text, followups
 
     if transition_signal == "ACTIVE":
-        # TASK-4.3: guard already present (validated by _commit_fsm_transition).
+        if not can_transition(current_state, "ACTIVE"):
+            logger.error(
+                "[FSM] Blocked illegal transition %s -> %s",
+                current_state,
+                "ACTIVE",
+            )
+            await session_memory.clear_adaptation_context(user_id)
+            return reply_text or "Помилка переходу. Спробуй ще раз.", followups
         await _commit_fsm_transition(
             user_id=user_id,
             target_agent="plan",
@@ -1042,7 +1049,13 @@ async def handle_adaptation_response(
         return reply_text, followups
 
     if transition_signal in ADAPTATION_FLOW_STATES:
-        # TASK-4.3: guard already present (validated by _commit_fsm_transition).
+        if not can_transition(current_state, transition_signal):
+            logger.error(
+                "[FSM] Blocked illegal transition %s -> %s",
+                current_state,
+                transition_signal,
+            )
+            return reply_text or "Помилка переходу. Спробуй ще раз.", followups
         await _commit_fsm_transition(
             user_id=user_id,
             target_agent="plan",
@@ -1056,7 +1069,14 @@ async def handle_adaptation_response(
         return reply_text, followups
 
     logger.error("Unknown adaptation transition_signal: %s", transition_signal)
-    # TASK-4.3: guard already present (validated by _commit_fsm_transition).
+    if not can_transition(current_state, "ACTIVE"):
+        logger.error(
+            "[FSM] Blocked illegal transition %s -> %s",
+            current_state,
+            "ACTIVE",
+        )
+        await session_memory.clear_adaptation_context(user_id)
+        return reply_text or "Помилка переходу. Спробуй ще раз.", followups
     await _commit_fsm_transition(
         user_id=user_id,
         target_agent="plan",
