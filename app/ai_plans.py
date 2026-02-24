@@ -128,7 +128,7 @@ Output (tool call arguments):
   "reply_text": "string",
   "transition_signal": null,
   "plan_updates": {
-    "duration": "SHORT | STANDARD | LONG | null",
+    "duration": "SHORT | MEDIUM | STANDARD | LONG | null",
     "focus": "SOMATIC | COGNITIVE | BOUNDARIES | REST | MIXED | null",
     "load": "LITE | MID | INTENSIVE | null",
     "preferred_time_slots": ["MORNING", "DAY", "EVENING"] | null
@@ -210,7 +210,7 @@ Input:
   "current_state": "PLAN_FLOW:CONFIRMATION_PENDING",
   "latest_user_message": "string",
   "known_parameters": {
-    "duration": "SHORT | STANDARD | LONG",
+    "duration": "SHORT | MEDIUM | STANDARD | LONG",
     "focus": "SOMATIC | COGNITIVE | BOUNDARIES | REST | MIXED",
     "load": "LITE | MID | INTENSIVE",
     "preferred_time_slots": ["MORNING", "DAY", "EVENING"]
@@ -228,7 +228,7 @@ Output (tool call arguments):
   "reply_text": "string",
   "transition_signal": "PLAN_FLOW:FINALIZATION | PLAN_FLOW:DATA_COLLECTION | IDLE_PLAN_ABORTED | null",
   "plan_updates": {
-    "duration": "SHORT | STANDARD | LONG | null",
+    "duration": "SHORT | MEDIUM | STANDARD | LONG | null",
     "focus": "SOMATIC | COGNITIVE | BOUNDARIES | REST | MIXED | null",
     "load": "LITE | MID | INTENSIVE | null",
     "preferred_time_slots": ["MORNING", "DAY", "EVENING"] | null

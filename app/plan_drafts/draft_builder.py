@@ -280,7 +280,7 @@ def create_plan_draft(
     Convenience function for creating plan draft.
 
     Args:
-        duration: "SHORT" | "STANDARD" | "LONG"
+        duration: "SHORT" | "MEDIUM" | "STANDARD" | "LONG"
         focus: "somatic" | "cognitive" | "boundaries" | "rest" | "mixed"
         load: "LITE" | "MID" | "INTENSIVE"
         library_path: Path to content library JSON

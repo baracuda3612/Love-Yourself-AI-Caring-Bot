@@ -16,6 +16,7 @@ from app.plan_drafts.draft_builder import (
     InsufficientLibraryError,
 )
 from app.plan_drafts.plan_types import Duration, Focus, Load, PlanDraft, PlanParameters, UserPolicy
+from app.plan_duration import InvalidDurationError, normalize_duration_value
 
 CONTENT_LIBRARY_PATH = (
     Path(__file__).resolve().parents[2]
@@ -36,11 +37,11 @@ def _build_plan_parameters(parameters: Dict[str, Any]) -> PlanParameters:
     focus_value = focus.lower() if isinstance(focus, str) else focus
 
     duration_value = None
-    if duration:
+    if duration is not None:
         try:
-            duration_value = Duration(duration)
-        except ValueError:
-            duration_value = None
+            duration_value = Duration(normalize_duration_value(duration))
+        except (InvalidDurationError, ValueError) as exc:
+            raise DraftValidationError([str(exc)]) from exc
 
     focus_enum = None
     if focus_value:

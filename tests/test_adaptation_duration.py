@@ -574,7 +574,7 @@ def test_change_category_does_not_mutate_old_if_draft_builder_fails():
     assert not created_plans
 
 
-def test_change_category_works_when_builder_has_no_user_id_param():
+def test_change_category_works_when_builder_accepts_user_id_param():
     plan = _make_plan(total_days=21, current_day=7)
     plan.id = 12
     plan.module_id = "BURNOUT_RECOVERY"
@@ -605,7 +605,8 @@ def test_change_category_works_when_builder_has_no_user_id_param():
 
     draft = SimpleNamespace(total_days=21, steps=[_DraftStep(1, 9101)])
 
-    def _build_without_user_id(parameters):
+    def _build_with_user_id(parameters, user_id):
+        assert user_id == str(plan.user_id)
         return draft
 
     def _add(obj):
@@ -619,7 +620,7 @@ def test_change_category_works_when_builder_has_no_user_id_param():
     db.add.side_effect = _add
 
     with patch("app.plan_adaptations._iter_future_steps", return_value=iter_rows), \
-         patch("app.plan_drafts.service.build_plan_draft", new=_build_without_user_id), \
+         patch("app.plan_drafts.service.build_plan_draft", new=_build_with_user_id), \
          patch("app.adaptation_executor.resolve_daily_time_slots", return_value={}), \
          patch("app.adaptation_executor.compute_scheduled_for", return_value=datetime.now(timezone.utc)), \
          patch("app.adaptation_executor.log_user_event"), \

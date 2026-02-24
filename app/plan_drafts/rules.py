@@ -73,10 +73,17 @@ SLOT_TIME_PREFERENCES = {
 DURATION_CONFIG = {
     Duration.SHORT: {
         "min_days": 7,
-        "max_days": 14,
-        "default_days": 10,
-        "intensity_curve": "flat",  # Constant intensity
+        "max_days": 7,
+        "default_days": 7,
+        "intensity_curve": "flat",
         "description": "Sprint - rapid stabilization",
+    },
+    Duration.MEDIUM: {
+        "min_days": 14,
+        "max_days": 14,
+        "default_days": 14,
+        "intensity_curve": "flat",
+        "description": "Bridge - short habit installation",
     },
     Duration.STANDARD: {
         "min_days": 21,
@@ -215,7 +222,7 @@ def get_difficulty_for_week(week_number: int, duration: Duration) -> int:
     """
     Rule 7: Calculate appropriate difficulty based on week and duration.
 
-    SHORT: Constant difficulty (1-2)
+    SHORT/MEDIUM: Constant difficulty (1-2)
     STANDARD: Progressive - start easier, increase after week 1
     LONG: Wave pattern - alternate between challenging and maintenance
     """
