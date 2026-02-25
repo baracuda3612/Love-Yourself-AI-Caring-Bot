@@ -582,7 +582,7 @@ INPUT:
 OUTPUT:
 {
   "reply_text": "string",
-  "transition_signal": "EXECUTE_ADAPTATION | ADAPTATION_PARAMS | ACTIVE | null",
+  "transition_signal": "EXECUTE_ADAPTATION | UNDO_LAST_ADAPTATION | ADAPTATION_PARAMS | ACTIVE | null",
   "adaptation_intent": "[SAME AS INPUT - FROZEN]",
   "adaptation_params": "[SAME AS INPUT - FROZEN]",
   "confirmed": true | false
@@ -742,7 +742,7 @@ _ADAPTATION_FLOW_CONFIRMATION_TOOL = {
             "reply_text": {"type": "string"},
             "transition_signal": {
                 "type": ["string", "null"],
-                "enum": ["EXECUTE_ADAPTATION", "ADAPTATION_PARAMS", "ACTIVE", None],
+                "enum": ["EXECUTE_ADAPTATION", "UNDO_LAST_ADAPTATION", "ADAPTATION_PARAMS", "ACTIVE", None],
             },
             "adaptation_intent": {
                 "type": "string",

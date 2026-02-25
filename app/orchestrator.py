@@ -17,6 +17,7 @@ from app.db import (
     AIPlanStep,
     ChatHistory,
     ContentLibrary,
+    AdaptationHistory,
     PlanInstance,
     SessionLocal,
     User,
@@ -24,8 +25,14 @@ from app.db import (
 )
 from app.logging.router_logging import log_metric, log_router_decision
 from app.plan_adaptations import PlanAdaptationError, apply_plan_adaptation
-from app.adaptation_executor import AdaptationExecutor
-from app.adaptation_types import AdaptationIntent, AdaptationNotEligibleError
+from app.adaptation_executor import AdaptationExecutor, AdaptationResult
+from app.adaptation_types import (
+    AdaptationIntent,
+    AdaptationNotEligibleError,
+    check_adaptation_conflict,
+    check_rate_limit,
+    get_inverse_intent,
+)
 from app.plan_parameters import normalize_plan_parameters
 from app.scheduler import cancel_plan_step_jobs, reschedule_plan_steps
 from app.redis_client import redis_client
@@ -262,8 +269,8 @@ def _guard_fsm_transition(
 
     normalized_signal = _normalize_fsm_state(transition_signal)
     if normalized_signal is None:
-        if transition_signal == "EXECUTE_ADAPTATION":
-            return "EXECUTE_ADAPTATION", None
+        if transition_signal in {"EXECUTE_ADAPTATION", "UNDO_LAST_ADAPTATION"}:
+            return transition_signal, None
         return None, "invalid_state"
 
     if normalized_current is None:
@@ -911,12 +918,103 @@ async def build_adaptation_payload(
     return payload
 
 
+def check_adaptation_eligibility(
+    db: Session,
+    plan: AIPlan,
+    intent: AdaptationIntent,
+) -> str | None:
+    """Full pre-execution eligibility check."""
+    last_entry = (
+        db.query(AdaptationHistory)
+        .filter(
+            AdaptationHistory.plan_id == plan.id,
+            AdaptationHistory.is_rolled_back == False,
+        )
+        .order_by(AdaptationHistory.applied_at.desc())
+        .first()
+    )
+    last_intent = None
+    if last_entry:
+        try:
+            last_intent = AdaptationIntent(last_entry.intent)
+        except ValueError:
+            pass
+
+    conflict_reason = check_adaptation_conflict(
+        intent=intent,
+        last_applied_intent=last_intent,
+        current_plan_load=plan.load,
+        current_plan_status=plan.status,
+    )
+    if conflict_reason:
+        return conflict_reason
+
+    all_history = (
+        db.query(AdaptationHistory)
+        .filter(AdaptationHistory.plan_id == plan.id)
+        .order_by(AdaptationHistory.applied_at.desc())
+        .all()
+    )
+    now_utc = datetime.now(timezone.utc)
+    return check_rate_limit(intent, all_history, now_utc)
+
+
+async def handle_undo_last_adaptation(
+    user_id: int,
+    db: Session,
+    current_state: str,
+) -> tuple[str, list[str]]:
+    """Handles semantic undo: cancel last adaptation via inverse intent."""
+    active_plan = get_active_plan(db, user_id)
+    if not active_plan:
+        return "Немає активного плану.", []
+
+    last_entry = (
+        db.query(AdaptationHistory)
+        .filter(
+            AdaptationHistory.plan_id == active_plan.id,
+            AdaptationHistory.is_rolled_back == False,
+        )
+        .order_by(AdaptationHistory.applied_at.desc())
+        .first()
+    )
+    if not last_entry:
+        return "Немає змін для скасування.", []
+
+    try:
+        last_intent = AdaptationIntent(last_entry.intent)
+    except ValueError:
+        return "Не вдалось визначити останню адаптацію.", []
+
+    inverse = get_inverse_intent(last_intent)
+    if inverse is None:
+        return (
+            f"❌ Цю зміну ({last_intent.value}) неможливо скасувати автоматично.\n"
+            "Структурні зміни плану потребують ручного коригування.",
+            [],
+        )
+
+    fake_llm_response = {
+        "adaptation_intent": inverse.value,
+        "adaptation_params": None,
+        "transition_signal": "EXECUTE_ADAPTATION",
+        "reply_text": "",
+    }
+    return await handle_adaptation_response(
+        user_id=user_id,
+        llm_response=fake_llm_response,
+        current_state=current_state,
+        db=db,
+        skip_eligibility_checks=True,
+    )
+
+
 async def execute_adaptation(
     user_id: int,
     llm_response: Dict[str, Any],
     db: Session,
-) -> list[int]:
-    """Returns step_ids to reschedule after DB commit."""
+) -> AdaptationResult:
+    """Returns post-commit scheduler actions for adaptation."""
     adaptation_intent_str = llm_response.get("adaptation_intent")
     adaptation_params = llm_response.get("adaptation_params")
 
@@ -944,6 +1042,7 @@ async def handle_adaptation_response(
     llm_response: Dict[str, Any],
     current_state: str,
     db: Session,
+    skip_eligibility_checks: bool = False,
 ) -> Tuple[str, List[str]]:
     """Handle LLM response for adaptation flow using caller session."""
     reply_text = str(llm_response.get("reply_text") or "")
@@ -958,9 +1057,13 @@ async def handle_adaptation_response(
             {"intent": adaptation_intent, "params": adaptation_params},
         )
 
+    if transition_signal == "UNDO_LAST_ADAPTATION":
+        return await handle_undo_last_adaptation(user_id, db, current_state)
+
     if transition_signal == "EXECUTE_ADAPTATION":
         adaptation_intent_str = llm_response.get("adaptation_intent")
         next_state_after = "ACTIVE"
+        _intent: AdaptationIntent | None = None
         try:
             _intent = AdaptationIntent(adaptation_intent_str)
             if _intent == AdaptationIntent.PAUSE_PLAN:
@@ -969,10 +1072,26 @@ async def handle_adaptation_response(
             pass
 
         step_ids_to_reschedule: list[int] = []
+        step_ids_to_cancel: list[int] = []
         adaptation_applied = False
         try:
-            step_ids_to_reschedule = await execute_adaptation(user_id, llm_response, db)
-            adaptation_applied = True
+            active_plan = get_active_plan(db, user_id)
+            if not active_plan:
+                followups.append("Немає активного плану для адаптації.")
+                next_state_after = current_state
+            else:
+                if _intent is None:
+                    followups.append("Невалідний тип адаптації.")
+                    return reply_text or "Ця зміна зараз недоступна.", followups
+                if not skip_eligibility_checks:
+                    eligibility_reason = check_adaptation_eligibility(db, active_plan, _intent)
+                    if eligibility_reason:
+                        followups.append(f"Адаптація недоступна: {eligibility_reason}")
+                        return reply_text or "Ця зміна зараз недоступна.", followups
+                adaptation_result = await execute_adaptation(user_id, llm_response, db)
+                step_ids_to_reschedule = adaptation_result.step_ids_to_reschedule
+                step_ids_to_cancel = adaptation_result.step_ids_to_cancel
+                adaptation_applied = True
         except AdaptationNotEligibleError as exc:
             logger.warning(
                 "[ADAPTATION] Not eligible for user %s: %s", user_id, exc.reason
@@ -1013,12 +1132,23 @@ async def handle_adaptation_response(
             db.commit()
 
             # 🕒 Post-commit side effects only
+            if step_ids_to_cancel:
+                try:
+                    cancel_plan_step_jobs(step_ids_to_cancel)
+                except Exception:
+                    logger.error(
+                        "[ADAPTATION] cancel jobs failed after commit for user %s, step_ids=%s",
+                        user_id,
+                        step_ids_to_cancel,
+                        exc_info=True,
+                    )
+
             if step_ids_to_reschedule:
                 try:
                     reschedule_plan_steps(step_ids_to_reschedule)
                 except Exception:
                     logger.error(
-                        "[ADAPTATION] reschedule failed after resume for user %s, step_ids=%s",
+                        "[ADAPTATION] reschedule failed after commit for user %s, step_ids=%s",
                         user_id,
                         step_ids_to_reschedule,
                         exc_info=True,

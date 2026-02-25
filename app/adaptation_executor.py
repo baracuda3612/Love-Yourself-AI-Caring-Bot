@@ -1,19 +1,25 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session, selectinload
 
-from app.adaptation_types import AdaptationIntent, AdaptationNotEligibleError
-from app.db import AIPlan, AIPlanDay, AIPlanStep, AIPlanVersion, User
+from app.adaptation_types import AdaptationIntent, AdaptationNotEligibleError, get_adaptation_category
+from app.db import AIPlan, AIPlanDay, AIPlanStep, AIPlanVersion, AdaptationHistory, User
 from app.plan_adaptations import apply_plan_adaptation
-from app.scheduler import cancel_plan_step_jobs
 from app.telemetry import log_user_event
 from app.time_slots import compute_scheduled_for, resolve_daily_time_slots
 from app.plan_duration import DAYS_TO_DURATION, assert_canonical_total_days
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class AdaptationResult:
+    step_ids_to_reschedule: list[int] = field(default_factory=list)
+    step_ids_to_cancel: list[int] = field(default_factory=list)
 
 
 class AdaptationExecutor:
@@ -23,44 +29,7 @@ class AdaptationExecutor:
     Implementation status: Skeleton only (Phase 3: TASK-3.x).
     """
 
-    def execute(
-        self,
-        db: Session,
-        plan_id: int,
-        intent: AdaptationIntent,
-        params: dict | None = None,
-    ) -> list[int]:
-        """Execute adaptation on a plan.
-
-        Returns list of step_ids to reschedule AFTER caller commits the DB session.
-        Caller MUST call reschedule_plan_steps(returned_ids) after commit.
-        Empty list means no rescheduling needed.
-        """
-        if intent == AdaptationIntent.PAUSE_PLAN:
-            return self._pause_plan(db, plan_id)
-        elif intent == AdaptationIntent.RESUME_PLAN:
-            return self._resume_plan(db, plan_id)
-        elif intent == AdaptationIntent.REDUCE_DAILY_LOAD:
-            self._reduce_daily_load(db, plan_id, params)
-        elif intent == AdaptationIntent.INCREASE_DAILY_LOAD:
-            return self._increase_daily_load(db, plan_id, params)
-        elif intent == AdaptationIntent.LOWER_DIFFICULTY:
-            self._lower_difficulty(db, plan_id)
-        elif intent == AdaptationIntent.INCREASE_DIFFICULTY:
-            self._increase_difficulty(db, plan_id)
-        elif intent == AdaptationIntent.EXTEND_PLAN_DURATION:
-            return self._extend_plan_duration(db, plan_id, params)
-        elif intent == AdaptationIntent.SHORTEN_PLAN_DURATION:
-            return self._shorten_plan_duration(db, plan_id, params)
-        elif intent == AdaptationIntent.CHANGE_MAIN_CATEGORY:
-            return self._change_main_category(db, plan_id, params)
-        else:
-            raise ValueError(f"Unknown adaptation intent: {intent}")
-        return []
-
-    def _reduce_daily_load(self, db: Session, plan_id: int, params: dict | None = None) -> None:
-        from app.plan_adaptations import _iter_future_steps
-
+    def _load_plan_with_days(self, db: Session, plan_id: int) -> AIPlan:
         plan = (
             db.query(AIPlan)
             .options(selectinload(AIPlan.days).selectinload(AIPlanDay.steps))
@@ -69,6 +38,108 @@ class AdaptationExecutor:
         )
         if not plan:
             raise AdaptationNotEligibleError("plan_not_found")
+        return plan
+
+    @staticmethod
+    def build_snapshot_before(db: Session, plan: AIPlan) -> dict:
+        """Build snapshot_before payload for AdaptationHistory."""
+        now_utc = datetime.now(timezone.utc)
+        future_steps = []
+
+        for day in plan.days:
+            for step in day.steps:
+                if step.is_completed or step.skipped or step.canceled_by_adaptation:
+                    continue
+                if step.scheduled_for and step.scheduled_for <= now_utc:
+                    continue
+                future_steps.append(
+                    {
+                        "id": step.id,
+                        "day_id": step.day_id,
+                        "exercise_id": step.exercise_id,
+                        "title": step.title or "",
+                        "time_slot": step.time_slot,
+                        "slot_type": step.slot_type,
+                        "difficulty": str(step.difficulty),
+                        "order_in_day": step.order_in_day,
+                        "scheduled_for": step.scheduled_for.isoformat() if step.scheduled_for else None,
+                        "canceled_by_adaptation": step.canceled_by_adaptation,
+                    }
+                )
+
+        if len(future_steps) > 500:
+            logger.warning(
+                "Snapshot too large for plan %s: %d steps. Skipping snapshot.",
+                plan.id,
+                len(future_steps),
+            )
+            return {"skipped": True, "reason": "too_large"}
+
+        return {
+            "plan_id": plan.id,
+            "load": plan.load,
+            "focus": plan.focus,
+            "total_days": plan.total_days,
+            "current_day": plan.current_day or 1,
+            "status": plan.status,
+            "preferred_time_slots": list(plan.preferred_time_slots or []),
+            "future_steps": future_steps,
+        }
+
+    def execute(
+        self,
+        db: Session,
+        plan_id: int,
+        intent: AdaptationIntent,
+        params: dict | None = None,
+    ) -> AdaptationResult:
+        """Execute adaptation on a plan and return post-commit scheduler actions."""
+        plan = self._load_plan_with_days(db, plan_id)
+        snapshot = self.build_snapshot_before(db, plan)
+
+        if intent == AdaptationIntent.PAUSE_PLAN:
+            reschedule_ids, cancel_ids = self._pause_plan(db, plan)
+        elif intent == AdaptationIntent.RESUME_PLAN:
+            reschedule_ids, cancel_ids = self._resume_plan(db, plan)
+        elif intent == AdaptationIntent.REDUCE_DAILY_LOAD:
+            reschedule_ids, cancel_ids = self._reduce_daily_load(db, plan, params)
+        elif intent == AdaptationIntent.INCREASE_DAILY_LOAD:
+            added_ids = self._increase_daily_load(db, plan, params)
+            reschedule_ids, cancel_ids = added_ids, []
+        elif intent == AdaptationIntent.LOWER_DIFFICULTY:
+            self._lower_difficulty(db, plan.id)
+            reschedule_ids, cancel_ids = [], []
+        elif intent == AdaptationIntent.INCREASE_DIFFICULTY:
+            self._increase_difficulty(db, plan.id)
+            reschedule_ids, cancel_ids = [], []
+        elif intent == AdaptationIntent.EXTEND_PLAN_DURATION:
+            added_ids = self._extend_plan_duration(db, plan, params)
+            reschedule_ids, cancel_ids = added_ids, []
+        elif intent == AdaptationIntent.SHORTEN_PLAN_DURATION:
+            reschedule_ids, cancel_ids = self._shorten_plan_duration(db, plan, params)
+        elif intent == AdaptationIntent.CHANGE_MAIN_CATEGORY:
+            reschedule_ids, cancel_ids = self._change_main_category(db, plan, params)
+        else:
+            raise ValueError(f"Unknown adaptation intent: {intent}")
+
+        history_entry = AdaptationHistory(
+            plan_id=plan.id,
+            user_id=plan.user_id,
+            intent=intent.value,
+            params=params,
+            category=get_adaptation_category(intent),
+            snapshot_before=snapshot,
+        )
+        db.add(history_entry)
+
+        return AdaptationResult(
+            step_ids_to_reschedule=reschedule_ids,
+            step_ids_to_cancel=cancel_ids,
+        )
+
+    def _reduce_daily_load(self, db: Session, plan: AIPlan, params: dict | None = None) -> tuple[list[int], list[int]]:
+        from app.plan_adaptations import _iter_future_steps
+
         if plan.status != "active":
             raise AdaptationNotEligibleError("plan_not_active")
 
@@ -100,7 +171,7 @@ class AdaptationExecutor:
 
         db.add(
             AIPlanVersion(
-                plan_id=plan_id,
+                plan_id=plan.id,
                 applied_adaptation_type="REDUCE_DAILY_LOAD",
                 diff={
                     "effective_from": effective_from.isoformat(),
@@ -117,7 +188,7 @@ class AdaptationExecutor:
             user_id=plan.user_id,
             event_type="plan_adapted",
             context={
-                "plan_id": plan_id,
+                "plan_id": plan.id,
                 "adaptation_type": "REDUCE_DAILY_LOAD",
                 "slot_removed": slot_to_remove,
                 "canceled_step_count": len(canceled_ids),
@@ -125,21 +196,12 @@ class AdaptationExecutor:
             },
         )
 
-        if canceled_ids:
-            cancel_plan_step_jobs(canceled_ids)
+        return [], canceled_ids
 
-    def _increase_daily_load(self, db: Session, plan_id: int, params: dict | None = None) -> list[int]:
+    def _increase_daily_load(self, db: Session, plan: AIPlan, params: dict | None = None) -> list[int]:
         from app.plan_adaptations import _iter_future_steps
         from app.db import ContentLibrary as ContentLibraryModel
 
-        plan = (
-            db.query(AIPlan)
-            .options(selectinload(AIPlan.days).selectinload(AIPlanDay.steps))
-            .filter(AIPlan.id == plan_id)
-            .first()
-        )
-        if not plan:
-            raise AdaptationNotEligibleError("plan_not_found")
         if plan.status != "active":
             raise AdaptationNotEligibleError("plan_not_active")
 
@@ -223,7 +285,7 @@ class AdaptationExecutor:
 
         db.add(
             AIPlanVersion(
-                plan_id=plan_id,
+                plan_id=plan.id,
                 applied_adaptation_type="INCREASE_DAILY_LOAD",
                 diff={
                     "effective_from": effective_from.isoformat(),
@@ -240,7 +302,7 @@ class AdaptationExecutor:
             user_id=plan.user_id,
             event_type="plan_adapted",
             context={
-                "plan_id": plan_id,
+                "plan_id": plan.id,
                 "adaptation_type": "INCREASE_DAILY_LOAD",
                 "slot_added": slot_to_add,
                 "added_step_count": len(added_ids),
@@ -260,17 +322,9 @@ class AdaptationExecutor:
         """Increase difficulty by 1 level (TASK-3.5)."""
         raise NotImplementedError("INCREASE_DIFFICULTY implementation in TASK-3.5")
 
-    def _extend_plan_duration(self, db: Session, plan_id: int, params: dict | None) -> list[int]:
+    def _extend_plan_duration(self, db: Session, plan: AIPlan, params: dict | None) -> list[int]:
         from app.plan_drafts.service import build_plan_draft
 
-        plan = (
-            db.query(AIPlan)
-            .options(selectinload(AIPlan.days).selectinload(AIPlanDay.steps))
-            .filter(AIPlan.id == plan_id)
-            .first()
-        )
-        if not plan:
-            raise AdaptationNotEligibleError("plan_not_found")
         if plan.status != "active":
             raise AdaptationNotEligibleError("plan_not_active")
 
@@ -326,7 +380,7 @@ class AdaptationExecutor:
             day_steps = days_dict[day_number]
 
             day_record = AIPlanDay(
-                plan_id=plan_id,
+                plan_id=plan.id,
                 day_number=day_number,
                 focus_theme=plan.focus or "",
             )
@@ -370,7 +424,7 @@ class AdaptationExecutor:
 
         db.add(
             AIPlanVersion(
-                plan_id=plan_id,
+                plan_id=plan.id,
                 applied_adaptation_type="EXTEND_PLAN_DURATION",
                 diff={
                     "old_total_days": old_total,
@@ -387,7 +441,7 @@ class AdaptationExecutor:
             user_id=plan.user_id,
             event_type="plan_adapted",
             context={
-                "plan_id": plan_id,
+                "plan_id": plan.id,
                 "adaptation_type": "EXTEND_PLAN_DURATION",
                 "old_total_days": old_total,
                 "new_total_days": target_days,
@@ -397,17 +451,9 @@ class AdaptationExecutor:
 
         return added_step_ids
 
-    def _shorten_plan_duration(self, db: Session, plan_id: int, params: dict | None) -> list[int]:
+    def _shorten_plan_duration(self, db: Session, plan: AIPlan, params: dict | None) -> tuple[list[int], list[int]]:
         from app.plan_adaptations import _iter_future_steps
 
-        plan = (
-            db.query(AIPlan)
-            .options(selectinload(AIPlan.days).selectinload(AIPlanDay.steps))
-            .filter(AIPlan.id == plan_id)
-            .first()
-        )
-        if not plan:
-            raise AdaptationNotEligibleError("plan_not_found")
         if plan.status != "active":
             raise AdaptationNotEligibleError("plan_not_active")
 
@@ -450,7 +496,7 @@ class AdaptationExecutor:
 
         db.add(
             AIPlanVersion(
-                plan_id=plan_id,
+                plan_id=plan.id,
                 applied_adaptation_type="SHORTEN_PLAN_DURATION",
                 diff={
                     "old_total_days": old_total,
@@ -467,7 +513,7 @@ class AdaptationExecutor:
             user_id=plan.user_id,
             event_type="plan_adapted",
             context={
-                "plan_id": plan_id,
+                "plan_id": plan.id,
                 "adaptation_type": "SHORTEN_PLAN_DURATION",
                 "old_total_days": old_total,
                 "new_total_days": target_days,
@@ -475,20 +521,9 @@ class AdaptationExecutor:
             },
         )
 
-        if canceled_ids:
-            cancel_plan_step_jobs(canceled_ids)
+        return [], canceled_ids
 
-        return []
-
-    def _pause_plan(self, db: Session, plan_id: int) -> list[int]:
-        plan = (
-            db.query(AIPlan)
-            .options(selectinload(AIPlan.days).selectinload(AIPlanDay.steps))
-            .filter(AIPlan.id == plan_id)
-            .first()
-        )
-        if not plan:
-            raise AdaptationNotEligibleError("plan_not_found")
+    def _pause_plan(self, db: Session, plan: AIPlan) -> tuple[list[int], list[int]]:
         if plan.status == "paused":
             raise AdaptationNotEligibleError("already_paused")
         if plan.status != "active":
@@ -496,7 +531,7 @@ class AdaptationExecutor:
 
         result = apply_plan_adaptation(
             db=db,
-            plan_id=plan_id,
+            plan_id=plan.id,
             adaptation_payload={
                 "adaptation_type": "pause",
                 "effective_from": datetime.now(timezone.utc),
@@ -511,34 +546,20 @@ class AdaptationExecutor:
             user_id=plan.user_id,
             event_type="plan_paused",
             context={
-                "plan_id": plan_id,
+                "plan_id": plan.id,
                 "canceled_step_count": len(result.canceled_step_ids),
             },
         )
 
-        if result.canceled_step_ids:
-            # cancel is idempotent and safe to call before commit.
-            # If commit later fails, scheduler reconciliation on restart
-            # will restore jobs for active plans.
-            cancel_plan_step_jobs(result.canceled_step_ids)
+        return [], list(result.canceled_step_ids or [])
 
-        return []
-
-    def _resume_plan(self, db: Session, plan_id: int) -> list[int]:
-        plan = (
-            db.query(AIPlan)
-            .options(selectinload(AIPlan.days).selectinload(AIPlanDay.steps))
-            .filter(AIPlan.id == plan_id)
-            .first()
-        )
-        if not plan:
-            raise AdaptationNotEligibleError("plan_not_found")
+    def _resume_plan(self, db: Session, plan: AIPlan) -> tuple[list[int], list[int]]:
         if plan.status != "paused":
             raise AdaptationNotEligibleError("not_paused")
 
         result = apply_plan_adaptation(
             db=db,
-            plan_id=plan_id,
+            plan_id=plan.id,
             adaptation_payload={
                 "adaptation_type": "resume",
                 "effective_from": datetime.now(timezone.utc),
@@ -553,12 +574,114 @@ class AdaptationExecutor:
             user_id=plan.user_id,
             event_type="plan_resumed",
             context={
-                "plan_id": plan_id,
+                "plan_id": plan.id,
                 "rescheduled_step_count": len(result.rescheduled_step_ids),
             },
         )
 
-        return result.rescheduled_step_ids
+        return list(result.rescheduled_step_ids or []), []
+
+    def rollback_last_adaptation(
+        self,
+        db: Session,
+        plan_id: int,
+        history_entry,
+    ) -> AdaptationResult:
+        """Restore plan to snapshot_before state."""
+        if history_entry.is_rolled_back:
+            raise AdaptationNotEligibleError("already_rolled_back")
+
+        non_rollback_intents = {"CHANGE_MAIN_CATEGORY", "EXTEND_PLAN_DURATION", "SHORTEN_PLAN_DURATION"}
+        if history_entry.intent in non_rollback_intents:
+            raise AdaptationNotEligibleError("structural_rollback_not_supported")
+
+        snapshot = history_entry.snapshot_before or {}
+        if snapshot.get("skipped"):
+            raise AdaptationNotEligibleError("snapshot_not_available")
+
+        plan = self._load_plan_with_days(db, plan_id)
+
+        plan.load = snapshot["load"]
+        plan.focus = snapshot["focus"]
+        plan.total_days = snapshot["total_days"]
+        plan.status = snapshot["status"]
+        plan.preferred_time_slots = snapshot["preferred_time_slots"]
+
+        now_utc = datetime.now(timezone.utc)
+        canceled_ids: list[int] = []
+        for day in plan.days:
+            for step in day.steps:
+                if not step.is_completed and not step.skipped:
+                    step.canceled_by_adaptation = True
+                    step.scheduled_for = None
+                    canceled_ids.append(step.id)
+
+        db.flush()
+
+        days_by_number = {d.day_number: d for d in plan.days}
+        restored_ids: list[int] = []
+
+        all_day_ids = list({step["day_id"] for step in snapshot.get("future_steps", [])})
+        days_by_id: dict[int, int] = {}
+        if all_day_ids:
+            day_rows = (
+                db.query(AIPlanDay.id, AIPlanDay.day_number)
+                .filter(AIPlanDay.id.in_(all_day_ids))
+                .all()
+            )
+            days_by_id = {row.id: row.day_number for row in day_rows}
+
+        for step_data in snapshot.get("future_steps", []):
+            day_number = days_by_id.get(step_data["day_id"])
+            if day_number is None:
+                continue
+            day_record = days_by_number.get(day_number)
+            if not day_record:
+                continue
+
+            new_scheduled_for = _recalculate_scheduled_for(
+                plan_start=plan.start_date,
+                day_number=day_number,
+                time_slot=step_data["time_slot"],
+                current_day=plan.current_day or 1,
+                now_utc=now_utc,
+            )
+            if new_scheduled_for is None:
+                continue
+
+            new_step = AIPlanStep(
+                day_id=day_record.id,
+                exercise_id=step_data["exercise_id"],
+                title=step_data["title"],
+                time_slot=step_data["time_slot"],
+                slot_type=step_data["slot_type"],
+                difficulty=step_data["difficulty"],
+                order_in_day=step_data["order_in_day"],
+                scheduled_for=new_scheduled_for,
+                canceled_by_adaptation=False,
+            )
+            db.add(new_step)
+            db.flush()
+            restored_ids.append(new_step.id)
+
+        history_entry.is_rolled_back = True
+        history_entry.rolled_back_at = now_utc
+
+        log_user_event(
+            db=db,
+            user_id=plan.user_id,
+            event_type="adaptation_rolled_back",
+            context={
+                "plan_id": plan_id,
+                "rolled_back_intent": history_entry.intent,
+                "restored_step_count": len(restored_ids),
+            },
+        )
+
+        return AdaptationResult(
+            step_ids_to_reschedule=restored_ids,
+            step_ids_to_cancel=canceled_ids,
+        )
 
     @staticmethod
     def _slots_to_load(slot_count: int) -> str:
@@ -580,20 +703,12 @@ class AdaptationExecutor:
         except (TypeError, ValueError):
             return str(value) if value else "EASY"
 
-    def _change_main_category(self, db: Session, plan_id: int, params: dict | None) -> list[int]:
+    def _change_main_category(self, db: Session, plan: AIPlan, params: dict | None) -> tuple[list[int], list[int]]:
         """Change main focus category by pausing old plan and creating new active plan."""
         from app.plan_adaptations import _iter_future_steps
         from app.plan_drafts.draft_builder import DraftValidationError
         from app.plan_drafts.service import InsufficientLibraryError, build_plan_draft
 
-        plan = (
-            db.query(AIPlan)
-            .options(selectinload(AIPlan.days).selectinload(AIPlanDay.steps))
-            .filter(AIPlan.id == plan_id)
-            .first()
-        )
-        if not plan:
-            raise AdaptationNotEligibleError("plan_not_found")
         if plan.status != "active":
             raise AdaptationNotEligibleError("plan_not_active")
 
@@ -612,7 +727,7 @@ class AdaptationExecutor:
 
         other_active = (
             db.query(AIPlan)
-            .filter(AIPlan.user_id == plan.user_id, AIPlan.status == "active", AIPlan.id != plan_id)
+            .filter(AIPlan.user_id == plan.user_id, AIPlan.status == "active", AIPlan.id != plan.id)
             .first()
         )
         if other_active:
@@ -624,7 +739,7 @@ class AdaptationExecutor:
             logger.error(
                 "[CHANGE_MAIN_CATEGORY] Invalid total_days=%s for plan %s",
                 plan.total_days,
-                plan_id,
+                plan.id,
             )
             raise AdaptationNotEligibleError("invalid_plan_duration")
 
@@ -731,7 +846,7 @@ class AdaptationExecutor:
 
         db.add(
             AIPlanVersion(
-                plan_id=plan_id,
+                plan_id=plan.id,
                 applied_adaptation_type="CHANGE_MAIN_CATEGORY",
                 diff={
                     "old_focus": old_focus,
@@ -749,7 +864,7 @@ class AdaptationExecutor:
             user_id=plan.user_id,
             event_type="plan_adapted",
             context={
-                "plan_id": plan_id,
+                "plan_id": plan.id,
                 "adaptation_type": "CHANGE_MAIN_CATEGORY",
                 "old_focus": old_focus,
                 "new_focus": target_category,
@@ -759,7 +874,34 @@ class AdaptationExecutor:
             },
         )
 
-        if canceled_ids:
-            cancel_plan_step_jobs(canceled_ids)
+        return added_step_ids, canceled_ids
 
-        return added_step_ids
+
+
+def _recalculate_scheduled_for(
+    plan_start: datetime,
+    day_number: int,
+    time_slot: str,
+    current_day: int,
+    now_utc: datetime,
+) -> datetime | None:
+    """Compute new scheduled_for for a restored step."""
+    from datetime import time
+
+    _SLOT_TIMES = {
+        "MORNING": time(9, 30),
+        "DAY": time(14, 0),
+        "EVENING": time(21, 0),
+    }
+    slot_time = _SLOT_TIMES.get(time_slot.upper())
+    if not slot_time:
+        return None
+
+    target_date = (plan_start + timedelta(days=day_number - 1)).date()
+    naive = datetime.combine(target_date, slot_time)
+    scheduled = naive.replace(tzinfo=timezone.utc)
+
+    if scheduled <= now_utc:
+        return None
+
+    return scheduled
