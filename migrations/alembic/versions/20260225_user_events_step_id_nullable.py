@@ -15,9 +15,26 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.alter_column("user_events", "step_id", nullable=True)
+    # SQL-first migration (PostgreSQL): drop NOT NULL only when needed.
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_name = 'user_events'
+                  AND column_name = 'step_id'
+                  AND is_nullable = 'NO'
+            ) THEN
+                ALTER TABLE user_events ALTER COLUMN step_id DROP NOT NULL;
+            END IF;
+        END
+        $$;
+        """
+    )
 
 
 def downgrade() -> None:
     # Note: downgrade will fail if NULL values exist — intentional.
-    op.alter_column("user_events", "step_id", nullable=False)
+    op.execute("ALTER TABLE user_events ALTER COLUMN step_id SET NOT NULL;")
