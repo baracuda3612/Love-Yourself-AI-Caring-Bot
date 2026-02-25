@@ -34,6 +34,12 @@ TASK_EVENT_TYPES = {
     "task_ignored",
     "task_delayed",
 }
+ADAPTATION_EVENT_TYPES = {
+    "adaptation_proposed",
+    "adaptation_rejected",
+    "adaptation_undo_requested",
+    "adaptation_undo_blocked",
+}
 RESOURCE_EVENT_TYPES = {"task_viewed_resource"}
 FRICTION_EVENT_TYPES = {"task_skipped", "task_ignored", "task_delayed", "task_failed"}
 SKIP_STREAK_EVENT_TYPES = {"task_skipped", "task_ignored", "task_failed"}
@@ -405,6 +411,25 @@ def _maybe_emit_system_prompt(
 
     logger.info("[ADAPTATION_PROMPT] Dispatching system prompt for user_id=%s", user.id)
     _dispatch_system_message(user, message)
+    try:
+        log_user_event(
+            db=db,
+            user_id=user.id,
+            event_type="adaptation_proposed",
+            context={
+                "proposal_type": proposal,
+                "plan_id": str(active_plan.id),
+                "plan_load": normalized_load,
+                "skip_streak": skip_streak,
+                "plan_execution_window_id": str(window.id),
+            },
+        )
+    except Exception:
+        logger.error(
+            "[ADAPTATION_PROMPT] Failed to log adaptation_proposed for user_id=%s",
+            user.id,
+            exc_info=True,
+        )
 
 
 def _maybe_increment_batch_completion(
@@ -469,13 +494,18 @@ def log_user_event(
             server_now,
         )
 
-    step_value = _resolve_step_id(step_id, content_id, plan_step_id)
-    if content_id is None and not db.get(ContentLibrary, step_value):
-        _ensure_content_stub(db, step_value, event_context)
-    content_lookup_id = str(content_id) if content_id is not None else step_value
-    content = db.get(ContentLibrary, content_lookup_id)
-    if content:
-        event_context.setdefault("content_version", content.content_version)
+    is_task_event = event_type in TASK_EVENT_TYPES
+
+    if is_task_event:
+        step_value = _resolve_step_id(step_id, content_id, plan_step_id)
+        if content_id is None and not db.get(ContentLibrary, step_value):
+            _ensure_content_stub(db, step_value, event_context)
+        content_lookup_id = str(content_id) if content_id is not None else step_value
+        content = db.get(ContentLibrary, content_lookup_id)
+        if content:
+            event_context.setdefault("content_version", content.content_version)
+    else:
+        step_value = step_id and str(step_id) or (plan_step_id and str(plan_step_id)) or None
 
     if event_type == "parameter_set":
         if event_context.get("parameter") == "load_mode":
@@ -495,7 +525,7 @@ def log_user_event(
     )
     db.add(event)
 
-    if event_type in TASK_EVENT_TYPES:
+    if is_task_event and step_value:
         stats = _get_or_create_task_stats(db, user_id, step_value)
         _update_task_stats(stats, event_type, bucket, event_context)
         if event_type in FRICTION_EVENT_TYPES:
@@ -511,7 +541,7 @@ def log_user_event(
                 server_now,
             )
 
-    if event_type in {"task_skipped", "task_ignored", "task_failed"}:
+    if event_type in {"task_skipped", "task_ignored", "task_failed"} and step_value:
         db.flush()
         _maybe_emit_system_prompt(db, user, window, event_type)
 

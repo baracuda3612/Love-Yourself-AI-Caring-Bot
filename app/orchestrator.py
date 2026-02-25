@@ -83,6 +83,7 @@ from app.workers.mock_workers import (
 )
 from app.schemas.planner import DifficultyLevel, GeneratedPlan, StepType
 from app.plan_duration import assert_canonical_total_days
+from app.telemetry import log_user_event
 
 session_memory = SessionMemory(limit=20)
 logger = logging.getLogger(__name__)
@@ -967,8 +968,34 @@ async def handle_undo_last_adaptation(
     """Handles semantic undo: cancel last adaptation via inverse intent."""
     active_plan = get_active_plan(db, user_id)
     if not active_plan:
+        try:
+            log_user_event(
+                db=db,
+                user_id=user_id,
+                event_type="adaptation_undo_blocked",
+                context={
+                    "plan_id": None,
+                    "reason": "no_active_plan",
+                    "last_intent": None,
+                },
+            )
+        except Exception:
+            logger.warning("[ADAPTATION] Failed to log undo_blocked for user %s", user_id, exc_info=True)
         await session_memory.clear_adaptation_context(user_id)
         return "Немає активного плану.", []
+
+    try:
+        log_user_event(
+            db=db,
+            user_id=user_id,
+            event_type="adaptation_undo_requested",
+            context={
+                "plan_id": str(active_plan.id) if active_plan else None,
+                "current_state": current_state,
+            },
+        )
+    except Exception:
+        logger.warning("[ADAPTATION] Failed to log undo_requested for user %s", user_id, exc_info=True)
 
     last_entry = (
         db.query(AdaptationHistory)
@@ -980,17 +1007,56 @@ async def handle_undo_last_adaptation(
         .first()
     )
     if not last_entry:
+        try:
+            log_user_event(
+                db=db,
+                user_id=user_id,
+                event_type="adaptation_undo_blocked",
+                context={
+                    "plan_id": str(active_plan.id),
+                    "reason": "no_history",
+                    "last_intent": None,
+                },
+            )
+        except Exception:
+            logger.warning("[ADAPTATION] Failed to log undo_blocked for user %s", user_id, exc_info=True)
         await session_memory.clear_adaptation_context(user_id)
         return "Немає змін для скасування.", []
 
     try:
         last_intent = AdaptationIntent(last_entry.intent)
     except ValueError:
+        try:
+            log_user_event(
+                db=db,
+                user_id=user_id,
+                event_type="adaptation_undo_blocked",
+                context={
+                    "plan_id": str(active_plan.id),
+                    "reason": "invalid_intent_in_history",
+                    "last_intent": last_entry.intent if last_entry else None,
+                },
+            )
+        except Exception:
+            logger.warning("[ADAPTATION] Failed to log undo_blocked for user %s", user_id, exc_info=True)
         await session_memory.clear_adaptation_context(user_id)
         return "Не вдалось визначити останню адаптацію.", []
 
     inverse = get_inverse_intent(last_intent)
     if inverse is None:
+        try:
+            log_user_event(
+                db=db,
+                user_id=user_id,
+                event_type="adaptation_undo_blocked",
+                context={
+                    "plan_id": str(active_plan.id),
+                    "reason": "non_invertible_intent",
+                    "last_intent": last_intent.value if last_intent else None,
+                },
+            )
+        except Exception:
+            logger.warning("[ADAPTATION] Failed to log undo_blocked for user %s", user_id, exc_info=True)
         await session_memory.clear_adaptation_context(user_id)
         return (
             f"❌ Цю зміну ({last_intent.value}) неможливо скасувати автоматично.\n"
@@ -1011,6 +1077,19 @@ async def handle_undo_last_adaptation(
         if slot:
             inverse_params = {"slot_to_remove": slot}
         else:
+            try:
+                log_user_event(
+                    db=db,
+                    user_id=user_id,
+                    event_type="adaptation_undo_blocked",
+                    context={
+                        "plan_id": str(active_plan.id),
+                        "reason": "missing_slot_params",
+                        "last_intent": last_intent.value if last_intent else None,
+                    },
+                )
+            except Exception:
+                logger.warning("[ADAPTATION] Failed to log undo_blocked for user %s", user_id, exc_info=True)
             await session_memory.clear_adaptation_context(user_id)
             return (
                 "❌ Не вдалось скасувати цю зміну автоматично.\n"
@@ -1185,6 +1264,29 @@ async def handle_adaptation_response(
         return reply_text, followups
 
     if transition_signal == "ACTIVE":
+        if current_state == "ADAPTATION_CONFIRMATION":
+            adaptation_ctx = await session_memory.get_adaptation_context(user_id)
+            rejected_intent = (adaptation_ctx or {}).get("intent")
+            rejected_params = (adaptation_ctx or {}).get("params")
+            if rejected_intent:
+                try:
+                    log_user_event(
+                        db=db,
+                        user_id=user_id,
+                        event_type="adaptation_rejected",
+                        context={
+                            "rejected_intent": rejected_intent,
+                            "rejected_params": rejected_params,
+                            "reason": "user_declined",
+                        },
+                    )
+                except Exception:
+                    logger.warning(
+                        "[ADAPTATION] Failed to log adaptation_rejected for user %s",
+                        user_id,
+                        exc_info=True,
+                    )
+
         if not can_transition(current_state, "ACTIVE"):
             logger.error(
                 "[FSM] Blocked illegal transition %s -> %s",

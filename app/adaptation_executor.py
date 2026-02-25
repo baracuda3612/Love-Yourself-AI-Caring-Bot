@@ -193,6 +193,8 @@ class AdaptationExecutor:
                 "slot_removed": slot_to_remove,
                 "canceled_step_count": len(canceled_ids),
                 "new_load": plan.load,
+                "plan_day": plan.current_day,
+                "plan_focus": plan.focus,
             },
         )
 
@@ -307,6 +309,8 @@ class AdaptationExecutor:
                 "slot_added": slot_to_add,
                 "added_step_count": len(added_ids),
                 "new_load": plan.load,
+                "plan_day": plan.current_day,
+                "plan_focus": plan.focus,
             },
         )
 
@@ -548,6 +552,9 @@ class AdaptationExecutor:
             context={
                 "plan_id": plan.id,
                 "canceled_step_count": len(result.canceled_step_ids),
+                "plan_load": plan.load,
+                "plan_focus": plan.focus,
+                "plan_day": plan.current_day,
             },
         )
 
@@ -576,6 +583,8 @@ class AdaptationExecutor:
             context={
                 "plan_id": plan.id,
                 "rescheduled_step_count": len(result.rescheduled_step_ids),
+                "plan_load": plan.load,
+                "plan_day": plan.current_day,
             },
         )
 
@@ -871,6 +880,7 @@ class AdaptationExecutor:
                 "new_plan_id": new_plan.id,
                 "canceled_step_count": len(canceled_ids),
                 "added_step_count": len(added_step_ids),
+                "plan_day": plan.current_day,
             },
         )
 
