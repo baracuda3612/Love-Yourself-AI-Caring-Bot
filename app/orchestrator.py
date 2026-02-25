@@ -967,6 +967,7 @@ async def handle_undo_last_adaptation(
     """Handles semantic undo: cancel last adaptation via inverse intent."""
     active_plan = get_active_plan(db, user_id)
     if not active_plan:
+        await session_memory.clear_adaptation_context(user_id)
         return "Немає активного плану.", []
 
     last_entry = (
@@ -979,24 +980,47 @@ async def handle_undo_last_adaptation(
         .first()
     )
     if not last_entry:
+        await session_memory.clear_adaptation_context(user_id)
         return "Немає змін для скасування.", []
 
     try:
         last_intent = AdaptationIntent(last_entry.intent)
     except ValueError:
+        await session_memory.clear_adaptation_context(user_id)
         return "Не вдалось визначити останню адаптацію.", []
 
     inverse = get_inverse_intent(last_intent)
     if inverse is None:
+        await session_memory.clear_adaptation_context(user_id)
         return (
             f"❌ Цю зміну ({last_intent.value}) неможливо скасувати автоматично.\n"
             "Структурні зміни плану потребують ручного коригування.",
             [],
         )
 
+    original_params = last_entry.params or {}
+    inverse_params: dict | None = None
+
+    if last_intent == AdaptationIntent.REDUCE_DAILY_LOAD:
+        slot = original_params.get("slot_to_remove")
+        if slot:
+            inverse_params = {"slot_to_add": slot}
+
+    elif last_intent == AdaptationIntent.INCREASE_DAILY_LOAD:
+        slot = original_params.get("slot_to_add")
+        if slot:
+            inverse_params = {"slot_to_remove": slot}
+        else:
+            await session_memory.clear_adaptation_context(user_id)
+            return (
+                "❌ Не вдалось скасувати цю зміну автоматично.\n"
+                "Параметр слоту не збережено. Зміни навантаження вручну.",
+                [],
+            )
+
     fake_llm_response = {
         "adaptation_intent": inverse.value,
-        "adaptation_params": None,
+        "adaptation_params": inverse_params,
         "transition_signal": "EXECUTE_ADAPTATION",
         "reply_text": "",
     }
