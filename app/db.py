@@ -227,6 +227,12 @@ class AIPlan(Base):
         cascade="all, delete-orphan",
         order_by="AIPlanVersion.created_at",
     )
+    adaptation_history = relationship(
+        "AdaptationHistory",
+        back_populates="plan",
+        cascade="all, delete-orphan",
+        order_by="AdaptationHistory.applied_at",
+    )
 
 
 class AIPlanDay(Base):
@@ -302,6 +308,26 @@ class AIPlanVersion(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     plan = relationship("AIPlan", back_populates="versions")
+
+
+class AdaptationHistory(Base):
+    __tablename__ = "adaptation_history"
+
+    id = Column(Integer, primary_key=True)
+    plan_id = Column(Integer, ForeignKey("ai_plans.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+
+    intent = Column(String(60), nullable=False)
+    params = Column(JSONB, nullable=True, default=None)
+    category = Column(String(40), nullable=False)
+
+    snapshot_before = Column(JSONB, nullable=False)
+
+    applied_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    is_rolled_back = Column(Boolean, default=False, nullable=False)
+    rolled_back_at = Column(DateTime(timezone=True), nullable=True)
+
+    plan = relationship("AIPlan", back_populates="adaptation_history")
 
 
 class PlanDraftRecord(Base):

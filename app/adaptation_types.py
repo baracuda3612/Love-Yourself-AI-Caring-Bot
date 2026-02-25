@@ -167,6 +167,164 @@ def get_non_structural_intents() -> Set[AdaptationIntent]:
     }
 
 
+# ── Conflict Matrix ──────────────────────────────────────────────────────────
+# Maps intent → set of intents that CANNOT be applied immediately before it.
+# Check: if last_applied_intent in ADAPTATION_CONFLICT_MATRIX[current_intent] → block.
+ADAPTATION_CONFLICT_MATRIX: dict[AdaptationIntent, set[AdaptationIntent]] = {
+    AdaptationIntent.REDUCE_DAILY_LOAD: {
+        AdaptationIntent.REDUCE_DAILY_LOAD,
+    },
+    AdaptationIntent.INCREASE_DAILY_LOAD: {
+        AdaptationIntent.INCREASE_DAILY_LOAD,
+    },
+    AdaptationIntent.PAUSE_PLAN: {
+        AdaptationIntent.PAUSE_PLAN,
+    },
+    AdaptationIntent.RESUME_PLAN: {
+        AdaptationIntent.RESUME_PLAN,
+    },
+    AdaptationIntent.CHANGE_MAIN_CATEGORY: {
+        AdaptationIntent.CHANGE_MAIN_CATEGORY,
+        AdaptationIntent.PAUSE_PLAN,
+    },
+    AdaptationIntent.EXTEND_PLAN_DURATION: {
+        AdaptationIntent.EXTEND_PLAN_DURATION,
+        AdaptationIntent.SHORTEN_PLAN_DURATION,
+    },
+    AdaptationIntent.SHORTEN_PLAN_DURATION: {
+        AdaptationIntent.SHORTEN_PLAN_DURATION,
+        AdaptationIntent.EXTEND_PLAN_DURATION,
+    },
+}
+
+
+def check_adaptation_conflict(
+    intent: AdaptationIntent,
+    last_applied_intent: AdaptationIntent | None,
+    current_plan_load: str | None,
+    current_plan_status: str | None,
+) -> str | None:
+    """
+    Returns a human-readable reason string if adaptation is blocked.
+    Returns None if allowed.
+
+    Call this BEFORE entering ADAPTATION_CONFIRMATION state.
+    Do NOT call inside executor.
+    """
+    if intent == AdaptationIntent.REDUCE_DAILY_LOAD and current_plan_load == "LITE":
+        return "already_minimum_load"
+    if intent == AdaptationIntent.INCREASE_DAILY_LOAD and current_plan_load == "INTENSIVE":
+        return "already_maximum_load"
+    if intent == AdaptationIntent.PAUSE_PLAN and current_plan_status == "paused":
+        return "plan_already_paused"
+    if intent == AdaptationIntent.RESUME_PLAN and current_plan_status == "active":
+        return "plan_not_paused"
+
+    if last_applied_intent is not None:
+        blocked_after = ADAPTATION_CONFLICT_MATRIX.get(intent, set())
+        if last_applied_intent in blocked_after:
+            return f"conflicts_with_previous_{last_applied_intent.value}"
+
+    return None
+
+
+# ── Rate Limits ──────────────────────────────────────────────────────────────
+ADAPTATION_RATE_LIMITS: dict[str, dict] = {
+    "LOAD_ADJUSTMENT": {
+        "max_per_day": 2,
+        "max_total": 10,
+        "cooldown_minutes": 30,
+    },
+    "DIFFICULTY_ADJUSTMENT": {
+        "max_per_day": 2,
+        "max_total": 10,
+        "cooldown_minutes": 30,
+    },
+    "DURATION_ADJUSTMENT": {
+        "max_per_day": 1,
+        "max_total": 3,
+        "cooldown_minutes": 60,
+    },
+    "EXECUTION_STATE": {
+        "max_per_day": 5,
+        "max_total": None,
+        "cooldown_minutes": 0,
+    },
+    "FOCUS_CHANGE": {
+        "max_per_day": 1,
+        "max_total": 2,
+        "cooldown_minutes": 120,
+    },
+}
+
+
+def check_rate_limit(
+    intent: AdaptationIntent,
+    history_entries: list,
+    now_utc,
+) -> str | None:
+    """
+    Returns reason string if rate limited, else None.
+    history_entries: already filtered to this plan, ordered by applied_at DESC.
+    """
+    category = get_adaptation_category(intent)
+    limits = ADAPTATION_RATE_LIMITS.get(category)
+    if not limits:
+        return None
+
+    category_entries = [e for e in history_entries if e.category == category and not e.is_rolled_back]
+
+    cooldown_minutes = limits.get("cooldown_minutes", 0)
+    if cooldown_minutes > 0 and category_entries:
+        last = category_entries[0]
+        elapsed = (now_utc - last.applied_at).total_seconds() / 60
+        if elapsed < cooldown_minutes:
+            remaining = int(cooldown_minutes - elapsed)
+            return f"cooldown_active_{remaining}_minutes"
+
+    max_per_day = limits.get("max_per_day")
+    if max_per_day is not None:
+        # TODO: day_start is computed in UTC. For users in non-UTC timezones this means
+        # the "day" boundary may differ from their local midnight by up to ±12h.
+        # Fix: pass user.timezone and localize day_start accordingly.
+        # Acceptable for MVP — affects edge cases only (e.g. user in UTC+2 at 23:00 local).
+        day_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_count = sum(1 for e in category_entries if e.applied_at >= day_start)
+        if today_count >= max_per_day:
+            return f"daily_limit_reached_{today_count}_of_{max_per_day}"
+
+    max_total = limits.get("max_total")
+    if max_total is not None and len(category_entries) >= max_total:
+        return f"total_limit_reached_{len(category_entries)}_of_{max_total}"
+
+    return None
+
+
+# ── Inverse Intent Map ────────────────────────────────────────────────────────
+# Semantic undo policy:
+# - LOAD / DIFFICULTY / EXECUTION_STATE: inverse intent is applied as a NEW adaptation.
+#   This means exercises are NOT restored to their exact pre-adaptation state.
+#   UX expectation: "undo load change" = new symmetrical adaptation, not exact revert.
+# - DURATION / FOCUS (None values below): no automatic undo.
+#   Reason: CHANGE_MAIN_CATEGORY creates a new plan — old plan is already paused (IS the rollback).
+#   EXTEND/SHORTEN: structural changes to step history make safe restore ambiguous.
+INVERSE_INTENT: dict[AdaptationIntent, AdaptationIntent | None] = {
+    AdaptationIntent.REDUCE_DAILY_LOAD: AdaptationIntent.INCREASE_DAILY_LOAD,
+    AdaptationIntent.INCREASE_DAILY_LOAD: AdaptationIntent.REDUCE_DAILY_LOAD,
+    AdaptationIntent.LOWER_DIFFICULTY: AdaptationIntent.INCREASE_DIFFICULTY,
+    AdaptationIntent.INCREASE_DIFFICULTY: AdaptationIntent.LOWER_DIFFICULTY,
+    AdaptationIntent.PAUSE_PLAN: AdaptationIntent.RESUME_PLAN,
+    AdaptationIntent.RESUME_PLAN: AdaptationIntent.PAUSE_PLAN,
+    AdaptationIntent.EXTEND_PLAN_DURATION: None,
+    AdaptationIntent.SHORTEN_PLAN_DURATION: None,
+    AdaptationIntent.CHANGE_MAIN_CATEGORY: None,
+}
+
+
+def get_inverse_intent(intent: AdaptationIntent) -> AdaptationIntent | None:
+    return INVERSE_INTENT.get(intent)
+
+
 class AdaptationNotEligibleError(ValueError):
     """Raised when adaptation cannot be applied due to current plan state."""
 
