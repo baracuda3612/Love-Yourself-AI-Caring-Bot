@@ -968,19 +968,9 @@ async def handle_undo_last_adaptation(
     """Handles semantic undo: cancel last adaptation via inverse intent."""
     active_plan = get_active_plan(db, user_id)
     if not active_plan:
-        try:
-            log_user_event(
-                db=db,
-                user_id=user_id,
-                event_type="adaptation_undo_blocked",
-                context={
-                    "plan_id": None,
-                    "reason": "no_active_plan",
-                    "last_intent": None,
-                },
-            )
-        except Exception:
-            logger.warning("[ADAPTATION] Failed to log undo_blocked for user %s", user_id, exc_info=True)
+        # Known limitation: `adaptation_undo_blocked` analytics are plan-scoped.
+        # Logging this event with `plan_id=None` causes a silent mismatch in
+        # acceptance-rate queries that filter by plan_id.
         await session_memory.clear_adaptation_context(user_id)
         return "Немає активного плану.", []
 
