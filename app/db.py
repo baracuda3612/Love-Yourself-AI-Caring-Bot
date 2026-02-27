@@ -160,6 +160,8 @@ class UserProfile(Base):
             "EVENING": "21:00",
         },
     )
+    coach_persona = Column(String(20), nullable=True)
+    pulse_sent_indices = Column(JSONB, nullable=True, default=list)
 
     user = relationship("User", back_populates="profile")
 
