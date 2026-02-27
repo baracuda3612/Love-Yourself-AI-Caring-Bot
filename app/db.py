@@ -160,6 +160,8 @@ class UserProfile(Base):
             "EVENING": "21:00",
         },
     )
+    coach_persona = Column(String(20), nullable=True)
+    pulse_sent_indices = Column(JSONB, nullable=True, default=list)
 
     user = relationship("User", back_populates="profile")
 
@@ -429,6 +431,14 @@ class PlanExecutionWindow(Base):
 class UserEvent(Base):
     __tablename__ = "user_events"
     __table_args__ = (Index("idx_user_events_context_gin", "context", postgresql_using="gin"),)
+
+    @property
+    def plan_step_id(self):
+        return self.step_id
+
+    @plan_step_id.setter
+    def plan_step_id(self, value):
+        self.step_id = value
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     event_type = Column(String, nullable=False)

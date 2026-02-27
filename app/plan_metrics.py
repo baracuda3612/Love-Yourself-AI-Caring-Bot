@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import Integer, cast
+from sqlalchemy import Integer, cast, func
 from sqlalchemy.orm import Session
 
 from app.db import AIPlan, AIPlanDay, AIPlanStep, UserEvent
@@ -22,7 +22,10 @@ class _TimelineEvent:
 
 
 def _plan_step_id_expr():
-    return cast(UserEvent.context["plan_step_id"].astext, Integer)
+    return func.coalesce(
+        cast(UserEvent.step_id, Integer),
+        cast(UserEvent.context["plan_step_id"].astext, Integer),
+    )
 
 
 def _plan_id_expr():
