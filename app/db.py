@@ -450,6 +450,12 @@ class UserEvent(Base):
         nullable=False,
         index=True,
     )
+    # TECH-DEBT TD-2:
+    # step_id is Text for historical reasons and may contain:
+    # - numeric plan_step_id (new system)
+    # - UUID/content_id (legacy deliveries)
+    # Metrics must treat this column carefully.
+    # Future refactor: introduce plan_step_int (Integer, nullable) and backfill.
     step_id = Column(Text, ForeignKey("content_library.id"), nullable=True)
     time_of_day_bucket = Column(String, nullable=False)
     context = Column(JSONB, nullable=False, default=dict)

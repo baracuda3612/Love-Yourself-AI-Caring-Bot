@@ -29,6 +29,10 @@ scheduler = BackgroundScheduler(jobstores=jobstores, timezone="UTC")
 
 logger = logging.getLogger(__name__)
 
+# TECH-DEBT TD-3:
+# Never reuse ORM objects across SQLAlchemy sessions.
+# Always re-fetch entities inside the session where they are used.
+
 _scheduler_started = False
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
 _ALLOWED_USER_STATES = {"ACTIVE"}
@@ -237,6 +241,9 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
         task_total = len(all_today)
         task_index = next((i + 1 for i, s in enumerate(all_today) if s.id == step.id), 1)
 
+        # TECH-DEBT TD-4:
+        # Task notification must be formatted at delivery time.
+        # Adaptation layer can mutate step content after scheduling.
         # TODO: notification_text is baked at schedule time, not delivery time.
         # If adaptation changes step title/content between scheduling and delivery,
         # user will see stale text. Fix when adaptation layer is stable:
@@ -385,6 +392,10 @@ def send_daily_pulse():
                 User.tg_id.isnot(None),
             ).all()
 
+            # TECH-DEBT TD-5:
+            # Current implementation performs N+1 query for pulse_sent detection.
+            # Refactor to single query fetching today's pulse_sent user_ids
+            # before scaling beyond ~1000 active users.
             pending_ids: list[int] = []
             for user in active_users:
                 if not user.profile:
@@ -510,6 +521,9 @@ def check_ignored_tasks():
     Finds delivered steps in the last day without reaction and logs task_ignored telemetry only.
     """
     with SessionLocal() as db:
+        # TECH-DEBT TD-6:
+        # This logic uses sliding 24h window, not calendar-day semantics.
+        # Refactor if strict day-based behavior is required.
         yesterday_start = datetime.now(pytz.UTC) - timedelta(days=1)
         yesterday_end = datetime.now(pytz.UTC)
 

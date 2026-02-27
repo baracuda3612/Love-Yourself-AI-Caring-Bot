@@ -473,6 +473,10 @@ def log_user_event(
     local_dt = server_now.astimezone(_resolve_timezone(user))
     bucket = _time_bucket(local_dt)
 
+    # TECH-DEBT TD-7:
+    # UserEvent.context is semi-structured JSON.
+    # Maintain documentation of allowed keys.
+    # Consider schema versioning if analytics complexity increases.
     event_context = dict(context or {})
     if content_id is not None:
         event_context.setdefault("content_id", str(content_id))

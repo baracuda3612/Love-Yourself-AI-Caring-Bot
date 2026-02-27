@@ -31,6 +31,10 @@ async def _complete(llm_client, system: str, user: str) -> str:
     return extract_output_text(response)
 
 
+# TECH-DEBT TD-8:
+# LLM is called per-user per-day.
+# Introduce commentary caching per (quote, persona)
+# before scaling beyond several thousand users.
 async def generate_pulse_message(user_profile, db, llm_client) -> str:
     persona = get_persona(user_profile)
     sent = get_sent_indices(user_profile)
