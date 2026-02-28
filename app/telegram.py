@@ -12,7 +12,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.config import settings
-from app.db import AIPlan, AIPlanDay, AIPlanStep, ChatHistory, SessionLocal, User, UserProfile
+from app.db import AIPlan, AIPlanDay, AIPlanStep, ChatHistory, SessionLocal, User, UserEvent, UserProfile
 from app.orchestrator import (
     PLAN_GENERATION_WAIT_MESSAGE,
     build_plan_draft_preview,
@@ -21,8 +21,11 @@ from app.orchestrator import (
 )
 from app.plan_guards import validate_step_action
 from app.scheduler import schedule_plan_step
+from app.ux.catalog import get_trigger_message
+from app.ux.persona import get_persona
+from app.ux.task_notification import get_step_rationale
 from app.redis_client import create_fsm_storage, create_redis_client
-from app.telemetry import log_user_event
+from app.telemetry import get_success_streak, log_user_event
 from app.logging.router_logging import log_metric
 
 bot = Bot(token=settings.BOT_TOKEN, parse_mode="HTML")
@@ -323,7 +326,69 @@ async def handle_task_completed(callback_query: CallbackQuery):
     await callback_query.answer("✅ Чудово! Завдання виконано.")
     if callback_query.message:
         await callback_query.message.edit_reply_markup(reply_markup=None)
-        await callback_query.message.answer("✅ Завдання відмічено як виконане.")
+
+        try:
+            with SessionLocal() as db:
+                step = db.query(AIPlanStep).filter(AIPlanStep.id == step_id).first()
+                if not step:
+                    return
+
+                day = step.day
+                plan = day.plan
+                user = plan.user
+                persona = get_persona(user.profile)
+                streak = get_success_streak(db, user.id)
+                rationale = get_step_rationale(db, step)
+
+                all_today = db.query(AIPlanStep).filter(
+                    AIPlanStep.day_id == day.id,
+                    AIPlanStep.canceled_by_adaptation == False,
+                ).all()
+                all_done = all(s.is_completed for s in all_today)
+
+                total_completed = db.query(UserEvent).filter(
+                    UserEvent.user_id == user.id,
+                    UserEvent.event_type == "task_completed",
+                ).count()
+                last_two = db.query(UserEvent).filter(
+                    UserEvent.user_id == user.id,
+                    UserEvent.event_type.in_(["task_completed", "task_skipped"]),
+                ).order_by(UserEvent.timestamp.desc()).limit(2).all()
+                prev_event = last_two[1] if len(last_two) > 1 else None
+
+                is_comeback = prev_event and prev_event.event_type == "task_skipped"
+                is_first = total_completed == 1
+
+                if is_comeback:
+                    trigger_id = "comeback_after_skip"
+                elif is_first:
+                    trigger_id = "first_task_ever"
+                elif streak == 3:
+                    trigger_id = "streak_3"
+                elif streak == 7:
+                    trigger_id = "streak_7"
+                elif all_done:
+                    trigger_id = "day_all_done"
+                else:
+                    trigger_id = "task_completed"
+
+                context = {
+                    "name": user.first_name,
+                    "exercise": step.title,
+                    "day": day.day_number,
+                    "streak": streak,
+                    "focus": getattr(plan, "focus", None),
+                    "rationale": rationale,
+                }
+                msg = get_trigger_message(trigger_id, persona, context)
+        except Exception:
+            logger.exception("Failed to build completion trigger message")
+            msg = None
+
+        if msg:
+            await callback_query.message.answer(msg, parse_mode="HTML")
+        else:
+            await callback_query.message.answer("✅ Виконано!")
 
 
 @router.callback_query(F.data.startswith("task_skip:"))
@@ -373,7 +438,52 @@ async def handle_task_skipped(callback_query: CallbackQuery):
     await callback_query.answer("⏭️ Завдання пропущено")
     if callback_query.message:
         await callback_query.message.edit_reply_markup(reply_markup=None)
-        await callback_query.message.answer("⏭️ Завдання відмічено як пропущене.")
+
+        try:
+            with SessionLocal() as db:
+                step = db.query(AIPlanStep).filter(AIPlanStep.id == step_id).first()
+                if not step:
+                    return
+
+                user = step.day.plan.user
+                persona = get_persona(user.profile)
+                recent_actions = db.query(UserEvent).filter(
+                    UserEvent.user_id == user.id,
+                    UserEvent.event_type.in_(["task_completed", "task_skipped"]),
+                ).order_by(UserEvent.timestamp.desc()).limit(2).all()
+                two_skips = len(recent_actions) >= 2 and all(e.event_type == "task_skipped" for e in recent_actions)
+                trigger_id = "skip_2_in_row" if two_skips else "task_skipped"
+                context = {"name": user.first_name, "exercise": step.title, "day": step.day.day_number}
+                msg = get_trigger_message(trigger_id, persona, context)
+        except Exception:
+            logger.exception("Failed to build skip trigger message")
+            msg = None
+            trigger_id = "task_skipped"
+
+        keyboard = None
+        if trigger_id == "skip_2_in_row":
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="🔧 Переглянути план", callback_data="adapt_suggest")]]
+            )
+
+        if msg:
+            await callback_query.message.answer(msg, parse_mode="HTML", reply_markup=keyboard)
+        else:
+            await callback_query.message.answer("⏭️ Пропущено", reply_markup=keyboard)
+
+
+@router.callback_query(F.data == "adapt_suggest")
+async def handle_adapt_suggest(callback_query: CallbackQuery):
+    await callback_query.answer()
+    with SessionLocal() as db:
+        user, _ = _ensure_user(db, callback_query.from_user)
+
+    response = await handle_incoming_message(
+        user.id,
+        "хочу переглянути план через пропуски",
+    )
+    if callback_query.message:
+        await _send_agent_response(callback_query.message, user.id, response)
 
 
 async def _send_agent_response(message: Message, user_id: int, response: dict) -> None:
