@@ -473,11 +473,13 @@ def log_user_event(
     local_dt = server_now.astimezone(_resolve_timezone(user))
     bucket = _time_bucket(local_dt)
 
+    # TECH-DEBT TD-7:
+    # UserEvent.context is semi-structured JSON.
+    # Maintain documentation of allowed keys.
+    # Consider schema versioning if analytics complexity increases.
     event_context = dict(context or {})
     if content_id is not None:
         event_context.setdefault("content_id", str(content_id))
-    if plan_step_id is not None:
-        event_context.setdefault("plan_step_id", str(plan_step_id))
     event_context.setdefault("timezone_source", "user_profile")
 
     instance = _ensure_plan_instance(db, user_id, plan_instance_id)
@@ -547,6 +549,28 @@ def log_user_event(
 
     return event
 
+
+
+
+def get_success_streak(db: Session, user_id: int, limit: int = 60) -> int:
+    events = (
+        db.query(UserEvent.event_type)
+        .filter(
+            UserEvent.user_id == user_id,
+            UserEvent.event_type.in_({"task_completed", "task_skipped", "task_ignored", "task_failed"}),
+        )
+        .order_by(UserEvent.timestamp.desc(), UserEvent.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+    streak = 0
+    for (event_type,) in events:
+        if event_type == "task_completed":
+            streak += 1
+        else:
+            break
+    return streak
 
 def get_skip_streak(db: Session, user_id: int, limit: int) -> int:
     events = (
