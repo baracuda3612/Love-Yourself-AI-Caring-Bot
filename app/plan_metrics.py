@@ -5,13 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import Integer, cast
+from sqlalchemy import Integer, case, cast, func
 from sqlalchemy.orm import Session
 
 from app.db import AIPlan, AIPlanDay, AIPlanStep, UserEvent
 
 DELIVERED_EVENT_TYPE = "task_delivered"
 RESET_EVENT_TYPES = {"plan_adapted", "plan_restarted", "plan_created"}
+
+_NUMERIC_RE = r"^[0-9]+$"
 
 
 @dataclass(frozen=True)
@@ -21,8 +23,38 @@ class _TimelineEvent:
     is_reset: bool
 
 
+def _safe_int_from_text(expr):
+    """
+    Cast text column to Integer only if it matches numeric regex.
+    Prevents Postgres invalid input syntax errors on legacy UUID rows.
+    """
+    return case(
+        (expr.op("~")(_NUMERIC_RE), cast(expr, Integer)),
+        else_=None,
+    )
+
+
 def _plan_step_id_expr():
-    return cast(UserEvent.context["plan_step_id"].astext, Integer)
+    """
+    Returns safe integer expression for plan_step_id.
+    Order of precedence:
+        1. event.step_id (numeric only)
+        2. event.context["plan_step_id"] (numeric only)
+    """
+    step_txt = UserEvent.step_id
+    ctx_txt = UserEvent.context["plan_step_id"].astext
+
+    # TECH-DEBT TD-1:
+    # UserEvent.step_id is Text and historically mixed plan_step_id and UUID/content IDs.
+    # This regex-guarded cast prevents Postgres errors on legacy rows.
+    # Long-term fix: normalize plan_step_id into a dedicated Integer column.
+    # TECH-DEBT TD-9:
+    # Regex-based casting is safe but not optimal for large datasets.
+    # Replace with normalized integer column when event table grows significantly.
+    return func.coalesce(
+        _safe_int_from_text(step_txt),
+        _safe_int_from_text(ctx_txt),
+    )
 
 
 def _plan_id_expr():
