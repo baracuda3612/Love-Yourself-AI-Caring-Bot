@@ -6,7 +6,7 @@ from html import escape as _html_escape
 from pathlib import Path
 from typing import Any
 
-_BASE = Path(__file__).parent.parent / "resources"
+_BASE = Path(__file__).resolve().parents[2] / "resource" / "assets" / "ux"
 
 
 def _load(filename: str) -> dict[str, Any]:
