@@ -61,7 +61,7 @@ def _plan_id_expr():
     return cast(UserEvent.context["plan_id"].astext, Integer)
 
 
-def _fetch_delivered_steps(
+def fetch_delivered_steps(
     db: Session,
     user_id: int,
     plan_id: int,
@@ -103,12 +103,12 @@ def get_recent_tasks(
     plan_id: int,
     limit: int,
 ) -> list[AIPlanStep]:
-    delivered = _fetch_delivered_steps(db, user_id, plan_id)
+    delivered = fetch_delivered_steps(db, user_id, plan_id)
     return [step for step, _timestamp in delivered[:limit]]
 
 
 def get_completion_rate(db: Session, user_id: int, plan_id: int) -> float:
-    delivered = _fetch_delivered_steps(db, user_id, plan_id)
+    delivered = fetch_delivered_steps(db, user_id, plan_id)
     if not delivered:
         return 0.0
     completed = sum(1 for step, _timestamp in delivered if step.is_completed)
@@ -116,7 +116,7 @@ def get_completion_rate(db: Session, user_id: int, plan_id: int) -> float:
 
 
 def calculate_skip_streak(db: Session, user_id: int, plan_id: int) -> int:
-    delivered = _fetch_delivered_steps(db, user_id, plan_id)
+    delivered = fetch_delivered_steps(db, user_id, plan_id)
     if not delivered:
         return 0
 
