@@ -74,6 +74,7 @@ from app.fsm.states import (
     PLAN_FLOW_STATES,
     ADAPTATION_ENTRY_STATES,
     ENTRY_PROMPT_ALLOWED_STATES,
+    IDLE_STATES,
     PLAN_CREATION_ENTRY_STATES,
 )
 from app.workers.mock_workers import (
@@ -296,20 +297,102 @@ def _plan_end_date_status(plan_end_date: Optional[datetime]) -> Optional[Tuple[d
     return plan_end_date.astimezone(pytz.UTC), datetime.now(pytz.UTC)
 
 
-def _auto_complete_plan_if_needed(user_id: int) -> None:
+def _auto_complete_plan_if_needed(db: Session, user: User) -> None:
+    if not user.plan_end_date:
+        return
+
+    now = datetime.now(timezone.utc)
+    plan_end_date = user.plan_end_date
+    if plan_end_date.tzinfo is None:
+        plan_end_date = plan_end_date.replace(tzinfo=timezone.utc)
+
+    if plan_end_date >= now:
+        return
+
+    active_plans = (
+        db.query(AIPlan)
+        .filter(AIPlan.user_id == user.id, AIPlan.status == "active")
+        .order_by(AIPlan.created_at.desc())
+        .limit(2)
+        .all()
+    )
+
+    if len(active_plans) > 1:
+        logger.warning(
+            "[COMPLETION] Multiple active plans found for user %s; completing latest plan id=%s",
+            user.id,
+            active_plans[0].id,
+        )
+
+    plan = active_plans[0] if active_plans else None
+
+    # IDEMPOTENCY GUARD
+    if plan is None or plan.status == "completed":
+        if user.current_state not in IDLE_STATES:
+            user.current_state = "IDLE_FINISHED"
+            db.add(user)
+        return
+
+    plan.status = "completed"
+    plan.end_date = now
+    db.add(plan)
+
+    user.current_state = "IDLE_FINISHED"
+    db.add(user)
+
+    completion_rate = None
+    adaptation_count = None
+    metrics_error = False
+    try:
+        from app.plan_metrics import get_completion_rate
+        from app.adaptation_metrics import get_adaptation_count
+
+        completion_rate = get_completion_rate(db, user.id, plan.id)
+        adaptation_count = get_adaptation_count(db, plan.id)
+    except Exception as e:
+        metrics_error = True
+        logger.warning("[COMPLETION] metrics failed user=%s plan=%s: %s", user.id, plan.id, e)
+
+    try:
+        log_user_event(
+            db=db,
+            user_id=user.id,
+            event_type="plan_completed",
+            context={
+                "plan_id": plan.id,
+                "total_days": plan.total_days,
+                "focus": plan.focus,
+                "load": plan.load,
+                "duration": plan.duration,
+                "completion_rate": round(completion_rate, 4) if completion_rate is not None else None,
+                "adaptation_count": adaptation_count,
+                "metrics_error": metrics_error,
+            },
+        )
+    except Exception as e:
+        logger.error("[COMPLETION] log event failed user=%s: %s", user.id, e)
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.create_task(_stub_completion_message(user.id, plan.id))
+    except Exception as e:
+        logger.warning("[COMPLETION] create_task failed: %s", e)
+
+
+async def _stub_completion_message(user_id: int, plan_id: int) -> None:
+    """Placeholder. Повна реалізація в Таску 5."""
+    logger.info("[COMPLETION] plan=%s user=%s — message pending Task 5", plan_id, user_id)
+
+
+def _auto_complete_plan_if_needed_for_user_id(user_id: int) -> None:
     with SessionLocal() as db:
         user: Optional[User] = db.query(User).filter(User.id == user_id).first()
         if not user:
             return
-        if user.current_state != "ACTIVE":
-            return
-        plan_times = _plan_end_date_status(user.plan_end_date)
-        if not plan_times:
-            return
-        plan_end_date, now = plan_times
-        if plan_end_date >= now:
-            return
-        user.current_state = "IDLE_FINISHED"
+
+        _auto_complete_plan_if_needed(db, user)
+
         try:
             db.commit()
         except IntegrityError:
@@ -317,13 +400,7 @@ def _auto_complete_plan_if_needed(user_id: int) -> None:
             logger.error(
                 "[FSM] Failed to auto-complete plan for user %s (plan_end_date=%s)",
                 user_id,
-                plan_end_date,
-            )
-        else:
-            logger.info(
-                "[FSM] Auto-completed plan for user %s: ACTIVE → IDLE_FINISHED (plan_end_date=%s)",
-                user_id,
-                plan_end_date,
+                user.plan_end_date,
             )
 
 
@@ -1421,7 +1498,7 @@ async def handle_incoming_message(
 
     await session_memory.append_message(user_id, "user", message_text)
 
-    _auto_complete_plan_if_needed(user_id)
+    _auto_complete_plan_if_needed_for_user_id(user_id)
 
     async def _finalize_reply(
         text: str,
