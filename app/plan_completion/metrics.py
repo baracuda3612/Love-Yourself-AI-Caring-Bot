@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.adaptation_metrics import get_adaptation_count
 from app.db import AIPlan
-from app.plan_metrics import _fetch_delivered_steps, get_completion_rate
+from app.plan_metrics import fetch_delivered_steps
 
 
 @dataclass(frozen=True)
@@ -64,15 +64,20 @@ def build_completion_metrics(
     Збирає повну статистику завершеного плану.
     Чиста функція — тільки reads, ніяких side effects.
     """
-    plan = db.get(AIPlan, plan_id)
+    plan = (
+        db.query(AIPlan)
+        .filter(AIPlan.id == plan_id, AIPlan.user_id == user_id)
+        .first()
+    )
     if plan is None:
-        raise ValueError(f"Plan {plan_id} not found")
+        raise ValueError(f"Plan {plan_id} not found for user {user_id}")
 
-    delivered = _fetch_delivered_steps(db, user_id, plan_id)
+    delivered = fetch_delivered_steps(db, user_id, plan_id)
     total_delivered = len(delivered)
 
+    adaptation_count = get_adaptation_count(db, plan_id)
+
     if total_delivered == 0:
-        adaptation_count = get_adaptation_count(db, plan_id)
         return CompletionMetrics(
             plan_id=plan.id,
             total_days=plan.total_days or 0,
@@ -94,6 +99,7 @@ def build_completion_metrics(
     total_completed = sum(1 for step, _timestamp in delivered if step.is_completed)
     total_skipped = sum(1 for step, _timestamp in delivered if step.skipped)
     total_ignored = max(total_delivered - total_completed - total_skipped, 0)
+    completion_rate = total_completed / total_delivered
 
     completed_day_numbers = {
         step.day.day_number
@@ -114,9 +120,6 @@ def build_completion_metrics(
         leaders = [slot for slot, count in slot_counts.items() if count == max_count]
         if len(leaders) == 1:
             dominant_time_slot = leaders[0]
-
-    completion_rate = get_completion_rate(db, user_id, plan_id)
-    adaptation_count = get_adaptation_count(db, plan_id)
 
     return CompletionMetrics(
         plan_id=plan.id,
