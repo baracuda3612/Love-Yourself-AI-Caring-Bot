@@ -330,7 +330,8 @@ def _auto_complete_plan_if_needed(db: Session, user: User) -> None:
     if plan is None or plan.status == "completed":
         if user.current_state not in IDLE_STATES:
             user.current_state = "IDLE_FINISHED"
-            db.add(user)
+        user.plan_end_date = None
+        db.add(user)
         return
 
     plan.status = "completed"
@@ -338,6 +339,7 @@ def _auto_complete_plan_if_needed(db: Session, user: User) -> None:
     db.add(plan)
 
     user.current_state = "IDLE_FINISHED"
+    user.plan_end_date = None
     db.add(user)
 
     completion_rate = None
@@ -371,13 +373,22 @@ def _auto_complete_plan_if_needed(db: Session, user: User) -> None:
         )
     except Exception as e:
         logger.error("[COMPLETION] log event failed user=%s: %s", user.id, e)
+        db.rollback()
+        plan.status = "completed"
+        plan.end_date = now
+        user.current_state = "IDLE_FINISHED"
+        user.plan_end_date = None
+        db.add(plan)
+        db.add(user)
 
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            asyncio.create_task(_stub_completion_message(user.id, plan.id))
-    except Exception as e:
-        logger.warning("[COMPLETION] create_task failed: %s", e)
+        asyncio.get_running_loop()
+        asyncio.create_task(_stub_completion_message(user.id, plan.id))
+    except RuntimeError:
+        logger.warning(
+            "[COMPLETION] No running event loop, skipping message task user=%s",
+            user.id,
+        )
 
 
 async def _stub_completion_message(user_id: int, plan_id: int) -> None:

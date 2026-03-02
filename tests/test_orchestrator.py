@@ -275,17 +275,17 @@ def test_auto_complete_marks_plan_completed_and_logs_event_with_metrics_error(mo
         captured.update(kwargs)
 
     monkeypatch.setattr(orchestrator, "log_user_event", fake_log_user_event)
-    monkeypatch.setattr(
-        orchestrator.asyncio,
-        "get_event_loop",
-        lambda: type("LoopStub", (), {"is_running": lambda _self: False})(),
-    )
+    def raise_no_loop():
+        raise RuntimeError("no running loop")
+
+    monkeypatch.setattr(orchestrator.asyncio, "get_running_loop", raise_no_loop)
 
     orchestrator._auto_complete_plan_if_needed(db, user)
 
     assert latest_plan.status == "completed"
     assert latest_plan.end_date is not None
     assert user.current_state == "IDLE_FINISHED"
+    assert user.plan_end_date is None
     assert captured["event_type"] == "plan_completed"
     assert captured["context"]["plan_id"] == 9
     assert captured["context"]["metrics_error"] is True
@@ -308,7 +308,46 @@ def test_auto_complete_without_active_plan_sets_idle_without_logging(monkeypatch
     orchestrator._auto_complete_plan_if_needed(db, user)
 
     assert user.current_state == "IDLE_FINISHED"
+    assert user.plan_end_date is None
     assert called["value"] is False
+
+
+def test_auto_complete_reapplies_plan_and_user_after_event_logging_failure(monkeypatch):
+    user = type("UserStub", (), {})()
+    user.id = 101
+    user.current_state = "ACTIVE"
+    user.plan_end_date = datetime.now(timezone.utc) - timedelta(days=1)
+
+    latest_plan = type("PlanStub", (), {})()
+    latest_plan.id = 22
+    latest_plan.status = "active"
+    latest_plan.created_at = datetime.now(timezone.utc)
+    latest_plan.total_days = 21
+    latest_plan.focus = "REST"
+    latest_plan.load = "MID"
+    latest_plan.duration = "LONG"
+    latest_plan.end_date = None
+
+    db = _AutoCompleteDB([latest_plan])
+    rollback_called = {"value": False}
+
+    def fake_log_user_event(**_kwargs):
+        raise RuntimeError("boom")
+
+    def fake_rollback():
+        rollback_called["value"] = True
+
+    db.rollback = fake_rollback
+
+    monkeypatch.setattr(orchestrator, "log_user_event", fake_log_user_event)
+
+    orchestrator._auto_complete_plan_if_needed(db, user)
+
+    assert rollback_called["value"] is True
+    assert latest_plan.status == "completed"
+    assert latest_plan.end_date is not None
+    assert user.current_state == "IDLE_FINISHED"
+    assert user.plan_end_date is None
 
 
 def test_auto_complete_warns_and_uses_latest_plan(monkeypatch, caplog):
