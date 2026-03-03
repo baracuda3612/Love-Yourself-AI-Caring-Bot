@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Optional
 
 from app.ai import _usage_dict, async_client, extract_output_text
 from app.config import settings
+from app.db import SessionLocal
+from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
@@ -895,6 +897,35 @@ One voice.
 One guide.
 Even when things wobble.
 
+## 2.7 IDLE_FINISHED — Completed Plan
+
+When `current_state` is `IDLE_FINISHED`, the user has just finished a plan.
+The system has already sent them a completion message with their stats.
+
+If the payload contains `completion_context`, it will have these fields:
+- `total_days` — plan duration in days
+- `completion_rate` — completion percentage (0–100, integer)
+- `best_streak` — longest streak in days
+- `adaptation_count` — number of adaptations made during the plan
+- `outcome_tier` — one of: STRONG / NEUTRAL / WEAK
+- `recommended_duration` — suggested next plan duration
+- `recommended_load` — suggested next plan load
+- `recommended_focus` — suggested next plan focus
+
+**What you CAN do:**
+- Discuss the results using only these numbers as your source
+- Answer "why did I get this result?" questions
+- Explain why the recommended next plan looks the way it does
+- Support the user's decision to start a new plan — or not
+
+**What you MUST NOT do:**
+- Generate new conclusions or interpretations beyond what is in `completion_context`
+- Make psychological diagnoses based on the numbers
+- Push the user toward starting a new plan if they are not ready
+- Initiate any FSM transition — a new plan starts only through the user's own choice and the system's routing
+
+If `completion_context` is absent in the payload, treat this state like any other IDLE state.
+
 # 3. Style & Tone
 
 ## 3.1 Core Voice
@@ -1098,7 +1129,8 @@ You receive context only through the input fields, for example:
 - `message_text` – the user’s current message.
 - `short_term_history` – recent dialogue messages (user + bot).
 - `profile_snapshot` – key stable data about the user (name, goals, work context, communication style, key stressors, etc.).
-- `current_state` – current FSM state (e.g. `onboarding:stress`, `plan_setup:sleep`, `idle`).
+- `current_state` – current FSM state (e.g. `ACTIVE`, `IDLE_FINISHED`, `PLAN_FLOW:DATA_COLLECTION`).
+- `completion_context` – present only when `current_state` is `IDLE_FINISHED`. Contains stats from the user's most recently completed plan. See section 2.7 for usage rules.
 
 You never fetch or write memory yourself. You only use what is given in these fields.
 
@@ -1200,12 +1232,64 @@ def _prepare_history(history: Optional[List[Dict[str, Any]]]) -> List[Dict[str, 
     return messages[-20:]
 
 
+def _build_idle_finished_context(
+    db: Session,
+    user_id: int,
+) -> dict | None:
+    """
+    Builds completion_context for IDLE_FINISHED state.
+    Returns None if no completed plan found or if metrics fail.
+    Called only when current_state == 'IDLE_FINISHED'.
+    """
+    from app.plan_completion.metrics import build_completion_metrics
+    from app.plan_completion.cta import get_next_plan_recommendation
+    from app.db import AIPlan
+
+    plan = (
+        db.query(AIPlan)
+        .filter(
+            AIPlan.user_id == user_id,
+            AIPlan.status == "completed",
+        )
+        .order_by(AIPlan.end_date.desc())
+        .first()
+    )
+    if plan is None:
+        return None
+
+    try:
+        metrics = build_completion_metrics(db, user_id, plan.id)
+        cta = get_next_plan_recommendation(metrics)
+    except Exception as e:
+        logger.warning(
+            "[COACH] Failed to build completion context user=%s plan=%s: %s",
+            user_id,
+            plan.id,
+            e,
+        )
+        return None
+
+    return {
+        "total_days": metrics.total_days,
+        "completion_rate": round(metrics.completion_rate * 100),
+        "best_streak": metrics.best_streak,
+        "adaptation_count": metrics.adaptation_count,
+        "outcome_tier": metrics.outcome_tier,
+        "recommended_duration": cta.recommended_duration,
+        "recommended_load": cta.recommended_load,
+        "recommended_focus": cta.recommended_focus,
+    }
+
+
 def _context_message(payload: Dict[str, Any]) -> str:
     context = {
         "user_profile": payload.get("profile_snapshot"),
         "current_time": payload.get("temporal_context"),
         "fsm_state": payload.get("current_state"),
     }
+    completion_context = payload.get("completion_context")
+    if completion_context is not None:
+        context["completion_context"] = completion_context
     return (
         "Context block (treat as remembered facts; do not expose directly):\n"
         + json.dumps(context, ensure_ascii=False, indent=2)
@@ -1257,7 +1341,20 @@ def _normalize_content(content: Any) -> str:
 
 
 async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
-    messages = _compose_messages(payload)
+    context_payload = dict(payload)
+
+    # Inject completion_context for IDLE_FINISHED state
+    completion_context = context_payload.get("completion_context")
+    if completion_context is None and context_payload.get("current_state") == "IDLE_FINISHED":
+        user_id = context_payload.get("user_id")
+        if isinstance(user_id, int):
+            with SessionLocal() as db:
+                completion_context = _build_idle_finished_context(db, user_id)
+
+    if completion_context is not None:
+        context_payload["completion_context"] = completion_context
+
+    messages = _compose_messages(context_payload)
 
     try:
         response = await async_client.responses.create(

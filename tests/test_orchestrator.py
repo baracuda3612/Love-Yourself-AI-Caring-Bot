@@ -127,6 +127,63 @@ async def test_coach_agent_allows_single_reroute(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_coach_early_return_receives_completion_context_in_idle_finished(monkeypatch):
+    dummy_memory = DummyMemory()
+    monkeypatch.setattr(orchestrator, "session_memory", dummy_memory)
+
+    async def fake_build_user_context(user_id, message_text):
+        return {"message_text": message_text, "current_state": "IDLE_FINISHED"}
+
+    async def fake_call_router(user_id, message_text, context):
+        return {
+            "router_result": {
+                "target_agent": "coach",
+                "confidence": "HIGH",
+                "intent_bucket": "MEANING",
+            },
+            "router_meta": {},
+            "fsm_state": None,
+            "session_id": None,
+            "input_message": message_text,
+            "context_payload": context,
+        }
+
+    monkeypatch.setattr(orchestrator, "build_user_context", fake_build_user_context)
+    monkeypatch.setattr(orchestrator, "call_router", fake_call_router)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_idle_finished_context",
+        lambda _db, _user_id: {"total_days": 14, "completion_rate": 80},
+    )
+
+    class _Session:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(orchestrator, "SessionLocal", lambda: _Session())
+
+    invoke_payloads = []
+
+    async def fake_invoke_agent(target_agent, payload):
+        invoke_payloads.append((target_agent, payload))
+        return {"reply_text": "coach response"}
+
+    monkeypatch.setattr(orchestrator, "_invoke_agent", fake_invoke_agent)
+
+    response = await orchestrator.handle_incoming_message(user_id=21, message_text="hi")
+
+    assert response["reply_text"] == "coach response"
+    assert invoke_payloads[0][0] == "coach"
+    assert invoke_payloads[0][1].get("completion_context") == {
+        "total_days": 14,
+        "completion_rate": 80,
+    }
+
+
+@pytest.mark.anyio
 async def test_plan_tool_call_invokes_handler(monkeypatch):
     dummy_memory = DummyMemory()
     monkeypatch.setattr(orchestrator, "session_memory", dummy_memory)
