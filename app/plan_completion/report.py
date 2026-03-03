@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from app.plan_completion.metrics import CompletionMetrics
+from app.plan_completion.metrics import (
+    CompletionMetrics,
+    STRONG_THRESHOLD,
+)
 
 HEADERS: dict[str, dict[str, str]] = {
     "strong": {
@@ -40,13 +43,13 @@ def _outcome_key(metrics: CompletionMetrics) -> str:
 
 
 def _pick_observation(metrics: CompletionMetrics) -> str:
-    if metrics.completion_rate >= 0.85 and metrics.best_streak >= 7:
+    if metrics.completion_rate >= STRONG_THRESHOLD and metrics.best_streak >= 7:
         return "7+ днів поспіль — це вже не випадковість."
     if metrics.had_adaptations and metrics.completion_rate >= 0.70:
         return "Ти змінював план по дорозі — і це спрацювало."
     if metrics.dominant_time_slot == "MORNING" and metrics.completion_rate >= 0.60:
         return "Ранок виявився твоїм часом."
-    if metrics.completion_rate >= 0.85:
+    if metrics.completion_rate >= STRONG_THRESHOLD:
         return "Ти тримав ритм навіть коли було складно."
     if metrics.best_streak >= 7:
         return "Тиждень поспіль — перший реальний поріг пройдено."
@@ -71,7 +74,7 @@ def build_completion_report(metrics: CompletionMetrics, persona: str) -> str:
     observation = _pick_observation(metrics)
 
     lines = [formatted]
-    if metrics.best_streak > 0 or metrics.adaptation_count > 0:
+    if metrics.best_streak >= 3 or metrics.adaptation_count > 0:
         lines.append(
             f"Streak: {metrics.best_streak} дн. • адаптацій: {metrics.adaptation_count}"
         )

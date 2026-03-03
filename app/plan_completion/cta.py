@@ -19,6 +19,9 @@ class CTARecommendation:
 LOAD_ORDER = ["LITE", "MID", "INTENSIVE"]
 DURATION_ORDER = ["SHORT", "MEDIUM", "STANDARD", "LONG"]
 
+VALID_LOADS = {"LITE", "MID", "INTENSIVE"}
+VALID_DURATIONS = {"SHORT", "MEDIUM", "STANDARD", "LONG"}
+
 
 def _load_up(load: str) -> str:
     idx = LOAD_ORDER.index(load) if load in LOAD_ORDER else 0
@@ -37,8 +40,10 @@ def _duration_up(duration: str) -> str:
 
 def get_next_plan_recommendation(metrics: CompletionMetrics) -> CTARecommendation:
     focus = metrics.focus or "mixed"
-    load = metrics.load or "LITE"
-    duration = metrics.duration or "SHORT"
+    load = metrics.load if metrics.load in VALID_LOADS else "LITE"
+    duration = (
+        metrics.duration if metrics.duration in VALID_DURATIONS else "SHORT"
+    )
 
     if metrics.outcome_tier == "STRONG" and load == "INTENSIVE":
         next_duration = _duration_up(duration)

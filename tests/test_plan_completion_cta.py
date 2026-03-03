@@ -88,3 +88,13 @@ def test_fallback_focus_and_load_defaults():
     assert rec.recommended_load == "LITE"
     assert rec.recommended_focus == "mixed"
     assert rec.button1_params == {"duration": "SHORT", "load": "LITE", "focus": "mixed"}
+
+
+def test_non_canonical_load_and_duration_are_normalized():
+    rec = get_next_plan_recommendation(
+        _metrics(outcome_tier="STRONG", load="STANDARD", duration="2w", focus="cognitive")
+    )
+    assert rec.recommended_duration == "SHORT"
+    assert rec.recommended_load == "MID"
+    assert rec.button1_params == {"duration": "SHORT", "load": "MID", "focus": "cognitive"}
+    assert rec.button2_params == {"duration": "SHORT", "load": "LITE", "focus": "cognitive"}

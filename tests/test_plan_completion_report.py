@@ -1,4 +1,4 @@
-from app.plan_completion.metrics import CompletionMetrics
+from app.plan_completion.metrics import CompletionMetrics, STRONG_THRESHOLD
 from app.plan_completion.report import build_completion_report
 
 
@@ -104,7 +104,7 @@ def test_observation_branch_morning_slot():
 
 def test_observation_branch_high_rate_only():
     report = build_completion_report(
-        _metrics(completion_rate=0.87, best_streak=4, dominant_time_slot=None),
+        _metrics(completion_rate=STRONG_THRESHOLD, best_streak=4, dominant_time_slot=None),
         "empath",
     )
     assert report.endswith("Ти тримав ритм навіть коли було складно.")
@@ -127,11 +127,22 @@ def test_observation_fallback_branch():
 
 
 def test_stats_line_included_when_streak_or_adaptations_present():
-    with_stats = build_completion_report(_metrics(best_streak=2, adaptation_count=1), "empath")
-    assert "Streak: 2 дн. • адаптацій: 1" in with_stats
-
-    without_stats = build_completion_report(
-        _metrics(best_streak=0, adaptation_count=0),
+    with_adaptations = build_completion_report(
+        _metrics(best_streak=2, adaptation_count=1),
         "empath",
     )
-    assert "Streak:" not in without_stats
+    assert "Streak: 2 дн. • адаптацій: 1" in with_adaptations
+
+    with_streak = build_completion_report(
+        _metrics(best_streak=3, adaptation_count=0),
+        "empath",
+    )
+    assert "Streak: 3 дн. • адаптацій: 0" in with_streak
+
+
+def test_stats_line_hidden_for_low_streak_without_adaptations():
+    report = build_completion_report(
+        _metrics(best_streak=2, adaptation_count=0),
+        "empath",
+    )
+    assert "Streak:" not in report
