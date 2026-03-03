@@ -1287,6 +1287,9 @@ def _context_message(payload: Dict[str, Any]) -> str:
         "current_time": payload.get("temporal_context"),
         "fsm_state": payload.get("current_state"),
     }
+    completion_context = payload.get("completion_context")
+    if completion_context is not None:
+        context["completion_context"] = completion_context
     return (
         "Context block (treat as remembered facts; do not expose directly):\n"
         + json.dumps(context, ensure_ascii=False, indent=2)

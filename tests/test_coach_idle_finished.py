@@ -102,6 +102,21 @@ def test_build_idle_finished_context_returns_none_on_metrics_exception(monkeypat
     assert result is None
 
 
+def test_context_message_includes_completion_context_when_present():
+    payload = {
+        "profile_snapshot": {"name": "Alex"},
+        "temporal_context": "2026-01-01T10:00:00Z",
+        "current_state": "IDLE_FINISHED",
+        "completion_context": {"total_days": 21, "completion_rate": 95},
+    }
+
+    message = coach_agent._context_message(payload)
+
+    assert '"completion_context"' in message
+    assert '"total_days": 21' in message
+    assert '"completion_rate": 95' in message
+
+
 @pytest.mark.anyio
 async def test_coach_agent_injects_completion_context_for_idle_finished(monkeypatch):
     captured = {}
