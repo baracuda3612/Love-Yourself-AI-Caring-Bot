@@ -9,6 +9,10 @@ from app.db import AIPlan
 from app.plan_metrics import fetch_delivered_steps
 
 
+STRONG_THRESHOLD = 0.80
+NEUTRAL_THRESHOLD = 0.50
+
+
 @dataclass(frozen=True)
 class CompletionMetrics:
     plan_id: int
@@ -48,9 +52,9 @@ def _compute_best_streak(completed_day_numbers: set[int]) -> int:
 
 
 def _resolve_outcome_tier(completion_rate: float) -> str:
-    if completion_rate >= 0.80:
+    if completion_rate >= STRONG_THRESHOLD:
         return "STRONG"
-    if completion_rate >= 0.50:
+    if completion_rate >= NEUTRAL_THRESHOLD:
         return "NEUTRAL"
     return "WEAK"
 
