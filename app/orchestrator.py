@@ -59,7 +59,7 @@ from app.plan_finalization import (
     finalize_plan,
     validate_for_finalization,
 )
-from app.workers.coach_agent import coach_agent
+from app.workers.coach_agent import _build_idle_finished_context, coach_agent
 from app.fsm.guards import can_transition
 from app.fsm.states import (
     ADAPTATION_CONFIRMATION,
@@ -1619,6 +1619,15 @@ async def handle_incoming_message(
             )
         coach_result = await _invoke_agent("coach", {"message_text": message_text})
         return await _finalize_reply(str(coach_result.get("reply_text") or ""))
+
+    # Inject completion_context for IDLE_FINISHED state
+    completion_context = None
+    if context_payload.get("current_state") == "IDLE_FINISHED":
+        with SessionLocal() as db:
+            completion_context = _build_idle_finished_context(db, user_id)
+
+    if completion_context is not None:
+        context_payload["completion_context"] = completion_context
 
     worker_payload = {
         "user_id": user_id,
