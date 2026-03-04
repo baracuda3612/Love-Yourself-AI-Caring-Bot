@@ -633,14 +633,16 @@ def _maybe_schedule_plan_completion(user_id: int, plan_id: int) -> None:
             user_tz = pytz.timezone("Europe/Kyiv")
 
         now_local = datetime.now(pytz.UTC).astimezone(user_tz)
+        candidate_run_date = datetime.now(pytz.UTC) + timedelta(hours=2)
+        candidate_local = candidate_run_date.astimezone(user_tz)
 
-        if now_local.hour >= 21:
+        if now_local.hour >= 21 or candidate_local.hour >= 21:
             next_day = (now_local + timedelta(days=1)).replace(
                 hour=10, minute=0, second=0, microsecond=0
             )
             run_date = next_day.astimezone(pytz.UTC)
         else:
-            run_date = datetime.now(pytz.UTC) + timedelta(hours=2)
+            run_date = candidate_run_date
 
     scheduler.add_job(
         "app.orchestrator:_trigger_plan_completion",
@@ -665,9 +667,11 @@ def check_plan_completions() -> None:
     and triggers completion. Primary trigger is _maybe_schedule_plan_completion.
     This catches users who stopped opening the bot.
     """
-    from app.orchestrator import _auto_complete_plan_if_needed
+    from app.orchestrator import _auto_complete_plan_if_needed, send_plan_completion_message
 
     now = datetime.now(pytz.UTC)
+    completed_pairs: list[tuple[int, int]] = []
+
     with SessionLocal() as db:
         expired_users = (
             db.query(User)
@@ -680,12 +684,39 @@ def check_plan_completions() -> None:
             .all()
         )
         for user in expired_users:
+            candidate_plan = (
+                db.query(AIPlan)
+                .filter(AIPlan.user_id == user.id, AIPlan.status == "active")
+                .order_by(AIPlan.created_at.desc())
+                .first()
+            )
             try:
                 _auto_complete_plan_if_needed(db, user)
+                if candidate_plan and candidate_plan.status == "completed":
+                    completed_pairs.append((user.id, candidate_plan.id))
             except Exception as e:
                 logger.error("[CRON_COMPLETION] failed user=%s: %s", user.id, e)
+
         try:
             db.commit()
         except Exception as e:
             db.rollback()
             logger.error("[CRON_COMPLETION] commit failed: %s", e)
+            return
+
+    if not _event_loop:
+        return
+
+    for user_id, plan_id in completed_pairs:
+        future = _submit_coroutine(send_plan_completion_message(user_id, plan_id))
+        if not future:
+            continue
+        try:
+            future.result(timeout=30)
+        except Exception as e:
+            logger.error(
+                "[CRON_COMPLETION] send failed user=%s plan=%s: %s",
+                user_id,
+                plan_id,
+                e,
+            )

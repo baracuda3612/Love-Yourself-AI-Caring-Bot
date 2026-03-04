@@ -146,6 +146,23 @@ def test_maybe_schedule_plan_completion_run_date_next_day_10_local(monkeypatch):
     assert run_date == datetime(2026, 1, 2, 8, 0, tzinfo=pytz.UTC)
 
 
+def test_maybe_schedule_plan_completion_moves_to_next_day_if_candidate_after_21(monkeypatch):
+    user = type("U", (), {"id": 1, "timezone": "Europe/Kyiv"})()
+    fake_db = _DBForMaybeSchedule(future_steps=0, user=user)
+    monkeypatch.setattr(scheduler, "SessionLocal", lambda: _SessionCtx(fake_db))
+
+    calls = []
+    monkeypatch.setattr(scheduler.scheduler, "add_job", lambda *a, **k: calls.append((a, k)))
+
+    _FakeNowDateTime.current = datetime(2026, 1, 1, 18, 30, tzinfo=pytz.UTC)  # 20:30 local; +2h => 22:30 local
+    monkeypatch.setattr(scheduler, "datetime", _FakeNowDateTime)
+
+    scheduler._maybe_schedule_plan_completion(user_id=1, plan_id=10)
+
+    run_date = calls[0][1]["run_date"]
+    assert run_date == datetime(2026, 1, 2, 8, 0, tzinfo=pytz.UTC)
+
+
 class _FakeEventQuery:
     def __init__(self, existing):
         self._existing = existing
@@ -222,6 +239,17 @@ class _ExpiredUserQuery:
         return self.users
 
 
+class _EmptyPlanQuery:
+    def filter(self, *_args, **_kwargs):
+        return self
+
+    def order_by(self, *_args, **_kwargs):
+        return self
+
+    def first(self):
+        return None
+
+
 class _DBForCron:
     def __init__(self, users):
         self.users = users
@@ -230,6 +258,8 @@ class _DBForCron:
     def query(self, model):
         if model is scheduler.User:
             return _ExpiredUserQuery(self.users)
+        if model is scheduler.AIPlan:
+            return _EmptyPlanQuery()
         raise AssertionError("unexpected model")
 
     def commit(self):
@@ -256,3 +286,65 @@ def test_check_plan_completions_calls_auto_complete(monkeypatch):
 
     assert calls == [1, 2]
     assert db.committed is True
+
+
+
+def test_check_plan_completions_submits_completion_messages_when_event_loop_available(monkeypatch):
+    users = [type("U", (), {"id": 1})()]
+
+    class _Plan:
+        def __init__(self, plan_id):
+            self.id = plan_id
+            self.status = "active"
+
+    class _PlanQuery:
+        def __init__(self, plan):
+            self.plan = plan
+
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def order_by(self, *_args, **_kwargs):
+            return self
+
+        def first(self):
+            return self.plan
+
+    class _DBForCronWithPlans(_DBForCron):
+        def __init__(self, users, plan):
+            super().__init__(users)
+            self.plan = plan
+
+        def query(self, model):
+            if model is scheduler.User:
+                return _ExpiredUserQuery(self.users)
+            if model is scheduler.AIPlan:
+                return _PlanQuery(self.plan)
+            raise AssertionError("unexpected model")
+
+    plan = _Plan(plan_id=42)
+    db = _DBForCronWithPlans(users, plan)
+    monkeypatch.setattr(scheduler, "SessionLocal", lambda: _SessionCtx(db))
+
+    def _fake_auto_complete(_db, _user):
+        plan.status = "completed"
+
+    monkeypatch.setattr("app.orchestrator._auto_complete_plan_if_needed", _fake_auto_complete)
+
+    submitted = []
+
+    class _Future:
+        def result(self, timeout=None):
+            return None
+
+    monkeypatch.setattr(scheduler, "_event_loop", object())
+    def _fake_submit(coro):
+        submitted.append(coro)
+        coro.close()
+        return _Future()
+
+    monkeypatch.setattr(scheduler, "_submit_coroutine", _fake_submit)
+
+    scheduler.check_plan_completions()
+
+    assert len(submitted) == 1
