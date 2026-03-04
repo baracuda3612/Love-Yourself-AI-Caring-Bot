@@ -59,6 +59,7 @@ def init_scheduler():
     scheduler.add_job("app.scheduler:send_daily_pulse", "cron", hour=9, minute=0, id="daily_pulse", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_silent_users", "cron", hour=12, minute=0, id="silent_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_ignored_tasks", "cron", hour=8, minute=0, id="ignored_check", replace_existing=True, max_instances=1)
+    scheduler.add_job("app.scheduler:check_plan_completions", "cron", hour=10, minute=30, id="plan_completion_check", replace_existing=True, max_instances=1)
 
 
 def shutdown_scheduler():
@@ -139,6 +140,7 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
             or getattr(step, "content_library_id", None)
         )
         plan_step_id = step.id
+        plan_id = plan.id
         user_id = user.id
         send_chat_id = user.tg_id
 
@@ -200,6 +202,8 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
                     context=error_context,
                 )
             db.commit()
+            if delivery_error is None:
+                _maybe_schedule_plan_completion(user_id, plan_id)
         except Exception:
             logger.exception("Failed to log scheduler telemetry.")
 
@@ -592,3 +596,127 @@ def check_ignored_tasks():
                 context={"detected_at": "morning_check"},
             )
         db.commit()
+
+
+
+def _maybe_schedule_plan_completion(user_id: int, plan_id: int) -> None:
+    """
+    Called after every task delivery.
+    If this was the last scheduled step, queues completion message
+    respecting user's local time (no messages after 21:00 local).
+    Cron job at 10:30 UTC is the fallback.
+    """
+    import pytz
+
+    with SessionLocal() as db:
+        future_steps = (
+            db.query(AIPlanStep)
+            .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+            .filter(
+                AIPlanDay.plan_id == plan_id,
+                AIPlanStep.scheduled_for > datetime.now(pytz.UTC),
+                AIPlanStep.canceled_by_adaptation == False,
+            )
+            .count()
+        )
+        if future_steps > 0:
+            return
+
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            return
+
+        user_tz_str = getattr(user, "timezone", None) or "Europe/Kyiv"
+        try:
+            user_tz = pytz.timezone(user_tz_str)
+        except Exception:
+            user_tz = pytz.timezone("Europe/Kyiv")
+
+        now_local = datetime.now(pytz.UTC).astimezone(user_tz)
+        candidate_run_date = datetime.now(pytz.UTC) + timedelta(hours=2)
+        candidate_local = candidate_run_date.astimezone(user_tz)
+
+        if now_local.hour >= 21 or candidate_local.hour >= 21:
+            next_day = (now_local + timedelta(days=1)).replace(
+                hour=10, minute=0, second=0, microsecond=0
+            )
+            run_date = next_day.astimezone(pytz.UTC)
+        else:
+            run_date = candidate_run_date
+
+    scheduler.add_job(
+        "app.orchestrator:_trigger_plan_completion",
+        "date",
+        run_date=run_date,
+        args=[user_id, plan_id],
+        id=f"completion_{plan_id}",
+        replace_existing=True,
+    )
+    logger.info(
+        "[SCHEDULER] Last step delivered plan=%s, completion at %s (local=%s)",
+        plan_id,
+        run_date,
+        now_local.strftime("%H:%M"),
+    )
+
+
+def check_plan_completions() -> None:
+    """
+    Daily cron at 10:30 UTC.
+    Safety net: finds users with active plans past end_date
+    and triggers completion. Primary trigger is _maybe_schedule_plan_completion.
+    This catches users who stopped opening the bot.
+    """
+    from app.orchestrator import _auto_complete_plan_if_needed, send_plan_completion_message
+
+    now = datetime.now(pytz.UTC)
+    completed_pairs: list[tuple[int, int]] = []
+
+    with SessionLocal() as db:
+        expired_users = (
+            db.query(User)
+            .join(AIPlan, AIPlan.user_id == User.id)
+            .filter(
+                AIPlan.status == "active",
+                User.plan_end_date < now,
+                User.plan_end_date.isnot(None),
+            )
+            .all()
+        )
+        for user in expired_users:
+            candidate_plan = (
+                db.query(AIPlan)
+                .filter(AIPlan.user_id == user.id, AIPlan.status == "active")
+                .order_by(AIPlan.created_at.desc())
+                .first()
+            )
+            try:
+                _auto_complete_plan_if_needed(db, user)
+                if candidate_plan and candidate_plan.status == "completed":
+                    completed_pairs.append((user.id, candidate_plan.id))
+            except Exception as e:
+                logger.error("[CRON_COMPLETION] failed user=%s: %s", user.id, e)
+
+        try:
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.error("[CRON_COMPLETION] commit failed: %s", e)
+            return
+
+    if not _event_loop:
+        return
+
+    for user_id, plan_id in completed_pairs:
+        future = _submit_coroutine(send_plan_completion_message(user_id, plan_id))
+        if not future:
+            continue
+        try:
+            future.result(timeout=30)
+        except Exception as e:
+            logger.error(
+                "[CRON_COMPLETION] send failed user=%s plan=%s: %s",
+                user_id,
+                plan_id,
+                e,
+            )

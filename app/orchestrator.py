@@ -21,8 +21,10 @@ from app.db import (
     PlanInstance,
     SessionLocal,
     User,
+    UserEvent,
     UserProfile,
 )
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from app.logging.router_logging import log_metric, log_router_decision
 from app.plan_adaptations import PlanAdaptationError, apply_plan_adaptation
 from app.adaptation_executor import AdaptationExecutor, AdaptationResult
@@ -38,6 +40,7 @@ from app.scheduler import cancel_plan_step_jobs, reschedule_plan_steps
 from app.redis_client import redis_client
 from app.session_memory import SessionMemory
 from app.time_slots import compute_scheduled_for, resolve_daily_time_slots
+from app.ux.persona import get_persona
 from app.ux.plan_messages import build_activation_info_message
 from app.ux.adaptation_preview import build_adaptation_preview, build_adaptation_success_message
 from app.plan_drafts.service import (
@@ -383,7 +386,7 @@ def _auto_complete_plan_if_needed(db: Session, user: User) -> None:
 
     try:
         asyncio.get_running_loop()
-        asyncio.create_task(_stub_completion_message(user.id, plan.id))
+        asyncio.create_task(send_plan_completion_message(user.id, plan.id))
     except RuntimeError:
         logger.warning(
             "[COMPLETION] No running event loop, skipping message task user=%s",
@@ -391,9 +394,143 @@ def _auto_complete_plan_if_needed(db: Session, user: User) -> None:
         )
 
 
-async def _stub_completion_message(user_id: int, plan_id: int) -> None:
-    """Placeholder. Повна реалізація в Таску 5."""
-    logger.info("[COMPLETION] plan=%s user=%s — message pending Task 5", plan_id, user_id)
+async def send_plan_completion_message(user_id: int, plan_id: int) -> None:
+    """
+    Sends completion report + CTA to user via Telegram.
+    Fire-and-forget. Called from _auto_complete_plan_if_needed.
+    Exempt from MAX_AUTO_MESSAGES_PER_DAY — this is a lifecycle event.
+    """
+    from app.plan_completion.metrics import build_completion_metrics
+    from app.plan_completion.report import build_completion_report
+    from app.plan_completion.cta import get_next_plan_recommendation
+    from app.scheduler import _send_message_async
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user or not user.tg_id:
+            logger.warning("[COMPLETION_MSG] user=%s not found or no tg_id", user_id)
+            return
+
+        already_sent = db.query(UserEvent).filter(
+            UserEvent.user_id == user_id,
+            UserEvent.event_type == "plan_completion_sent",
+            UserEvent.context["plan_id"].astext == str(plan_id),
+        ).first()
+        if already_sent:
+            logger.info("[COMPLETION_MSG] already sent for plan=%s", plan_id)
+            return
+
+        try:
+            metrics = build_completion_metrics(db, user_id, plan_id)
+        except Exception as e:
+            logger.error(
+                "[COMPLETION_MSG] metrics failed user=%s plan=%s: %s",
+                user_id,
+                plan_id,
+                e,
+            )
+            return
+
+        persona = "empath"
+        if user.profile:
+            persona = get_persona(user.profile)
+
+        report_text = build_completion_report(metrics, persona)
+        cta = get_next_plan_recommendation(metrics)
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text=cta.button1_text,
+                callback_data=f"start_plan:{cta.button1_params['duration']}:{cta.button1_params['load']}:{cta.button1_params['focus']}",
+            ),
+            InlineKeyboardButton(
+                text=cta.button2_text,
+                callback_data=f"start_plan:{cta.button2_params['duration']}:{cta.button2_params['load']}:{cta.button2_params['focus']}",
+            ),
+        ]])
+        tg_id = user.tg_id
+
+    result = await _send_message_async(tg_id, report_text, reply_markup=keyboard)
+
+    if result:
+        with SessionLocal() as db:
+            log_user_event(
+                db,
+                user_id=user_id,
+                event_type="plan_completion_sent",
+                context={"plan_id": plan_id, "outcome_tier": metrics.outcome_tier},
+            )
+            db.commit()
+        return
+
+    _schedule_completion_retry(user_id, plan_id)
+
+
+def _schedule_completion_retry(user_id: int, plan_id: int) -> None:
+    from app.scheduler import scheduler
+
+    scheduler.add_job(
+        "app.orchestrator:_retry_completion_message",
+        "date",
+        run_date=datetime.now(timezone.utc) + timedelta(minutes=30),
+        args=[user_id, plan_id],
+        id=f"completion_retry_{plan_id}",
+        replace_existing=True,
+    )
+    logger.info("[COMPLETION_MSG] retry scheduled user=%s plan=%s", user_id, plan_id)
+
+
+def _retry_completion_message(user_id: int, plan_id: int) -> None:
+    """APScheduler sync callback — submits async send to event loop."""
+    from app.scheduler import _submit_coroutine
+
+    future = _submit_coroutine(send_plan_completion_message(user_id, plan_id))
+    if future:
+        try:
+            future.result(timeout=30)
+        except Exception as e:
+            logger.error("[COMPLETION_RETRY] failed user=%s: %s", user_id, e)
+            _submit_coroutine(_send_failure_notice(user_id))
+
+
+async def _send_failure_notice(user_id: int) -> None:
+    from app.scheduler import _send_message_async
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.id == user_id).first()
+        if user and user.tg_id:
+            await _send_message_async(
+                user.tg_id,
+                "⚠️ Не вдалось надіслати звіт про завершення плану. "
+                "Зверніться в підтримку якщо це повторюється.",
+            )
+
+
+def _trigger_plan_completion(user_id: int, plan_id: int) -> None:
+    """
+    APScheduler sync callback.
+    Calls _auto_complete_plan_if_needed and submits send_plan_completion_message.
+    """
+    from app.scheduler import _submit_coroutine
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            return
+        _auto_complete_plan_if_needed(db, user)
+        try:
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.error("[COMPLETION_TRIGGER] db commit failed user=%s: %s", user_id, e)
+            return
+
+    future = _submit_coroutine(send_plan_completion_message(user_id, plan_id))
+    if future:
+        try:
+            future.result(timeout=30)
+        except Exception as e:
+            logger.error("[COMPLETION_TRIGGER] send failed user=%s: %s", user_id, e)
 
 
 def _auto_complete_plan_if_needed_for_user_id(user_id: int) -> None:
