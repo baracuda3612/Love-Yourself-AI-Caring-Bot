@@ -114,6 +114,8 @@ class Settings:
         self.IS_DEV = environment_normalized == "dev"
         self.IS_STAGING = environment_normalized == "staging"
         self.IS_PROD = environment_normalized == "prod"
+        if self.REPORT_TOKEN_SECRET == "change-me-in-production" and self.IS_PROD:
+            raise RuntimeError("REPORT_TOKEN_SECRET must be set in production")
 
 
 settings = Settings()
