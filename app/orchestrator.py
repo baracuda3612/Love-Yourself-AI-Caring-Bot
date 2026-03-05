@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.ai_plans import PlanAgentEnvelopeError, plan_agent
+from app.config import settings
 from app.ai_router import cognitive_route_message
 from app.db import (
     AIPlan,
@@ -403,6 +404,7 @@ async def send_plan_completion_message(user_id: int, plan_id: int) -> None:
     from app.plan_completion.metrics import build_completion_metrics
     from app.plan_completion.report import build_completion_report
     from app.plan_completion.cta import get_next_plan_recommendation
+    from app.plan_completion.tokens import make_report_token
     from app.scheduler import _send_message_async
 
     with SessionLocal() as db:
@@ -437,6 +439,11 @@ async def send_plan_completion_message(user_id: int, plan_id: int) -> None:
 
         report_text = build_completion_report(metrics, persona)
         cta = get_next_plan_recommendation(metrics)
+        report_url = (
+            f"{settings.APP_BASE_URL}/report/"
+            f"{make_report_token(plan_id, settings.REPORT_TOKEN_SECRET)}"
+        )
+        report_text = report_text + f"\n\n🔗 <a href=\"{report_url}\">Детальний звіт →</a>"
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(
