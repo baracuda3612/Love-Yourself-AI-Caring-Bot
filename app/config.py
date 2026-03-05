@@ -62,6 +62,9 @@ class Settings:
     DEFAULT_DAILY_LIMIT: int = 10
     DEFAULT_SEND_HOUR: int = 9
     REDIS_URL: str = ""
+    REPORT_TOKEN_SECRET: str = "change-me-in-production"
+    APP_BASE_URL: str = "https://your-app.up.railway.app"
+    BOT_USERNAME: str = "your_bot"
     ENVIRONMENT: str = "dev"
     IS_DEV: bool = True
     IS_STAGING: bool = False
@@ -104,10 +107,15 @@ class Settings:
         self.DEFAULT_SEND_HOUR = _as_int(os.getenv("DEFAULT_SEND_HOUR"), 9)
         # Empty ``REDIS_URL`` disables Redis-backed features (FSM, session memory).
         self.REDIS_URL = os.getenv("REDIS_URL") or ""
+        self.REPORT_TOKEN_SECRET = os.getenv("REPORT_TOKEN_SECRET", "change-me-in-production")
+        self.APP_BASE_URL = os.getenv("APP_BASE_URL", "https://your-app.up.railway.app")
+        self.BOT_USERNAME = os.getenv("BOT_USERNAME", "your_bot")
         self.ENVIRONMENT = environment_normalized
         self.IS_DEV = environment_normalized == "dev"
         self.IS_STAGING = environment_normalized == "staging"
         self.IS_PROD = environment_normalized == "prod"
+        if self.REPORT_TOKEN_SECRET == "change-me-in-production" and self.IS_PROD:
+            raise RuntimeError("REPORT_TOKEN_SECRET must be set in production")
 
 
 settings = Settings()
@@ -131,3 +139,6 @@ IS_DEV = settings.IS_DEV
 IS_STAGING = settings.IS_STAGING
 IS_PROD = settings.IS_PROD
 REDIS_URL = settings.REDIS_URL
+REPORT_TOKEN_SECRET = settings.REPORT_TOKEN_SECRET
+APP_BASE_URL = settings.APP_BASE_URL
+BOT_USERNAME = settings.BOT_USERNAME

@@ -27,6 +27,7 @@ from app.ux.task_notification import get_step_rationale
 from app.redis_client import create_fsm_storage, create_redis_client
 from app.telemetry import get_success_streak, log_user_event
 from app.logging.router_logging import log_metric
+from app.fsm.states import PLAN_CREATION_ENTRY_STATES
 
 bot = Bot(token=settings.BOT_TOKEN, parse_mode="HTML")
 redis_client = create_redis_client()
@@ -116,6 +117,12 @@ def _sanitize_message_text(text: Optional[str]) -> str:
 
 @router.message(Command("start"))
 async def cmd_start(message: Message):
+    args = message.text.split(maxsplit=1)[1] if message.text and " " in message.text else ""
+
+    if args.startswith("newplan_"):
+        await _handle_newplan_deeplink(message, args)
+        return
+
     with SessionLocal() as db:
         user, is_created = _ensure_user(db, message.from_user)
         if is_created:
@@ -128,6 +135,50 @@ async def cmd_start(message: Message):
         is_created,
         user.current_state,
     )
+
+
+async def _handle_newplan_deeplink(message: Message, args: str) -> None:
+    from app.orchestrator import handle_incoming_message
+    from app.plan_parameters import normalize_plan_parameters
+    from app.session_memory import SessionMemory
+
+    parts = args.split("_")
+    if len(parts) != 4:
+        await message.answer("Некоректне посилання. Напиши мені напряму.")
+        return
+
+    _, duration, load, focus = parts
+    tg_id = message.from_user.id
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.tg_id == tg_id).first()
+        if not user:
+            await message.answer("Спочатку потрібно зареєструватись.")
+            return
+        if user.current_state not in PLAN_CREATION_ENTRY_STATES:
+            await message.answer(
+                "Зараз не можу розпочати новий план. "
+                "Заверши поточний або напиши — розберемось."
+            )
+            return
+        internal_id = user.id
+
+    redis = create_redis_client()
+    session = SessionMemory(redis_client=redis)
+    try:
+        params = normalize_plan_parameters(
+            {"duration": duration, "load": load, "focus": focus}
+        )
+        await session.set_plan_parameters(internal_id, params)
+    except Exception:
+        await message.answer("Щось пішло не так. Спробуй ще раз.")
+        return
+
+    response = await handle_incoming_message(
+        user_id=internal_id, message_text="створити план"
+    )
+    if response.get("reply_text"):
+        await message.answer(response["reply_text"])
 
 
 @router.message(Command("spawn"))
