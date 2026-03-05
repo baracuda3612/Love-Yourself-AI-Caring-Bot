@@ -13,5 +13,5 @@ parsedatetime==2.6
 python-dateutil
 psycopg2-binary
 redis==5.0.7
-uvicorn
-jinja2
+uvicorn==0.34.0
+jinja2==3.1.4
