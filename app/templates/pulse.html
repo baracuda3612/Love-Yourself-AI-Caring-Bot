@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Plan Pulse</title>
+  <style>
+    body { background:#0f1115; color:#fff; font-family: Inter, sans-serif; margin:0; padding:20px; }
+    .wrap { max-width:720px; margin:0 auto; }
+    .card { background:#171a21; border-radius:16px; padding:16px; }
+    .muted { color:#a7adbb; }
+    .row { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+    .pill { border:1px solid #2b3242; border-radius:999px; padding:4px 10px; font-size:12px; }
+    .prog { height:8px; background:#2b3242; border-radius:999px; overflow:hidden; }
+    .prog-fill { height:100%; width:0; background:#7e8bff; transition:width .8s ease; }
+    .grid { display:grid; grid-template-columns:repeat(7, 1fr); gap:8px; margin-top:14px; }
+    .dot { width:100%; aspect-ratio:1/1; border-radius:8px; background:#262d3a; position:relative; }
+    .dot.future { opacity:.35; }
+    .dot.past, .dot.active { opacity:1; }
+    .a::after { content:""; width:6px; height:6px; border-radius:50%; background:#ffd76a; position:absolute; top:5px; right:5px; }
+    .ph { margin-top:16px; font-size:18px; line-height:1.4; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="muted">week {{ week_number }} snapshot</div>
+  <div class="card">
+    <div class="row">
+      <div>
+        <div>{{ plan_name }}</div>
+        <div class="muted">{{ plan_focus }}</div>
+      </div>
+      <div class="pill">day {{ active_day_number }}</div>
+    </div>
+
+    <div style="margin-top:12px" class="prog"><div class="prog-fill" id="pfill"></div></div>
+    <div class="muted" id="ppct">0%</div>
+
+    <div style="margin-top:8px"><span id="sn">{{ window_done }}</span>/<span id="so">{{ window_total }}</span></div>
+    <div class="grid" id="grid"></div>
+    <div class="ph">{{ phrase }}</div>
+  </div>
+  <div style="margin-top:12px" class="muted">
+    {% if logo_long_svg %}
+      {{ logo_long_svg | safe }}
+    {% else %}
+      love yourself
+    {% endif %}
+  </div>
+</div>
+<script>
+const DAYS = {{ days_json | tojson }};
+const TOTAL_DAYS = {{ plan_total_days }};
+const ACTIVE_DAY = {{ active_day_number }};
+const PERCENT = {{ plan_percent }};
+
+const grid = document.getElementById('grid');
+DAYS.forEach((d) => {
+  const el = document.createElement('div');
+  el.className = `dot ${d.window}${d.adapted ? ' a' : ''}`;
+  const ratio = Number(d.completion_ratio || 0);
+  el.style.background = ratio >= 1 ? '#7e8bff' : ratio > 0 ? '#4b5670' : '#262d3a';
+  if (d.is_today) {
+    el.style.outline = '2px solid #ffffff';
+    el.style.outlineOffset = '1px';
+  }
+  grid.appendChild(el);
+});
+
+requestAnimationFrame(() => {
+  document.getElementById('pfill').style.width = `${PERCENT}%`;
+  document.getElementById('ppct').textContent = `${PERCENT}%`;
+});
+</script>
+</body>
+</html>
