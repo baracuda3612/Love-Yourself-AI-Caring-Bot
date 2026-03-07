@@ -20,7 +20,7 @@ from app.ux.catalog import get_trigger_message
 from app.ux.persona import get_persona
 from app.ux.pulse_prompt import generate_pulse_message
 from app.ux.rate_limit import can_send_auto_message
-from app.ux.task_notification import format_task_notification
+from app.ux.task_notification import format_task_notification, maybe_advance_current_day
 
 # Configure JobStore
 DATABASE_URL = settings.DATABASE_URL
@@ -195,6 +195,9 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
                     plan_step_id=plan_step_id,
                     context=base_context,
                 )
+                day_number = base_context.get("day_number")
+                if day_number is not None:
+                    maybe_advance_current_day(db, plan_id, day_number)
             else:
                 error_context = {**base_context, "error": delivery_error}
                 log_user_event(
