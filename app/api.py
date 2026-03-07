@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from pathlib import Path
 from typing import Dict
 
@@ -10,6 +11,7 @@ from app.config import settings
 from app.db import AIPlan, SessionLocal, User
 from app.plan_completion.cta import get_next_plan_recommendation
 from app.plan_completion.metrics import build_completion_metrics
+from app.plan_completion.pulse import build_pulse_data
 from app.plan_completion.report import _pick_observation, build_completion_report
 from app.plan_completion.timeline import get_plan_timeline
 from app.plan_completion.tokens import verify_report_token
@@ -58,6 +60,22 @@ DUR_LABELS = {
     "MEDIUM": "14 днів",
     "STANDARD": "21 день",
     "LONG": "30 днів",
+}
+
+
+FOCUS_LABELS_PULSE = {
+    "cognitive": "Когнітивне відновлення",
+    "rest": "Відновлення",
+    "body": "Фізичне",
+    "emotional": "Емоційне",
+    "mixed": "Комплексне",
+}
+
+DUR_LABELS_PULSE = {
+    "SHORT": "7-денний план",
+    "MEDIUM": "14-денний план",
+    "STANDARD": "21-денний план",
+    "LONG": "90-денний план",
 }
 
 
@@ -161,6 +179,48 @@ async def completion_report(request: Request, token: str):
             "cta_button1_link": _deep_link(cta.button1_params),
             "cta_button2_link": _deep_link(cta.button2_params),
             "timeline": [{"day": d.day, "status": d.status} for d in timeline],
+            "logo_long_svg": _LOGO_LONG,
+            "logo_icon_svg": _LOGO_ICON,
+        },
+    )
+
+
+@app.get("/pulse/{token}", response_class=HTMLResponse)
+async def pulse_report(request: Request, token: str):
+    plan_id = verify_report_token(token, settings.REPORT_TOKEN_SECRET)
+    if plan_id is None:
+        return HTMLResponse("<h1>Посилання недійсне або застаріле.</h1>", status_code=404)
+
+    with SessionLocal() as db:
+        plan = db.query(AIPlan).filter(AIPlan.id == plan_id).first()
+        if not plan:
+            return HTMLResponse("<h1>План не знайдено.</h1>", status_code=404)
+
+        if plan.status != "active":
+            return HTMLResponse("<h1>План не активний.</h1>", status_code=404)
+
+        try:
+            data = build_pulse_data(plan_id, db)
+        except Exception:
+            return HTMLResponse("<h1>Дані плану недоступні.</h1>", status_code=404)
+
+    if templates is None:
+        return HTMLResponse(f"<h1>Pulse: день {data.active_day_number}</h1>")
+
+    return templates.TemplateResponse(
+        "pulse.html",
+        {
+            "request": request,
+            "plan_name": DUR_LABELS_PULSE.get(plan.duration or "", "План"),
+            "plan_focus": FOCUS_LABELS_PULSE.get((plan.focus or "").lower(), ""),
+            "active_day_number": data.active_day_number,
+            "plan_total_days": data.plan_total_days,
+            "plan_percent": data.plan_percent,
+            "week_number": data.week_number,
+            "window_done": data.window_done,
+            "window_total": data.window_total,
+            "phrase": data.phrase,
+            "days_json": [asdict(d) for d in data.days],
             "logo_long_svg": _LOGO_LONG,
             "logo_icon_svg": _LOGO_ICON,
         },

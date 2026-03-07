@@ -1,6 +1,7 @@
 # app/scheduler.py
 import asyncio
 import logging
+from math import ceil
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -11,6 +12,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.config import settings
+from app.plan_completion.tokens import make_report_token
 from app.db import AIPlan, AIPlanDay, AIPlanStep, SessionLocal, User, UserEvent
 from app.ai import async_client
 from app.telemetry import log_user_event
@@ -18,7 +20,7 @@ from app.ux.catalog import get_trigger_message
 from app.ux.persona import get_persona
 from app.ux.pulse_prompt import generate_pulse_message
 from app.ux.rate_limit import can_send_auto_message
-from app.ux.task_notification import format_task_notification
+from app.ux.task_notification import format_task_notification, maybe_advance_current_day
 
 # Configure JobStore
 DATABASE_URL = settings.DATABASE_URL
@@ -60,6 +62,7 @@ def init_scheduler():
     scheduler.add_job("app.scheduler:check_silent_users", "cron", hour=12, minute=0, id="silent_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_ignored_tasks", "cron", hour=8, minute=0, id="ignored_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_plan_completions", "cron", hour=10, minute=30, id="plan_completion_check", replace_existing=True, max_instances=1)
+    scheduler.add_job("app.scheduler:send_plan_pulse_snapshots", "cron", hour=10, minute=0, id="pulse_snapshot_check", replace_existing=True, max_instances=1)
 
 
 def shutdown_scheduler():
@@ -192,6 +195,9 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
                     plan_step_id=plan_step_id,
                     context=base_context,
                 )
+                day_number = base_context.get("day_number")
+                if day_number is not None:
+                    maybe_advance_current_day(db, plan_id, day_number)
             else:
                 error_context = {**base_context, "error": delivery_error}
                 log_user_event(
@@ -720,3 +726,93 @@ def check_plan_completions() -> None:
                 plan_id,
                 e,
             )
+
+
+PULSE_THRESHOLDS = {
+    "MEDIUM": [7],
+    "STANDARD": [7, 14],
+    "LONG": [14, 28, 42, 56, 70, 84],
+}
+
+
+def _now_in_user_tz(user: User) -> datetime:
+    tz_name = getattr(user, "timezone", None) or "Europe/Kyiv"
+    try:
+        tz = pytz.timezone(tz_name)
+    except Exception:
+        tz = pytz.timezone("Europe/Kyiv")
+    return datetime.now(pytz.UTC).astimezone(tz)
+
+
+async def check_pulse_triggers(db, bot) -> None:
+    active_plans = db.query(AIPlan).filter(AIPlan.status == "active").all()
+
+    for plan in active_plans:
+        thresholds = PULSE_THRESHOLDS.get(plan.duration, [])
+        if not thresholds:
+            continue
+
+        user = db.query(User).filter(User.id == plan.user_id).first()
+        if not user or not user.tg_id:
+            continue
+        if not can_deliver_tasks(user):
+            continue
+
+        today = _now_in_user_tz(user).date()
+        active_day = getattr(plan, "current_day", None) or 1
+        active_day = min(active_day, getattr(plan, "total_days", None) or active_day)
+
+        if active_day not in thresholds:
+            continue
+
+        already_sent = (
+            db.query(UserEvent)
+            .filter(
+                UserEvent.user_id == plan.user_id,
+                UserEvent.event_type == "pulse_sent",
+                UserEvent.context["plan_id"].astext == str(plan.id),
+                UserEvent.context["active_day"].astext == str(active_day),
+            )
+            .first()
+        )
+        if already_sent:
+            continue
+
+        token = make_report_token(plan.id, settings.REPORT_TOKEN_SECRET)
+        url = f"{settings.APP_BASE_URL}/pulse/{token}"
+        week_num = ceil(active_day / 7)
+
+        text = (
+            f"📊 Тиждень {week_num} — snapshot твого плану.\n\n"
+            f"Подивись як іде процес:"
+        )
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="Відкрити", url=url)]]
+        )
+
+        try:
+            await bot.send_message(user.tg_id, text, reply_markup=keyboard)
+        except Exception:
+            continue
+
+        log_user_event(
+            db,
+            user_id=plan.user_id,
+            event_type="pulse_sent",
+            context={"active_day": active_day, "plan_id": plan.id, "date": str(today)},
+        )
+        db.commit()
+
+
+def send_plan_pulse_snapshots() -> None:
+    if not _event_loop:
+        logger.warning("[PULSE_SNAPSHOT] No event loop available")
+        return
+
+    async def _run():
+        from app.telegram import bot as tg_bot
+
+        with SessionLocal() as db:
+            await check_pulse_triggers(db, tg_bot)
+
+    asyncio.run_coroutine_threadsafe(_run(), _event_loop)
