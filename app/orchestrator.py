@@ -1673,6 +1673,12 @@ async def handle_incoming_message(
         }
 
     context_payload = await build_user_context(user_id, message_text)
+    if context_payload.get("current_state") in ADAPTATION_FLOW_STATES and hasattr(
+        session_memory, "set_adaptation_last_active"
+    ):
+        await session_memory.set_adaptation_last_active(user_id)
+        if hasattr(session_memory, "clear_adaptation_soft_prompted"):
+            await session_memory.clear_adaptation_soft_prompted(user_id)
 
     show_plan_actions = False
     if context_payload.get("current_state") == "PLAN_FLOW:CONFIRMATION_PENDING":
@@ -1827,6 +1833,8 @@ async def handle_incoming_message(
                     db=db,
                     reason="user_initiated_adaptation",
                 )
+                await session_memory.set_adaptation_last_active(user_id)
+                await session_memory.clear_adaptation_soft_prompted(user_id)
             except ValueError as exc:
                 logger.error(
                     "FSM transition blocked for user %s: %s -> %s, reason: %s",

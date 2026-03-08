@@ -51,6 +51,11 @@ _ADAPTATION_ACTIONS = [
     ("❌ Скасувати", "adapt_cancel", "скасувати"),
 ]
 
+_ADAPTATION_TIMEOUT_CALLBACKS = [
+    "adaptation_timeout_reset",
+    "adaptation_timeout_continue",
+]
+
 
 def _build_plan_action_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -336,6 +341,37 @@ async def on_adaptation_action(callback_query: CallbackQuery):
         raise RuntimeError("handle_incoming_message response must include reply_text")
     if callback_query.message:
         await _send_agent_response(callback_query.message, user.id, response)
+
+
+@router.callback_query(F.data.in_(_ADAPTATION_TIMEOUT_CALLBACKS))
+async def on_adaptation_timeout_action(callback_query: CallbackQuery):
+    from app.session_memory import session_memory
+
+    cb_data = callback_query.data or ""
+    with SessionLocal() as db:
+        user, _ = _ensure_user(db, callback_query.from_user)
+
+        if cb_data == "adaptation_timeout_reset":
+            user.current_state = "ACTIVE"
+            db.add(user)
+            db.commit()
+            await session_memory.clear_adaptation_context(user.id)
+            await session_memory.clear_adaptation_last_active(user.id)
+            await session_memory.clear_adaptation_soft_prompted(user.id)
+            await callback_query.answer()
+            if callback_query.message:
+                await callback_query.message.edit_reply_markup(reply_markup=None)
+            await bot.send_message(
+                user.tg_id,
+                "Повертаємось до плану. Наступне завдання прийде за розкладом. 👍",
+            )
+
+        elif cb_data == "adaptation_timeout_continue":
+            await session_memory.set_adaptation_last_active(user.id)
+            await session_memory.clear_adaptation_soft_prompted(user.id)
+            await callback_query.answer()
+            if callback_query.message:
+                await callback_query.message.edit_reply_markup(reply_markup=None)
 
 
 @router.callback_query(F.data.startswith("task_complete:"))

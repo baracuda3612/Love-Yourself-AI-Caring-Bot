@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from typing import List, MutableSequence
 
 from redis.asyncio import Redis
@@ -29,6 +30,12 @@ class SessionMemory:
 
     def _adaptation_context_key(self, user_id: int) -> str:
         return f"session:{user_id}:adaptation_context"
+
+    def _adaptation_last_active_key(self, user_id: int) -> str:
+        return f"session:{user_id}:adaptation_last_active"
+
+    def _adaptation_soft_prompted_key(self, user_id: int) -> str:
+        return f"session:{user_id}:adaptation_soft_prompted"
 
     async def append_message(self, user_id: int | None, role: str, text: str) -> None:
         """Append a message to the tail of the user's history."""
@@ -191,3 +198,73 @@ class SessionMemory:
             await self.redis.delete(self._adaptation_context_key(user_id))
         except Exception:  # pragma: no cover - defensive
             logger.warning("Failed to clear adaptation context from Redis", exc_info=True)
+
+    async def set_adaptation_last_active(self, user_id: int | None) -> None:
+        if user_id is None or self.redis is None:
+            return
+
+        try:
+            await self.redis.set(
+                self._adaptation_last_active_key(user_id),
+                datetime.now(timezone.utc).isoformat(),
+                ex=7200,
+            )
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("Failed to set adaptation_last_active", exc_info=True)
+
+    async def get_adaptation_last_active(self, user_id: int | None) -> datetime | None:
+        if user_id is None or self.redis is None:
+            return None
+
+        try:
+            raw = await self.redis.get(self._adaptation_last_active_key(user_id))
+            if not raw:
+                return None
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8", "ignore")
+            dt = datetime.fromisoformat(raw)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except Exception:  # pragma: no cover - defensive
+            return None
+
+    async def clear_adaptation_last_active(self, user_id: int | None) -> None:
+        if user_id is None or self.redis is None:
+            return
+
+        try:
+            await self.redis.delete(self._adaptation_last_active_key(user_id))
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("Failed to clear adaptation_last_active", exc_info=True)
+
+    async def set_adaptation_soft_prompted(self, user_id: int | None) -> None:
+        if user_id is None or self.redis is None:
+            return
+
+        try:
+            await self.redis.set(
+                self._adaptation_soft_prompted_key(user_id),
+                "1",
+                ex=7200,
+            )
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("Failed to set adaptation_soft_prompted", exc_info=True)
+
+    async def get_adaptation_soft_prompted(self, user_id: int | None) -> bool:
+        if user_id is None or self.redis is None:
+            return False
+
+        try:
+            return bool(await self.redis.get(self._adaptation_soft_prompted_key(user_id)))
+        except Exception:  # pragma: no cover - defensive
+            return False
+
+    async def clear_adaptation_soft_prompted(self, user_id: int | None) -> None:
+        if user_id is None or self.redis is None:
+            return
+
+        try:
+            await self.redis.delete(self._adaptation_soft_prompted_key(user_id))
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("Failed to clear adaptation_soft_prompted", exc_info=True)
