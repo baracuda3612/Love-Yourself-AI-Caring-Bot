@@ -41,6 +41,9 @@ _ALLOWED_USER_STATES = {"ACTIVE"}
 
 _DELIVERY_LATE_GRACE = timedelta(minutes=1)
 
+ADAPTATION_SOFT_TIMEOUT_MIN = 30
+ADAPTATION_HARD_TIMEOUT_MIN = 60
+
 
 def _to_utc(dt: datetime) -> datetime:
     """Safely convert datetime to UTC-aware, handling both naive and aware inputs."""
@@ -63,6 +66,14 @@ def init_scheduler():
     scheduler.add_job("app.scheduler:check_ignored_tasks", "cron", hour=8, minute=0, id="ignored_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_plan_completions", "cron", hour=10, minute=30, id="plan_completion_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:send_plan_pulse_snapshots", "cron", hour=10, minute=0, id="pulse_snapshot_check", replace_existing=True, max_instances=1)
+    scheduler.add_job(
+        "app.scheduler:check_stuck_adaptations",
+        "interval",
+        minutes=5,
+        id="stuck_adaptation_check",
+        replace_existing=True,
+        max_instances=1,
+    )
 
 
 def shutdown_scheduler():
@@ -664,6 +675,80 @@ def _maybe_schedule_plan_completion(user_id: int, plan_id: int) -> None:
         run_date,
         now_local.strftime("%H:%M"),
     )
+
+
+async def _send_adaptation_timeout_prompt(user: User, bot) -> None:
+    from app.session_memory import session_memory
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[[
+            InlineKeyboardButton(
+                text="✅ Так, повернутись до плану",
+                callback_data="adaptation_timeout_reset",
+            ),
+            InlineKeyboardButton(
+                text="🔄 Ні, продовжую",
+                callback_data="adaptation_timeout_continue",
+            ),
+        ]]
+    )
+    text = "Схоже, налаштування плану зупинилось. Повернутись до виконання плану?"
+
+    try:
+        await bot.send_message(user.tg_id, text, reply_markup=keyboard)
+        await session_memory.set_adaptation_soft_prompted(user.id)
+    except Exception:
+        logger.warning("[ADAPT_TIMEOUT] Failed to send prompt user=%s", user.id)
+
+
+async def _force_reset_adaptation(user: User, db) -> None:
+    from app.session_memory import session_memory
+
+    user.current_state = "ACTIVE"
+    db.add(user)
+    db.commit()
+    await session_memory.clear_adaptation_context(user.id)
+    await session_memory.clear_adaptation_last_active(user.id)
+    await session_memory.clear_adaptation_soft_prompted(user.id)
+    logger.info("[ADAPT_TIMEOUT] Hard reset user=%s", user.id)
+
+
+def check_stuck_adaptations() -> None:
+    if not _event_loop:
+        return
+
+    async def _run():
+        from app.fsm.states import ADAPTATION_FLOW_STATES
+        from app.session_memory import session_memory
+        from app.telegram import bot as tg_bot
+
+        with SessionLocal() as db:
+            stuck_users = (
+                db.query(User)
+                .filter(User.current_state.in_(list(ADAPTATION_FLOW_STATES)))
+                .all()
+            )
+
+            now = datetime.utcnow()
+
+            for user in stuck_users:
+                if not user.tg_id:
+                    continue
+
+                last_active = await session_memory.get_adaptation_last_active(user.id)
+                if last_active is None:
+                    await session_memory.set_adaptation_last_active(user.id)
+                    continue
+
+                minutes_idle = (now - last_active).total_seconds() / 60
+                already_prompted = await session_memory.get_adaptation_soft_prompted(user.id)
+
+                if minutes_idle >= ADAPTATION_HARD_TIMEOUT_MIN and already_prompted:
+                    await _force_reset_adaptation(user, db)
+                elif minutes_idle >= ADAPTATION_SOFT_TIMEOUT_MIN and not already_prompted:
+                    await _send_adaptation_timeout_prompt(user, tg_bot)
+
+    asyncio.run_coroutine_threadsafe(_run(), _event_loop)
 
 
 def check_plan_completions() -> None:
