@@ -569,3 +569,124 @@ async def test_adaptation_tunnel_plan_handled_before_plan_agent(monkeypatch):
 
     assert response["reply_text"] == "adaptation reply"
     assert response["followup_messages"] == ["followup"]
+
+
+@pytest.mark.anyio
+async def test_adaptation_tunnel_activity_refresh_clears_soft_prompted(monkeypatch):
+    class _Memory:
+        def __init__(self):
+            self.calls = []
+
+        async def append_message(self, user_id, role, text):
+            self.calls.append(("append", user_id, role, text))
+
+        async def set_adaptation_last_active(self, user_id):
+            self.calls.append(("set_last_active", user_id))
+
+        async def clear_adaptation_soft_prompted(self, user_id):
+            self.calls.append(("clear_soft_prompted", user_id))
+
+    memory = _Memory()
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+
+    async def fake_build_user_context(user_id, message_text):
+        return {"message_text": message_text, "current_state": "ADAPTATION_PARAMS"}
+
+    async def fake_call_router(user_id, message_text, context):
+        return {
+            "router_result": {
+                "target_agent": "coach",
+                "confidence": "HIGH",
+                "intent_bucket": "MEANING",
+            },
+            "router_meta": {},
+            "fsm_state": None,
+            "session_id": None,
+            "input_message": message_text,
+            "context_payload": context,
+        }
+
+    async def fake_invoke_agent(target_agent, payload):
+        return {"reply_text": "ok"}
+
+    monkeypatch.setattr(orchestrator, "build_user_context", fake_build_user_context)
+    monkeypatch.setattr(orchestrator, "call_router", fake_call_router)
+    monkeypatch.setattr(orchestrator, "_invoke_agent", fake_invoke_agent)
+
+    response = await orchestrator.handle_incoming_message(user_id=77, message_text="hello")
+
+    assert response["reply_text"] == "ok"
+    assert ("set_last_active", 77) in memory.calls
+    assert ("clear_soft_prompted", 77) in memory.calls
+
+
+@pytest.mark.anyio
+async def test_adaptation_selection_entry_clears_soft_prompted(monkeypatch):
+    class _Memory:
+        def __init__(self):
+            self.calls = []
+
+        async def append_message(self, user_id, role, text):
+            self.calls.append(("append", user_id, role, text))
+
+        async def set_adaptation_last_active(self, user_id):
+            self.calls.append(("set_last_active", user_id))
+
+        async def clear_adaptation_soft_prompted(self, user_id):
+            self.calls.append(("clear_soft_prompted", user_id))
+
+    class _DummySession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def commit(self):
+            return None
+
+        def rollback(self):
+            return None
+
+    memory = _Memory()
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(orchestrator, "SessionLocal", lambda: _DummySession())
+
+    async def fake_build_user_context(user_id, message_text):
+        return {"message_text": message_text, "current_state": "ACTIVE"}
+
+    async def fake_call_router(user_id, message_text, context):
+        return {
+            "router_result": {
+                "target_agent": "plan",
+                "confidence": "HIGH",
+                "intent_bucket": "STRUCTURAL",
+            },
+            "router_meta": {},
+            "fsm_state": None,
+            "session_id": None,
+            "input_message": message_text,
+            "context_payload": context,
+        }
+
+    async def fake_invoke_agent(target_agent, payload):
+        return {"transition_signal": "ADAPTATION_SELECTION"}
+
+    async def fake_commit_transition(**kwargs):
+        return "ACTIVE"
+
+    async def fake_handle_adaptation_flow(user_id, message_text, current_state, db):
+        return "adapt", []
+
+    monkeypatch.setattr(orchestrator, "build_user_context", fake_build_user_context)
+    monkeypatch.setattr(orchestrator, "call_router", fake_call_router)
+    monkeypatch.setattr(orchestrator, "_invoke_agent", fake_invoke_agent)
+    monkeypatch.setattr(orchestrator, "_commit_fsm_transition", fake_commit_transition)
+    monkeypatch.setattr(orchestrator, "handle_adaptation_flow", fake_handle_adaptation_flow)
+    monkeypatch.setattr(orchestrator, "get_active_plan", lambda db, user_id: object())
+
+    response = await orchestrator.handle_incoming_message(user_id=78, message_text="adapt")
+
+    assert response["reply_text"] == "adapt"
+    assert ("set_last_active", 78) in memory.calls
+    assert ("clear_soft_prompted", 78) in memory.calls

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -36,7 +36,7 @@ class _DummySessionMemory:
 
     async def set_adaptation_last_active(self, user_id):
         self.calls.append(("set_last_active", user_id))
-        self.last_active = datetime.utcnow()
+        self.last_active = datetime.now(timezone.utc)
 
     async def get_adaptation_soft_prompted(self, user_id):
         self.calls.append(("get_soft_prompted", user_id))
@@ -143,7 +143,7 @@ def _run_check(monkeypatch, users, memory):
 @pytest.mark.anyio
 async def test_soft_prompt_sent_after_30min(monkeypatch):
     user = SimpleNamespace(id=1, tg_id=100, current_state="ADAPTATION_SELECTION")
-    memory = _DummySessionMemory(last_active=datetime.utcnow() - timedelta(minutes=31), prompted=False)
+    memory = _DummySessionMemory(last_active=datetime.now(timezone.utc) - timedelta(minutes=31), prompted=False)
     sent, reset = _run_check(monkeypatch, [user], memory)
     await asyncio.sleep(0)
     assert sent == [1]
@@ -153,7 +153,7 @@ async def test_soft_prompt_sent_after_30min(monkeypatch):
 @pytest.mark.anyio
 async def test_soft_prompt_sent_only_once(monkeypatch):
     user = SimpleNamespace(id=2, tg_id=101, current_state="ADAPTATION_SELECTION")
-    memory = _DummySessionMemory(last_active=datetime.utcnow() - timedelta(minutes=40), prompted=True)
+    memory = _DummySessionMemory(last_active=datetime.now(timezone.utc) - timedelta(minutes=40), prompted=True)
     sent, reset = _run_check(monkeypatch, [user], memory)
     await asyncio.sleep(0)
     assert sent == []
@@ -163,7 +163,7 @@ async def test_soft_prompt_sent_only_once(monkeypatch):
 @pytest.mark.anyio
 async def test_hard_reset_after_60min_with_prompt(monkeypatch):
     user = SimpleNamespace(id=3, tg_id=102, current_state="ADAPTATION_SELECTION")
-    memory = _DummySessionMemory(last_active=datetime.utcnow() - timedelta(minutes=61), prompted=True)
+    memory = _DummySessionMemory(last_active=datetime.now(timezone.utc) - timedelta(minutes=61), prompted=True)
     sent, reset = _run_check(monkeypatch, [user], memory)
     await asyncio.sleep(0)
     assert sent == []
@@ -173,7 +173,7 @@ async def test_hard_reset_after_60min_with_prompt(monkeypatch):
 @pytest.mark.anyio
 async def test_no_hard_reset_without_soft_prompt(monkeypatch):
     user = SimpleNamespace(id=4, tg_id=103, current_state="ADAPTATION_SELECTION")
-    memory = _DummySessionMemory(last_active=datetime.utcnow() - timedelta(minutes=61), prompted=False)
+    memory = _DummySessionMemory(last_active=datetime.now(timezone.utc) - timedelta(minutes=61), prompted=False)
     sent, reset = _run_check(monkeypatch, [user], memory)
     await asyncio.sleep(0)
     assert sent == [4]
@@ -183,7 +183,7 @@ async def test_no_hard_reset_without_soft_prompt(monkeypatch):
 @pytest.mark.anyio
 async def test_no_action_if_active_user(monkeypatch):
     user = SimpleNamespace(id=5, tg_id=104, current_state="ACTIVE")
-    memory = _DummySessionMemory(last_active=datetime.utcnow() - timedelta(minutes=80), prompted=True)
+    memory = _DummySessionMemory(last_active=datetime.now(timezone.utc) - timedelta(minutes=80), prompted=True)
     sent, reset = _run_check(monkeypatch, [], memory)
     await asyncio.sleep(0)
     assert sent == []
@@ -203,7 +203,7 @@ async def test_fallback_sets_timer_on_missing_redis(monkeypatch):
 
 @pytest.mark.anyio
 async def test_continue_resets_timer(monkeypatch):
-    memory = _DummySessionMemory(last_active=datetime.utcnow(), prompted=True)
+    memory = _DummySessionMemory(last_active=datetime.now(timezone.utc), prompted=True)
 
     class _Session:
         def __enter__(self):
@@ -248,7 +248,7 @@ async def test_continue_resets_timer(monkeypatch):
 
 @pytest.mark.anyio
 async def test_yes_resets_fsm_to_active(monkeypatch):
-    memory = _DummySessionMemory(last_active=datetime.utcnow(), prompted=True)
+    memory = _DummySessionMemory(last_active=datetime.now(timezone.utc), prompted=True)
 
     class _Session:
         def __enter__(self):

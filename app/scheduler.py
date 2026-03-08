@@ -2,7 +2,7 @@
 import asyncio
 import logging
 from math import ceil
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import pytz
@@ -723,13 +723,15 @@ def check_stuck_adaptations() -> None:
         from app.telegram import bot as tg_bot
 
         with SessionLocal() as db:
+            # TD-ADAPT-1: At scale, add index on User.current_state and filter by
+            # adaptation_started_at or updated_at to avoid full-table scan.
             stuck_users = (
                 db.query(User)
                 .filter(User.current_state.in_(list(ADAPTATION_FLOW_STATES)))
                 .all()
             )
 
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
 
             for user in stuck_users:
                 if not user.tg_id:

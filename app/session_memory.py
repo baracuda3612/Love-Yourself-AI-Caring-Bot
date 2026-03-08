@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, MutableSequence
 
 from redis.asyncio import Redis
@@ -206,7 +206,7 @@ class SessionMemory:
         try:
             await self.redis.set(
                 self._adaptation_last_active_key(user_id),
-                datetime.utcnow().isoformat(),
+                datetime.now(timezone.utc).isoformat(),
                 ex=7200,
             )
         except Exception:  # pragma: no cover - defensive
@@ -222,7 +222,10 @@ class SessionMemory:
                 return None
             if isinstance(raw, bytes):
                 raw = raw.decode("utf-8", "ignore")
-            return datetime.fromisoformat(raw)
+            dt = datetime.fromisoformat(raw)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
         except Exception:  # pragma: no cover - defensive
             return None
 
