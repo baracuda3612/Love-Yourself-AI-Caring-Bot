@@ -1,75 +1,393 @@
 <!doctype html>
 <html lang="uk">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Plan Pulse</title>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Love Yourself — Pulse</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300;1,400&family=DM+Mono:wght@300;400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet"/>
   <style>
-    body { background:#0f1115; color:#fff; font-family: Inter, sans-serif; margin:0; padding:20px; }
-    .wrap { max-width:720px; margin:0 auto; }
-    .card { background:#171a21; border-radius:16px; padding:16px; }
-    .muted { color:#a7adbb; }
-    .row { display:flex; justify-content:space-between; align-items:center; gap:12px; }
-    .pill { border:1px solid #2b3242; border-radius:999px; padding:4px 10px; font-size:12px; }
-    .prog { height:8px; background:#2b3242; border-radius:999px; overflow:hidden; }
-    .prog-fill { height:100%; width:0; background:#7e8bff; transition:width .8s ease; }
-    .grid { display:grid; grid-template-columns:repeat(7, 1fr); gap:8px; margin-top:14px; }
-    .dot { width:100%; aspect-ratio:1/1; border-radius:8px; background:#262d3a; position:relative; }
-    .dot.future { opacity:.35; }
-    .dot.past, .dot.active { opacity:1; }
-    .a::after { content:""; width:6px; height:6px; border-radius:50%; background:#ffd76a; position:absolute; top:5px; right:5px; }
-    .ph { margin-top:16px; font-size:18px; line-height:1.4; }
+    :root {
+      --bg:      #0C0906;
+      --done:    #5F9C73;
+      --done-dk: #2A4A35;
+      --done-lt: #5F9C73;
+      --adapt:   #7C5BBF;
+      --card-bg: #F4F0E6;
+      --card-br: rgba(46,26,14,.1);
+      --text:    #1C1007;
+      --muted:   rgba(46,26,14,.45);
+      --muted2:  rgba(46,26,14,.25);
+      --accent:  #5F9C73;
+    }
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body {
+      background: var(--bg);
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+      min-height: 100vh;
+      font-family: 'DM Sans', sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 32px 20px 48px;
+      gap: 0;
+    }
+    .brand {
+      width: 100%;
+      max-width: 380px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      opacity: 0;
+      animation: rise .4s .05s ease forwards;
+    }
+    .brand-tag {
+      font-family: 'DM Mono', monospace;
+      font-size: 9px;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: rgba(240,234,224,.55);
+    }
+    .card {
+      width: 100%;
+      max-width: 380px;
+      background: var(--card-bg);
+      border: 1px solid rgba(240,234,224,.18);
+      border-radius: 14px;
+      overflow: hidden;
+      opacity: 0;
+      animation: rise .45s .1s ease forwards;
+    }
+    .card-top {
+      padding: 16px 18px 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      border-bottom: 1px solid var(--card-br);
+    }
+    .plan-title {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 18px;
+      font-weight: 400;
+      color: var(--text);
+      line-height: 1.15;
+    }
+    .plan-focus {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 2px;
+      font-weight: 300;
+    }
+    .day-pill {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      color: var(--done-lt);
+      background: rgba(74,124,89,.12);
+      border: 1px solid rgba(74,124,89,.22);
+      padding: 3px 8px;
+      border-radius: 5px;
+      white-space: nowrap;
+      margin-top: 2px;
+    }
+    .prog-row {
+      padding: 12px 18px 13px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid var(--card-br);
+    }
+    .prog-track {
+      flex: 1;
+      height: 2px;
+      background: rgba(46,26,14,.1);
+      border-radius: 1px;
+      overflow: hidden;
+    }
+    .prog-fill {
+      height: 100%;
+      background: var(--done);
+      border-radius: 1px;
+      width: 0;
+      transition: width 1.4s cubic-bezier(.16,1,.3,1);
+    }
+    .prog-pct {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      color: var(--done-lt);
+      white-space: nowrap;
+      min-width: 30px;
+      text-align: right;
+    }
+    .hm-wrap { padding: 14px 18px 12px; }
+    .hm-grid { display: flex; flex-direction: column; gap: 3px; }
+    .hm-row { display: flex; gap: 2px; align-items: center; }
+    .hm-row.active-row {
+      background: rgba(95,156,115,.08);
+      border-radius: 5px;
+      margin: 0 -4px;
+      padding: 2px 4px;
+    }
+    .w-lbl {
+      font-family: 'DM Mono', monospace;
+      font-size: 7px;
+      color: var(--muted2);
+      width: 14px;
+      flex-shrink: 0;
+      text-align: right;
+      padding-right: 3px;
+      letter-spacing: .02em;
+    }
+    .w-lbl.cur { color: rgba(74,124,89,.7); }
+    .dots-row { display: flex; gap: 2px; flex-wrap: nowrap; }
+    .dot {
+      width: 14px;
+      height: 14px;
+      flex-shrink: 0;
+      border-radius: 2px;
+      position: relative;
+      transition: transform .12s;
+      cursor: default;
+    }
+    .dot:hover { transform: scale(1.7); z-index: 10; }
+    .dp-done  { background: #B8D4C2; }
+    .dp-empty { background: rgba(46,26,14,.06); border: 1px solid rgba(46,26,14,.1); }
+    .da-done  { background: var(--done); }
+    .da-p66   { background: linear-gradient(to top, var(--done) 66%, rgba(74,124,89,.1) 66%); border: 1px solid rgba(74,124,89,.3); }
+    .da-p50   { background: linear-gradient(to top, var(--done) 50%, rgba(74,124,89,.1) 50%); border: 1px solid rgba(74,124,89,.3); }
+    .da-p33   { background: linear-gradient(to top, var(--done) 33%, rgba(74,124,89,.1) 33%); border: 1px solid rgba(74,124,89,.3); }
+    .da-empty { background: rgba(95,156,115,.1); border: 1px solid rgba(95,156,115,.3); }
+    .d-adapt      { background: var(--adapt) !important; border: none !important; }
+    .d-adapt.past { background: #C4B8E0 !important; opacity: .45 !important; }
+    .d-future {
+      background: rgba(46,26,14,.04);
+      border: 1px solid rgba(46,26,14,.08);
+      filter: blur(1px);
+      opacity: .3;
+      pointer-events: none;
+    }
+    .d-today { box-shadow: 0 0 0 2px rgba(255,255,255,.9), 0 0 8px 2px rgba(95,156,115,.5) !important; }
+    .legend {
+      padding: 0 18px 14px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 14px;
+      border-bottom: 1px solid var(--card-br);
+    }
+    .leg { display: flex; align-items: center; gap: 4px; font-size: 9px; color: var(--muted); font-family: 'DM Mono', monospace; }
+    .ld { width: 7px; height: 7px; border-radius: 2px; flex-shrink: 0; }
+    .ld-done  { background: var(--done); }
+    .ld-part  { background: linear-gradient(to top, var(--done) 50%, rgba(74,124,89,.1) 50%); border: 1px solid rgba(74,124,89,.3); }
+    .ld-empty { background: rgba(74,124,89,.07); border: 1px solid rgba(74,124,89,.2); }
+    .ld-adapt { background: var(--adapt); }
+    .ld-past  { background: #B8D4C2; }
+    .ld-fut   { background: rgba(46,26,14,.04); border: 1px solid rgba(46,26,14,.1); filter: blur(.5px); opacity: .5; }
+    .stat-row { padding: 13px 18px 14px; display: flex; align-items: baseline; gap: 5px; }
+    .stat-n { font-family: 'DM Mono', monospace; font-size: 22px; color: #1C1007; line-height: 1; }
+    .stat-sep { font-family: 'DM Mono', monospace; font-size: 13px; color: rgba(46,26,14,.25); }
+    .stat-of { font-family: 'DM Mono', monospace; font-size: 13px; color: rgba(46,26,14,.45); }
+    .stat-lbl { font-size: 10px; color: rgba(46,26,14,.4); margin-left: 4px; font-weight: 300; }
+    .phrase-block {
+      width: 100%;
+      max-width: 380px;
+      margin-top: 12px;
+      padding: 16px 18px;
+      border: 1px solid rgba(240,234,224,.18);
+      border-radius: 12px;
+      background: rgba(240,234,224,.04);
+      opacity: 0;
+      animation: rise .4s .3s ease forwards;
+      position: relative;
+      overflow: hidden;
+    }
+    .phrase-block::before {
+      content: '"';
+      position: absolute;
+      right: 10px; bottom: -22px;
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 80px;
+      color: rgba(255,255,255,.04);
+      line-height: 1;
+      pointer-events: none;
+    }
+    .ph-label {
+      font-family: 'DM Mono', monospace;
+      font-size: 8px;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: rgba(240,234,224,.55);
+      margin-bottom: 7px;
+    }
+    .ph-text {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 19px;
+      font-weight: 300;
+      font-style: italic;
+      color: rgba(240,234,224,.92);
+      line-height: 1.4;
+    }
+    #tip {
+      position: fixed;
+      background: rgba(10,8,4,.96);
+      border: 1px solid rgba(255,255,255,.1);
+      color: rgba(240,234,224,.9);
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      padding: 5px 9px;
+      border-radius: 6px;
+      pointer-events: none;
+      z-index: 999;
+      white-space: nowrap;
+      opacity: 0;
+      transition: opacity .08s;
+    }
+    #tip.on { opacity: 1; }
+    @keyframes rise {
+      from { opacity:0; transform:translateY(8px); }
+      to   { opacity:1; transform:translateY(0); }
+    }
+  
+    .logo-long-svg { display:inline-block; opacity:.75; }
+    .logo-long-svg svg { height:20px; width:auto; display:block; }
+    .logo-icon-svg { display:inline-block; opacity:.35; }
+    .logo-icon-svg svg { height:22px; width:22px; display:block; margin:0 auto; }
   </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="muted">week {{ week_number }} snapshot</div>
+  <div id="tip"></div>
+
+  <!-- BRAND -->
+  <div class="brand">
+    <div class="logo-long-svg" aria-label="Love Yourself">{{ logo_long_svg | safe }}</div>
+    <span class="brand-tag">week {{ week_number }} snapshot</span>
+  </div>
+
+  <!-- CARD -->
   <div class="card">
-    <div class="row">
+    <div class="card-top">
       <div>
-        <div>{{ plan_name }}</div>
-        <div class="muted">{{ plan_focus }}</div>
+        <div class="plan-title">{{ plan_name }}</div>
+        <div class="plan-focus">{{ plan_focus }}</div>
       </div>
-      <div class="pill">day {{ active_day_number }}</div>
+      <div class="day-pill">day {{ active_day_number }}</div>
     </div>
 
-    <div style="margin-top:12px" class="prog"><div class="prog-fill" id="pfill"></div></div>
-    <div class="muted" id="ppct">0%</div>
+    <div class="prog-row">
+      <div class="prog-track">
+        <div class="prog-fill" id="pfill"></div>
+      </div>
+      <div class="prog-pct" id="ppct">0%</div>
+    </div>
 
-    <div style="margin-top:8px"><span id="sn">{{ window_done }}</span>/<span id="so">{{ window_total }}</span></div>
-    <div class="grid" id="grid"></div>
-    <div class="ph">{{ phrase }}</div>
+    <div class="hm-wrap">
+      <div class="hm-grid" id="hmgrid"></div>
+    </div>
+
+    <div class="legend">
+      <div class="leg"><span class="ld ld-done"></span>виконано</div>
+      <div class="leg"><span class="ld ld-part"></span>частково</div>
+      <div class="leg"><span class="ld ld-empty"></span>не виконано</div>
+      <div class="leg"><span class="ld ld-adapt"></span>адаптація</div>
+      <div class="leg"><span class="ld ld-past"></span>минуле</div>
+      <div class="leg"><span class="ld ld-fut"></span>попереду</div>
+    </div>
+
+    <div class="stat-row">
+      <span class="stat-n" id="sn">—</span>
+      <span class="stat-sep">/</span>
+      <span class="stat-of" id="so">—</span>
+      <span class="stat-lbl">виконаних цього тижня</span>
+    </div>
   </div>
-  <div style="margin-top:12px" class="muted">
-    {% if logo_long_svg %}
-      {{ logo_long_svg | safe }}
-    {% else %}
-      love yourself
-    {% endif %}
+
+  <!-- PHRASE -->
+  <div class="phrase-block">
+    <div class="ph-label">спостереження</div>
+    <div class="ph-text">{{ phrase }}</div>
   </div>
-</div>
+
+  <div style="margin-top:28px; opacity:0; animation: rise .4s .45s ease forwards; text-align:center;">
+    <div class="logo-icon-svg" aria-label="Love Yourself">{{ logo_icon_svg | safe }}</div>
+  </div>
+
 <script>
 const DAYS = {{ days_json | tojson }};
 const TOTAL_DAYS = {{ plan_total_days }};
 const ACTIVE_DAY = {{ active_day_number }};
-const PERCENT = {{ plan_percent }};
+const WEEKS = Math.ceil(TOTAL_DAYS / 7);
 
-const grid = document.getElementById('grid');
-DAYS.forEach((d) => {
-  const el = document.createElement('div');
-  el.className = `dot ${d.window}${d.adapted ? ' a' : ''}`;
-  const ratio = Number(d.completion_ratio || 0);
-  el.style.background = ratio >= 1 ? '#7e8bff' : ratio > 0 ? '#4b5670' : '#262d3a';
-  if (d.is_today) {
-    el.style.outline = '2px solid #ffffff';
-    el.style.outlineOffset = '1px';
-  }
-  grid.appendChild(el);
-});
+function cls(d) {
+  if (d.adapted) return d.window === 'past' ? 'dot d-adapt past' : 'dot d-adapt';
+  if (d.window === 'future') return 'dot d-future';
+  if (d.window === 'past') return d.completion_ratio > 0 ? 'dot dp-done' : 'dot dp-empty';
+  if (d.completion_ratio >= 1)   return 'dot da-done';
+  if (d.completion_ratio >= 0.6) return 'dot da-p66';
+  if (d.completion_ratio >= 0.45) return 'dot da-p50';
+  if (d.completion_ratio > 0)    return 'dot da-p33';
+  return 'dot da-empty';
+}
 
+function tipTxt(d) {
+  if (d.window === 'future') return `день ${d.day} · попереду`;
+  if (d.adapted) return `день ${d.day} · адаптація`;
+  const lbl = d.completion_ratio>=1 ? 'виконано' : d.completion_ratio>=.6 ? '2/3' : d.completion_ratio>=.45 ? 'половина' : d.completion_ratio>0 ? '1/3' : 'не виконано';
+  return `день ${d.day} · ${lbl}`;
+}
+
+const tip = document.getElementById('tip');
+const grid = document.getElementById('hmgrid');
+
+for (let w = 0; w < WEEKS; w++) {
+  const week = DAYS.slice(w*7, w*7+7);
+  const isActive = week.some(d => d.window === 'active');
+
+  const row = document.createElement('div');
+  row.className = 'hm-row' + (isActive ? ' active-row' : '');
+
+  const lbl = document.createElement('div');
+  lbl.className = 'w-lbl' + (isActive ? ' cur' : '');
+  lbl.textContent = `w${w+1}`;
+  row.appendChild(lbl);
+
+  const dotsEl = document.createElement('div');
+  dotsEl.className = 'dots-row';
+
+  week.forEach((d, i) => {
+    const el = document.createElement('div');
+    el.className = cls(d);
+    if (d.is_today) el.classList.add('d-today');
+    el.style.opacity = '0';
+    const delay = 0.18 + (w * 7 + i) * 0.018;
+    el.style.animation = `rise .2s ${delay}s ease forwards`;
+    if (d.window !== 'future') {
+      const txt = tipTxt(d);
+      el.addEventListener('mouseenter', () => { tip.textContent = txt; tip.classList.add('on'); });
+      el.addEventListener('mousemove', e => {
+        const r = tip.getBoundingClientRect(), p = 10;
+        let lx = e.clientX+p, ly = e.clientY+p;
+        if (lx+r.width+p > window.innerWidth)  lx = window.innerWidth-r.width-p;
+        if (ly+r.height+p > window.innerHeight) ly = window.innerHeight-r.height-p;
+        tip.style.left = lx+'px'; tip.style.top = ly+'px';
+      });
+      el.addEventListener('mouseleave', () => tip.classList.remove('on'));
+    }
+    dotsEl.appendChild(el);
+  });
+
+  row.appendChild(dotsEl);
+  grid.appendChild(row);
+}
+
+const active = DAYS.filter(d => d.window === 'active');
+const done = active.filter(d => d.completion_ratio > 0 || d.adapted).length;
+document.getElementById('sn').textContent = done;
+document.getElementById('so').textContent = active.length;
+
+const pct = {{ plan_percent }};
 requestAnimationFrame(() => {
-  document.getElementById('pfill').style.width = `${PERCENT}%`;
-  document.getElementById('ppct').textContent = `${PERCENT}%`;
+  document.getElementById('pfill').style.width = pct + '%';
+  let c = 0;
+  const tick = () => { c = Math.min(c+2, pct); document.getElementById('ppct').textContent = c+'%'; if(c<pct) requestAnimationFrame(tick); };
+  setTimeout(tick, 150);
 });
 </script>
 </body>
