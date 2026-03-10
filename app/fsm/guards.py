@@ -8,6 +8,7 @@ from app.fsm.states import (
     ADAPTATION_FLOW_STATES,
     ADAPTATION_SELECTION,
     PLAN_FLOW_ALLOWED_TRANSITIONS,
+    SCHEDULE_ADJUSTMENT_ALLOWED_TRANSITIONS,
     PLAN_FLOW_ENTRYPOINTS,
     PLAN_FLOW_STATES,
 )
@@ -29,6 +30,9 @@ def can_transition(from_state: str, to_state: str) -> bool:
     if (from_state, to_state) in PLAN_FLOW_ALLOWED_TRANSITIONS:
         return True
     if (from_state, to_state) in ADAPTATION_FLOW_ALLOWED_TRANSITIONS:
+        return True
+
+    if (from_state, to_state) in SCHEDULE_ADJUSTMENT_ALLOWED_TRANSITIONS:
         return True
 
     if to_state == ADAPTATION_SELECTION and from_state in {"ACTIVE", "ACTIVE_PAUSED"}:
