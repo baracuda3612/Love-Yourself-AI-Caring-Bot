@@ -13,6 +13,7 @@ from app.fsm.states import (
     ADAPTATION_PARAMS,
     ADAPTATION_SELECTION,
     ENTRY_PROMPT_ALLOWED_STATES,
+    SCHEDULE_ADJUSTMENT,
 )
 from app.plan_parameters import normalize_plan_parameters
 from app.adaptation_types import get_all_intent_values, get_intents_requiring_params
@@ -28,6 +29,7 @@ __all__ = [
     "adaptation_flow_selection",
     "adaptation_flow_params",
     "adaptation_flow_confirmation",
+    "schedule_adjustment",
 ]
 
 _PLAN_FLOW_ENTRY_PROMPT = """You are the Plan Agent for ENTRY MODE.
@@ -41,7 +43,8 @@ Purpose:
 - Decide whether the user wants to:
   A) Start a NEW plan (plan creation)
   B) MODIFY existing plan (plan adaptation)
-  C) Neither (null signal)
+  C) CHANGE task delivery time (schedule adjustment)
+  D) Neither (null signal)
 
 Rules:
 - Do NOT ask questions.
@@ -56,11 +59,16 @@ Decision Logic:
    - Set reply_text to "" (orchestrator handles entry)
 
 2. PLAN ADAPTATION (modify existing):
-   - User wants to change/modify/adjust existing plan
+   - User wants to change/modify/adjust existing plan content/difficulty/load
    - Set transition_signal to "ADAPTATION_SELECTION"
    - Set reply_text to "" (orchestrator handles entry)
 
-3. NEITHER:
+3. SCHEDULE ADJUSTMENT (change delivery time):
+   - User asks to deliver tasks earlier/later or at specific time
+   - Set transition_signal to "SCHEDULE_ADJUSTMENT"
+   - Set reply_text to ""
+
+4. NEITHER:
    - User message does not clearly indicate plan creation or adaptation
    - Set transition_signal to null
    - Set reply_text to a helpful response acknowledging the message
@@ -74,7 +82,7 @@ Input:
 Output (tool call arguments):
 {
   "reply_text": "string",
-  "transition_signal": "PLAN_FLOW:DATA_COLLECTION | ADAPTATION_SELECTION | null",
+  "transition_signal": "PLAN_FLOW:DATA_COLLECTION | ADAPTATION_SELECTION | SCHEDULE_ADJUSTMENT | null",
   "plan_updates": null,
   "generated_plan_object": null
 }
@@ -86,6 +94,9 @@ Output: {"reply_text": "", "transition_signal": "PLAN_FLOW:DATA_COLLECTION", "pl
 
 Input: "хочу змінити план"
 Output: {"reply_text": "", "transition_signal": "ADAPTATION_SELECTION", "plan_updates": null, "generated_plan_object": null}
+
+Input: "перенеси на 21:00"
+Output: {"reply_text": "", "transition_signal": "SCHEDULE_ADJUSTMENT", "plan_updates": null, "generated_plan_object": null}
 
 Input: "як справи з планом?"
 Output: {"reply_text": "Чим можу допомогти з твоїм планом? Хочеш створити новий чи змінити поточний?", "transition_signal": null, "plan_updates": null, "generated_plan_object": null}
@@ -335,6 +346,29 @@ Forbidden:
 - emotional language / coaching
 - inventing new actions/intents
 - outputting anything outside the single tool call
+"""
+
+
+
+_SCHEDULE_ADJUSTMENT_PROMPT = """You are the Plan Agent for SCHEDULE_ADJUSTMENT.
+
+You MUST read the input JSON and return exactly ONE tool call.
+You MUST NOT output any assistant text outside the tool call.
+
+Session memory contains:
+- active_tasks
+- current_slot
+- pending_changes
+- slots_queue
+- step
+
+Rules:
+- If user confirms a specific time in HH:MM format, call schedule_adjustment_record with new_time and user_text.
+- If queue is empty or user confirms done/save/apply, call schedule_adjustment_apply.
+- If user cancels, call schedule_adjustment_cancel.
+- If user asks clarifying question, answer with user_text and do not fabricate slot names for user-facing text.
+
+Never mention technical slot names MORNING/DAY/EVENING in user_text.
 """
 
 _ADAPTATION_FLOW_SELECTION_PROMPT = """You are the Plan Agent for ADAPTATION_SELECTION.
@@ -762,6 +796,65 @@ _ADAPTATION_FLOW_CONFIRMATION_TOOL = {
     },
 }
 
+
+
+_SCHEDULE_ADJUSTMENT_INIT_TOOL = {
+    "type": "function",
+    "name": "schedule_adjustment_init",
+    "description": "User wants to change task delivery time.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "user_text": {"type": "string"},
+        },
+        "required": ["user_text"],
+        "additionalProperties": False,
+    },
+}
+
+_SCHEDULE_ADJUSTMENT_RECORD_TOOL = {
+    "type": "function",
+    "name": "schedule_adjustment_record",
+    "description": "Record confirmed time for a task.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "new_time": {"type": "string"},
+            "user_text": {"type": "string"},
+        },
+        "required": ["new_time", "user_text"],
+        "additionalProperties": False,
+    },
+}
+
+_SCHEDULE_ADJUSTMENT_APPLY_TOOL = {
+    "type": "function",
+    "name": "schedule_adjustment_apply",
+    "description": "Apply all pending time changes.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "user_text": {"type": "string"},
+        },
+        "required": ["user_text"],
+        "additionalProperties": False,
+    },
+}
+
+_SCHEDULE_ADJUSTMENT_CANCEL_TOOL = {
+    "type": "function",
+    "name": "schedule_adjustment_cancel",
+    "description": "Cancel without applying changes.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "user_text": {"type": "string"},
+        },
+        "required": ["user_text"],
+        "additionalProperties": False,
+    },
+}
+
 _PLAN_FLOW_ENTRY_TOOL = {
 
     "type": "function",
@@ -773,7 +866,7 @@ _PLAN_FLOW_ENTRY_TOOL = {
             "reply_text": {"type": "string"},
             "transition_signal": {
                 "type": ["string", "null"],
-                "enum": ["PLAN_FLOW:DATA_COLLECTION", "ADAPTATION_SELECTION", None],
+                "enum": ["PLAN_FLOW:DATA_COLLECTION", "ADAPTATION_SELECTION", "SCHEDULE_ADJUSTMENT", None],
             },
             "plan_updates": {"type": "null"},
             "generated_plan_object": {"type": "null"},
@@ -923,6 +1016,8 @@ async def plan_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
         return await adaptation_flow_params(payload)
     if current_state == ADAPTATION_CONFIRMATION:
         return await adaptation_flow_confirmation(payload)
+    if current_state == SCHEDULE_ADJUSTMENT:
+        return await schedule_adjustment(payload)
 
     if current_state in ENTRY_PROMPT_ALLOWED_STATES:
         return await plan_flow_entry(payload)
@@ -1096,6 +1191,50 @@ async def adaptation_flow_confirmation(payload: Dict[str, Any]) -> Dict[str, Any
         }
 
     return arguments
+
+
+async def schedule_adjustment(payload: Dict[str, Any]) -> Dict[str, Any]:
+    messages = [
+        {"role": "system", "content": _SCHEDULE_ADJUSTMENT_PROMPT},
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+    ]
+
+    response = await async_client.responses.create(
+        model=settings.PLAN_MODEL,
+        input=messages,
+        max_output_tokens=settings.MAX_TOKENS,
+        tools=[
+            _SCHEDULE_ADJUSTMENT_INIT_TOOL,
+            _SCHEDULE_ADJUSTMENT_RECORD_TOOL,
+            _SCHEDULE_ADJUSTMENT_APPLY_TOOL,
+            _SCHEDULE_ADJUSTMENT_CANCEL_TOOL,
+        ],
+    )
+
+    tool_call = _extract_tool_call(response)
+    if not tool_call:
+        return {
+            "reply_text": extract_output_text(response),
+            "transition_signal": None,
+            "tool_call": None,
+            "error": {"code": "CONTRACT_MISMATCH"},
+        }
+
+    arguments = tool_call.get("arguments")
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            arguments = {}
+
+    return {
+        "reply_text": "",
+        "transition_signal": None,
+        "tool_call": {
+            "name": tool_call.get("name"),
+            "arguments": arguments if isinstance(arguments, dict) else {},
+        },
+    }
 
 
 async def plan_flow_data_collection(payload: Dict[str, Any]) -> Dict[str, Any]:
