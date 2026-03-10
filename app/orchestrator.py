@@ -319,15 +319,23 @@ async def _handle_schedule_adjustment_record(user_id: int, tool_args: Dict[str, 
 
 
 async def _handle_schedule_adjustment_apply(user_id: int, tool_args: Dict[str, Any], db: Session) -> Dict[str, Any]:
+    ctx = await session_memory.get_schedule_adjustment_context(user_id) or {}
+    plan_was_paused = bool(ctx.get("plan_was_paused", False))
+
     user = db.query(User).filter(User.id == user_id).first()
     active_plan = get_active_plan(db, user_id)
     if not user or not active_plan:
-        await _commit_fsm_transition(user_id=user_id, target_agent="plan", next_state="ACTIVE", db=db, reason="no_plan")
+        return_state = "ACTIVE_PAUSED" if plan_was_paused else "ACTIVE"
+        await _commit_fsm_transition(
+            user_id=user_id,
+            target_agent="plan",
+            next_state=return_state,
+            db=db,
+            reason="no_plan",
+        )
         return {"user_text": "Активний план не знайдено."}
 
-    ctx = await session_memory.get_schedule_adjustment_context(user_id) or {}
     pending_changes = ctx.get("pending_changes", {})
-    plan_was_paused = bool(ctx.get("plan_was_paused", False))
     if not pending_changes:
         return_state = "ACTIVE_PAUSED" if plan_was_paused else "ACTIVE"
         await _commit_fsm_transition(

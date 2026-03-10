@@ -443,3 +443,27 @@ async def test_timeout_reset_callback_paused_returns_to_paused(monkeypatch):
     await telegram.on_sched_adj_timeout(cb)
 
     assert user.current_state == "ACTIVE_PAUSED"
+
+
+@pytest.mark.anyio
+async def test_apply_no_plan_paused_returns_to_paused(monkeypatch):
+    profile = SimpleNamespace(daily_time_slots={"MORNING": "08:10", "DAY": "13:00", "EVENING": "20:00"})
+    user = SimpleNamespace(id=1, profile=profile, timezone="Europe/Kyiv")
+    memory = _DummySessionMemory({"plan_was_paused": True, "pending_changes": {}})
+    db = _DummyDB(user)
+
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(orchestrator, "get_active_plan", lambda _db, _user_id: None)
+
+    called = {}
+
+    async def _fake_commit_fsm_transition(**kwargs):
+        called["next_state"] = kwargs.get("next_state")
+        return None
+
+    monkeypatch.setattr(orchestrator, "_commit_fsm_transition", _fake_commit_fsm_transition)
+
+    result = await orchestrator._handle_schedule_adjustment_apply(1, {}, db)
+
+    assert called["next_state"] == "ACTIVE_PAUSED"
+    assert result["user_text"] == "Активний план не знайдено."
