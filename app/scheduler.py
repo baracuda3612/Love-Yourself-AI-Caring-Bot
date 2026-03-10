@@ -43,6 +43,8 @@ _DELIVERY_LATE_GRACE = timedelta(minutes=1)
 
 ADAPTATION_SOFT_TIMEOUT_MIN = 30
 ADAPTATION_HARD_TIMEOUT_MIN = 60
+SCHEDULE_ADJ_SOFT_TIMEOUT_MIN = 15
+SCHEDULE_ADJ_HARD_TIMEOUT_MIN = 30
 
 
 def _to_utc(dt: datetime) -> datetime:
@@ -71,6 +73,14 @@ def init_scheduler():
         "interval",
         minutes=5,
         id="stuck_adaptation_check",
+        replace_existing=True,
+        max_instances=1,
+    )
+    scheduler.add_job(
+        "app.scheduler:check_stuck_schedule_adjustments",
+        "interval",
+        minutes=5,
+        id="stuck_schedule_adj_check",
         replace_existing=True,
         max_instances=1,
     )
@@ -752,6 +762,72 @@ def check_stuck_adaptations() -> None:
 
     asyncio.run_coroutine_threadsafe(_run(), _event_loop)
 
+
+
+
+async def _send_schedule_adjustment_timeout_prompt(user: User, bot) -> None:
+    from app.session_memory import session_memory
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Повернутись", callback_data="sched_adj_timeout_reset"),
+        InlineKeyboardButton(text="🔄 Продовжую", callback_data="sched_adj_timeout_continue"),
+    ]])
+    try:
+        await bot.send_message(
+            user.tg_id,
+            "Налаштування часу зупинилось. Повернутись до плану без змін?",
+            reply_markup=keyboard,
+        )
+        await session_memory.set_schedule_adjustment_soft_prompted(user.id)
+    except Exception:
+        logger.warning("[SCHED_ADJ_TIMEOUT] Failed user=%s", user.id)
+
+
+async def _force_reset_schedule_adjustment(user: User, db) -> None:
+    from app.session_memory import session_memory
+
+    ctx = await session_memory.get_schedule_adjustment_context(user.id) or {}
+    plan_was_paused = bool(ctx.get("plan_was_paused", False))
+
+    # Known trade-off for timeout edge cases:
+    # if context is missing/expired at hard-timeout time, we fall back to ACTIVE.
+    # This avoids getting the user stuck in tunnel; preserving paused state requires context.
+    user.current_state = "ACTIVE_PAUSED" if plan_was_paused else "ACTIVE"
+    db.add(user)
+    db.commit()
+    await session_memory.clear_schedule_adjustment_context(user.id)
+    await session_memory.clear_schedule_adjustment_last_active(user.id)
+    await session_memory.clear_schedule_adjustment_soft_prompted(user.id)
+    logger.info("[SCHED_ADJ_TIMEOUT] Hard reset user=%s -> %s", user.id, user.current_state)
+
+
+def check_stuck_schedule_adjustments() -> None:
+    if not _event_loop:
+        return
+
+    async def _run():
+        from app.session_memory import session_memory
+        from app.telegram import bot as tg_bot
+
+        with SessionLocal() as db:
+            stuck_users = db.query(User).filter(User.current_state == "SCHEDULE_ADJUSTMENT").all()
+            now = datetime.now(timezone.utc)
+            for user in stuck_users:
+                if not user.tg_id:
+                    continue
+                last_active = await session_memory.get_schedule_adjustment_last_active(user.id)
+                if last_active is None:
+                    await session_memory.set_schedule_adjustment_last_active(user.id)
+                    continue
+                minutes_idle = (now - last_active).total_seconds() / 60
+                already_prompted = await session_memory.get_schedule_adjustment_soft_prompted(user.id)
+
+                if minutes_idle >= SCHEDULE_ADJ_HARD_TIMEOUT_MIN and already_prompted:
+                    await _force_reset_schedule_adjustment(user, db)
+                elif minutes_idle >= SCHEDULE_ADJ_SOFT_TIMEOUT_MIN and not already_prompted:
+                    await _send_schedule_adjustment_timeout_prompt(user, tg_bot)
+
+    asyncio.run_coroutine_threadsafe(_run(), _event_loop)
 
 def check_plan_completions() -> None:
     """

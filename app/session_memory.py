@@ -37,6 +37,15 @@ class SessionMemory:
     def _adaptation_soft_prompted_key(self, user_id: int) -> str:
         return f"session:{user_id}:adaptation_soft_prompted"
 
+    def _schedule_adjustment_context_key(self, user_id: int) -> str:
+        return f"session:{user_id}:schedule_adjustment_context"
+
+    def _schedule_adjustment_last_active_key(self, user_id: int) -> str:
+        return f"session:{user_id}:schedule_adjustment_last_active"
+
+    def _schedule_adjustment_soft_prompted_key(self, user_id: int) -> str:
+        return f"session:{user_id}:schedule_adjustment_soft_prompted"
+
     async def append_message(self, user_id: int | None, role: str, text: str) -> None:
         """Append a message to the tail of the user's history."""
 
@@ -268,3 +277,124 @@ class SessionMemory:
             await self.redis.delete(self._adaptation_soft_prompted_key(user_id))
         except Exception:  # pragma: no cover - defensive
             logger.warning("Failed to clear adaptation_soft_prompted", exc_info=True)
+
+
+    async def get_schedule_adjustment_context(self, user_id: int | None) -> dict | None:
+        if user_id is None or self.redis is None:
+            return None
+
+        try:
+            raw = await self.redis.get(self._schedule_adjustment_context_key(user_id))
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("Failed to fetch schedule adjustment context from Redis", exc_info=True)
+            return None
+
+        if not raw:
+            return None
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "ignore")
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    async def set_schedule_adjustment_context(self, user_id: int | None, context: dict) -> None:
+        if user_id is None or self.redis is None:
+            return
+
+        try:
+            await self.redis.set(
+                self._schedule_adjustment_context_key(user_id),
+                json.dumps(context),
+                ex=3600,
+            )
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("Failed to persist schedule adjustment context to Redis", exc_info=True)
+
+    async def update_schedule_adjustment_context(self, user_id: int | None, updates: dict) -> None:
+        if user_id is None or self.redis is None:
+            return
+
+        existing = await self.get_schedule_adjustment_context(user_id) or {}
+        existing.update(updates)
+        await self.set_schedule_adjustment_context(user_id, existing)
+
+    async def clear_schedule_adjustment_context(self, user_id: int | None) -> None:
+        if user_id is None or self.redis is None:
+            return
+
+        try:
+            await self.redis.delete(self._schedule_adjustment_context_key(user_id))
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("Failed to clear schedule adjustment context", exc_info=True)
+
+    async def set_schedule_adjustment_last_active(self, user_id: int | None) -> None:
+        if user_id is None or self.redis is None:
+            return
+
+        try:
+            await self.redis.set(
+                self._schedule_adjustment_last_active_key(user_id),
+                datetime.now(timezone.utc).isoformat(),
+                ex=7200,
+            )
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("Failed to set schedule_adjustment_last_active", exc_info=True)
+
+    async def get_schedule_adjustment_last_active(self, user_id: int | None) -> datetime | None:
+        if user_id is None or self.redis is None:
+            return None
+
+        try:
+            raw = await self.redis.get(self._schedule_adjustment_last_active_key(user_id))
+            if not raw:
+                return None
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8", "ignore")
+            dt = datetime.fromisoformat(raw)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except Exception:  # pragma: no cover - defensive
+            return None
+
+    async def clear_schedule_adjustment_last_active(self, user_id: int | None) -> None:
+        if user_id is None or self.redis is None:
+            return
+
+        try:
+            await self.redis.delete(self._schedule_adjustment_last_active_key(user_id))
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("Failed to clear schedule_adjustment_last_active", exc_info=True)
+
+    async def set_schedule_adjustment_soft_prompted(self, user_id: int | None) -> None:
+        if user_id is None or self.redis is None:
+            return
+
+        try:
+            await self.redis.set(
+                self._schedule_adjustment_soft_prompted_key(user_id),
+                "1",
+                ex=7200,
+            )
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("Failed to set schedule_adjustment_soft_prompted", exc_info=True)
+
+    async def get_schedule_adjustment_soft_prompted(self, user_id: int | None) -> bool:
+        if user_id is None or self.redis is None:
+            return False
+
+        try:
+            return bool(await self.redis.get(self._schedule_adjustment_soft_prompted_key(user_id)))
+        except Exception:  # pragma: no cover - defensive
+            return False
+
+    async def clear_schedule_adjustment_soft_prompted(self, user_id: int | None) -> None:
+        if user_id is None or self.redis is None:
+            return
+
+        try:
+            await self.redis.delete(self._schedule_adjustment_soft_prompted_key(user_id))
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("Failed to clear schedule_adjustment_soft_prompted", exc_info=True)
