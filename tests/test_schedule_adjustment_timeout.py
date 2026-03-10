@@ -24,9 +24,10 @@ from app import scheduler
 
 
 class _DummySessionMemory:
-    def __init__(self, last_active=None, prompted=False):
+    def __init__(self, last_active=None, prompted=False, context=None):
         self.last_active = last_active
         self.prompted = prompted
+        self.context = context or {}
 
     async def get_schedule_adjustment_last_active(self, _user_id):
         return self.last_active
@@ -36,6 +37,18 @@ class _DummySessionMemory:
 
     async def get_schedule_adjustment_soft_prompted(self, _user_id):
         return self.prompted
+
+    async def get_schedule_adjustment_context(self, _user_id):
+        return self.context
+
+    async def clear_schedule_adjustment_context(self, _user_id):
+        self.context = {}
+
+    async def clear_schedule_adjustment_last_active(self, _user_id):
+        self.last_active = None
+
+    async def clear_schedule_adjustment_soft_prompted(self, _user_id):
+        self.prompted = False
 
 
 class _DummyDB:
@@ -98,3 +111,45 @@ async def test_soft_prompt_after_idle(monkeypatch):
     await asyncio.sleep(0)
 
     assert sent == [1]
+
+
+@pytest.mark.anyio
+async def test_force_reset_returns_to_paused_if_context_marks_paused(monkeypatch):
+    user = SimpleNamespace(id=2, tg_id=200, current_state="SCHEDULE_ADJUSTMENT")
+    memory = _DummySessionMemory(context={"plan_was_paused": True})
+
+    import sys
+
+    monkeypatch.setitem(sys.modules, "app.session_memory", SimpleNamespace(session_memory=memory))
+
+    class _DB:
+        def add(self, _obj):
+            return None
+
+        def commit(self):
+            return None
+
+    await scheduler._force_reset_schedule_adjustment(user, _DB())
+
+    assert user.current_state == "ACTIVE_PAUSED"
+
+
+@pytest.mark.anyio
+async def test_force_reset_falls_back_to_active_without_context(monkeypatch):
+    user = SimpleNamespace(id=3, tg_id=300, current_state="SCHEDULE_ADJUSTMENT")
+    memory = _DummySessionMemory(context={})
+
+    import sys
+
+    monkeypatch.setitem(sys.modules, "app.session_memory", SimpleNamespace(session_memory=memory))
+
+    class _DB:
+        def add(self, _obj):
+            return None
+
+        def commit(self):
+            return None
+
+    await scheduler._force_reset_schedule_adjustment(user, _DB())
+
+    assert user.current_state == "ACTIVE"

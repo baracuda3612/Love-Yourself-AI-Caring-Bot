@@ -284,8 +284,15 @@ async def test_apply_reads_profile_daily_time_slots(monkeypatch):
             "plan_was_paused": False,
         }
     )
+    db = _DummyDB(user)
     monkeypatch.setattr(orchestrator, "session_memory", memory)
-    monkeypatch.setattr(orchestrator, "get_active_plan", lambda _db, _user_id: plan)
+
+    def _fake_get_active_plan(db_arg, user_id_arg):
+        assert db_arg is db
+        assert user_id_arg == 1
+        return plan
+
+    monkeypatch.setattr(orchestrator, "get_active_plan", _fake_get_active_plan)
     monkeypatch.setattr(orchestrator, "log_user_event", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(orchestrator, "reschedule_plan_steps", lambda *_args, **_kwargs: None)
 
@@ -294,8 +301,38 @@ async def test_apply_reads_profile_daily_time_slots(monkeypatch):
 
     monkeypatch.setattr(orchestrator, "_commit_fsm_transition", _fake_commit_fsm_transition)
 
-    db = _DummyDB(user)
     result = await orchestrator._handle_schedule_adjustment_apply(1, {"user_text": "done"}, db)
 
     assert result["user_text"] == "done"
     assert profile.daily_time_slots["MORNING"] == "07:30"
+
+
+@pytest.mark.anyio
+async def test_apply_does_not_claim_resume_when_resume_fails(monkeypatch):
+    profile = SimpleNamespace(daily_time_slots={"MORNING": "08:10", "DAY": "13:00", "EVENING": "20:00"})
+    user = SimpleNamespace(id=1, profile=profile, timezone="Europe/Kyiv")
+    plan = SimpleNamespace(id=77, current_day=1, start_date=datetime.now(timezone.utc), status="paused")
+
+    memory = _DummySessionMemory(
+        {
+            "pending_changes": {
+                "MORNING": {"new_time": "07:00", "new_slot": "MORNING"},
+            },
+            "plan_was_paused": True,
+        }
+    )
+    db = _DummyDB(user)
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(orchestrator, "get_active_plan", lambda db_arg, user_id_arg: plan)
+    monkeypatch.setattr(orchestrator, "log_user_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(orchestrator, "reschedule_plan_steps", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(orchestrator, "_resume_plan_if_paused", lambda *_args, **_kwargs: (False, []))
+
+    async def _fake_commit_fsm_transition(**_kwargs):
+        return None
+
+    monkeypatch.setattr(orchestrator, "_commit_fsm_transition", _fake_commit_fsm_transition)
+
+    result = await orchestrator._handle_schedule_adjustment_apply(1, {}, db)
+
+    assert "План відновлено" not in result["user_text"]

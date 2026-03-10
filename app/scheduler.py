@@ -786,13 +786,19 @@ async def _send_schedule_adjustment_timeout_prompt(user: User, bot) -> None:
 async def _force_reset_schedule_adjustment(user: User, db) -> None:
     from app.session_memory import session_memory
 
-    user.current_state = "ACTIVE"
+    ctx = await session_memory.get_schedule_adjustment_context(user.id) or {}
+    plan_was_paused = bool(ctx.get("plan_was_paused", False))
+
+    # Known trade-off for timeout edge cases:
+    # if context is missing/expired at hard-timeout time, we fall back to ACTIVE.
+    # This avoids getting the user stuck in tunnel; preserving paused state requires context.
+    user.current_state = "ACTIVE_PAUSED" if plan_was_paused else "ACTIVE"
     db.add(user)
     db.commit()
     await session_memory.clear_schedule_adjustment_context(user.id)
     await session_memory.clear_schedule_adjustment_last_active(user.id)
     await session_memory.clear_schedule_adjustment_soft_prompted(user.id)
-    logger.info("[SCHED_ADJ_TIMEOUT] Hard reset user=%s", user.id)
+    logger.info("[SCHED_ADJ_TIMEOUT] Hard reset user=%s -> %s", user.id, user.current_state)
 
 
 def check_stuck_schedule_adjustments() -> None:

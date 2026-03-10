@@ -187,15 +187,17 @@ def _plan_agent_fallback_envelope() -> Dict[str, Any]:
     }
 
 
-def _resume_plan_if_paused(db: Session, plan: AIPlan) -> List[int]:
+def _resume_plan_if_paused(db: Session, plan: AIPlan) -> Tuple[bool, List[int]]:
     if plan.status != "paused":
-        return []
+        return False, []
     try:
         result = apply_plan_adaptation(db, plan.id, {"adaptation_type": "resume"})
     except Exception:
         logger.exception("[SCHED_ADJ] Failed to resume paused plan=%s", plan.id)
-        return []
-    return list(result.rescheduled_step_ids or [])
+        return False, []
+
+    resumed = plan.status == "active"
+    return resumed, list(result.rescheduled_step_ids or [])
 
 
 def _sanitize_plan_updates(plan_updates: Any) -> Optional[Dict[str, Any]]:
@@ -414,8 +416,11 @@ async def _handle_schedule_adjustment_apply(user_id: int, tool_args: Dict[str, A
     resume_note = ""
     resumed_step_ids: List[int] = []
     if plan_was_paused:
-        resumed_step_ids = _resume_plan_if_paused(db, active_plan)
-        resume_note = " План відновлено 🎉"
+        resumed, resumed_step_ids = _resume_plan_if_paused(db, active_plan)
+        if resumed:
+            resume_note = " План відновлено 🎉"
+        else:
+            logger.warning("[SCHED_ADJ] plan_was_paused but resume did not succeed user=%s", user_id)
 
     await _commit_fsm_transition(
         user_id=user_id,
