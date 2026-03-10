@@ -308,7 +308,32 @@ async def test_apply_reads_profile_daily_time_slots(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_apply_does_not_claim_resume_when_resume_fails(monkeypatch):
+async def test_apply_no_changes_paused_returns_to_paused(monkeypatch):
+    profile = SimpleNamespace(daily_time_slots={"MORNING": "08:10", "DAY": "13:00", "EVENING": "20:00"})
+    user = SimpleNamespace(id=1, profile=profile, timezone="Europe/Kyiv")
+    plan = SimpleNamespace(id=99, current_day=1, start_date=datetime.now(timezone.utc), status="paused")
+
+    memory = _DummySessionMemory({"pending_changes": {}, "plan_was_paused": True})
+    db = _DummyDB(user)
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(orchestrator, "get_active_plan", lambda _db, _user_id: plan)
+
+    called = {}
+
+    async def _fake_commit_fsm_transition(**kwargs):
+        called["next_state"] = kwargs.get("next_state")
+        return None
+
+    monkeypatch.setattr(orchestrator, "_commit_fsm_transition", _fake_commit_fsm_transition)
+
+    result = await orchestrator._handle_schedule_adjustment_apply(1, {}, db)
+
+    assert called["next_state"] == "ACTIVE_PAUSED"
+    assert result["user_text"] == "Нічого не змінилось."
+
+
+@pytest.mark.anyio
+async def test_apply_with_changes_paused_stays_paused(monkeypatch):
     profile = SimpleNamespace(daily_time_slots={"MORNING": "08:10", "DAY": "13:00", "EVENING": "20:00"})
     user = SimpleNamespace(id=1, profile=profile, timezone="Europe/Kyiv")
     plan = SimpleNamespace(id=77, current_day=1, start_date=datetime.now(timezone.utc), status="paused")
@@ -323,16 +348,98 @@ async def test_apply_does_not_claim_resume_when_resume_fails(monkeypatch):
     )
     db = _DummyDB(user)
     monkeypatch.setattr(orchestrator, "session_memory", memory)
-    monkeypatch.setattr(orchestrator, "get_active_plan", lambda db_arg, user_id_arg: plan)
+    monkeypatch.setattr(orchestrator, "get_active_plan", lambda _db, _user_id: plan)
     monkeypatch.setattr(orchestrator, "log_user_event", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(orchestrator, "reschedule_plan_steps", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(orchestrator, "_resume_plan_if_paused", lambda *_args, **_kwargs: (False, []))
 
-    async def _fake_commit_fsm_transition(**_kwargs):
+    called = {}
+
+    async def _fake_commit_fsm_transition(**kwargs):
+        called["next_state"] = kwargs.get("next_state")
         return None
 
     monkeypatch.setattr(orchestrator, "_commit_fsm_transition", _fake_commit_fsm_transition)
 
     result = await orchestrator._handle_schedule_adjustment_apply(1, {}, db)
 
+    assert called["next_state"] == "ACTIVE_PAUSED"
     assert "План відновлено" not in result["user_text"]
+
+
+@pytest.mark.anyio
+async def test_apply_with_changes_active_goes_active(monkeypatch):
+    profile = SimpleNamespace(daily_time_slots={"MORNING": "08:10", "DAY": "13:00", "EVENING": "20:00"})
+    user = SimpleNamespace(id=1, profile=profile, timezone="Europe/Kyiv")
+    plan = SimpleNamespace(id=88, current_day=1, start_date=datetime.now(timezone.utc), status="active")
+
+    memory = _DummySessionMemory(
+        {
+            "pending_changes": {
+                "MORNING": {"new_time": "07:00", "new_slot": "MORNING"},
+            },
+            "plan_was_paused": False,
+        }
+    )
+    db = _DummyDB(user)
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(orchestrator, "get_active_plan", lambda _db, _user_id: plan)
+    monkeypatch.setattr(orchestrator, "log_user_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(orchestrator, "reschedule_plan_steps", lambda *_args, **_kwargs: None)
+
+    called = {}
+
+    async def _fake_commit_fsm_transition(**kwargs):
+        called["next_state"] = kwargs.get("next_state")
+        return None
+
+    monkeypatch.setattr(orchestrator, "_commit_fsm_transition", _fake_commit_fsm_transition)
+
+    await orchestrator._handle_schedule_adjustment_apply(1, {}, db)
+
+    assert called["next_state"] == "ACTIVE"
+
+
+@pytest.mark.anyio
+async def test_timeout_reset_callback_paused_returns_to_paused(monkeypatch):
+    user = SimpleNamespace(id=15, tg_id=115, current_state="SCHEDULE_ADJUSTMENT")
+    memory = _DummySessionMemory({"plan_was_paused": True})
+
+    class _Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def add(self, _obj):
+            return None
+
+        def commit(self):
+            return None
+
+    monkeypatch.setattr(telegram, "session_memory", memory)
+    monkeypatch.setattr(telegram, "SessionLocal", lambda: _Session())
+    monkeypatch.setattr(telegram, "_ensure_user", lambda _db, _tg_user: (user, False))
+
+    sent = []
+
+    async def _send_message(chat_id, text):
+        sent.append((chat_id, text))
+
+    monkeypatch.setattr(telegram.bot, "send_message", _send_message)
+
+    msg = _Message()
+
+    async def _answer():
+        return None
+
+    cb = SimpleNamespace(
+        data="sched_adj_timeout_reset",
+        from_user=SimpleNamespace(id=999),
+        message=msg,
+        answer=_answer,
+    )
+
+    await telegram.on_sched_adj_timeout(cb)
+
+    assert user.current_state == "ACTIVE_PAUSED"

@@ -498,7 +498,9 @@ async def on_sched_adj_timeout(callback_query: CallbackQuery):
         user, _ = _ensure_user(db, callback_query.from_user)
 
         if cb_data == "sched_adj_timeout_reset":
-            user.current_state = "ACTIVE"
+            ctx = await session_memory.get_schedule_adjustment_context(user.id) or {}
+            plan_was_paused = bool(ctx.get("plan_was_paused", False))
+            user.current_state = "ACTIVE_PAUSED" if plan_was_paused else "ACTIVE"
             db.add(user)
             db.commit()
             await session_memory.clear_schedule_adjustment_context(user.id)

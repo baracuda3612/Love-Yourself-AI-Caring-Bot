@@ -329,7 +329,14 @@ async def _handle_schedule_adjustment_apply(user_id: int, tool_args: Dict[str, A
     pending_changes = ctx.get("pending_changes", {})
     plan_was_paused = bool(ctx.get("plan_was_paused", False))
     if not pending_changes:
-        await _commit_fsm_transition(user_id=user_id, target_agent="plan", next_state="ACTIVE", db=db, reason="no_changes")
+        return_state = "ACTIVE_PAUSED" if plan_was_paused else "ACTIVE"
+        await _commit_fsm_transition(
+            user_id=user_id,
+            target_agent="plan",
+            next_state=return_state,
+            db=db,
+            reason="no_changes",
+        )
         await session_memory.clear_schedule_adjustment_context(user_id)
         return {"user_text": tool_args.get("user_text", "Нічого не змінилось.")}
 
@@ -413,19 +420,11 @@ async def _handle_schedule_adjustment_apply(user_id: int, tool_args: Dict[str, A
         except Exception:
             logger.exception("[SCHED_ADJ] reschedule failed user=%s", user_id)
 
-    resume_note = ""
-    resumed_step_ids: List[int] = []
-    if plan_was_paused:
-        resumed, resumed_step_ids = _resume_plan_if_paused(db, active_plan)
-        if resumed:
-            resume_note = " План відновлено 🎉"
-        else:
-            logger.warning("[SCHED_ADJ] plan_was_paused but resume did not succeed user=%s", user_id)
-
+    return_state = "ACTIVE_PAUSED" if plan_was_paused else "ACTIVE"
     await _commit_fsm_transition(
         user_id=user_id,
         target_agent="plan",
-        next_state="ACTIVE",
+        next_state=return_state,
         db=db,
         reason="schedule_adjustment_applied",
     )
@@ -433,13 +432,7 @@ async def _handle_schedule_adjustment_apply(user_id: int, tool_args: Dict[str, A
     await session_memory.clear_schedule_adjustment_last_active(user_id)
     await session_memory.clear_schedule_adjustment_soft_prompted(user_id)
 
-    if resumed_step_ids:
-        try:
-            reschedule_plan_steps(resumed_step_ids)
-        except Exception:
-            logger.exception("[SCHED_ADJ] resumed-plan reschedule failed user=%s", user_id)
-
-    return {"user_text": tool_args.get("user_text", f"Готово ✅{resume_note}")}
+    return {"user_text": tool_args.get("user_text", "Готово ✅")}
 
 
 async def _handle_schedule_adjustment_cancel(user_id: int, tool_args: Dict[str, Any], db: Session) -> Dict[str, Any]:
