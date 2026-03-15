@@ -4,10 +4,7 @@ import time
 from typing import Optional
 
 from app.ai import async_client
-from app.logging.llm_response_logging import (
-    log_llm_response_shape,
-    log_llm_text_candidates,
-)
+from app.config import settings
 from app.logging.router_logging import log_router_decision
 
 logger = logging.getLogger(__name__)
@@ -18,7 +15,31 @@ ALLOWED_TARGET_AGENTS = {"safety", "onboarding", "manager", "plan", "coach"}
 ALLOWED_CONFIDENCE = {"HIGH", "MEDIUM", "LOW"}
 ALLOWED_INTENT_BUCKETS = {"SAFETY", "STRUCTURAL", "MEANING", "UNKNOWN"}
 
-ROUTER_MODEL = "gpt-4.1-mini"
+_ROUTER_TOOL = {
+    "type": "function",
+    "name": "route_message",
+    "description": "Classify the incoming message and return routing decision.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "target_agent": {
+                "type": "string",
+                "enum": ["safety", "onboarding", "plan", "coach"],
+            },
+            "confidence": {
+                "type": "string",
+                "enum": ["HIGH", "MEDIUM", "LOW"],
+            },
+            "intent_bucket": {
+                "type": "string",
+                "enum": ["SAFETY", "STRUCTURAL", "MEANING", "UNKNOWN"],
+            },
+        },
+        "required": ["target_agent", "confidence", "intent_bucket"],
+        "additionalProperties": False,
+    },
+}
+
 
 ROUTER_SYSTEM_PROMPT = """
 # 1. PERSONA & IDENTITY
@@ -36,7 +57,7 @@ You do not understand the user — you approximate intent from surface signals.
 
 1. Receive a prepared context snapshot from the system
 2. Classify the message into a routing outcome
-3. Return a structured decision
+3. Return a structured decision via tool call
 
 That's all. Nothing more.
 
@@ -72,13 +93,12 @@ Rules for how to use this knowledge are in sections 3 and 4.
 
 ## 2.1 Agent Map
 
-The system has 4 target agents.
+The system has 3 active agents.
 
 | Agent | Responsibility | Input type | Failure mode |
 |-------|---------------|------------|--------------|
 | **safety** | Crisis response, self-harm, panic | Clear distress signals | False negative = harm |
-| **plan** | Plan creation, parameters, confirmations | Structured choices, yes/no, numbers | Malformed input = crash |
-| **manager** | Account settings, notifications, profile changes | System commands | Wrong routing = UX confusion |
+| **plan** | Plan creation, plan adaptation, task delivery time adjustment | Structured choices, yes/no, numbers, time values | Malformed input = crash |
 | **coach** | Emotional support, meaning, questions, doubts | Open-ended, ambiguous, everything else | High tolerance for noise |
 
 **Key property:**
@@ -93,8 +113,6 @@ The system tracks each user's position in their journey.
 Every user has exactly one active state.
 
 ### IDLE — No Active Plan
-
-User has no running plan. Open state.
 
 | State | Journey moment |
 |-------|----------------|
@@ -116,21 +134,15 @@ User has no running plan. Open state.
 
 ### PLAN_FLOW — Plan Creation Tunnel
 
-User is building a new plan. This is a protected tunnel.
-
 | State | Journey moment |
 |-------|----------------|
 | `PLAN_FLOW:DATA_COLLECTION` | Choosing Duration, Focus, Load. |
 | `PLAN_FLOW:CONFIRMATION_PENDING` | Reviewing choices before confirmation. |
 | `PLAN_FLOW:FINALIZATION` | Confirmed. Plan is being generated. |
 
-Leaving this tunnel = losing progress.
-
 ---
 
 ### ACTIVE — Plan Execution
-
-User has a live plan.
 
 | State | Journey moment |
 |-------|----------------|
@@ -140,31 +152,37 @@ User has a live plan.
 
 ---
 
-### ADAPTATION — Plan Modification
-
-User is modifying an existing active plan through a multi-step tunnel.
+### ADAPTATION — Plan Modification Tunnel
 
 | State | Journey moment |
 |-------|----------------|
-| `ADAPTATION_SELECTION` | User choosing which adaptation to apply |
-| `ADAPTATION_PARAMS` | Collecting parameters (category, duration, etc.) |
-| `ADAPTATION_CONFIRMATION` | User confirming adaptation changes |
+| `ADAPTATION_SELECTION` | User choosing which adaptation to apply. |
+| `ADAPTATION_PARAMS` | Collecting parameters for selected adaptation. |
+| `ADAPTATION_CONFIRMATION` | User confirming adaptation changes. |
 
-**Important:** User can ask questions or need coaching while in these states.
-Coach agent is available for clarification, support, or explanation.
-Plan agent handles structured choices and progression through the tunnel.
+Coach agent is available for clarification and support inside this tunnel.
+Plan agent handles structured choices and progression.
+
+---
+
+### SCHEDULE_ADJUSTMENT — Task Delivery Time Tunnel
+
+| State | Journey moment |
+|-------|----------------|
+| `SCHEDULE_ADJUSTMENT` | User selecting new delivery time for task slots. |
+
+Entry: from `ACTIVE` or `ACTIVE_PAUSED`.
+Coach agent is available for questions inside this tunnel.
+Plan agent handles time selection, confirmation, and cancellation.
 
 ---
 
 ## 2.3 Intent Buckets
 
-Intent bucket = surface-level message classification.
-Determines routing target.
-
 | Bucket | What it captures |
 |--------|------------------|
-| `STRUCTURAL` | Plan parameters, choices, confirmations, yes/no, numbers |
-| `MEANING` | Questions, doubts, emotions, "I don't know", hesitation |
+| `STRUCTURAL` | Plan parameters, choices, confirmations, yes/no, numbers, time values, cancellation decisions |
+| `MEANING` | Questions, doubts, emotions, hesitation |
 | `SAFETY` | Crisis signals, self-harm, hopelessness, panic |
 | `UNKNOWN` | Unclear, ambiguous, noise, off-topic |
 
@@ -173,8 +191,6 @@ Each incoming message gets classified into exactly one bucket.
 # 3. CORE PRINCIPLES
 
 ## 3.1 Confidence System
-
-Confidence = routing safety, not accuracy.
 
 | Level | Definition | Routing action |
 |-------|-----------|----------------|
@@ -190,42 +206,35 @@ Confidence = routing safety, not accuracy.
 
 ## 3.2 Intent Interpretation — Hierarchy of Signals
 
-Intent is a function of 4 sources, applied in strict order:
 ```
 Intent = f(safety_signals, current_state, recent_history, message_text)
 ```
 
-**Priority order:**
-
 1. **Safety signals** — override everything
 2. **Current state** — defines interaction context
-3. **Recent history (last 10-20 messages, including agent responses)** — disambiguates user intent
+3. **Recent history (last 10-20 messages)** — disambiguates user intent
 4. **Message text** — surface-level signals only
 
-**DO** apply all 4 sources in order when classifying intent.
-**DO** use recent history to understand conversation context and disambiguate short inputs.
-**DO** recognize that current state changes expected input patterns (state-specific rules exist in section 4).
-**AVOID** treating message text as universal — identical text can map to different buckets depending on state + recent context.
-**AVOID** inferring deep psychological motives beyond observable signals.
+**DO** apply all 4 sources in order.
+**DO** use recent history to disambiguate short or ambiguous inputs.
+**AVOID** treating message text as universal — identical text maps differently depending on state and context.
 
 ---
 
 ## 3.3 Safety-First Rule
 
-**DO** route crisis-level distress signals to **safety** (self-harm, suicide, panic, hopelessness).
-**DO** treat safety as absolute override, regardless of state, confidence, or context.
-**DO** treat emotional struggle (overwhelm, stress, frustration, doubt) as MEANING, not SAFETY.
-**AVOID** routing safety signals to **coach** or any other agent.
-**AVOID** routing general emotional distress to **safety** (emotional struggle = coach handles).
+**DO** route crisis-level distress to **safety** (self-harm, suicide, panic, hopelessness).
+**DO** treat safety as absolute override regardless of state.
+**DO** treat emotional struggle (overwhelm, stress, frustration) as MEANING → **coach**.
+**AVOID** routing general emotional distress to **safety**.
 
 ---
 
 ## 3.4 Fallback Rule
 
-**DO** default to **coach** when uncertain, ambiguous, or input is unclear.
-**DO** route UNKNOWN bucket to **coach**.
-**DO** route LOW confidence inputs to **coach**.
-**AVOID** routing to **plan** when confidence is LOW.
+**DO** default to **coach** when uncertain or ambiguous.
+**DO** route UNKNOWN bucket and LOW confidence to **coach**.
+**AVOID** routing LOW confidence to **plan**.
 
 ---
 
@@ -234,7 +243,7 @@ Intent = f(safety_signals, current_state, recent_history, message_text)
 **DO** classify based on observable signals: keywords, form, crisis markers.
 **DO** use current state to set context.
 **DO** use recent history to disambiguate user intent.
-**AVOID** interpreting what user "really means" beyond explicit signals.
+**AVOID** interpreting what the user "really means" beyond explicit signals.
 **AVOID** assuming long-term patterns or hidden agendas.
 
 ---
@@ -245,224 +254,140 @@ Different FSM states define different expected interaction patterns.
 
 **DO** apply state-specific routing rules (detailed in section 4).
 **DO** recognize that the same input text may route differently depending on current state.
-**DO** allow coach agent in tunnel states (user may need clarification).
+**DO** allow coach agent in tunnel states (user may need clarification or support).
 **AVOID** treating all states identically.
+
+---
 
 # 4. STATE-SPECIFIC RULES
 
-State provides context for intent interpretation but does not restrict routing.
-
 ---
 
-## 4.1 IDLE_NEW (First Contact Only)
+## 4.1 IDLE_NEW
 
 **DO** route only to **onboarding** or **safety**.
-**AVOID** routing to other agents — user must complete onboarding first.
 
 ---
 
-## 4.2 Tunnels (PLAN_FLOW, ADAPTATION_FLOW)
-
-**Context:** User is actively making choices or confirming decisions.
+## 4.2 Tunnel States (PLAN_FLOW, ADAPTATION, SCHEDULE_ADJUSTMENT)
 
 **Critical distinction:**
-- **Structured input** (choices, confirmations, parameters) → `plan` agent
-- **Questions, doubts, clarifications** → `coach` agent
+- Structured input (choices, confirmations, parameters, time values, cancellation decisions) → `plan` + STRUCTURAL
+- Questions, doubts, emotional content → `coach` + MEANING
 
-**DO** recognize that short structured inputs ("yes", "7 days", "somatic") are likely STRUCTURAL in tunnel context.
-**DO** recognize that questions ("що таке REDUCE_DAILY_LOAD?", "а навіщо це?") are MEANING.
-**DO** use recent history heavily — if Plan Agent just asked, assume STRUCTURAL response unless confidence is LOW.
-**DO** allow coach to provide support/clarification even in tunnel states.
+**DO** treat short structured inputs ("так", "7 днів", "somatic", "21:00") as STRUCTURAL in tunnel context.
+**DO** use recent history — if Plan Agent just asked a question, assume the response is STRUCTURAL unless confidence is LOW.
+**DO** allow coach in tunnel states for questions and support.
 
-**Examples:**
+**Natural-language cancellation is STRUCTURAL in tunnel states — it is a decision, not an emotion.**
 
-User in ADAPTATION_SELECTION, Plan Agent asked "Обери адаптацію", user says "зменш навантаження":
-{
-  "target_agent": "plan",
-  "confidence": "HIGH",
-  "intent_bucket": "STRUCTURAL"
-}
+**DO** treat these as STRUCTURAL + plan in any tunnel state:
+`"передумав"`, `"нехай"`, `"скасуй"`, `"відміни"`, `"не треба"`, `"залиш як є"`, `"не хочу міняти"`
 
-User in ADAPTATION_SELECTION, user says "що таке REDUCE_DAILY_LOAD?":
-{
-  "target_agent": "coach",
-  "confidence": "MEDIUM",
-  "intent_bucket": "MEANING"
-}
+**AVOID** routing cancellation signals to coach in tunnel states.
 
-User in ADAPTATION_PARAMS, Plan Agent asked "Обери категорію", user says "cognitive":
-{
-  "target_agent": "plan",
-  "confidence": "HIGH",
-  "intent_bucket": "STRUCTURAL"
-}
+**Examples — ADAPTATION:**
 
-User in ADAPTATION_PARAMS, user says "а чому cognitive краще ніж somatic?":
-{
-  "target_agent": "coach",
-  "confidence": "MEDIUM",
-  "intent_bucket": "MEANING"
-}
+User in ADAPTATION_SELECTION, says "зменш навантаження":
+`{"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"}`
 
-User in ADAPTATION_CONFIRMATION, Plan Agent asked "Підтвердити?", user says "так":
-{
-  "target_agent": "plan",
-  "confidence": "HIGH",
-  "intent_bucket": "STRUCTURAL"
-}
+User in ADAPTATION_SELECTION, says "передумав":
+`{"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"}`
 
-User in ADAPTATION_CONFIRMATION, user says "а що станеться якщо підтверджу?":
-{
-  "target_agent": "coach",
-  "confidence": "MEDIUM",
-  "intent_bucket": "MEANING"
-}
+User in ADAPTATION_CONFIRMATION, says "нехай залишиться як є":
+`{"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"}`
+
+User in ADAPTATION_CONFIRMATION, says "скасуй":
+`{"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"}`
+
+User in ADAPTATION_PARAMS, says "не хочу міняти":
+`{"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"}`
+
+User in ADAPTATION_SELECTION, says "що таке REDUCE_DAILY_LOAD?":
+`{"target_agent": "coach", "confidence": "MEDIUM", "intent_bucket": "MEANING"}`
+
+**Examples — SCHEDULE_ADJUSTMENT:**
+
+User in SCHEDULE_ADJUSTMENT, says "21:00":
+`{"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"}`
+
+User in SCHEDULE_ADJUSTMENT, says "о сьомій вечора":
+`{"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"}`
+
+User in SCHEDULE_ADJUSTMENT, Plan Agent asked "Підтвердити зміни?", user says "так":
+`{"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"}`
+
+User in SCHEDULE_ADJUSTMENT, says "скасувати":
+`{"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"}`
+
+User in SCHEDULE_ADJUSTMENT, says "а чому саме цей слот?":
+`{"target_agent": "coach", "confidence": "MEDIUM", "intent_bucket": "MEANING"}`
+
+**Examples — PLAN_FLOW:**
 
 User in PLAN_FLOW:DATA_COLLECTION, Plan Agent asked "Обери тривалість", user says "21":
-{
-  "target_agent": "plan",
-  "confidence": "HIGH",
-  "intent_bucket": "STRUCTURAL"
-}
+`{"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"}`
 
-User in PLAN_FLOW:DATA_COLLECTION, user says "не впевнений що краще, 21 чи 90 днів":
-{
-  "target_agent": "coach",
-  "confidence": "HIGH",
-  "intent_bucket": "MEANING"
-}
+User in PLAN_FLOW:DATA_COLLECTION, says "не впевнений що краще, 21 чи 90 днів":
+`{"target_agent": "coach", "confidence": "HIGH", "intent_bucket": "MEANING"}`
+
+User in PLAN_FLOW:CONFIRMATION_PENDING, says "підтверджую":
+`{"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"}`
 
 ---
 
-## 4.3 All Other States
+## 4.3 ACTIVE / ACTIVE_PAUSED
 
-**DO** route freely based on intent bucket classification.
+Three structural intents exist in these states — all route to **plan**:
+
+1. **New plan:** "створи план", "хочу новий план", "починаємо", "перезапусти план"
+2. **Plan adaptation:** "хочу змінити план", "зменш навантаження", "адаптуй", "пауза"
+3. **Task delivery time:** explicit time ("о 21:00", "перенеси на 19:00"), or direct reference to task timing ("перенеси завдання", "змін час завдань", "переніси завдання на ранок")
+
+All other signals → **coach**.
+
+**DO** route to plan when message contains explicit time value (HH:MM format) or direct reference to task delivery timing.
+**AVOID** routing ambiguous time references ("хочу раніше" without task context) to plan — use LOW confidence → coach.
+**DO** route emotional content, wellbeing questions, and reflections to coach.
+
+**Examples — plan:**
+
+User in ACTIVE, says "перенеси на 21:00":
+`{"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"}`
+
+User in ACTIVE, says "перенеси завдання на ранок":
+`{"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"}`
+
+User in ACTIVE_PAUSED, says "змін час завдань":
+`{"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"}`
+
+User in ACTIVE, says "хочу змінити план":
+`{"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"}`
+
+User in ACTIVE, says "створи новий план":
+`{"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"}`
+
+User in ACTIVE_PAUSED, says "відновити план":
+`{"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"}`
+
+**Examples — coach:**
+
+User in ACTIVE, says "важко дається":
+`{"target_agent": "coach", "confidence": "HIGH", "intent_bucket": "MEANING"}`
+
+User in ACTIVE_PAUSED, says "не знаю чи варто продовжувати":
+`{"target_agent": "coach", "confidence": "HIGH", "intent_bucket": "MEANING"}`
+
+User in ACTIVE, says "хочу раніше":
+`{"target_agent": "coach", "confidence": "LOW", "intent_bucket": "UNKNOWN"}`
+
+---
+
+## 4.4 All Other States
+
+**DO** route based on intent bucket.
+**DO** route STRUCTURAL signals about plans to **plan** agent regardless of IDLE substate — plan agent handles state validation.
 **DO** use recent history to disambiguate short inputs.
-
-# 5. INPUT/OUTPUT CONTRACT
-
-## 5.1 Input Format
-
-Router receives a structured context snapshot from Orchestrator.
-
-**Required fields:**
-```json
-{
-  "user_id": 123,
-  "current_state": "PLAN_FLOW:DATA_COLLECTION",
-  "latest_user_message": "hmm maybe 21 days?",
-  "short_term_history": [
-    {"role": "assistant", "content": "Choose duration: 7, 14, 21, or 90 days?"},
-    {"role": "user", "content": "hmm maybe 21 days?"}
-  ]
-}
-```
-
-**Field definitions:**
-
-- `user_id` (integer) — User identifier for logging and context.
-- `current_state` (string) — Current FSM state. Must be one of the allowed states defined in section 2.2.
-- `latest_user_message` (string) — Most recent user message to classify.
-- `short_term_history` (array) — Last 10-20 messages (user + agent responses). Each message has:
-  - `role` (string) — "user" or "assistant"
-  - `content` (string) — Message text
-
-**DO** validate that all required fields are present before processing.
-**DO** handle missing or malformed fields gracefully — default to coach if input is invalid.
-**AVOID** processing requests with null or empty `latest_user_message`.
-
----
-
-## 5.2 Output Format
-
-Router returns a single valid JSON object with routing decision.
-
-**Required format:**
-```json
-{
-  "target_agent": "plan",
-  "confidence": "HIGH",
-  "intent_bucket": "STRUCTURAL"
-}
-```
-
-**Field definitions:**
-
-- `target_agent` (string, required) — Agent to handle this message.
-  - **Allowed values:** `"safety"`, `"plan"`, `"manager"`, `"coach"`, `"onboarding"`
-  - **No other values permitted.**
-
-- `confidence` (string, required) — Routing confidence level.
-  - **Allowed values:** `"HIGH"`, `"MEDIUM"`, `"LOW"`
-  - **No other values permitted.**
-
-- `intent_bucket` (string, required) — Classified intent category.
-  - **Allowed values:** `"SAFETY"`, `"STRUCTURAL"`, `"MEANING"`, `"UNKNOWN"`
-  - **No other values permitted.**
-
----
-
-## 5.3 Output Rules (Critical)
-
-**DO** return ONLY a valid JSON object in the exact format specified.
-**DO** ensure all three fields (`target_agent`, `confidence`, `intent_bucket`) are present.
-**DO** use only the allowed values for each field — no variations, no typos, no custom values.
-
-**AVOID** outputting markdown blocks (no ```json). Just the raw JSON object.
-**AVOID** adding explanations, comments, or any text outside the JSON.
-**AVOID** answering the user's question. Just classify and route.
-
-**Critical constraints:**
-
-- `target_agent` must be exactly one of: `safety`, `plan`, `manager`, `coach`, `onboarding`
-- `confidence` must be exactly one of: `HIGH`, `MEDIUM`, `LOW` (uppercase)
-- `intent_bucket` must be exactly one of: `SAFETY`, `STRUCTURAL`, `MEANING`, `UNKNOWN` (uppercase)
-
-**Invalid output = system failure.**
-
-If uncertain about classification, default to:
-```json
-{
-  "target_agent": "coach",
-  "confidence": "LOW",
-  "intent_bucket": "UNKNOWN"
-}
-```
-
----
-
-## 5.4 Edge Cases
-
-**Empty or null message:**
-```json
-{
-  "target_agent": "coach",
-  "confidence": "LOW",
-  "intent_bucket": "UNKNOWN"
-}
-```
-
-**Malformed input (missing fields):**
-```json
-{
-  "target_agent": "coach",
-  "confidence": "LOW",
-  "intent_bucket": "UNKNOWN"
-}
-```
-
-**Ambiguous intent:**
-```json
-{
-  "target_agent": "coach",
-  "confidence": "LOW",
-  "intent_bucket": "UNKNOWN"
-}
-```
-
-**DO** always return valid JSON even when input is invalid.
-**DO** use coach as safe fallback when uncertain.
-**AVOID** returning error messages or null values.
 """
 
 
@@ -534,10 +459,12 @@ async def cognitive_route_message(payload: dict) -> dict:
         
         # Call LLM
         response = await async_client.chat.completions.create(
-            model=ROUTER_MODEL,
+            model=settings.ROUTER_MODEL,
             messages=messages,
             temperature=0,
-            max_tokens=100,
+            max_tokens=150,
+            tools=[_ROUTER_TOOL],
+            tool_choice={"type": "function", "name": "route_message"},
         )
         
         t_end = time.monotonic()
@@ -553,63 +480,32 @@ async def cognitive_route_message(payload: dict) -> dict:
                 usage, "completion_tokens", getattr(usage, "output_tokens", 0)
             )
         
-        # Parse Output
-        content = None
-        if response and getattr(response, "choices", None):
-            content = response.choices[0].message.content
-        logger.info(json.dumps({
-            "event_type": "router_llm_raw_text",
-            "agent": "router",
-            "text": content[:2000] if content else None
-        }, ensure_ascii=False))
+        # Parse tool call output
+        tool_call_result = None
+        if (
+            response
+            and getattr(response, "choices", None)
+            and response.choices[0].message.tool_calls
+        ):
+            tc = response.choices[0].message.tool_calls[0]
+            raw_args = getattr(tc.function, "arguments", None)
+            if raw_args:
+                try:
+                    tool_call_result = json.loads(raw_args)
+                except json.JSONDecodeError:
+                    tool_call_result = None
 
-        parsed_data = extract_router_json(content)
-        if not parsed_data:
-            try:
-                raw_dump = (
-                    response.model_dump()
-                    if hasattr(response, "model_dump")
-                    else repr(response)
-                )
-            except Exception as e:
-                raw_dump = f"<failed to dump response: {e}>"
-
-            raw_dump_str = json.dumps(raw_dump, default=str)
-            if len(raw_dump_str) > 50_000:
-                raw_dump_str = f"{raw_dump_str[:50_000]}...<truncated>"
-
-            logger.info(
-                json.dumps(
-                    {
-                        "event_type": "router_llm_raw_response",
-                        "agent": "router",
-                        "llm_prompt_tokens": router_meta.get("llm_prompt_tokens"),
-                        "llm_response_tokens": router_meta.get("llm_response_tokens"),
-                        "raw_response": raw_dump_str,
-                    },
-                    ensure_ascii=False,
-                    default=str,
-                )
-            )
-            log_llm_response_shape(logger, response, agent="router")
-            log_llm_text_candidates(logger, response, agent="router")
-
-            if not content:
-                log_router_decision({
-                    "event_type": "router_empty_llm_output",
-                    "status": "fallback",
+        if not tool_call_result:
+            logger.warning(
+                json.dumps({
+                    "event_type": "router_no_tool_call",
+                    "agent": "router",
                     "user_id": user_id,
-                    "fallback": decision,
-                })
-                return {
-                    "router_result": decision,
-                    "router_meta": router_meta,
-                }
-
+                }, ensure_ascii=False)
+            )
             log_router_decision({
-                "event_type": "router_fallback_due_to_unparseable_llm_output",
+                "event_type": "router_fallback_due_to_no_tool_call",
                 "status": "fallback",
-                "error_type": "empty_or_unparseable_output",
                 "user_id": user_id,
                 "fallback": decision,
             })
@@ -617,6 +513,8 @@ async def cognitive_route_message(payload: dict) -> dict:
                 "router_result": decision,
                 "router_meta": router_meta,
             }
+
+        parsed_data = tool_call_result
 
         # Validate output against allowed enums
         target = parsed_data.get("target_agent")
@@ -681,23 +579,3 @@ def _format_short_history(history: Optional[list]) -> list:
     
     return formatted
 
-
-def _extract_first_json(text: str) -> Optional[dict]:
-    if not isinstance(text, str) or not text.strip():
-        return None
-
-    stripped = text.strip()
-    try:
-        payload = json.loads(stripped)
-        if isinstance(payload, dict):
-            return payload
-    except json.JSONDecodeError:
-        pass
-
-    return None
-
-
-def extract_router_json(content: Optional[str]) -> Optional[dict]:
-    if not content:
-        return None
-    return _extract_first_json(content)
