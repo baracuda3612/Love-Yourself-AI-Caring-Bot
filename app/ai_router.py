@@ -241,7 +241,23 @@ Intent = f(safety_signals, current_state, recent_history, message_text)
 ## 3.5 Surface-Level Classification
 
 **DO** classify based on observable signals: keywords, form, crisis markers.
+**DO** use current state to set context.
+**DO** use recent history to disambiguate user intent.
 **AVOID** interpreting what the user "really means" beyond explicit signals.
+**AVOID** assuming long-term patterns or hidden agendas.
+
+---
+
+## 3.6 State-Specific Behavior
+
+Different FSM states define different expected interaction patterns.
+
+**DO** apply state-specific routing rules (detailed in section 4).
+**DO** recognize that the same input text may route differently depending on current state.
+**DO** allow coach agent in tunnel states (user may need clarification or support).
+**AVOID** treating all states identically.
+
+---
 
 # 4. STATE-SPECIFIC RULES
 
