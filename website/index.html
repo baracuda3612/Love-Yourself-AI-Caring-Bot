@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Love Yourself — Daily AI for high-performing teams</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1080 1080'%3E%3Cpath fill='%23DDAAE6' d='m539.46,1041.91c-54.11,0-109.11-8.82-163.07-27.42C114.75,924.34-24.76,638.14,65.39,376.5,155.55,114.86,441.75-24.65,703.39,65.5c126.74,43.67,228.89,134.09,287.63,254.59,58.74,120.5,67.04,256.66,23.36,383.41-71.56,207.68-266.65,338.41-474.93,338.41Zm.82-959.54c-189.91,0-367.77,119.19-433.02,308.55-82.2,238.55,45,499.5,283.56,581.7,49.18,16.95,99.36,24.99,148.68,25,189.91.02,367.77-119.19,433.02-308.55h0c39.82-115.56,32.25-239.71-21.3-349.58-53.56-109.87-146.69-192.31-262.25-232.12-49.18-16.95-99.36-25-148.68-25Z'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0e0804;
+    --bg2: #1c1008;
+    --bg3: #2a1a0e;
+    --cream: #F8F4F1;
+    --cream2: #CABFB6;
+    --cream3: #9D897C;
+    --purple: #DDAAE6;
+    --purple2: #A238FF;
+    --warm: #A05222;
+    --border: rgba(248,244,241,0.08);
+    --border2: rgba(248,244,241,0.14);
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--cream);
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 400;
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+
+  /* NAV */
+  nav {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 100;
+    padding: 20px 48px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: rgba(14,8,4,0.85);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .nav-logo svg { height: 28px; width: auto; }
+  .nav-logo .logo-fill { fill: var(--cream); }
+
+  .nav-cta {
+    background: var(--purple);
+    color: #1a0a2e;
+    padding: 10px 24px;
+    border-radius: 100px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    text-decoration: none;
+    transition: opacity 0.2s;
+  }
+  .nav-cta:hover { opacity: 0.85; }
+
+  /* HERO */
+  .hero {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 120px 48px 80px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -200px; right: -200px;
+    width: 700px; height: 700px;
+    background: radial-gradient(circle, rgba(162,56,255,0.12) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .hero::after {
+    content: '';
+    position: absolute;
+    bottom: -100px; left: -100px;
+    width: 500px; height: 500px;
+    background: radial-gradient(circle, rgba(221,170,230,0.07) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .hero-label {
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--purple);
+    margin-bottom: 32px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .hero-label::before {
+    content: '';
+    display: block;
+    width: 24px; height: 1px;
+    background: var(--purple);
+  }
+
+  .hero h1 {
+    font-family: 'Libre Baskerville', serif;
+    font-size: clamp(36px, 5.5vw, 80px);
+    font-weight: 400;
+    line-height: 1.1;
+    max-width: 900px;
+    margin-bottom: 32px;
+    letter-spacing: -0.02em;
+  }
+
+  .hero h1 em {
+    font-style: italic;
+    color: var(--purple);
+  }
+
+  .hero-sub {
+    font-size: clamp(16px, 1.8vw, 22px);
+    color: var(--cream2);
+    max-width: 560px;
+    margin-bottom: 48px;
+    font-weight: 300;
+    line-height: 1.5;
+  }
+
+  .hero-actions { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
+
+  .btn-primary {
+    background: var(--purple);
+    color: #1a0a2e;
+    padding: 16px 36px;
+    border-radius: 100px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 16px;
+    font-weight: 500;
+    text-decoration: none;
+    transition: opacity 0.2s, transform 0.2s;
+    display: inline-block;
+  }
+  .btn-primary:hover { opacity: 0.88; transform: translateY(-1px); }
+
+  .hero-scroll {
+    font-size: 13px;
+    color: var(--cream3);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .hero-scroll::after {
+    content: '↓';
+    font-size: 16px;
+  }
+
+  /* SECTIONS */
+  section { padding: 100px 48px; }
+
+  .section-label {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--cream3);
+    margin-bottom: 48px;
+  }
+
+  /* PROBLEM */
+  .problem { background: var(--bg2); }
+
+  .problem-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 80px;
+    align-items: start;
+    max-width: 1100px;
+  }
+
+  .problem-text {
+    font-family: 'Libre Baskerville', serif;
+    font-size: clamp(20px, 2.2vw, 30px);
+    line-height: 1.5;
+    color: var(--cream);
+    font-weight: 400;
+  }
+
+  .problem-stat {
+    border-left: 2px solid var(--purple);
+    padding-left: 32px;
+  }
+
+  .stat-number {
+    font-family: 'Libre Baskerville', serif;
+    font-size: clamp(56px, 7vw, 96px);
+    font-weight: 700;
+    color: var(--purple);
+    line-height: 1;
+    margin-bottom: 16px;
+  }
+
+  .stat-text {
+    font-size: 16px;
+    color: var(--cream2);
+    line-height: 1.6;
+    max-width: 340px;
+  }
+
+  .stat-source {
+    margin-top: 12px;
+    font-size: 12px;
+    color: var(--cream3);
+  }
+
+  /* HOW IT WORKS */
+  .how { background: var(--bg); }
+
+  .steps {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 2px;
+    max-width: 1100px;
+    margin-top: 0;
+  }
+
+  .step {
+    background: var(--bg2);
+    padding: 48px 40px;
+    position: relative;
+    transition: background 0.2s;
+  }
+  .step:first-child { border-radius: 16px 0 0 16px; }
+  .step:last-child { border-radius: 0 16px 16px 0; }
+  .step:hover { background: var(--bg3); }
+
+  .step-num {
+    font-family: 'Libre Baskerville', serif;
+    font-size: 72px;
+    color: rgba(221,170,230,0.15);
+    line-height: 1;
+    margin-bottom: 16px;
+    font-weight: 700;
+  }
+
+  .step h3 {
+    font-family: 'Libre Baskerville', serif;
+    font-size: 22px;
+    font-weight: 400;
+    margin-bottom: 16px;
+    line-height: 1.3;
+  }
+
+  .step p {
+    font-size: 15px;
+    color: var(--cream2);
+    line-height: 1.7;
+  }
+
+  .step-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: rgba(221,170,230,0.1);
+    border: 1px solid rgba(221,170,230,0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    margin-bottom: 28px;
+  }
+
+  /* OUTCOMES */
+  .outcomes { background: var(--bg2); }
+
+  .outcomes-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+    max-width: 1100px;
+  }
+
+  .outcome-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 40px 36px;
+    transition: border-color 0.2s;
+  }
+  .outcome-card:hover { border-color: var(--border2); }
+
+  .outcome-role {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--purple);
+    margin-bottom: 20px;
+  }
+
+  .outcome-card h3 {
+    font-family: 'Libre Baskerville', serif;
+    font-size: 20px;
+    font-weight: 400;
+    line-height: 1.4;
+    margin-bottom: 12px;
+  }
+
+  .outcome-card p {
+    font-size: 15px;
+    color: var(--cream2);
+    line-height: 1.7;
+  }
+
+  /* FOUNDER */
+  .founder { background: var(--bg); border-top: 1px solid var(--border); }
+
+  .founder-inner {
+    max-width: 900px;
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 64px;
+    align-items: center;
+  }
+
+  .founder-photo {
+    width: 200px;
+    height: 200px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid var(--border2);
+    filter: grayscale(20%);
+  }
+
+  .founder-photo-placeholder {
+    width: 200px;
+    height: 200px;
+    border-radius: 50%;
+    background: var(--bg3);
+    border: 2px solid var(--border2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--cream3);
+    font-size: 13px;
+  }
+
+  blockquote {
+    font-family: 'Libre Baskerville', serif;
+    font-size: clamp(20px, 2vw, 28px);
+    font-weight: 400;
+    font-style: italic;
+    line-height: 1.5;
+    color: var(--cream);
+    margin-bottom: 28px;
+    position: relative;
+  }
+
+  blockquote::before {
+    content: '"';
+    font-size: 80px;
+    color: var(--purple);
+    opacity: 0.3;
+    position: absolute;
+    top: -20px;
+    left: -20px;
+    font-family: 'Libre Baskerville', serif;
+    line-height: 1;
+    pointer-events: none;
+  }
+
+  .founder-name {
+    font-size: 15px;
+    color: var(--cream2);
+  }
+  .founder-name strong { color: var(--cream); font-weight: 500; }
+  .founder-name a {
+    color: var(--purple);
+    text-decoration: none;
+    transition: opacity 0.2s;
+  }
+  .founder-name a:hover { opacity: 0.75; }
+
+  /* CTA */
+  .cta-section {
+    background: var(--bg2);
+    text-align: center;
+    border-top: 1px solid var(--border);
+  }
+
+  .cta-section h2 {
+    font-family: 'Libre Baskerville', serif;
+    font-size: clamp(28px, 3.5vw, 48px);
+    font-weight: 400;
+    margin-bottom: 16px;
+    line-height: 1.2;
+  }
+
+  .cta-section p {
+    color: var(--cream2);
+    font-size: 17px;
+    margin-bottom: 40px;
+    max-width: 480px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .cta-sub {
+    margin-top: 20px;
+    font-size: 13px;
+    color: var(--cream3);
+  }
+
+  /* FOOTER */
+  footer {
+    padding: 32px 48px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 13px;
+    color: var(--cream3);
+  }
+
+  footer svg { height: 20px; width: auto; }
+  footer .logo-fill { fill: var(--cream); }
+
+  /* ANIMATIONS */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(24px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .hero h1 { animation: fadeUp 0.8s ease forwards; }
+  .hero-sub { animation: fadeUp 0.8s 0.15s ease both; }
+  .hero-actions { animation: fadeUp 0.8s 0.28s ease both; }
+
+  /* RESPONSIVE */
+  @media (max-width: 768px) {
+    nav { padding: 16px 24px; }
+    section { padding: 64px 24px; }
+    .hero { padding: 100px 24px 64px; }
+    .problem-grid { grid-template-columns: 1fr; gap: 48px; }
+    .steps { grid-template-columns: 1fr; }
+    .step:first-child { border-radius: 16px 16px 0 0; }
+    .step:last-child { border-radius: 0 0 16px 16px; }
+    .outcomes-grid { grid-template-columns: 1fr; }
+    .founder-inner { grid-template-columns: 1fr; text-align: center; gap: 32px; }
+    .founder-photo, .founder-photo-placeholder { margin: 0 auto; }
+    blockquote::before { left: 0; }
+    footer { flex-direction: column; gap: 12px; text-align: center; }
+  }
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <a href="/" class="nav-logo" aria-label="Love Yourself">
+    <svg viewBox="0 0 1080 1080" xmlns="http://www.w3.org/2000/svg">
+      <path class="logo-fill" d="m539.46,1041.91c-54.11,0-109.11-8.82-163.07-27.42C114.75,924.34-24.76,638.14,65.39,376.5,155.55,114.86,441.75-24.65,703.39,65.5c126.74,43.67,228.89,134.09,287.63,254.59,58.74,120.5,67.04,256.66,23.36,383.41-71.56,207.68-266.65,338.41-474.93,338.41Zm.82-959.54c-189.91,0-367.77,119.19-433.02,308.55-82.2,238.55,45,499.5,283.56,581.7,49.18,16.95,99.36,24.99,148.68,25,189.91.02,367.77-119.19,433.02-308.55h0c39.82-115.56,32.25-239.71-21.3-349.58-53.56-109.87-146.69-192.31-262.25-232.12-49.18-16.95-99.36-25-148.68-25Z"/>
+      <path class="logo-fill" d="m411.93,915.14c2.73.94,5.47,1.83,8.21,2.71-24.15-28.34-53.13-73.29-56.95-128.87-2.64-38.44,7.07-78.08,28.08-114.61,30.05-52.26,81.96-94.41,138.87-112.74,15.87-5.11,32.07-9.46,47.73-13.67,46.22-12.41,89.88-24.13,123.13-53.85,4.05-3.62,7.9-7.42,11.63-11.32.34-.4.69-.8,1.03-1.2,5.49-6.36,11.12-12.89,16.49-19.58,23.5-31.84,37.77-69.74,40.18-108.57,1.3-20.92-.91-42.02-6.2-62.44-5.02,16.16-12.08,31.81-20.69,46.2-27.48,45.95-69.72,84.05-118.94,107.27-49.3,23.26-102.74,31.13-154.42,38.73-54.21,7.97-105.42,15.51-149.68,39.58-63.53,34.55-103.09,102.28-107.93,170.58-2.13,29.99,2.05,62.17,17.17,88.46,24.66,42.9,69.75,76.94,111.92,101.27,22.36,12.9,45.97,23.62,70.38,32.03Z"/>
+      <path class="logo-fill" d="m794.34,222.63c21.45,41.45,31.77,88.07,28.92,134.09-.29,4.7-.75,9.39-1.32,14.07-.23,37.7-15.84,78.95-44.18,116.41-1.9,2.51-3.82,4.96-5.74,7.37-3.71,4.98-7.62,9.82-11.69,14.54-8.53,10.5-16.78,20.12-24.76,29-11.82,15.18-21.22,30.64-25.68,50.01-7.31,31.68,1.46,65.05,21.83,83.04,19.97,17.64,52.63,22.59,83.19,12.62,63.15-20.61,102.92-81.01,118.13-143.05,18.26-74.48-9.74-152.55-48.73-215.89-23.92-38.85-54.43-73.58-89.96-102.21Z"/>
+      <path class="logo-fill" d="m601.93,596.39c-3.44.93-6.88,1.86-10.3,2.78-15.73,4.23-30.59,8.21-45.22,12.93-44.7,14.4-85.51,47.56-109.16,88.71-15.53,27-23.04,57.02-21.15,84.54,2.88,41.9,26.27,77.11,45.37,99.26,14.88,17.26,32.9,30.41,54.26,38.57,35.21,13.45,68.86,13.38,105.3,6.07,17.81-3.57,35.38-8.36,52.54-14.3,4.97-1.72,9.9-3.53,14.79-5.44,2.36-.92,4.72-1.87,7.06-2.83,1.86-.77,5.03-2.94,7-2.96-.89.01-1.79.07-2.68.07-26.79,0-52.94-5.19-77.44-15.78-43.83-18.96-76.88-56.23-88.39-99.72-10.15-38.32-3.94-81.86,17.47-122.61,14.86-28.28,31.76-49.54,50.54-69.26Z"/>
+      <path class="logo-fill" d="m831.35,734.19c-16.01,5.22-32.33,7.78-48.24,7.78-32.59,0-63.46-10.71-86.51-31.06-25.3-22.34-40.12-56.1-42.04-92.27-22.35,21.79-40.86,42.43-56.23,71.68-15.22,28.96-19.89,58.92-13.15,84.36,7.28,27.49,29.57,52.25,58.18,64.62,56.45,24.4,126.57,9.07,187.61-41.02,26.21-21.51,48.13-45.88,65.32-72.44,7.96-14.82,15.07-30.29,21.24-46.37-23.48,24.35-52.26,43.64-86.17,54.71Z"/>
+      <path class="logo-fill" d="m500.46,330.77l-12.26,3.89c-40.8,12.89-82.99,26.23-117.8,48.97-32.6,21.3-64.17,53.84-91.3,94.11-3.17,4.71-6.23,9.48-9.19,14.32,8.09-5.79,16.46-11.13,25.15-15.85,52.55-28.58,110.88-37.16,167.29-45.46,50.06-7.36,97.34-14.32,139.52-34.22,39.8-18.78,73.91-49.51,96.05-86.53,23.32-38.99,36.04-96.05-4.83-128.51-.51-.4-.97-.75-1.47-1.15-22.54-16.63-47.86-27.43-71.39-34.48,13.76,17.95,21.44,39.51,21.1,60.61-.48,29.86-16.27,59.26-43.32,80.68-22.66,17.94-48.93,27.61-71.77,35.27-8.57,2.87-17.18,5.62-25.79,8.37Z"/>
+      <path class="logo-fill" d="m161.03,660.19c6.41-75.88,31.67-149.1,74.1-212.08,21.65-32.14,57.67-77.12,106.28-108.88,40.9-26.72,86.62-41.17,130.83-55.14l12.14-3.85c8.37-2.66,16.72-5.33,25.04-8.12,18.59-6.23,39.75-13.93,55.7-26.56,14.32-11.34,23-26.28,23.22-39.96.2-12.21-6.63-25.89-17.82-35.69-33.28-29.17-88.09-23.69-126.44-17.02-108.27,18.81-199.6,92.32-252.29,187.45-11.4,20.57-20.97,42.15-28.63,64.39-28.87,83.78-29.32,172.7-2.11,255.46Z"/>
+    </svg>
+  </a>
+  <a href="mailto:hello@loveyourselfua.com?subject=Waitlist Application" class="nav-cta">Join waitlist</a>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-label">Early access · B2B AI wellness</div>
+  <h1>Wellbeing that makes your people feel better — <em>every day,</em> every moment.</h1>
+  <p class="hero-sub">Love Yourself — a daily AI tool that catches people before they crash, not after.</p>
+  <div class="hero-actions">
+    <a href="mailto:hello@loveyourselfua.com?subject=Waitlist Application" class="btn-primary">Join waitlist</a>
+    <span class="hero-scroll">See how it works</span>
+  </div>
+</section>
+
+<!-- PROBLEM -->
+<section class="problem">
+  <div class="section-label">The problem</div>
+  <div class="problem-grid">
+    <div>
+      <p class="problem-text" style="font-family:'Libre Baskerville',serif;font-size:clamp(22px,2.4vw,34px);margin-bottom:32px;line-height:1.3;">Engineers don't burn out in a day. They burn out in <span style="color:var(--purple);font-style:italic;">a thousand small moments</span> nobody notices.</p>
+      <p class="problem-text" style="font-size:clamp(16px,1.6vw,20px);color:var(--cream2);font-family:'DM Sans',sans-serif;font-weight:300;">By 2 PM, your best engineers aren't thinking about the next feature. They're scrolling. Grabbing another coffee. Waiting for the day to end.<br><br>The brain needs to rest to keep performing — but nobody stops. Nobody even notices it's happening.</p>
+    </div>
+    <div class="problem-stat">
+      <div class="stat-number">89.5%</div>
+      <p class="stat-text">of productivity losses from burnout aren't people quitting — they're people sitting at their desks, going through the motions.</p>
+      <p class="stat-source">Source: Ukrainian IT sector research, 2025</p>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section class="how" id="how">
+  <div class="section-label">How it works</div>
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">01</div>
+      <h3>You set your moment</h3>
+      <p>During onboarding, you pick the time when focus usually drops. The bot shows up then — not randomly, not three times a day.</p>
+    </div>
+    <div class="step">
+      <div class="step-num">02</div>
+      <h3>Two minutes, one exercise</h3>
+      <p>A state-switch exercise matched to your current load — breathing, physical reset, or cognitive unload. Something that actually shifts the brain state.</p>
+    </div>
+    <div class="step">
+      <div class="step-num">03</div>
+      <h3>Done. See you tomorrow.</h3>
+      <p>One question after: "How do you feel?" That's it. No app to open, no streak to maintain. Tomorrow the bot shows up again — at the same moment.</p>
+    </div>
+  </div>
+</section>
+
+<!-- OUTCOMES -->
+<section class="outcomes">
+  <div class="section-label">What you get</div>
+  <div class="outcomes-grid">
+    <div class="outcome-card">
+      <div class="outcome-role">💻 Engineer</div>
+      <h3>Gets through the day without hitting empty.</h3>
+      <p>More focused hours, less end-of-day exhaustion. Energy managed, not burned.</p>
+    </div>
+    <div class="outcome-card">
+      <div class="outcome-role">🤝 HR</div>
+      <h3>A tool the team actually uses — and gains from.</h3>
+      <p>Aggregated signals of usage. No individual exposure. No surveillance.</p>
+    </div>
+    <div class="outcome-card">
+      <div class="outcome-role">📈 CEO</div>
+      <h3>Less invisible productivity loss.</h3>
+      <p>Fewer surprise resignations. A team you can actually plan around.</p>
+    </div>
+  </div>
+</section>
+
+<!-- FOUNDER -->
+<section class="founder">
+  <div class="founder-inner">
+    <img src="assets/founder.png" alt="Sasha Oliinyk, founder" class="founder-photo" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+    <div class="founder-photo-placeholder" style="display:none">Photo</div>
+    <div>
+      <blockquote>Most companies buy a fire extinguisher after the fire. We built the smoke detector.</blockquote>
+      <p class="founder-name">
+        <strong>Oleksandr Oliinyk</strong>, founder of Love Yourself<br>
+        <a href="https://www.linkedin.com/in/oleksandr-oliinyk-love-yourself/" target="_blank" rel="noopener">LinkedIn →</a>
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta-section">
+  <h2>We're in early access.</h2>
+  <p>If your team is building something real and running on fumes — let's talk.</p>
+  <a href="mailto:hello@loveyourselfua.com?subject=Waitlist Application" class="btn-primary">Join waitlist</a>
+  <p class="cta-sub">hello@loveyourselfua.com</p>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <svg viewBox="0 0 1920 360" xmlns="http://www.w3.org/2000/svg">
+    <path class="logo-fill" d="m193.19,229.03c-4.14,15.51-7.4,31.72-9.78,48.64-33.75-1.06-57.77-1.59-72.04-1.59s-37.81.53-71.12,1.59c-1.41,0-2.11-1.24-2.11-3.7,0-2.2.7-3.39,2.11-3.57,10.66-1.23,17.91-3.22,21.75-5.95,3.83-2.73,5.75-8.2,5.75-16.4v-124.49c0-6.17-.77-10.52-2.31-13.03-1.54-2.51-4.25-4.5-8.13-5.95-3.88-1.45-9.56-2.62-17.05-3.51-1.41,0-2.11-1.21-2.11-3.64s.7-3.64,2.11-3.64c5.9,0,12.95.26,21.15.79,7.84.53,14.45.79,19.83.79s11.94-.26,19.7-.79c8.11-.53,15.11-.79,21.02-.79,1.41,0,2.11,1.21,2.11,3.64s-.71,3.64-2.11,3.64c-7.4.88-13.04,2.05-16.92,3.51-3.88,1.45-6.57,3.42-8.06,5.89-1.5,2.47-2.25,6.83-2.25,13.1v128.45c0,10.41,5.11,15.61,15.33,15.61h26.17c10.84,0,20-2.89,27.49-8.66,7.49-5.77,14.89-16.54,22.21-32.32.35-.7,1.19-1.06,2.51-1.06,1.14,0,2.22.35,3.24,1.06,1.01.71,1.52,1.5,1.52,2.38Z"/>
+    <path class="logo-fill" d="m1764.88,302.89c-13.18,0-26.57-2.15-39.71-6.68-63.71-21.95-97.68-91.64-75.73-155.35,21.95-63.71,91.64-97.68,155.35-75.73,30.86,10.63,55.73,32.65,70.04,61.99,14.3,29.34,16.32,62.5,5.69,93.36-17.42,50.57-64.93,82.4-115.64,82.4Z"/>
+  </svg>
+  <span>© 2025 Love Yourself · loveyourselfua.com</span>
+</footer>
+
+</body>
+</html>
