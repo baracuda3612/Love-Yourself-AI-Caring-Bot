@@ -10,7 +10,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
+ 
   :root {
     --bg: #0e0804;
     --bg2: #1c1008;
@@ -24,9 +24,9 @@
     --border: rgba(248,244,241,0.08);
     --border2: rgba(248,244,241,0.14);
   }
-
+ 
   html { scroll-behavior: smooth; }
-
+ 
   body {
     background: var(--bg);
     color: var(--cream);
@@ -35,7 +35,7 @@
     line-height: 1.6;
     overflow-x: hidden;
   }
-
+ 
   /* NAV */
   nav {
     position: fixed;
@@ -49,10 +49,10 @@
     backdrop-filter: blur(12px);
     border-bottom: 1px solid var(--border);
   }
-
+ 
   .nav-logo svg { height: 28px; width: auto; }
   .nav-logo .logo-fill { fill: var(--cream); }
-
+ 
   .nav-cta {
     background: var(--purple);
     color: #1a0a2e;
@@ -65,7 +65,7 @@
     transition: opacity 0.2s;
   }
   .nav-cta:hover { opacity: 0.85; }
-
+ 
   /* HERO */
   .hero {
     min-height: 100vh;
@@ -76,7 +76,7 @@
     position: relative;
     overflow: hidden;
   }
-
+ 
   .hero::before {
     content: '';
     position: absolute;
@@ -85,7 +85,7 @@
     background: radial-gradient(circle, rgba(162,56,255,0.12) 0%, transparent 70%);
     pointer-events: none;
   }
-
+ 
   .hero::after {
     content: '';
     position: absolute;
@@ -94,7 +94,7 @@
     background: radial-gradient(circle, rgba(221,170,230,0.07) 0%, transparent 70%);
     pointer-events: none;
   }
-
+ 
   .hero-label {
     font-size: 12px;
     font-weight: 500;
@@ -112,7 +112,7 @@
     width: 24px; height: 1px;
     background: var(--purple);
   }
-
+ 
   .hero h1 {
     font-family: 'Libre Baskerville', serif;
     font-size: clamp(36px, 5.5vw, 80px);
@@ -122,12 +122,12 @@
     margin-bottom: 32px;
     letter-spacing: -0.02em;
   }
-
+ 
   .hero h1 em {
     font-style: italic;
     color: var(--purple);
   }
-
+ 
   .hero-sub {
     font-size: clamp(16px, 1.8vw, 22px);
     color: var(--cream2);
@@ -136,9 +136,9 @@
     font-weight: 300;
     line-height: 1.5;
   }
-
+ 
   .hero-actions { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
-
+ 
   .btn-primary {
     background: var(--purple);
     color: #1a0a2e;
@@ -152,22 +152,26 @@
     display: inline-block;
   }
   .btn-primary:hover { opacity: 0.88; transform: translateY(-1px); }
-
+ 
   .hero-scroll {
     font-size: 13px;
     color: var(--cream3);
     display: flex;
     align-items: center;
     gap: 8px;
+    text-decoration: none;
+    transition: color 0.2s;
+    cursor: pointer;
   }
+  .hero-scroll:hover { color: var(--cream2); }
   .hero-scroll::after {
     content: '↓';
     font-size: 16px;
   }
-
+ 
   /* SECTIONS */
   section { padding: 100px 48px; }
-
+ 
   .section-label {
     font-size: 11px;
     font-weight: 500;
@@ -176,10 +180,10 @@
     color: var(--cream3);
     margin-bottom: 48px;
   }
-
+ 
   /* PROBLEM */
   .problem { background: var(--bg2); }
-
+ 
   .problem-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -187,7 +191,7 @@
     align-items: start;
     max-width: 1100px;
   }
-
+ 
   .problem-text {
     font-family: 'Libre Baskerville', serif;
     font-size: clamp(20px, 2.2vw, 30px);
@@ -195,12 +199,12 @@
     color: var(--cream);
     font-weight: 400;
   }
-
+ 
   .problem-stat {
     border-left: 2px solid var(--purple);
     padding-left: 32px;
   }
-
+ 
   .stat-number {
     font-family: 'Libre Baskerville', serif;
     font-size: clamp(56px, 7vw, 96px);
@@ -209,23 +213,23 @@
     line-height: 1;
     margin-bottom: 16px;
   }
-
+ 
   .stat-text {
     font-size: 16px;
     color: var(--cream2);
     line-height: 1.6;
     max-width: 340px;
   }
-
+ 
   .stat-source {
     margin-top: 12px;
     font-size: 12px;
     color: var(--cream3);
   }
-
+ 
   /* HOW IT WORKS */
   .how { background: var(--bg); }
-
+ 
   .steps {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -233,7 +237,7 @@
     max-width: 1100px;
     margin-top: 0;
   }
-
+ 
   .step {
     background: var(--bg2);
     padding: 48px 40px;
@@ -243,7 +247,7 @@
   .step:first-child { border-radius: 16px 0 0 16px; }
   .step:last-child { border-radius: 0 16px 16px 0; }
   .step:hover { background: var(--bg3); }
-
+ 
   .step-num {
     font-family: 'Libre Baskerville', serif;
     font-size: 72px;
@@ -252,7 +256,7 @@
     margin-bottom: 16px;
     font-weight: 700;
   }
-
+ 
   .step h3 {
     font-family: 'Libre Baskerville', serif;
     font-size: 22px;
@@ -260,13 +264,13 @@
     margin-bottom: 16px;
     line-height: 1.3;
   }
-
+ 
   .step p {
     font-size: 15px;
     color: var(--cream2);
     line-height: 1.7;
   }
-
+ 
   .step-icon {
     width: 48px;
     height: 48px;
@@ -279,17 +283,17 @@
     font-size: 20px;
     margin-bottom: 28px;
   }
-
+ 
   /* OUTCOMES */
   .outcomes { background: var(--bg2); }
-
+ 
   .outcomes-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 24px;
     max-width: 1100px;
   }
-
+ 
   .outcome-card {
     background: var(--bg);
     border: 1px solid var(--border);
@@ -298,7 +302,7 @@
     transition: border-color 0.2s;
   }
   .outcome-card:hover { border-color: var(--border2); }
-
+ 
   .outcome-role {
     font-size: 11px;
     font-weight: 500;
@@ -307,7 +311,7 @@
     color: var(--purple);
     margin-bottom: 20px;
   }
-
+ 
   .outcome-card h3 {
     font-family: 'Libre Baskerville', serif;
     font-size: 20px;
@@ -315,16 +319,16 @@
     line-height: 1.4;
     margin-bottom: 12px;
   }
-
+ 
   .outcome-card p {
     font-size: 15px;
     color: var(--cream2);
     line-height: 1.7;
   }
-
+ 
   /* FOUNDER */
   .founder { background: var(--bg); border-top: 1px solid var(--border); }
-
+ 
   .founder-inner {
     max-width: 900px;
     display: grid;
@@ -332,7 +336,7 @@
     gap: 64px;
     align-items: center;
   }
-
+ 
   .founder-photo {
     width: 200px;
     height: 200px;
@@ -341,7 +345,7 @@
     border: 2px solid var(--border2);
     filter: grayscale(20%);
   }
-
+ 
   .founder-photo-placeholder {
     width: 200px;
     height: 200px;
@@ -354,7 +358,7 @@
     color: var(--cream3);
     font-size: 13px;
   }
-
+ 
   blockquote {
     font-family: 'Libre Baskerville', serif;
     font-size: clamp(20px, 2vw, 28px);
@@ -365,7 +369,7 @@
     margin-bottom: 28px;
     position: relative;
   }
-
+ 
   blockquote::before {
     content: '"';
     font-size: 80px;
@@ -378,7 +382,7 @@
     line-height: 1;
     pointer-events: none;
   }
-
+ 
   .founder-name {
     font-size: 15px;
     color: var(--cream2);
@@ -390,14 +394,14 @@
     transition: opacity 0.2s;
   }
   .founder-name a:hover { opacity: 0.75; }
-
+ 
   /* CTA */
   .cta-section {
     background: var(--bg2);
     text-align: center;
     border-top: 1px solid var(--border);
   }
-
+ 
   .cta-section h2 {
     font-family: 'Libre Baskerville', serif;
     font-size: clamp(28px, 3.5vw, 48px);
@@ -405,7 +409,7 @@
     margin-bottom: 16px;
     line-height: 1.2;
   }
-
+ 
   .cta-section p {
     color: var(--cream2);
     font-size: 17px;
@@ -414,13 +418,13 @@
     margin-left: auto;
     margin-right: auto;
   }
-
+ 
   .cta-sub {
     margin-top: 20px;
     font-size: 13px;
     color: var(--cream3);
   }
-
+ 
   /* FOOTER */
   footer {
     padding: 32px 48px;
@@ -431,20 +435,20 @@
     font-size: 13px;
     color: var(--cream3);
   }
-
+ 
   footer svg { height: 20px; width: auto; }
   footer .logo-fill { fill: var(--cream); }
-
+ 
   /* ANIMATIONS */
   @keyframes fadeUp {
     from { opacity: 0; transform: translateY(24px); }
     to { opacity: 1; transform: translateY(0); }
   }
-
+ 
   .hero h1 { animation: fadeUp 0.8s ease forwards; }
   .hero-sub { animation: fadeUp 0.8s 0.15s ease both; }
   .hero-actions { animation: fadeUp 0.8s 0.28s ease both; }
-
+ 
   /* RESPONSIVE */
   @media (max-width: 768px) {
     nav { padding: 16px 24px; }
@@ -463,7 +467,7 @@
 </style>
 </head>
 <body>
-
+ 
 <!-- NAV -->
 <nav>
   <a href="/" class="nav-logo" aria-label="Love Yourself">
@@ -479,7 +483,7 @@
   </a>
   <a href="mailto:hello@loveyourselfua.com?subject=Waitlist Application" class="nav-cta">Join waitlist</a>
 </nav>
-
+ 
 <!-- HERO -->
 <section class="hero">
   <div class="hero-label">Early access · B2B AI wellness</div>
@@ -487,12 +491,12 @@
   <p class="hero-sub">Love Yourself — a daily AI tool that catches people before they crash, not after.</p>
   <div class="hero-actions">
     <a href="mailto:hello@loveyourselfua.com?subject=Waitlist Application" class="btn-primary">Join waitlist</a>
-    <span class="hero-scroll">See how it works</span>
+    <a href="#problem" class="hero-scroll">See how it works</a>
   </div>
 </section>
-
+ 
 <!-- PROBLEM -->
-<section class="problem">
+<section class="problem" id="problem">
   <div class="section-label">The problem</div>
   <div class="problem-grid">
     <div>
@@ -506,7 +510,7 @@
     </div>
   </div>
 </section>
-
+ 
 <!-- HOW IT WORKS -->
 <section class="how" id="how">
   <div class="section-label">How it works</div>
@@ -528,7 +532,7 @@
     </div>
   </div>
 </section>
-
+ 
 <!-- OUTCOMES -->
 <section class="outcomes">
   <div class="section-label">What you get</div>
@@ -550,7 +554,7 @@
     </div>
   </div>
 </section>
-
+ 
 <!-- FOUNDER -->
 <section class="founder">
   <div class="founder-inner">
@@ -565,7 +569,7 @@
     </div>
   </div>
 </section>
-
+ 
 <!-- CTA -->
 <section class="cta-section">
   <h2>We're in early access.</h2>
@@ -573,15 +577,12 @@
   <a href="mailto:hello@loveyourselfua.com?subject=Waitlist Application" class="btn-primary">Join waitlist</a>
   <p class="cta-sub">hello@loveyourselfua.com</p>
 </section>
-
+ 
 <!-- FOOTER -->
 <footer>
-  <svg viewBox="0 0 1920 360" xmlns="http://www.w3.org/2000/svg">
-    <path class="logo-fill" d="m193.19,229.03c-4.14,15.51-7.4,31.72-9.78,48.64-33.75-1.06-57.77-1.59-72.04-1.59s-37.81.53-71.12,1.59c-1.41,0-2.11-1.24-2.11-3.7,0-2.2.7-3.39,2.11-3.57,10.66-1.23,17.91-3.22,21.75-5.95,3.83-2.73,5.75-8.2,5.75-16.4v-124.49c0-6.17-.77-10.52-2.31-13.03-1.54-2.51-4.25-4.5-8.13-5.95-3.88-1.45-9.56-2.62-17.05-3.51-1.41,0-2.11-1.21-2.11-3.64s.7-3.64,2.11-3.64c5.9,0,12.95.26,21.15.79,7.84.53,14.45.79,19.83.79s11.94-.26,19.7-.79c8.11-.53,15.11-.79,21.02-.79,1.41,0,2.11,1.21,2.11,3.64s-.71,3.64-2.11,3.64c-7.4.88-13.04,2.05-16.92,3.51-3.88,1.45-6.57,3.42-8.06,5.89-1.5,2.47-2.25,6.83-2.25,13.1v128.45c0,10.41,5.11,15.61,15.33,15.61h26.17c10.84,0,20-2.89,27.49-8.66,7.49-5.77,14.89-16.54,22.21-32.32.35-.7,1.19-1.06,2.51-1.06,1.14,0,2.22.35,3.24,1.06,1.01.71,1.52,1.5,1.52,2.38Z"/>
-    <path class="logo-fill" d="m1764.88,302.89c-13.18,0-26.57-2.15-39.71-6.68-63.71-21.95-97.68-91.64-75.73-155.35,21.95-63.71,91.64-97.68,155.35-75.73,30.86,10.63,55.73,32.65,70.04,61.99,14.3,29.34,16.32,62.5,5.69,93.36-17.42,50.57-64.93,82.4-115.64,82.4Z"/>
-  </svg>
+  <img src="assets/logo_long.svg" alt="Love Yourself" style="height:24px;width:auto;opacity:0.9;filter:brightness(0) saturate(100%) invert(96%) sepia(5%) saturate(200%) hue-rotate(340deg) brightness(103%);">
   <span>© 2025 Love Yourself · loveyourselfua.com</span>
 </footer>
-
+ 
 </body>
 </html>
