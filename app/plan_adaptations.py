@@ -69,7 +69,7 @@ def _iter_future_steps(
 ) -> Iterable[Tuple[AIPlanDay, AIPlanStep]]:
     for day in plan.days:
         for step in day.steps:
-            if step.is_completed or step.skipped or step.canceled_by_adaptation:
+            if step.step_status in ("completed", "skipped", "expired") or step.canceled_by_adaptation:
                 continue
             if _resolve_step_anchor(plan, day, step) >= effective_from:
                 yield day, step
@@ -110,6 +110,7 @@ def _apply_reduce_load(
             continue
         future_steps.sort(key=lambda step: step.order_in_day)
         for step in future_steps[target:]:
+            step.step_status = "skipped"
             step.skipped = True
             step.scheduled_for = None
             step_diff_count += 1

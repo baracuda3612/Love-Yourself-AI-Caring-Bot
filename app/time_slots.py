@@ -157,7 +157,7 @@ def iter_future_steps(
 ) -> Iterable[tuple[AIPlanDay, AIPlanStep]]:
     for day in plan.days:
         for step in day.steps:
-            if step.is_completed or step.skipped:
+            if step.step_status in ("completed", "skipped", "expired"):
                 continue
             anchor = resolve_step_anchor(
                 plan_start=plan.start_date or effective_from,

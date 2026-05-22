@@ -108,11 +108,30 @@ def get_recent_tasks(
 
 
 def get_completion_rate(db: Session, user_id: int, plan_id: int) -> float:
-    delivered = fetch_delivered_steps(db, user_id, plan_id)
-    if not delivered:
+    """
+    completion_rate = completed / eligible
+    eligible = steps where step_status in (completed, skipped, expired)
+               AND scheduled_at <= now AND not canceled_by_adaptation
+    Future pending/delivered tasks are excluded.
+    """
+    from app.db import AIPlanDay
+    import pytz as _pytz
+    now_utc = datetime.now(_pytz.UTC)
+    eligible_steps = (
+        db.query(AIPlanStep)
+        .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+        .filter(
+            AIPlanDay.plan_id == plan_id,
+            AIPlanStep.step_status.in_(["completed", "skipped", "expired"]),
+            AIPlanStep.scheduled_for <= now_utc,
+            AIPlanStep.canceled_by_adaptation == False,
+        )
+        .all()
+    )
+    if not eligible_steps:
         return 0.0
-    completed = sum(1 for step, _timestamp in delivered if step.is_completed)
-    return float(completed / len(delivered))
+    completed = sum(1 for s in eligible_steps if s.step_status == "completed")
+    return float(completed / len(eligible_steps))
 
 
 def calculate_skip_streak(db: Session, user_id: int, plan_id: int) -> int:

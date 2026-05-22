@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
+import pytz
 from sqlalchemy.orm import Session
 
 from app.adaptation_metrics import get_adaptation_count
-from app.db import AIPlan
+from app.active_days import consecutive_active_days_gap, resolve_active_days
+from app.db import AIPlan, AIPlanDay, AIPlanStep
 from app.plan_metrics import fetch_delivered_steps
 
 
@@ -51,6 +54,33 @@ def _compute_best_streak(completed_day_numbers: set[int]) -> int:
     return best
 
 
+def _compute_best_streak_by_date(
+    completed_dates: list,
+    active_days: list[str],
+) -> int:
+    """
+    Streak that ignores gaps caused by non-active days.
+    FRI → MON is consecutive if SAT/SUN are not in active_days.
+    """
+    if not completed_dates:
+        return 0
+
+    sorted_dates = sorted(set(completed_dates))
+    best = 1
+    current = 1
+
+    for i in range(1, len(sorted_dates)):
+        prev_date = sorted_dates[i - 1]
+        curr_date = sorted_dates[i]
+        if consecutive_active_days_gap(prev_date, curr_date, active_days):
+            current += 1
+        else:
+            current = 1
+        best = max(best, current)
+
+    return best
+
+
 def _resolve_outcome_tier(completion_rate: float) -> str:
     if completion_rate >= STRONG_THRESHOLD:
         return "STRONG"
@@ -76,10 +106,23 @@ def build_completion_metrics(
     if plan is None:
         raise ValueError(f"Plan {plan_id} not found for user {user_id}")
 
-    delivered = fetch_delivered_steps(db, user_id, plan_id)
-    total_delivered = len(delivered)
-
     adaptation_count = get_adaptation_count(db, plan_id)
+
+    # Eligible steps: completed | skipped | expired, scheduled <= now, not canceled
+    now_utc = datetime.now(pytz.UTC)
+    eligible_steps = (
+        db.query(AIPlanStep)
+        .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+        .filter(
+            AIPlanDay.plan_id == plan_id,
+            AIPlanStep.step_status.in_(["completed", "skipped", "expired"]),
+            AIPlanStep.scheduled_for <= now_utc,
+            AIPlanStep.canceled_by_adaptation == False,
+        )
+        .all()
+    )
+
+    total_delivered = len(eligible_steps)
 
     if total_delivered == 0:
         return CompletionMetrics(
@@ -100,23 +143,32 @@ def build_completion_metrics(
             outcome_tier="WEAK",
         )
 
-    total_completed = sum(1 for step, _timestamp in delivered if step.is_completed)
-    total_skipped = sum(1 for step, _timestamp in delivered if step.skipped)
-    total_ignored = max(total_delivered - total_completed - total_skipped, 0)
+    total_completed = sum(1 for s in eligible_steps if s.step_status == "completed")
+    total_skipped = sum(1 for s in eligible_steps if s.step_status == "skipped")
+    total_ignored = sum(1 for s in eligible_steps if s.step_status == "expired")
     completion_rate = total_completed / total_delivered
 
-    completed_day_numbers = {
-        step.day.day_number
-        for step, _timestamp in delivered
-        if step.is_completed and step.day is not None
-    }
-    best_streak = _compute_best_streak(completed_day_numbers)
+    # Streak by real calendar dates, respecting active_days gaps.
+    user = plan.user
+    active_days = resolve_active_days(getattr(user, "profile", None))
+    user_tz_str = getattr(user, "timezone", None) or "Europe/Kyiv"
+    try:
+        user_tz = pytz.timezone(user_tz_str)
+    except Exception:
+        user_tz = pytz.timezone("Europe/Kyiv")
+
+    completed_dates = [
+        s.scheduled_for.astimezone(user_tz).date()
+        for s in eligible_steps
+        if s.step_status == "completed" and s.scheduled_for
+    ]
+    best_streak = _compute_best_streak_by_date(completed_dates, active_days)
 
     slot_counts: dict[str, int] = {}
-    for step, _timestamp in delivered:
-        if not step.is_completed or not step.time_slot:
+    for s in eligible_steps:
+        if s.step_status != "completed" or not s.time_slot:
             continue
-        slot_counts[step.time_slot] = slot_counts.get(step.time_slot, 0) + 1
+        slot_counts[s.time_slot] = slot_counts.get(s.time_slot, 0) + 1
 
     dominant_time_slot: str | None = None
     if slot_counts:

@@ -43,8 +43,11 @@ def _to_ratio(completed: int, delivered: int) -> float:
 
 
 def _is_step_completed(step: object) -> bool:
-    status = getattr(step, "status", None)
-    return bool(getattr(step, "is_completed", False) or status == "completed")
+    step_status = getattr(step, "step_status", None)
+    if step_status is not None:
+        return step_status == "completed"
+    # Legacy fallback for objects without step_status
+    return bool(getattr(step, "is_completed", False))
 
 
 def _is_step_canceled(step: object) -> bool:

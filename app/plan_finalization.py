@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 import logging
 import pytz
@@ -25,6 +25,12 @@ from app.time_slots import (
     daily_time_slots_to_time_mapping,
     normalize_time_slot,
     resolve_daily_time_slots,
+)
+from app.active_days import (
+    resolve_active_days,
+    is_active_day,
+    next_active_date,
+    step_expires_at,
 )
 from app.telemetry import log_user_event
 from app.scheduler import schedule_plan_step
@@ -150,11 +156,13 @@ def _resolve_scheduled_for(
     time_slot: str,
     tz: pytz.BaseTzInfo,
     slot_time_mapping: dict[str, time],
+    real_date: date | None = None,
 ) -> datetime:
     if day_number <= 0:
         raise FinalizationError("invalid_day_number")
     slot_time = _resolve_time_slot(time_slot, slot_time_mapping)
-    target_date = anchor_date.date() + timedelta(days=day_number - 1)
+    # real_date overrides the sequential day offset when active_days are used.
+    target_date = real_date if real_date is not None else (anchor_date.date() + timedelta(days=day_number - 1))
     naive = datetime.combine(target_date, slot_time)
     try:
         localized = tz.localize(naive)
@@ -263,6 +271,17 @@ def finalize_plan(
 
         tz = _normalize_timezone(user.timezone)
         anchor_dt = plan_start.astimezone(tz)
+        active_days = resolve_active_days(profile)
+
+        # Build a mapping: logical day_number → real calendar date (active days only).
+        # day_number 1 = first active date >= anchor, day_number N = Nth active date.
+        anchor_date = anchor_dt.date()
+        active_date_map: dict[int, date] = {}
+        cursor = anchor_date
+        for logical_day in range(1, locked_draft.total_days + 1):
+            cursor = next_active_date(cursor, active_days)
+            active_date_map[logical_day] = cursor
+            cursor += timedelta(days=1)
 
         day_records: dict[int, AIPlanDay] = {}
         for day_number in range(1, locked_draft.total_days + 1):
@@ -291,6 +310,7 @@ def finalize_plan(
         if exercise_ids - set(content_entries.keys()):
             raise FinalizationError("content_library_missing")
 
+        last_scheduled_for: datetime | None = None
         day_orders: dict[int, int] = defaultdict(int)
         for step_row in step_rows:
             day_number = int(step_row.day_number or 0)
@@ -302,13 +322,21 @@ def finalize_plan(
             exercise_id = str(step_row.exercise_id or "")
             content = content_entries.get(exercise_id)
             time_slot = normalize_time_slot(step_row.time_slot)
+
+            # Use the real active calendar date for this logical day.
+            real_date = active_date_map.get(day_number)
+            if real_date is None:
+                raise FinalizationError("active_date_missing")
             scheduled_for = _resolve_scheduled_for(
                 anchor_date=anchor_dt,
                 day_number=day_number,
                 time_slot=time_slot,
                 tz=tz,
                 slot_time_mapping=slot_time_mapping,
+                real_date=real_date,
             )
+            expires = step_expires_at(scheduled_for, tz)
+
             step_type = _map_step_type(step_row.slot_type)
             assert step_type in {entry.value for entry in StepType}
             difficulty = _map_difficulty(step_row.difficulty)
@@ -326,13 +354,24 @@ def finalize_plan(
                     order_in_day=order_in_day,
                     time_slot=time_slot,
                     scheduled_for=scheduled_for,
+                    expires_at=expires,
+                    step_status="pending",
                 )
             )
+            if last_scheduled_for is None or scheduled_for > last_scheduled_for:
+                last_scheduled_for = scheduled_for
 
         locked_draft.status = "FINALIZED"
 
         user.current_state = "ACTIVE"
-        end_date = _derive_plan_end_date(plan_start, locked_draft.total_days, tz)
+        # plan_end_date = date of last scheduled step (not total_days offset).
+        end_date = (
+            last_scheduled_for.astimezone(tz).replace(
+                hour=23, minute=59, second=59, microsecond=0
+            )
+            if last_scheduled_for
+            else _derive_plan_end_date(plan_start, locked_draft.total_days, tz)
+        )
         user.plan_end_date = end_date
         if end_date is not None:
             plan.end_date = end_date

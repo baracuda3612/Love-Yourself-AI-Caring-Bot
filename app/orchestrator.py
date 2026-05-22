@@ -1403,8 +1403,7 @@ def get_daily_task_count(db: Session, plan: AIPlan) -> int:
         .filter(
             AIPlanStep.day_id == first_day.id,
             AIPlanStep.canceled_by_adaptation == False,
-            AIPlanStep.skipped == False,
-            AIPlanStep.is_completed == False,
+            AIPlanStep.step_status.notin_(["completed", "skipped", "expired"]),
         )
         .count()
     )

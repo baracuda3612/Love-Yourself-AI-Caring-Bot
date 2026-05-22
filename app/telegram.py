@@ -545,6 +545,11 @@ async def handle_task_completed(callback_query: CallbackQuery):
             await callback_query.answer(error_msg)
             return
 
+        if step.step_status == "expired":
+            await callback_query.answer("⏰ Час на це завдання минув.")
+            return
+
+        step.step_status = "completed"
         step.is_completed = True
         step.completed_at = datetime.now(timezone.utc)
         step.skipped = False
@@ -657,6 +662,11 @@ async def handle_task_skipped(callback_query: CallbackQuery):
             await callback_query.answer(error_msg)
             return
 
+        if step.step_status == "expired":
+            await callback_query.answer("⏰ Час на це завдання минув.")
+            return
+
+        step.step_status = "skipped"
         step.skipped = True
         step.is_completed = False
         step.completed_at = None

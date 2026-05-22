@@ -39,7 +39,9 @@ _scheduler_started = False
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
 _ALLOWED_USER_STATES = {"ACTIVE"}
 
-_DELIVERY_LATE_GRACE = timedelta(minutes=1)
+# Deliver a task up to 2 hours after its scheduled_for time.
+# Protects against brief server downtime without delivering stale tasks (e.g. at 23:00).
+_DELIVERY_LATE_GRACE = timedelta(hours=2)
 
 ADAPTATION_SOFT_TIMEOUT_MIN = 30
 ADAPTATION_HARD_TIMEOUT_MIN = 60
@@ -70,6 +72,7 @@ def init_scheduler():
         scheduler.remove_job("daily_pulse")
     except Exception:
         pass
+    scheduler.add_job("app.scheduler:expire_overdue_steps", "cron", hour=0, minute=5, id="expire_steps", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_silent_users", "cron", hour=12, minute=0, id="silent_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_ignored_tasks", "cron", hour=8, minute=0, id="ignored_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_plan_completions", "cron", hour=10, minute=30, id="plan_completion_check", replace_existing=True, max_instances=1)
@@ -153,9 +156,17 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
 
         if plan.status != "active":
             return
-        if step.is_completed or step.skipped:
+        if step.step_status in ("completed", "skipped", "expired"):
             return
         if not step.scheduled_for:
+            return
+
+        # Check active_days: skip delivery on non-active days.
+        from app.active_days import resolve_active_days, is_active_day
+        user_tz = pytz.timezone(getattr(user, "timezone", None) or "Europe/Kyiv")
+        today_local = datetime.now(pytz.UTC).astimezone(user_tz).date()
+        active_days = resolve_active_days(user.profile)
+        if not is_active_day(today_local, active_days):
             return
 
         scheduled_for = step.scheduled_for.astimezone(pytz.UTC)
@@ -222,6 +233,9 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
                     plan_step_id=plan_step_id,
                     context=base_context,
                 )
+                db_step = db.query(AIPlanStep).filter(AIPlanStep.id == plan_step_id).first()
+                if db_step:
+                    db_step.step_status = "delivered"
                 day_number = base_context.get("day_number")
                 if day_number is not None:
                     maybe_advance_current_day(db, plan_id, day_number)
@@ -245,9 +259,9 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
     """
     Schedules a single step. Returns True if a NEW job was created.
     """
-    if step.is_completed or step.skipped:
+    if step.step_status in ("completed", "skipped", "expired"):
         return False
-    
+
     # We only schedule if we have a concrete time
     if not step.scheduled_for:
         return False
@@ -630,6 +644,33 @@ def check_ignored_tasks():
             )
         db.commit()
 
+
+
+def expire_overdue_steps() -> None:
+    """
+    Runs at 00:05 UTC daily.
+    Marks all delivered/pending steps whose expires_at has passed as 'expired'.
+    Keeps is_completed and skipped booleans in sync for backward compatibility.
+    """
+    now_utc = datetime.now(pytz.UTC)
+    with SessionLocal() as db:
+        overdue = (
+            db.query(AIPlanStep)
+            .filter(
+                AIPlanStep.step_status.in_(["pending", "delivered"]),
+                AIPlanStep.expires_at.isnot(None),
+                AIPlanStep.expires_at < now_utc,
+                AIPlanStep.canceled_by_adaptation == False,
+            )
+            .all()
+        )
+        count = 0
+        for step in overdue:
+            step.step_status = "expired"
+            count += 1
+        if count:
+            db.commit()
+            logger.info("[EXPIRE] Marked %d steps as expired.", count)
 
 
 def _maybe_schedule_plan_completion(user_id: int, plan_id: int) -> None:

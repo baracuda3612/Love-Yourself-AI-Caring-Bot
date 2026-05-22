@@ -160,6 +160,10 @@ class UserProfile(Base):
             "EVENING": "21:00",
         },
     )
+    active_days = Column(
+        JSONB,
+        default=lambda: ["MON", "TUE", "WED", "THU", "FRI"],
+    )
     coach_persona = Column(String(20), nullable=True)
     pulse_sent_indices = Column(JSONB, nullable=True, default=list)
 
@@ -291,6 +295,12 @@ class AIPlanStep(Base):
     scheduled_for = Column(DateTime(timezone=True), nullable=True)
     
     # Execution State
+    # step_status is the canonical lifecycle field.
+    # Values: pending | delivered | completed | skipped | expired
+    # is_completed and skipped are kept for backward compatibility and are
+    # kept in sync whenever step_status is written.
+    step_status = Column(String(20), nullable=False, default="pending")
+    expires_at = Column(DateTime(timezone=True), nullable=True)
     is_completed = Column(Boolean, default=False)
     completed_at = Column(DateTime(timezone=True), nullable=True)
     skipped = Column(Boolean, default=False)

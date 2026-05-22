@@ -48,7 +48,7 @@ class AdaptationExecutor:
 
         for day in plan.days:
             for step in day.steps:
-                if step.is_completed or step.skipped or step.canceled_by_adaptation:
+                if step.step_status in ("completed", "skipped", "expired") or step.canceled_by_adaptation:
                     continue
                 if step.scheduled_for and step.scheduled_for <= now_utc:
                     continue
@@ -231,7 +231,7 @@ class AdaptationExecutor:
             future_in_day = [
                 step
                 for step in day.steps
-                if not step.is_completed and not step.skipped and not step.canceled_by_adaptation
+                if step.step_status not in ("completed", "skipped", "expired") and not step.canceled_by_adaptation
             ]
             if not future_in_day:
                 continue
@@ -620,7 +620,7 @@ class AdaptationExecutor:
         canceled_ids: list[int] = []
         for day in plan.days:
             for step in day.steps:
-                if not step.is_completed and not step.skipped:
+                if step.step_status not in ("completed", "skipped", "expired"):
                     step.canceled_by_adaptation = True
                     step.scheduled_for = None
                     canceled_ids.append(step.id)

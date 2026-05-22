@@ -13,7 +13,7 @@ def is_step_terminal(step: AIPlanStep) -> bool:
     Returns:
         True if step is completed or skipped.
     """
-    return bool(step.is_completed or step.skipped)
+    return step.step_status in ("completed", "skipped", "expired")
 
 
 def is_plan_active(step: AIPlanStep) -> bool:
@@ -46,10 +46,9 @@ def get_terminal_reason(step: AIPlanStep) -> str | None:
     Returns:
         "completed" | "skipped" | None.
     """
-    if step.is_completed:
-        return "completed"
-    if step.skipped:
-        return "skipped"
+    status = step.step_status
+    if status in ("completed", "skipped", "expired"):
+        return status
     return None
 
 
@@ -74,6 +73,8 @@ def validate_step_action(step: AIPlanStep) -> tuple[bool, str]:
             return (False, "Завдання вже виконано")
         if reason == "skipped":
             return (False, "Завдання вже пропущено")
+        if reason == "expired":
+            return (False, "⏰ Час на це завдання минув.")
         return (False, "Завдання вже завершене")
 
     return (True, "")
