@@ -29,9 +29,9 @@ class ActiveDaysError(ValueError):
 def resolve_timezone(name: str | None) -> pytz.BaseTzInfo:
     """Returns a safe timezone object for user-scoped scheduling logic."""
     try:
-        return pytz.timezone(name or "Europe/Kyiv")
+        return pytz.timezone(name or "UTC")
     except pytz.UnknownTimeZoneError:
-        return pytz.timezone("Europe/Kyiv")
+        return pytz.UTC
 
 
 def normalize_active_days(raw: object) -> List[str]:
