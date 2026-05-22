@@ -158,14 +158,14 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
 
         if plan.status != "active":
             return
-        if step.step_status in ("completed", "skipped", "expired"):
+        if step.step_status in ("completed", "skipped", "expired", "canceled"):
             return
         if not step.scheduled_for:
             return
 
         # Check active_days: skip delivery on non-active days.
         from app.active_days import resolve_active_days, is_active_day
-        user_tz = pytz.timezone(getattr(user, "timezone", None) or "Europe/Kyiv")
+        user_tz = resolve_timezone(getattr(user, "timezone", None))
         today_local = datetime.now(pytz.UTC).astimezone(user_tz).date()
         active_days = resolve_active_days(user.profile)
         if not is_active_day(today_local, active_days):
@@ -263,7 +263,7 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
     """
     Schedules a single step. Returns True if a NEW job was created.
     """
-    if step.step_status in ("completed", "skipped", "expired"):
+    if step.step_status in ("completed", "skipped", "expired", "canceled"):
         return False
 
     # We only schedule if we have a concrete time
@@ -399,7 +399,7 @@ async def schedule_daily_loop():
         now_utc = datetime.now(pytz.UTC)
         
         # JOIN: Step -> Day -> Plan -> User
-        # Filter: Active User + Active Plan + Future Step + Not Completed
+        # Filter: Active User + Active Plan + Future Step + Not terminal
         pending_steps = (
             db.query(AIPlanStep, AIPlanDay, AIPlan, User)
             .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
@@ -409,8 +409,8 @@ async def schedule_daily_loop():
                 AIPlan.status == "active",
                 User.is_active == True,
                 User.current_state == "ACTIVE",
-                AIPlanStep.is_completed == False,
-                AIPlanStep.skipped == False,
+                AIPlanStep.step_status == "pending",
+                AIPlanStep.canceled_by_adaptation == False,
                 AIPlanStep.scheduled_for != None, # Only schedule if time is set
                 AIPlanStep.scheduled_for > now_utc
             )
