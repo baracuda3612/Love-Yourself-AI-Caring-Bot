@@ -26,7 +26,7 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
 from app.active_days import consecutive_active_days_gap
-from app.plan_completion.metrics import _compute_best_streak_by_date
+from app.plan_completion.metrics import _compute_best_streak_by_date, _compute_current_streak
 from app.plan_guards import validate_step_action, is_step_terminal
 
 
@@ -205,11 +205,12 @@ class TestExpiredStepGuard:
         step = _StubStep(step_status="expired")
         assert is_step_terminal(step) is True
 
-    def test_expired_step_action_blocked_with_correct_message(self):
+    def test_expired_step_action_blocked_silently(self):
+        """Expired steps fail silently — empty error message so UI can answer()."""
         step = _StubStep(step_status="expired")
         allowed, msg = validate_step_action(step)
         assert allowed is False
-        assert "⏰" in msg or "минув" in msg.lower()
+        assert msg == ""  # caller does callback_query.answer() with no text
 
     def test_completed_step_action_blocked(self):
         step = _StubStep(step_status="completed")
@@ -235,3 +236,108 @@ class TestExpiredStepGuard:
         allowed, msg = validate_step_action(step)
         assert allowed is True
         assert msg == ""
+
+    def test_canceled_step_is_terminal_and_silent(self):
+        """Canceled (by adaptation) steps are terminal and fail silently."""
+        step = _StubStep(step_status="canceled")
+        assert is_step_terminal(step) is True
+        allowed, msg = validate_step_action(step)
+        assert allowed is False
+        assert msg == ""
+
+
+# ---------------------------------------------------------------------------
+# Test 4: current_streak vs best_streak
+# ---------------------------------------------------------------------------
+
+class TestCurrentStreak:
+    def test_current_streak_single_date(self):
+        dates = [date(2026, 5, 18)]
+        assert _compute_current_streak(dates, ACTIVE_DAYS_WEEKDAYS) == 1
+
+    def test_current_streak_consecutive(self):
+        dates = [date(2026, 5, 18), date(2026, 5, 19), date(2026, 5, 20)]
+        assert _compute_current_streak(dates, ACTIVE_DAYS_WEEKDAYS) == 3
+
+    def test_current_streak_after_gap(self):
+        """Best=5, but current=2 (gap on Wed)."""
+        dates = [
+            date(2026, 5, 11),  # Mon
+            date(2026, 5, 12),  # Tue
+            date(2026, 5, 13),  # Wed
+            date(2026, 5, 14),  # Thu
+            date(2026, 5, 15),  # Fri
+            # gap: no Mon 18
+            date(2026, 5, 19),  # Tue
+            date(2026, 5, 20),  # Wed
+        ]
+        assert _compute_best_streak_by_date(dates, ACTIVE_DAYS_WEEKDAYS) == 5
+        assert _compute_current_streak(dates, ACTIVE_DAYS_WEEKDAYS) == 2
+
+    def test_current_streak_crosses_weekend(self):
+        """Fri + Mon = current streak 2 (Sat/Sun skipped)."""
+        dates = [date(2026, 5, 15), date(2026, 5, 18)]
+        assert _compute_current_streak(dates, ACTIVE_DAYS_WEEKDAYS) == 2
+
+
+# ---------------------------------------------------------------------------
+# Test 5: three-metric split
+# ---------------------------------------------------------------------------
+
+class TestThreeMetrics:
+    def _eligible(self, statuses):
+        now = datetime.now(timezone.utc)
+        past = now - timedelta(hours=1)
+
+        @dataclass
+        class _S:
+            step_status: str
+            scheduled_for: datetime
+            canceled_by_adaptation: bool = False
+
+        steps = [_S(s, past) for s in statuses]
+        eligible_statuses = ("completed", "skipped", "expired")
+        return [
+            s for s in steps
+            if s.step_status in eligible_statuses
+            and s.scheduled_for <= now
+            and not s.canceled_by_adaptation
+        ]
+
+    def test_completion_rate(self):
+        el = self._eligible(["completed", "completed", "skipped", "expired"])
+        rate = sum(1 for s in el if s.step_status == "completed") / len(el)
+        assert rate == 0.5
+
+    def test_engagement_rate(self):
+        el = self._eligible(["completed", "skipped", "expired"])
+        rate = sum(1 for s in el if s.step_status in ("completed", "skipped")) / len(el)
+        assert round(rate, 4) == round(2 / 3, 4)
+
+    def test_silent_miss_rate(self):
+        el = self._eligible(["completed", "expired", "expired"])
+        rate = sum(1 for s in el if s.step_status == "expired") / len(el)
+        assert round(rate, 4) == round(2 / 3, 4)
+
+    def test_canceled_excluded_from_denominator(self):
+        """canceled steps must not appear in eligible (canceled_by_adaptation filter)."""
+        now = datetime.now(timezone.utc)
+        past = now - timedelta(hours=1)
+
+        @dataclass
+        class _S:
+            step_status: str
+            scheduled_for: datetime
+            canceled_by_adaptation: bool
+
+        steps = [
+            _S("completed", past, False),
+            _S("canceled", past, True),   # must be excluded
+        ]
+        eligible = [
+            s for s in steps
+            if s.step_status in ("completed", "skipped", "expired")
+            and not s.canceled_by_adaptation
+        ]
+        assert len(eligible) == 1
+        assert eligible[0].step_status == "completed"

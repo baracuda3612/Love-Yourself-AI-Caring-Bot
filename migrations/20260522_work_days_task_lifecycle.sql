@@ -29,17 +29,33 @@ ALTER TABLE ai_plan_steps
 
 
 -- ── Backfill step_status ──────────────────────────────────────────────────────
--- Priority: completed > skipped > canceled_by_adaptation (→ expired) > pending.
+-- Priority: completed > skipped > canceled_by_adaptation (→ canceled) > pending.
+-- IMPORTANT: canceled_by_adaptation maps to 'canceled', NOT 'expired'.
+--   expired  = user had a window and did not react  (churn signal)
+--   canceled = system removed the step via adaptation layer (excluded from metrics)
 
 UPDATE ai_plan_steps
 SET step_status =
     CASE
-        WHEN is_completed          = TRUE THEN 'completed'
-        WHEN skipped               = TRUE THEN 'skipped'
-        WHEN canceled_by_adaptation = TRUE THEN 'expired'
+        WHEN is_completed           = TRUE THEN 'completed'
+        WHEN skipped                = TRUE THEN 'skipped'
+        WHEN canceled_by_adaptation = TRUE THEN 'canceled'
         ELSE 'pending'
     END
-WHERE step_status = 'pending';  -- only touch rows not yet set (idempotent re-run)
+WHERE step_status = 'pending';  -- idempotent: only touches rows not yet set
+
+
+-- ── Backfill expires_at for existing steps ────────────────────────────────────
+-- Steps created before this migration have no expires_at.
+-- Fallback: end of the scheduled_for day in UTC (23:59:59).
+-- This gives the expiry job something to work with for legacy active plans.
+
+UPDATE ai_plan_steps
+SET expires_at = date_trunc('day', scheduled_for AT TIME ZONE 'UTC')
+                 + INTERVAL '1 day' - INTERVAL '1 second'
+WHERE expires_at IS NULL
+  AND scheduled_for IS NOT NULL
+  AND step_status IN ('pending', 'delivered');
 
 
 -- ── Index for common filter: pending/delivered steps per plan ─────────────────
@@ -51,6 +67,7 @@ COMMIT;
 
 
 -- ── Rollback (run manually if needed) ────────────────────────────────────────
+-- Note: expires_at backfill is not reversible without original data.
 -- BEGIN;
 -- ALTER TABLE ai_plan_steps  DROP COLUMN IF EXISTS expires_at;
 -- ALTER TABLE ai_plan_steps  DROP COLUMN IF EXISTS step_status;

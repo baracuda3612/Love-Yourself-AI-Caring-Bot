@@ -72,7 +72,8 @@ def init_scheduler():
         scheduler.remove_job("daily_pulse")
     except Exception:
         pass
-    scheduler.add_job("app.scheduler:expire_overdue_steps", "cron", hour=0, minute=5, id="expire_steps", replace_existing=True, max_instances=1)
+    # Run every hour at :05 — 1 h max lag for any timezone, not just UTC+0.
+    scheduler.add_job("app.scheduler:expire_overdue_steps", "cron", minute=5, id="expire_steps", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_silent_users", "cron", hour=12, minute=0, id="silent_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_ignored_tasks", "cron", hour=8, minute=0, id="ignored_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_plan_completions", "cron", hour=10, minute=30, id="plan_completion_check", replace_existing=True, max_instances=1)
@@ -648,19 +649,38 @@ def check_ignored_tasks():
 
 def expire_overdue_steps() -> None:
     """
-    Runs at 00:05 UTC daily.
-    Marks all delivered/pending steps whose expires_at has passed as 'expired'.
-    Keeps is_completed and skipped booleans in sync for backward compatibility.
+    Runs every hour at :05.
+    Max lag = 1 h — safe for all timezones (not just UTC).
+
+    Expiry rule:
+    - Primary: expires_at IS NOT NULL AND expires_at < now
+    - Fallback: expires_at IS NULL AND scheduled_for date (UTC) < today
+      Covers steps created outside plan_finalization that have no expires_at.
     """
+    from sqlalchemy import or_, and_, func as sa_func
+
     now_utc = datetime.now(pytz.UTC)
+    today_utc = now_utc.date()
+
     with SessionLocal() as db:
         overdue = (
             db.query(AIPlanStep)
             .filter(
                 AIPlanStep.step_status.in_(["pending", "delivered"]),
-                AIPlanStep.expires_at.isnot(None),
-                AIPlanStep.expires_at < now_utc,
                 AIPlanStep.canceled_by_adaptation == False,
+                or_(
+                    # Primary path: explicit expiry timestamp set
+                    and_(
+                        AIPlanStep.expires_at.isnot(None),
+                        AIPlanStep.expires_at < now_utc,
+                    ),
+                    # Fallback: no expires_at but scheduled day already passed (UTC)
+                    and_(
+                        AIPlanStep.expires_at.is_(None),
+                        AIPlanStep.scheduled_for.isnot(None),
+                        sa_func.date(AIPlanStep.scheduled_for) < today_utc,
+                    ),
+                ),
             )
             .all()
         )
