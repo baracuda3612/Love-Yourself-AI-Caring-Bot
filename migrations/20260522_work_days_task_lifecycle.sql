@@ -53,15 +53,27 @@ WHERE step_status = 'pending';  -- idempotent: only touches rows not yet set
 
 -- ── Backfill expires_at for existing steps ────────────────────────────────────
 -- Steps created before this migration have no expires_at.
--- Fallback: end of the scheduled_for day in UTC (23:59:59).
--- This gives the expiry job something to work with for legacy active plans.
+-- Backfill rule must match runtime lifecycle exactly:
+-- scheduled_for -> user's local timezone -> same local day 23:59:59 -> back to UTC.
+-- Using UTC truncation here would expire some tasks hours too early / too late.
 
-UPDATE ai_plan_steps
-SET expires_at = date_trunc('day', scheduled_for AT TIME ZONE 'UTC')
-                 + INTERVAL '1 day' - INTERVAL '1 second'
-WHERE expires_at IS NULL
-  AND scheduled_for IS NOT NULL
-  AND step_status IN ('pending', 'delivered');
+UPDATE ai_plan_steps AS step
+SET expires_at =
+    (
+        date_trunc(
+            'day',
+            step.scheduled_for AT TIME ZONE COALESCE(NULLIF("user".timezone, ''), 'Europe/Kyiv')
+        )
+        + INTERVAL '1 day'
+        - INTERVAL '1 second'
+    ) AT TIME ZONE COALESCE(NULLIF("user".timezone, ''), 'Europe/Kyiv')
+FROM ai_plan_days AS day
+JOIN ai_plans AS plan ON plan.id = day.plan_id
+JOIN users AS "user" ON "user".id = plan.user_id
+WHERE step.day_id = day.id
+  AND step.expires_at IS NULL
+  AND step.scheduled_for IS NOT NULL
+  AND step.step_status IN ('pending', 'delivered');
 
 
 -- ── Index for common filter: pending/delivered steps per plan ─────────────────
