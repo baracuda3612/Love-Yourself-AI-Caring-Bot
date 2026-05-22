@@ -55,21 +55,23 @@ WHERE step_status = 'pending';  -- idempotent: only touches rows not yet set
 -- Steps created before this migration have no expires_at.
 -- Backfill rule must match runtime lifecycle exactly:
 -- scheduled_for -> user's local timezone -> same local day 23:59:59 -> back to UTC.
--- Using UTC truncation here would expire some tasks hours too early / too late.
+-- Missing or invalid timezone strings fall back to UTC to match plan_finalization.
 
 UPDATE ai_plan_steps AS step
 SET expires_at =
     (
         date_trunc(
             'day',
-            step.scheduled_for AT TIME ZONE COALESCE(NULLIF("user".timezone, ''), 'Europe/Kyiv')
+            step.scheduled_for AT TIME ZONE COALESCE(valid_tz.name, 'UTC')
         )
         + INTERVAL '1 day'
         - INTERVAL '1 second'
-    ) AT TIME ZONE COALESCE(NULLIF("user".timezone, ''), 'Europe/Kyiv')
+    ) AT TIME ZONE COALESCE(valid_tz.name, 'UTC')
 FROM ai_plan_days AS day
 JOIN ai_plans AS plan ON plan.id = day.plan_id
 JOIN users AS "user" ON "user".id = plan.user_id
+LEFT JOIN pg_timezone_names AS valid_tz
+       ON valid_tz.name = NULLIF("user".timezone, '')
 WHERE step.day_id = day.id
   AND step.expires_at IS NULL
   AND step.scheduled_for IS NOT NULL
