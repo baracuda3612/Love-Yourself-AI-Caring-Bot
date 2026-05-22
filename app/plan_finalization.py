@@ -17,10 +17,15 @@ from app.db import (
     ContentLibrary,
     PlanDraftRecord,
     User,
+    UserProfile,
 )
 from app.plan_activation.activation_anchor import resolve_activation_anchor_date
 from app.schemas.planner import DifficultyLevel, StepType, PlanModule
-from app.time_slots import normalize_time_slot
+from app.time_slots import (
+    daily_time_slots_to_time_mapping,
+    normalize_time_slot,
+    resolve_daily_time_slots,
+)
 from app.telemetry import log_user_event
 from app.scheduler import schedule_plan_step
 from app.db import SessionLocal
@@ -127,12 +132,12 @@ def _derive_plan_end_date(plan_start: datetime, total_days: int, tz: pytz.BaseTz
     return end_local
 
 
-def _resolve_time_slot(value: str) -> time:
+def _resolve_time_slot(value: str, slot_time_mapping: dict[str, time]) -> time:
     try:
         normalized = normalize_time_slot(value)
     except Exception as exc:
         raise FinalizationError("invalid_time_slot") from exc
-    slot_time = _FIXED_TIME_SLOTS.get(normalized)
+    slot_time = slot_time_mapping.get(normalized)
     if not slot_time:
         raise FinalizationError("invalid_time_slot")
     return slot_time
@@ -144,10 +149,11 @@ def _resolve_scheduled_for(
     day_number: int,
     time_slot: str,
     tz: pytz.BaseTzInfo,
+    slot_time_mapping: dict[str, time],
 ) -> datetime:
     if day_number <= 0:
         raise FinalizationError("invalid_day_number")
-    slot_time = _resolve_time_slot(time_slot)
+    slot_time = _resolve_time_slot(time_slot, slot_time_mapping)
     target_date = anchor_date.date() + timedelta(days=day_number - 1)
     naive = datetime.combine(target_date, slot_time)
     try:
@@ -200,11 +206,16 @@ def finalize_plan(
         if active_plan is not None:
             raise ActivePlanExistsError("active_plan_exists")
 
+        profile = db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+        slot_time_mapping = daily_time_slots_to_time_mapping(
+            resolve_daily_time_slots(profile)
+        )
+
         plan_start = resolve_activation_anchor_date(
             draft=locked_draft,
             activation_time_utc=activation_time_utc,
             user_timezone=user.timezone,
-            slot_time_mapping=_FIXED_TIME_SLOTS,
+            slot_time_mapping=slot_time_mapping,
         )
         plan = AIPlan(
             user_id=user_id,
@@ -296,6 +307,7 @@ def finalize_plan(
                 day_number=day_number,
                 time_slot=time_slot,
                 tz=tz,
+                slot_time_mapping=slot_time_mapping,
             )
             step_type = _map_step_type(step_row.slot_type)
             assert step_type in {entry.value for entry in StepType}

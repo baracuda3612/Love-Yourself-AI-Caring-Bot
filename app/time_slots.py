@@ -45,6 +45,21 @@ def _parse_time(value: str) -> time:
     return time(hour=hour, minute=minute)
 
 
+def map_time_to_slot(hhmm: str) -> str:
+    """Maps a HH:MM string to the internal slot enum: MORNING / DAY / EVENING."""
+    t = _parse_time(hhmm)
+    if t.hour < 12:
+        return "MORNING"
+    if t.hour < 18:
+        return "DAY"
+    return "EVENING"
+
+
+def daily_time_slots_to_time_mapping(slots: Dict[str, str]) -> Dict[str, time]:
+    """Converts {'DAY': '14:30', ...} to {'DAY': time(14, 30), ...}."""
+    return {slot: _parse_time(hhmm) for slot, hhmm in slots.items()}
+
+
 def normalize_daily_time_slots(raw: Any, *, require_all: bool) -> Dict[str, str]:
     if not isinstance(raw, dict):
         if require_all:
@@ -210,12 +225,27 @@ def update_user_time_slots(
     user: User,
     raw_time_slots: Dict[str, str],
 ) -> tuple[list[int], list[int]]:
-    normalized = normalize_daily_time_slots(raw_time_slots, require_all=True)
+    # Validate and normalise only the keys that are explicitly provided.
+    # Missing keys are left unchanged in the profile (merge, not replace).
+    if not isinstance(raw_time_slots, dict):
+        raise TimeSlotError("daily_time_slots_invalid")
+    partial: Dict[str, str] = {}
+    for key, value in raw_time_slots.items():
+        slot = normalize_time_slot(key)
+        if not isinstance(value, str):
+            raise TimeSlotError("daily_time_slots_invalid")
+        parsed = _parse_time(value.strip())
+        partial[slot] = f"{parsed.hour:02d}:{parsed.minute:02d}"
+
     profile = user.profile
     if not profile:
         profile = UserProfile(user_id=user.id)
         db.add(profile)
         user.profile = profile
+
+    existing = resolve_daily_time_slots(profile)
+    existing.update(partial)
+    normalized = existing
     profile.daily_time_slots = normalized
 
     plans = (
