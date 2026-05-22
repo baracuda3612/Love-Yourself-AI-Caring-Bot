@@ -276,6 +276,11 @@ class TestExpiryTimezoneBoundaries:
 
         assert step_expires_at(scheduled_for, tz) < now_utc
 
+    def test_resolve_timezone_uses_utc_fallback_for_missing_or_invalid_values(self):
+        assert resolve_timezone(None) == pytz.UTC
+        assert resolve_timezone("") == pytz.UTC
+        assert resolve_timezone("Not/A_Real_Zone") == pytz.UTC
+
 
 # ---------------------------------------------------------------------------
 # Test 5: current_streak vs best_streak
