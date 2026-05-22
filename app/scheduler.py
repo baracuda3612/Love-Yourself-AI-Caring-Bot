@@ -765,12 +765,7 @@ def _maybe_schedule_plan_completion(user_id: int, plan_id: int) -> None:
         if not user:
             return
 
-        user_tz_str = getattr(user, "timezone", None) or "Europe/Kyiv"
-        try:
-            user_tz = pytz.timezone(user_tz_str)
-        except Exception:
-            user_tz = pytz.timezone("Europe/Kyiv")
-
+        user_tz = resolve_timezone(getattr(user, "timezone", None))
         now_local = datetime.now(pytz.UTC).astimezone(user_tz)
         candidate_run_date = datetime.now(pytz.UTC) + timedelta(hours=2)
         candidate_local = candidate_run_date.astimezone(user_tz)
@@ -1011,11 +1006,7 @@ PULSE_THRESHOLDS = {
 
 
 def _now_in_user_tz(user: User) -> datetime:
-    tz_name = getattr(user, "timezone", None) or "Europe/Kyiv"
-    try:
-        tz = pytz.timezone(tz_name)
-    except Exception:
-        tz = pytz.timezone("Europe/Kyiv")
+    tz = resolve_timezone(getattr(user, "timezone", None))
     return datetime.now(pytz.UTC).astimezone(tz)
 
 
