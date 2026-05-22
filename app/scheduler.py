@@ -63,7 +63,13 @@ def _generate_step_job_id(step: AIPlanStep) -> str:
 def init_scheduler():
     if not scheduler.running:
         scheduler.start()
-    scheduler.add_job("app.scheduler:send_daily_pulse", "cron", hour=9, minute=0, id="daily_pulse", replace_existing=True, max_instances=1)
+    # P1 frozen: keep send_daily_pulse() available, but disable its cron trigger.
+    # scheduler.add_job("app.scheduler:send_daily_pulse", "cron", hour=9, minute=0, id="daily_pulse", replace_existing=True, max_instances=1)
+    # Remove any persisted daily_pulse job from the job store (existing deployments).
+    try:
+        scheduler.remove_job("daily_pulse")
+    except Exception:
+        pass
     scheduler.add_job("app.scheduler:check_silent_users", "cron", hour=12, minute=0, id="silent_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_ignored_tasks", "cron", hour=8, minute=0, id="ignored_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_plan_completions", "cron", hour=10, minute=30, id="plan_completion_check", replace_existing=True, max_instances=1)
