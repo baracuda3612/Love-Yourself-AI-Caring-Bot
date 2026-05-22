@@ -25,7 +25,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
-from app.active_days import consecutive_active_days_gap
+import pytz
+
+from app.active_days import consecutive_active_days_gap, resolve_timezone, step_expires_at
 from app.plan_completion.metrics import _compute_best_streak_by_date, _compute_current_streak
 from app.plan_guards import validate_step_action, is_step_terminal
 
@@ -247,7 +249,36 @@ class TestExpiredStepGuard:
 
 
 # ---------------------------------------------------------------------------
-# Test 4: current_streak vs best_streak
+# Test 4: expiry follows the user's local day, not the UTC day
+# ---------------------------------------------------------------------------
+
+
+class TestExpiryTimezoneBoundaries:
+    def test_step_expiry_uses_local_end_of_day_for_utc_plus_timezone(self):
+        """
+        Tokyo 01:00 local can be the previous UTC day.
+        Expiry must still be 23:59:59 Tokyo time, not 23:59:59 UTC.
+        """
+        tz = resolve_timezone("Asia/Tokyo")
+        scheduled_for = datetime(2026, 5, 21, 16, 0, tzinfo=timezone.utc)  # 01:00 on May 22 local
+        expires_at = step_expires_at(scheduled_for, tz)
+
+        assert expires_at == datetime(2026, 5, 22, 14, 59, 59, tzinfo=pytz.UTC)
+
+    def test_step_expiry_detects_next_local_day_even_if_utc_day_has_not_changed(self):
+        """
+        Kyiv 00:30 local is still the previous UTC day.
+        A May 21 local task must already be expired by then.
+        """
+        tz = resolve_timezone("Europe/Kyiv")
+        scheduled_for = datetime(2026, 5, 21, 18, 0, tzinfo=timezone.utc)  # 21:00 on May 21 local
+        now_utc = datetime(2026, 5, 21, 21, 30, tzinfo=timezone.utc)       # 00:30 on May 22 local
+
+        assert step_expires_at(scheduled_for, tz) < now_utc
+
+
+# ---------------------------------------------------------------------------
+# Test 5: current_streak vs best_streak
 # ---------------------------------------------------------------------------
 
 class TestCurrentStreak:
@@ -281,7 +312,7 @@ class TestCurrentStreak:
 
 
 # ---------------------------------------------------------------------------
-# Test 5: three-metric split
+# Test 6: three-metric split
 # ---------------------------------------------------------------------------
 
 class TestThreeMetrics:
