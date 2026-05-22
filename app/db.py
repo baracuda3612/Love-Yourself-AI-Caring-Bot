@@ -301,6 +301,7 @@ class AIPlanStep(Base):
     # kept in sync whenever step_status is written.
     step_status = Column(String(20), nullable=False, default="pending")
     expires_at = Column(DateTime(timezone=True), nullable=True)
+    tg_message_id = Column(Integer, nullable=True)  # Telegram message_id for button removal on expiry
     is_completed = Column(Boolean, default=False)
     completed_at = Column(DateTime(timezone=True), nullable=True)
     skipped = Column(Boolean, default=False)

@@ -27,6 +27,12 @@ ALTER TABLE ai_plan_steps
 ALTER TABLE ai_plan_steps
     ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ NULL;
 
+-- tg_message_id: Telegram message ID of the delivered task notification.
+-- Used by expire_overdue_steps to remove inline keyboard buttons on expiry.
+
+ALTER TABLE ai_plan_steps
+    ADD COLUMN IF NOT EXISTS tg_message_id INTEGER NULL;
+
 
 -- ── Backfill step_status ──────────────────────────────────────────────────────
 -- Priority: completed > skipped > canceled_by_adaptation (→ canceled) > pending.

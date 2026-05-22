@@ -237,6 +237,8 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
                 db_step = db.query(AIPlanStep).filter(AIPlanStep.id == plan_step_id).first()
                 if db_step:
                     db_step.step_status = "delivered"
+                    if result is not None and hasattr(result, "message_id"):
+                        db_step.tg_message_id = result.message_id
                 day_number = base_context.get("day_number")
                 if day_number is not None:
                     maybe_advance_current_day(db, plan_id, day_number)
@@ -656,6 +658,9 @@ def expire_overdue_steps() -> None:
     - Primary: expires_at IS NOT NULL AND expires_at < now
     - Fallback: expires_at IS NULL AND scheduled_for date (UTC) < today
       Covers steps created outside plan_finalization that have no expires_at.
+
+    After marking expired, removes inline keyboard buttons from the Telegram
+    message so the user sees the task as closed (no tappable buttons).
     """
     from sqlalchemy import or_, and_, func as sa_func
 
@@ -665,16 +670,17 @@ def expire_overdue_steps() -> None:
     with SessionLocal() as db:
         overdue = (
             db.query(AIPlanStep)
+            .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+            .join(AIPlan, AIPlan.id == AIPlanDay.plan_id)
+            .join(User, User.id == AIPlan.user_id)
             .filter(
                 AIPlanStep.step_status.in_(["pending", "delivered"]),
                 AIPlanStep.canceled_by_adaptation == False,
                 or_(
-                    # Primary path: explicit expiry timestamp set
                     and_(
                         AIPlanStep.expires_at.isnot(None),
                         AIPlanStep.expires_at < now_utc,
                     ),
-                    # Fallback: no expires_at but scheduled day already passed (UTC)
                     and_(
                         AIPlanStep.expires_at.is_(None),
                         AIPlanStep.scheduled_for.isnot(None),
@@ -684,13 +690,44 @@ def expire_overdue_steps() -> None:
             )
             .all()
         )
+
+        to_clear: list[tuple[int, int]] = []  # (tg_id, tg_message_id)
         count = 0
         for step in overdue:
             step.step_status = "expired"
             count += 1
+            if step.tg_message_id:
+                try:
+                    tg_id = step.day.plan.user.tg_id
+                    if tg_id:
+                        to_clear.append((tg_id, step.tg_message_id))
+                except Exception:
+                    pass
+
         if count:
             db.commit()
             logger.info("[EXPIRE] Marked %d steps as expired.", count)
+
+    # Remove inline keyboards outside the DB session (no DB lock needed).
+    if to_clear:
+        async def _remove_keyboards():
+            from app.telegram import bot as tg_bot
+            for chat_id, message_id in to_clear:
+                try:
+                    await tg_bot.edit_message_reply_markup(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        reply_markup=None,
+                    )
+                except Exception:
+                    pass  # message already deleted / too old — ignore
+
+        future = _submit_coroutine(_remove_keyboards())
+        if future:
+            try:
+                future.result(timeout=30)
+            except Exception as exc:
+                logger.warning("[EXPIRE] Failed to remove keyboards: %s", exc)
 
 
 def _maybe_schedule_plan_completion(user_id: int, plan_id: int) -> None:
