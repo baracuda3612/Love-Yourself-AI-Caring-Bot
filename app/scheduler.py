@@ -12,6 +12,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.config import settings
+from app.active_days import resolve_timezone, step_expires_at
 from app.plan_completion.tokens import make_report_token
 from app.db import AIPlan, AIPlanDay, AIPlanStep, SessionLocal, User, UserEvent
 from app.ai import async_client
@@ -656,19 +657,20 @@ def expire_overdue_steps() -> None:
 
     Expiry rule:
     - Primary: expires_at IS NOT NULL AND expires_at < now
-    - Fallback: expires_at IS NULL AND scheduled_for date (UTC) < today
-      Covers steps created outside plan_finalization that have no expires_at.
+    - Self-heal: if expires_at IS NULL, recompute it from scheduled_for using
+      the user's local calendar day, then evaluate against now immediately.
+      This keeps legacy / adaptation-created steps aligned with the same local
+      end-of-day rule used by plan finalization.
 
     After marking expired, removes inline keyboard buttons from the Telegram
     message so the user sees the task as closed (no tappable buttons).
     """
-    from sqlalchemy import or_, and_, func as sa_func
+    from sqlalchemy import or_
 
     now_utc = datetime.now(pytz.UTC)
-    today_utc = now_utc.date()
 
     with SessionLocal() as db:
-        overdue = (
+        candidates = (
             db.query(AIPlanStep)
             .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
             .join(AIPlan, AIPlan.id == AIPlanDay.plan_id)
@@ -677,23 +679,25 @@ def expire_overdue_steps() -> None:
                 AIPlanStep.step_status.in_(["pending", "delivered"]),
                 AIPlanStep.canceled_by_adaptation == False,
                 or_(
-                    and_(
-                        AIPlanStep.expires_at.isnot(None),
-                        AIPlanStep.expires_at < now_utc,
-                    ),
-                    and_(
-                        AIPlanStep.expires_at.is_(None),
-                        AIPlanStep.scheduled_for.isnot(None),
-                        sa_func.date(AIPlanStep.scheduled_for) < today_utc,
-                    ),
+                    AIPlanStep.expires_at.is_(None),
+                    AIPlanStep.expires_at < now_utc,
                 ),
             )
             .all()
         )
 
         to_clear: list[tuple[int, int]] = []  # (tg_id, tg_message_id)
+        repaired = 0
         count = 0
-        for step in overdue:
+        for step in candidates:
+            if step.expires_at is None and step.scheduled_for is not None:
+                user_tz = resolve_timezone(getattr(step.day.plan.user, "timezone", None))
+                step.expires_at = step_expires_at(step.scheduled_for, user_tz)
+                repaired += 1
+
+            if step.expires_at is None or step.expires_at >= now_utc:
+                continue
+
             step.step_status = "expired"
             count += 1
             if step.tg_message_id:
@@ -704,9 +708,13 @@ def expire_overdue_steps() -> None:
                 except Exception:
                     pass
 
-        if count:
+        if count or repaired:
             db.commit()
-            logger.info("[EXPIRE] Marked %d steps as expired.", count)
+            logger.info(
+                "[EXPIRE] Marked %d steps as expired, repaired %d missing expires_at values.",
+                count,
+                repaired,
+            )
 
     # Remove inline keyboards outside the DB session (no DB lock needed).
     if to_clear:
