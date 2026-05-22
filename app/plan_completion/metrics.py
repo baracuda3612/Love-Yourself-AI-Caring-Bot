@@ -23,9 +23,15 @@ class CompletionMetrics:
     total_delivered: int
     total_completed: int
     total_skipped: int
-    total_ignored: int
-    completion_rate: float
-    best_streak: int
+    total_ignored: int          # = expired (user had window, did not react)
+    # ── Rates ──────────────────────────────────────────────────────────────────
+    completion_rate: float      # completed / eligible
+    engagement_rate: float      # (completed + skipped) / eligible  — conscious action
+    silent_miss_rate: float     # expired / eligible  — churn signal
+    # ── Streak ─────────────────────────────────────────────────────────────────
+    best_streak: int            # longest streak over the whole plan
+    current_streak: int         # streak ending at the last completed date
+    # ── Context ────────────────────────────────────────────────────────────────
     had_adaptations: bool
     adaptation_count: int
     dominant_time_slot: str | None
@@ -81,6 +87,31 @@ def _compute_best_streak_by_date(
     return best
 
 
+def _compute_current_streak(
+    completed_dates: list,
+    active_days: list[str],
+) -> int:
+    """
+    Consecutive streak ending at the most recent completed date.
+    Walks backward from the last date, stops at the first gap.
+    """
+    if not completed_dates:
+        return 0
+
+    sorted_dates = sorted(set(completed_dates), reverse=True)
+    streak = 1
+
+    for i in range(1, len(sorted_dates)):
+        more_recent = sorted_dates[i - 1]
+        older = sorted_dates[i]
+        if consecutive_active_days_gap(older, more_recent, active_days):
+            streak += 1
+        else:
+            break
+
+    return streak
+
+
 def _resolve_outcome_tier(completion_rate: float) -> str:
     if completion_rate >= STRONG_THRESHOLD:
         return "STRONG"
@@ -133,7 +164,10 @@ def build_completion_metrics(
             total_skipped=0,
             total_ignored=0,
             completion_rate=0.0,
+            engagement_rate=0.0,
+            silent_miss_rate=0.0,
             best_streak=0,
+            current_streak=0,
             had_adaptations=adaptation_count > 0,
             adaptation_count=adaptation_count,
             dominant_time_slot=None,
@@ -146,7 +180,10 @@ def build_completion_metrics(
     total_completed = sum(1 for s in eligible_steps if s.step_status == "completed")
     total_skipped = sum(1 for s in eligible_steps if s.step_status == "skipped")
     total_ignored = sum(1 for s in eligible_steps if s.step_status == "expired")
+    # Zero-division guard (total_delivered > 0 guaranteed by check above)
     completion_rate = total_completed / total_delivered
+    engagement_rate = (total_completed + total_skipped) / total_delivered
+    silent_miss_rate = total_ignored / total_delivered
 
     # Streak by real calendar dates, respecting active_days gaps.
     user = plan.user
@@ -163,6 +200,7 @@ def build_completion_metrics(
         if s.step_status == "completed" and s.scheduled_for
     ]
     best_streak = _compute_best_streak_by_date(completed_dates, active_days)
+    current_streak = _compute_current_streak(completed_dates, active_days)
 
     slot_counts: dict[str, int] = {}
     for s in eligible_steps:
@@ -185,7 +223,10 @@ def build_completion_metrics(
         total_skipped=total_skipped,
         total_ignored=total_ignored,
         completion_rate=completion_rate,
+        engagement_rate=engagement_rate,
+        silent_miss_rate=silent_miss_rate,
         best_streak=best_streak,
+        current_streak=current_streak,
         had_adaptations=adaptation_count > 0,
         adaptation_count=adaptation_count,
         dominant_time_slot=dominant_time_slot,

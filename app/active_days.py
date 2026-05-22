@@ -26,6 +26,14 @@ class ActiveDaysError(ValueError):
     """Raised when active_days data is invalid."""
 
 
+def resolve_timezone(name: str | None) -> pytz.BaseTzInfo:
+    """Returns a safe timezone object for user-scoped scheduling logic."""
+    try:
+        return pytz.timezone(name or "UTC")
+    except pytz.UnknownTimeZoneError:
+        return pytz.UTC
+
+
 def normalize_active_days(raw: object) -> List[str]:
     """
     Validates and normalises a raw active_days value.

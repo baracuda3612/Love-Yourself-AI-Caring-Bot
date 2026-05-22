@@ -12,6 +12,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.config import settings
+from app.active_days import resolve_timezone, step_expires_at
 from app.plan_completion.tokens import make_report_token
 from app.db import AIPlan, AIPlanDay, AIPlanStep, SessionLocal, User, UserEvent
 from app.ai import async_client
@@ -72,7 +73,8 @@ def init_scheduler():
         scheduler.remove_job("daily_pulse")
     except Exception:
         pass
-    scheduler.add_job("app.scheduler:expire_overdue_steps", "cron", hour=0, minute=5, id="expire_steps", replace_existing=True, max_instances=1)
+    # Run every hour at :05 — 1 h max lag for any timezone, not just UTC+0.
+    scheduler.add_job("app.scheduler:expire_overdue_steps", "cron", minute=5, id="expire_steps", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_silent_users", "cron", hour=12, minute=0, id="silent_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_ignored_tasks", "cron", hour=8, minute=0, id="ignored_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_plan_completions", "cron", hour=10, minute=30, id="plan_completion_check", replace_existing=True, max_instances=1)
@@ -156,14 +158,14 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
 
         if plan.status != "active":
             return
-        if step.step_status in ("completed", "skipped", "expired"):
+        if step.step_status in ("completed", "skipped", "expired", "canceled"):
             return
         if not step.scheduled_for:
             return
 
         # Check active_days: skip delivery on non-active days.
         from app.active_days import resolve_active_days, is_active_day
-        user_tz = pytz.timezone(getattr(user, "timezone", None) or "Europe/Kyiv")
+        user_tz = resolve_timezone(getattr(user, "timezone", None))
         today_local = datetime.now(pytz.UTC).astimezone(user_tz).date()
         active_days = resolve_active_days(user.profile)
         if not is_active_day(today_local, active_days):
@@ -236,6 +238,8 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
                 db_step = db.query(AIPlanStep).filter(AIPlanStep.id == plan_step_id).first()
                 if db_step:
                     db_step.step_status = "delivered"
+                    if result is not None and hasattr(result, "message_id"):
+                        db_step.tg_message_id = result.message_id
                 day_number = base_context.get("day_number")
                 if day_number is not None:
                     maybe_advance_current_day(db, plan_id, day_number)
@@ -259,7 +263,7 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
     """
     Schedules a single step. Returns True if a NEW job was created.
     """
-    if step.step_status in ("completed", "skipped", "expired"):
+    if step.step_status in ("completed", "skipped", "expired", "canceled"):
         return False
 
     # We only schedule if we have a concrete time
@@ -395,7 +399,7 @@ async def schedule_daily_loop():
         now_utc = datetime.now(pytz.UTC)
         
         # JOIN: Step -> Day -> Plan -> User
-        # Filter: Active User + Active Plan + Future Step + Not Completed
+        # Filter: Active User + Active Plan + Future Step + Not terminal
         pending_steps = (
             db.query(AIPlanStep, AIPlanDay, AIPlan, User)
             .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
@@ -405,8 +409,8 @@ async def schedule_daily_loop():
                 AIPlan.status == "active",
                 User.is_active == True,
                 User.current_state == "ACTIVE",
-                AIPlanStep.is_completed == False,
-                AIPlanStep.skipped == False,
+                AIPlanStep.step_status == "pending",
+                AIPlanStep.canceled_by_adaptation == False,
                 AIPlanStep.scheduled_for != None, # Only schedule if time is set
                 AIPlanStep.scheduled_for > now_utc
             )
@@ -648,29 +652,90 @@ def check_ignored_tasks():
 
 def expire_overdue_steps() -> None:
     """
-    Runs at 00:05 UTC daily.
-    Marks all delivered/pending steps whose expires_at has passed as 'expired'.
-    Keeps is_completed and skipped booleans in sync for backward compatibility.
+    Runs every hour at :05.
+    Max lag = 1 h — safe for all timezones (not just UTC).
+
+    Expiry rule:
+    - Primary: expires_at IS NOT NULL AND expires_at < now
+    - Self-heal: if expires_at IS NULL, recompute it from scheduled_for using
+      the user's local calendar day, then evaluate against now immediately.
+      This keeps legacy / adaptation-created steps aligned with the same local
+      end-of-day rule used by plan finalization.
+
+    After marking expired, removes inline keyboard buttons from the Telegram
+    message so the user sees the task as closed (no tappable buttons).
     """
+    from sqlalchemy import or_
+
     now_utc = datetime.now(pytz.UTC)
+
     with SessionLocal() as db:
-        overdue = (
+        candidates = (
             db.query(AIPlanStep)
+            .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+            .join(AIPlan, AIPlan.id == AIPlanDay.plan_id)
+            .join(User, User.id == AIPlan.user_id)
             .filter(
                 AIPlanStep.step_status.in_(["pending", "delivered"]),
-                AIPlanStep.expires_at.isnot(None),
-                AIPlanStep.expires_at < now_utc,
                 AIPlanStep.canceled_by_adaptation == False,
+                or_(
+                    AIPlanStep.expires_at.is_(None),
+                    AIPlanStep.expires_at < now_utc,
+                ),
             )
             .all()
         )
+
+        to_clear: list[tuple[int, int]] = []  # (tg_id, tg_message_id)
+        repaired = 0
         count = 0
-        for step in overdue:
+        for step in candidates:
+            if step.expires_at is None and step.scheduled_for is not None:
+                user_tz = resolve_timezone(getattr(step.day.plan.user, "timezone", None))
+                step.expires_at = step_expires_at(step.scheduled_for, user_tz)
+                repaired += 1
+
+            if step.expires_at is None or step.expires_at >= now_utc:
+                continue
+
             step.step_status = "expired"
             count += 1
-        if count:
+            if step.tg_message_id:
+                try:
+                    tg_id = step.day.plan.user.tg_id
+                    if tg_id:
+                        to_clear.append((tg_id, step.tg_message_id))
+                except Exception:
+                    pass
+
+        if count or repaired:
             db.commit()
-            logger.info("[EXPIRE] Marked %d steps as expired.", count)
+            logger.info(
+                "[EXPIRE] Marked %d steps as expired, repaired %d missing expires_at values.",
+                count,
+                repaired,
+            )
+
+    # Remove inline keyboards outside the DB session (no DB lock needed).
+    if to_clear:
+        async def _remove_keyboards():
+            from app.telegram import bot as tg_bot
+            for chat_id, message_id in to_clear:
+                try:
+                    await tg_bot.edit_message_reply_markup(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        reply_markup=None,
+                    )
+                except Exception:
+                    pass  # message already deleted / too old — ignore
+
+        future = _submit_coroutine(_remove_keyboards())
+        if future:
+            try:
+                future.result(timeout=30)
+            except Exception as exc:
+                logger.warning("[EXPIRE] Failed to remove keyboards: %s", exc)
 
 
 def _maybe_schedule_plan_completion(user_id: int, plan_id: int) -> None:
@@ -700,12 +765,7 @@ def _maybe_schedule_plan_completion(user_id: int, plan_id: int) -> None:
         if not user:
             return
 
-        user_tz_str = getattr(user, "timezone", None) or "Europe/Kyiv"
-        try:
-            user_tz = pytz.timezone(user_tz_str)
-        except Exception:
-            user_tz = pytz.timezone("Europe/Kyiv")
-
+        user_tz = resolve_timezone(getattr(user, "timezone", None))
         now_local = datetime.now(pytz.UTC).astimezone(user_tz)
         candidate_run_date = datetime.now(pytz.UTC) + timedelta(hours=2)
         candidate_local = candidate_run_date.astimezone(user_tz)
@@ -946,11 +1006,7 @@ PULSE_THRESHOLDS = {
 
 
 def _now_in_user_tz(user: User) -> datetime:
-    tz_name = getattr(user, "timezone", None) or "Europe/Kyiv"
-    try:
-        tz = pytz.timezone(tz_name)
-    except Exception:
-        tz = pytz.timezone("Europe/Kyiv")
+    tz = resolve_timezone(getattr(user, "timezone", None))
     return datetime.now(pytz.UTC).astimezone(tz)
 
 

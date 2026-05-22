@@ -542,11 +542,11 @@ async def handle_task_completed(callback_query: CallbackQuery):
 
         is_allowed, error_msg = validate_step_action(step)
         if not is_allowed:
-            await callback_query.answer(error_msg)
-            return
-
-        if step.step_status == "expired":
-            await callback_query.answer("⏰ Час на це завдання минув.")
+            # Expired steps fail silently — buttons just stop responding.
+            if step.step_status in ("expired", "canceled"):
+                await callback_query.answer()
+            else:
+                await callback_query.answer(error_msg)
             return
 
         step.step_status = "completed"
@@ -659,11 +659,10 @@ async def handle_task_skipped(callback_query: CallbackQuery):
 
         is_allowed, error_msg = validate_step_action(step)
         if not is_allowed:
-            await callback_query.answer(error_msg)
-            return
-
-        if step.step_status == "expired":
-            await callback_query.answer("⏰ Час на це завдання минув.")
+            if step.step_status in ("expired", "canceled"):
+                await callback_query.answer()
+            else:
+                await callback_query.answer(error_msg)
             return
 
         step.step_status = "skipped"
