@@ -3,70 +3,100 @@ plan_context:
   plan_id: "UUID"
   status: "draft | confirming | active | paused"
 
-  goal: "burnout_recovery"   # з impact_area
+  # ————— Plan Type —————
+  # SHORT = 7 working days, 1 slot/day (DAY, state_switch)
+  # MEDIUM = 14 working days, 2 slots/day (DAY state_switch + EVENING unload)
+  # Rule: first plan is ALWAYS SHORT — no exceptions.
+  # Rule: MEDIUM only after SHORT completed or explicitly chosen on plan #2+.
+  duration: "SHORT | MEDIUM"
 
-  # ————— Core Plan Parameters —————
-  duration_days: 7 | 21 | 90
-  focus: "somatic | cognitive | mixed"
-  load: "LITE | MID | INTENSIVE"
+  # Working days = MON–FRI (active_days). Weekends are free.
+  # 7 working days ≠ 7 calendar days (min 9 calendar days due to weekends).
+  working_days: 7  # or 14
 
   # ————— Daily Structure —————
-  # Це не фокус-шифти, не фази — просто як день побудований
+  # SHORT: 1 slot per day
   daily_structure:
-    slots:
-      - "MORNING"
-      - "DAY"
-      - "EVENING"
+    SHORT:
+      slots: ["DAY"]
+      mechanic_per_slot:
+        DAY: "switch"
 
-    load_to_slots:
-      LITE: ["MORNING"]
-      MID: ["MORNING", "EVENING"]
-      INTENSIVE: ["MORNING", "DAY", "EVENING"]
+    # MEDIUM: 2 slots per day
+    MEDIUM:
+      slots: ["DAY", "EVENING"]
+      mechanic_per_slot:
+        DAY: "switch"
+        EVENING: "unload"
 
-  # ————— Content Rules (from library) —————
-  content_rules:
-    cooldown_days_enabled: true
-    categories_enabled: ["somatic", "cognitive", "boundaries", "rest"]
-    difficulty_range: [1, 3]   # allowed difficulty levels
+  # ————— Exercise Library v5 —————
+  # Mechanics: switch (5 exercises) | unload (3 exercises)
+  #
+  # switch — change state physically or sensorially:
+  #   somatic_004_v2  Дихання            2хв     M/D/E
+  #   somatic_005_v2  Холодна вода       1–2хв   M/D/E
+  #   somatic_006_v2  Мікроходьба        2хв     D ONLY
+  #   somatic_001_combined  Перезавантаження тіла  30–60с  M/D/E
+  #   somatic_003_v2  Сенсорний якір     30–60с  M/D/E
+  #
+  # unload — offload mental noise, especially evening:
+  #   rest_104_v2      Brain Dump        2–3хв   E ONLY (hardlock)
+  #   cognitive_008_v2 Одна річ          1–2хв   E ONLY (hardlock)
+  #   cognitive_001_v2 Думка             1–2хв   M/D/E
+  #
+  # Slot restrictions enforced by builder:
+  #   somatic_006_v2 → DAY only
+  #   rest_104_v2, cognitive_008_v2 → EVENING only (hardlock)
 
-  # ————— What is currently being proposed (draft view) —————
-  today_slots:
-    - slot_type: "MORNING"
+  # ————— Active Delivery Days —————
+  active_days: ["MON", "TUE", "WED", "THU", "FRI"]  # default, user-configurable
+
+  # ————— Example: SHORT plan draft view —————
+  example_SHORT_day:
+    slot: "DAY"
+    mechanic: "switch"
+    assigned_exercise:
+      id: "somatic_004_v2"
+      title: "Дихання"
+      duration: "2 хв"
+      steps:
+        - "Вдих — повільно, на 4 рахунки"
+        - "Затримай подих на 7"
+        - "Видих — повільно, на 8"
+        - "Повтори 4 рази"
+
+  # ————— Example: MEDIUM plan draft view —————
+  example_MEDIUM_day:
+    - slot: "DAY"
+      mechanic: "switch"
       assigned_exercise:
-        id: "BR_SOM_L1_01"
-        title: "4-7-8 Breathing"
-        category: "somatic"
-        difficulty: 1
-        cooldown_days: 2
+        id: "somatic_003_v2"
+        title: "Сенсорний якір"
+        duration: "30–60 сек"
 
-        scientific_rationale: "Activates the vagus nerve to reduce sympathetic nervous system arousal and lower stress."
-        full_instruction: "Inhale for 4 seconds, hold for 7, exhale for 8. Repeat 4 times."
-
-    - slot_type: "EVENING"
+    - slot: "EVENING"
+      mechanic: "unload"
       assigned_exercise:
-        id: "BR_COG_L1_03"
-        title: "Leaves on a Stream"
-        category: "cognitive"
-        difficulty: 1
-        cooldown_days: 3
+        id: "rest_104_v2"
+        title: "Brain Dump"
+        duration: "2–3 хв"
 
-        scientific_rationale: "A CBT defusion exercise that reduces rumination by creating distance from intrusive thoughts."
-        full_instruction: "Imagine each thought floating away on a leaf down a stream..."
-
-  # ————— User Control & Integrity —————
-  plan_integrity:
-    is_locked: true
-    change_requires_confirmation: true
-
-  user_rights:
-    can_request_changes: true
-    can_change_duration: true
-    can_change_focus: true
-    can_change_load: true
-    can_pause: true
-    can_resume: true
+  # ————— Step Lifecycle —————
+  # pending → delivered → completed | skipped
+  #                      ↓ (time expired at 23:59:59 local)
+  #                    expired  (buttons removed, silent)
+  # canceled  = removed by adaptation layer (excluded from metrics)
 
   # ————— Safety Signals —————
   telemetry_snapshot:
-    recent_missed_tasks: 2
-    in_red_zone: false
+    completion_rate: 0.0   # completed / eligible
+    engagement_rate: 0.0   # (completed + skipped) / eligible
+    silent_miss_rate: 0.0  # expired / eligible
+    current_streak: 0      # consecutive active days ending at latest completion
+    best_streak: 0         # peak streak over plan lifetime
+
+  # ————— User Framing (language rules) —————
+  # DO NOT say: "SHORT plan", "MEDIUM plan", "advanced level", "level up"
+  # SAY instead: "інший формат дня", "додаємо вечірній слот"
+  # DO NOT say: user "failed" or "missed"
+  # SAY instead: load was wrong, we adapt

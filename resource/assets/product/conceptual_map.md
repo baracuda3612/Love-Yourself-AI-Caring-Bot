@@ -1,246 +1,194 @@
-# Love Yourself Conceptual Map & Product Bible (v1.2)
+# Love Yourself — Conceptual Map & Product Bible (v2.0)
 
+> **Версія:** v2.0 · травень 2026
+> **Статус:** актуальна. v1.x — застаріла, не використовувати.
 
 
-1. Core Philosophy — A System Against Chaos
 
-Love Yourself is a structured daily support system designed to reduce decision fatigue and stop the downward spiral of burnout.
+## 1. Core Philosophy
 
-It does this by:
+Love Yourself — система щоденної підтримки, яка зменшує вирішення рішень і зупиняє спіраль вигорання.
 
+Як:
+- дає дню передбачуваний ритм,
+- обмежує кількість речей, про які треба думати,
+- не дає перевантажитися коли енергії мало.
 
-giving the day a predictable rhythm,
-limiting how many things the user has to think about,
-and preventing overload when energy is low.
+**Мета — не штовхати людину до результату. Мета — захистити нервову систему від колапсу.**
 
-The goal is not to “push” people to perform.
-The goal is to protect their nervous system from collapse by keeping effort inside a safe range.
 
 
+## 2. Що таке цей продукт
 
+Це інструмент самодопомоги, не клінічне лікування.
 
-2. What This Product Is (and Is Not)
+Ми:
+- не ставимо діагнози,
+- не призначаємо лікування,
+- не замінюємо терапію.
 
-This is a self-help system, not medical or clinical treatment.
+Ми використовуємо перевірені техніки саморегуляції як щоденну практику стабілізації.
 
-We:
 
 
-do not diagnose,
-do not prescribe,
-do not treat mental illness.
+## 3. Глосарій
 
-We use well-known psychological and somatic techniques as safe self-regulation tools to help people stabilize, recover energy, and build healthier routines.
+**План**
+Структурований контракт між користувачем і системою. Визначає: скільки, коли і в якому форматі. Є `SHORT` (7 робочих днів) і `MEDIUM` (14 робочих днів).
 
-These tools can support therapy or recovery — but they do not replace it.
+**Вправа (Task)**
+Маленька конкретна дія, що створює фізіологічний або психологічний зсув. Не загальні поради — цільові мікро-інтервенції.
 
+**Бібліотека контенту**
+Закритий набір вправ. Система ніколи не вигадує нові — тільки вибирає з бібліотеки.
 
+**Активні дні (Active Days)**
+Дні тижня, коли система доставляє задачі. За замовчуванням: ПН–ПТ. Уїкенди — вільні.
 
 
-3. Product Glossary
 
-Plan
-A structured recovery plan.
-It is a “Self-Care Contract” between the user and the system that defines:
+## 4. Механіки вправ
 
+В бібліотеці v5 **дві механіки**:
 
-how long,
-how intense,
-and in what way the user will work on themselves.
+### state_switch — Змінити стан
+Фізично або сенсорно вирвати з поточного стану. Вирішує і "втомився", і "застряг".
+- Підтверджено в T0.1 тестуванні
+- Слоти: MORNING, DAY, EVENING (залежно від вправи)
+- Вправ: 5
 
-Exercise (Task)
-A small, concrete action designed to create a specific psychological or physiological shift.
-These are not generic wellness tips — they are targeted micro-interventions.
+### unload — Вивантажити голову
+Прибрати шум або дати орієнтацію. Особливо вечірній слот. Закрити день або назвати стан.
+- Слоти: DAY, EVENING (залежно від вправи)
+- Вправ: 3
 
-Content Library
-The closed set of all exercises the system is allowed to use.
-We never invent new exercises on the fly.
 
 
+## 5. Бібліотека вправ v5 — 8 вправ
 
+### State Switch (5)
 
-4. The Anatomy of an Exercise
+| ID | Назва | Тривалість | Слоти |
+|----|-------|------------|-------|
+| `somatic_004_v2` | Дихання | 2 хв | M, D, E |
+| `somatic_005_v2` | Холодна вода | 1–2 хв | M, D, E |
+| `somatic_006_v2` | Мікроходьба | 2 хв | **D тільки** |
+| `somatic_001_combined` | Перезавантаження тіла | 30–60 сек | M, D, E |
+| `somatic_003_v2` | Сенсорний якір | 30–60 сек | M, D, E |
 
-Every exercise is a standardized, safety-checked unit.
+### Unload (3)
 
-Each one has:
+| ID | Назва | Тривалість | Слоти |
+|----|-------|------------|-------|
+| `rest_104_v2` | Brain Dump | 2–3 хв | **E тільки** (hardlock) |
+| `cognitive_008_v2` | Одна річ | 1–2 хв | **E тільки** (hardlock) |
+| `cognitive_001_v2` | Думка | 1–2 хв | M, D, E |
 
+**Hardlock** = вправа може доставлятися ТІЛЬКИ у вечірній слот. Не переміщується.
 
-Full Instruction — clear step-by-step guidance on what to do.
-Scientific Rationale — based on CBT, ACT, or somatic psychology.
-Difficulty Level — Level 1 (easy) to Level 3 (challenging).
 
-These parameters do not change.
-They are fixed because they come from real psychological protocols.
 
+## 6. Анатомія плану
 
+### SHORT (7 робочих днів)
+- **1 слот на день**: DAY
+- **Механіка**: state_switch
+- **Коли**: перший план завжди SHORT — без виключень
+- **Формат**: мінімальний. Система входить в ритм.
 
+### MEDIUM (14 робочих днів)
+- **2 слоти на день**: DAY + EVENING
+- **DAY**: state_switch
+- **EVENING**: unload (Brain Dump або Одна Річ — hardlock E)
+- **Коли**: другий план і далі, якщо користувач хоче
 
-5. How Plans Are Built
+**Важливо**: 7 робочих днів ≠ 7 календарних днів. Мінімум 9 calendar днів (уїкенди пропускаються).
 
-Every plan is created using three simple choices:
+**Приховати від користувача**: назви SHORT/MEDIUM. Показувати: "інший формат дня", не "просунутий рівень".
 
-Duration
 
 
-7 days → short stabilization
-21 days → building a new rhythm
-90 days → deeper lifestyle change
+## 7. Охолодження і повторення
 
-Focus
+`cooldown_days` — мінімальна кількість днів перед повтором тієї ж вправи.
 
+Чому:
+- мозок адаптується швидко,
+- повторення втрачає ефект,
+- нудьга вбиває послідовність.
 
-Somatic → body-first (good when the mind is overloaded)
-Cognitive → mind-first (good for overthinking, perfectionism)
-Mixed → balanced
+У v5: cooldown_days = 1 для всіх вправ. З 8 вправами (5 switch + 3 unload) і 1–2 слотами на день — достатньо варіативності.
 
-Load
 
 
-LITE → 1 task per day
-MID → 2 tasks per day
-INTENSIVE → 3 tasks per day
+## 8. Як система обробляє пропущені задачі
 
-More load = more slots, not harder exercises. 
+Пропущені задачі — не провал. Це **дані**.
 
+Статуси кроків:
+- `pending` → очікує доставки
+- `delivered` → доставлено, очікує дії
+- `completed` → виконано (користувач натиснув [Виконано])
+- `skipped` → пропущено (користувач натиснув [Пропустити])
+- `expired` → час вийшов (23:59:59 місцевого часу), кнопки зникли
+- `canceled` → скасовано системою через адаптацію (не враховується в метриках)
 
+Три метрики:
+- `completion_rate` = виконано / доставлено
+- `engagement_rate` = (виконано + пропущено) / доставлено — сигнал присутності
+- `silent_miss_rate` = прострочено / доставлено — сигнал відтоку
 
 
-6. Cooldown & Repetition
 
-The system enforces cooldown_days — a minimum number of days before the same exercise can repeat.
+## 9. Права користувача
 
-Why:
+Користувач завжди може:
+- попросити інший формат,
+- призупинити або відновити план.
 
+Що не може: тихо переписати план. Будь-яка зміна — через адаптацію з підтвердженням.
 
-the brain adapts quickly,
-repetition loses effect,
-boredom kills consistency.
 
-Cooldown keeps the nervous system responsive.
 
+## 10. Цілісність плану
 
+Правило "locked plan" — не про контроль користувача. Про контроль AI.
 
+Користувач вільний хотіти змін. Система не вільна змінювати довільно.
 
-7. How the System Handles Missed Tasks
+Це захищає від:
+- емоційних перекосів ("зроби легше"),
+- втрати ритму коли некомфортно.
 
-Missed tasks are not treated as failure.
 
-They are treated as data.
 
-If too many tasks are skipped:
+## 11. Персоналізація без вигадки
 
+Кожен план персоналізований — але тільки через **вибір**, не через **вигадку**.
 
-the system flags a Red Zone,
-and will suggest making the plan lighter or pausing.
+Система:
+- вибирає з перевірених вправ,
+- враховує історію і контекст.
 
-This is not punishment.
-It is a safety valve.
+Вона не:
+- вигадує нові вправи,
+- переписує інструкції,
+- змінює наукові обґрунтування.
 
 
 
+## Coach Operating Principles
 
-8. What Users Can Change
+**Explain, don't execute**
+Ти пояснюєш що відбувається. Система обробляє структуру.
 
-Users are always allowed to:
+**No judgment**
+Пропущені задачі — навантаження було неправильне, а не людина провалилась.
 
+**Sustainability first**
+SHORT план виконаний послідовно цінніший за MEDIUM план, що ламається.
 
-say something feels too hard,
-ask for a lighter version,
-ask for a different focus,
-pause or resume the plan.
-
-What they cannot do is silently rewrite the plan mid-flow.
-
-When a user wants a change, the system creates an adaptation request that the user must explicitly confirm.
-
-This keeps structure from collapsing when motivation dips.
-
-
-
-
-9. Plan Integrity — Who Is Locked, Who Is Free
-
-The “locked plan” rule is not about controlling the user.
-It is about controlling the AI.
-
-The user is always free to want changes.
-The system is not free to change things impulsively.
-
-A plan is a versioned snapshot of intent.
-It stays valid until the user approves an adaptation.
-
-This protects people from:
-
-
-emotional over-correction,
-“just make it easier” spirals,
-losing rhythm when things get uncomfortable.
-
-The user is free.
-The AI is not.
-
-
-
-
-10. Explain vs Change
-
-There is a strict boundary between:
-
-
-understanding the plan
-and changing the plan
-
-The Coach can:
-
-
-explain what a plan does,
-explain why something was chosen,
-explain what each parameter means,
-reduce anxiety about the structure.
-
-The Coach cannot:
-
-
-change load, focus, or duration,
-apply changes,
-or confirm adaptations.
-
-Only the system can propose changes.
-Only the user can approve them.
-
-
-
-
-11. Personalization Without Invention
-
-Every plan is personalized — but only through selection, not invention.
-
-The system:
-
-
-selects from verified exercises,
-based on the user’s energy, focus, and history.
-
-It does not:
-
-
-invent new exercises,
-rewrite instructions,
-or alter scientific rationales.
-
-You are not getting random content.
-You are getting a custom plan built from a safe, closed toolkit.
-
-
-
-
-🛡 Coach Operating Principles
-
-Explain, don’t execute
-You help people understand what is happening.
-The system handles the structure.
-No judgment
-Missed tasks mean the load was wrong — not that the person failed.
-Sustainability first
-A LITE plan done consistently is worth more than an INTENSIVE plan that breaks someone.
+**Мова з користувачем**
+- Не "SHORT / MEDIUM" — "формат дня"
+- Не "просунутий рівень" — "інший ритм"
+- Не "ти пропустив" — "ми адаптуємо"
