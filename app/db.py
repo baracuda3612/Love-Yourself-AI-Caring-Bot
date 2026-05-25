@@ -167,6 +167,16 @@ class UserProfile(Base):
     coach_persona = Column(String(20), nullable=True)
     pulse_sent_indices = Column(JSONB, nullable=True, default=list)
 
+    # ── Pause mechanics (T5.1) ─────────────────────────────────────────────
+    # is_paused: set by /pause, cleared by /resume.
+    # Scheduler skips delivery when True. Not an adaptation — no plan rewrite.
+    is_paused = Column(Boolean, nullable=False, default=False)
+    # pause_count: monotonically increasing audit counter.
+    pause_count = Column(Integer, nullable=False, default=0)
+    # evening_slot_collected: True once EVENING HH:MM is stored for MEDIUM.
+    # Collected exactly once on first MEDIUM plan. Never asked again.
+    evening_slot_collected = Column(Boolean, nullable=False, default=False)
+
     user = relationship("User", back_populates="profile")
 
 
@@ -291,6 +301,9 @@ class AIPlanStep(Base):
     # Scheduling
     order_in_day = Column(Integer, default=0)
     time_slot = Column(String, default="DAY")
+    # mechanic: snapshot of exercise.mechanic at plan generation time.
+    # Values: 'switch' | 'unload'. Never recomputed at delivery (invariant 6, T5.1).
+    mechanic = Column(String(10), nullable=False, default="switch")
     # Concrete timestamp for the scheduler (calculated from user daily_time_slots)
     scheduled_for = Column(DateTime(timezone=True), nullable=True)
     
