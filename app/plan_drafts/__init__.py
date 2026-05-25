@@ -1,16 +1,14 @@
-"""Plan draft builder modules."""
+"""Plan draft builder modules.
 
-# ── v5 builder (P1 canonical) ─────────────────────────────────────────────────
-from app.plan_drafts.plan_builder_v5 import (
-    ExerciseV5,
-    InvalidRecipeError,
-    MissingEveningSlotError,
-    NoCandidatesError,
-    PlanBuilderV5,
-    PlanDraftV5,
-    PlanStepV5,
-    get_default_builder,
-)
+v5 builder (P1 canonical):
+    Import directly — do NOT import via this package init.
+    Requires PyYAML (listed in requirements.txt).
+
+    from app.plan_drafts.plan_builder_v5 import PlanBuilderV5, get_default_builder
+
+Legacy builder (orchestrator / adaptation code):
+    Kept for backward compat. Broken with v5 library JSON — see T5.2.
+"""
 
 # ── Legacy builder (kept for orchestrator / adaptation code) ──────────────────
 from app.plan_drafts.draft_builder import (
@@ -33,20 +31,11 @@ from app.plan_drafts.plan_types import (
 )
 
 __all__ = [
-    # v5 builder
-    "ExerciseV5",
-    "InvalidRecipeError",
-    "MissingEveningSlotError",
-    "NoCandidatesError",
-    "PlanBuilderV5",
-    "PlanDraftV5",
-    "PlanStepV5",
-    "get_default_builder",
-    # shared types
+    # shared types (v5-compatible)
     "Duration",
     "Mechanic",
     "TimeSlot",
-    # legacy (kept for backward compat)
+    # legacy (kept for backward compat — do not use in new code)
     "ContentLibrary",
     "DraftBuilder",
     "DraftValidationError",
