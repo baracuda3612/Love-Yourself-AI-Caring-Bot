@@ -1,6 +1,24 @@
 """
 Core type definitions for Plan Builder.
 These are deterministic contracts - no LLM interpretation needed.
+
+──────────────────────────────────────────────────────────────────────────────
+DEPRECATION NOTICE (T5.1, 2026-05)
+──────────────────────────────────────────────────────────────────────────────
+The following are FROZEN for P1. Do not use in new code:
+  - Duration.STANDARD, Duration.LONG   (21/90-day plans not in P1)
+  - Focus                              (replaced by mechanic in v5 builder)
+  - Load                               (replaced by plan_context_template slots)
+  - SlotType                           (CORE/SUPPORT/EMERGENCY/REST not in v5)
+  - TimeSlot.MORNING                   (not used in P1 plan recipes)
+
+Active for P1:
+  - Duration.SHORT, Duration.MEDIUM    (7 and 14 working-day plans)
+  - TimeSlot.DAY, TimeSlot.EVENING     (internal tags; users see HH:MM only)
+  - Mechanic                           (NEW — replaces Focus/Load for routing)
+
+New builder: app.plan_drafts.plan_builder_v5.PlanBuilderV5
+──────────────────────────────────────────────────────────────────────────────
 """
 
 from dataclasses import dataclass, field
@@ -11,14 +29,37 @@ from typing import Optional
 class Duration(str, Enum):
     """Plan duration types"""
 
-    SHORT = "SHORT"  # 7 days
-    MEDIUM = "MEDIUM"  # 14 days
-    STANDARD = "STANDARD"  # 21 days
-    LONG = "LONG"  # 90 days
+    SHORT = "SHORT"    # 7 working days  — ACTIVE in P1
+    MEDIUM = "MEDIUM"  # 14 working days — ACTIVE in P1
+    # ── FROZEN: not used in P1 plan recipes ──────────────────────────────────
+    STANDARD = "STANDARD"  # 21 days — FROZEN
+    LONG = "LONG"          # 90 days — FROZEN
+
+
+class Mechanic(str, Enum):
+    """
+    Exercise mechanic — the only routing dimension in v5.
+
+    switch → DAY or EVENING (physically or sensorially disrupts current state)
+    unload → EVENING only    (offloads mental noise, closes the day)
+
+    Slot eligibility is DERIVED from mechanic, not stored on the exercise:
+      switch → [DAY, EVENING]
+      unload → [EVENING]
+    """
+
+    SWITCH = "switch"
+    UNLOAD = "unload"
+
+
+# ── FROZEN enums — kept for backward compatibility, do not use in new code ──
 
 
 class Focus(str, Enum):
-    """Focus categories matching content library"""
+    """
+    DEPRECATED (T5.1) — replaced by Mechanic.
+    Kept for legacy orchestrator / adaptation code. Do not use in new builders.
+    """
 
     SOMATIC = "somatic"
     COGNITIVE = "cognitive"
@@ -28,15 +69,21 @@ class Focus(str, Enum):
 
 
 class Load(str, Enum):
-    """Daily task load"""
+    """
+    DEPRECATED (T5.1) — replaced by plan_context_template slots.
+    Kept for legacy orchestrator / adaptation code. Do not use in new builders.
+    """
 
-    LITE = "LITE"  # 1 task per day
-    MID = "MID"  # 2 tasks per day
-    INTENSIVE = "INTENSIVE"  # 3 tasks per day
+    LITE = "LITE"        # 1 task per day — FROZEN
+    MID = "MID"          # 2 tasks per day — FROZEN
+    INTENSIVE = "INTENSIVE"  # 3 tasks per day — FROZEN
 
 
 class SlotType(str, Enum):
-    """Task slot types based on priority"""
+    """
+    DEPRECATED (T5.1) — CORE/SUPPORT/EMERGENCY/REST not used in v5.
+    Kept for legacy validators / rules. Do not use in new builders.
+    """
 
     CORE = "CORE"
     SUPPORT = "SUPPORT"
@@ -45,9 +92,15 @@ class SlotType(str, Enum):
 
 
 class TimeSlot(str, Enum):
-    """When to execute task"""
+    """
+    Internal time-slot tags. Users never see these — they see HH:MM only.
 
-    MORNING = "MORNING"
+    MORNING — FROZEN: not used in P1 plan recipes (may exist in legacy DB rows)
+    DAY     — ACTIVE in P1
+    EVENING — ACTIVE in P1
+    """
+
+    MORNING = "MORNING"  # FROZEN — not used in P1 plan recipes
     DAY = "DAY"
     EVENING = "EVENING"
 

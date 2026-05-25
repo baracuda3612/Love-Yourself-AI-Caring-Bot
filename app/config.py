@@ -69,6 +69,11 @@ class Settings:
     IS_DEV: bool = True
     IS_STAGING: bool = False
     IS_PROD: bool = False
+    # ── Feature flags ─────────────────────────────────────────────────────────
+    # ADAPTATIONS_ENABLED: frozen at False for P1.
+    # Adaptation layer is not active. No new AdaptationHistory records may be
+    # created while this is False. Flip to True only when adaptation agent is ready.
+    ADAPTATIONS_ENABLED: bool = False
 
     def __post_init__(self) -> None:
         bot_token = os.getenv("BOT_TOKEN")
@@ -116,6 +121,8 @@ class Settings:
         self.IS_PROD = environment_normalized == "prod"
         if self.REPORT_TOKEN_SECRET == "change-me-in-production" and self.IS_PROD:
             raise RuntimeError("REPORT_TOKEN_SECRET must be set in production")
+        # ADAPTATIONS_ENABLED is always False in P1 — not env-driven yet
+        self.ADAPTATIONS_ENABLED = False
 
 
 settings = Settings()
@@ -142,3 +149,4 @@ REDIS_URL = settings.REDIS_URL
 REPORT_TOKEN_SECRET = settings.REPORT_TOKEN_SECRET
 APP_BASE_URL = settings.APP_BASE_URL
 BOT_USERNAME = settings.BOT_USERNAME
+ADAPTATIONS_ENABLED = settings.ADAPTATIONS_ENABLED
