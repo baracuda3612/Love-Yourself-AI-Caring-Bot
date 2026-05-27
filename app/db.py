@@ -223,7 +223,7 @@ class AIPlan(Base):
 
     duration = Column(String(20), nullable=True)
     focus = Column(String(20), nullable=True)
-    load = Column(String(20), nullable=False)
+    load = Column(String(20), nullable=True)   # nullable since T5.2 — v5 plans have no load concept
     preferred_time_slots = Column(JSONB, default=list, nullable=False)
     total_days = Column(Integer, nullable=True)
     
