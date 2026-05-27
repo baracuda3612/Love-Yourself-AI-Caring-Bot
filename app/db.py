@@ -364,8 +364,9 @@ class PlanDraftRecord(Base):
     status = Column(String(20), nullable=False, default="DRAFT")
 
     duration = Column(String(20), nullable=False)
-    focus = Column(String(20), nullable=False)
-    load = Column(String(20), nullable=False)
+    # focus / load: nullable since T5.2 — v5 plans do not use these concepts
+    focus = Column(String(20), nullable=True)
+    load = Column(String(20), nullable=True)
 
     draft_data = Column(JSONB, nullable=False)
 
@@ -392,10 +393,12 @@ class PlanDraftStep(Base):
 
     day_number = Column(Integer, nullable=False)
     exercise_id = Column(String(50), nullable=False)
-    slot_type = Column(String(20), nullable=False)
+    # mechanic: snapshot from library at build time (T5.2). "switch" | "unload"
+    mechanic = Column(String(10), nullable=True)  # nullable: legacy rows pre-T5.2
+    slot_type = Column(String(20), nullable=True)   # legacy; not used in v5
     time_slot = Column(String(20), nullable=False)
-    category = Column(String(30), nullable=False)
-    difficulty = Column(Integer, nullable=False)
+    category = Column(String(30), nullable=True)    # legacy; not used in v5
+    difficulty = Column(Integer, nullable=True)     # legacy; not used in v5
 
     draft = relationship("PlanDraftRecord", back_populates="steps")
 

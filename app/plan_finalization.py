@@ -95,19 +95,8 @@ _FIXED_TIME_SLOTS: dict[str, time] = {
 }
 
 
-def _map_step_type(slot_type: str | None) -> str:
-    if (slot_type or "").strip().upper() == "REST":
-        return StepType.REST.value
-    return StepType.ACTION.value
-
-
-def _map_difficulty(difficulty: int | None) -> str:
-    value = difficulty or 1
-    if value <= 2:
-        return DifficultyLevel.EASY.value
-    if value <= 4:
-        return DifficultyLevel.MEDIUM.value
-    return DifficultyLevel.HARD.value
+# _map_step_type and _map_difficulty removed in T5.2.
+# v5 plans: step_type is always ACTION, difficulty is always EASY.
 
 
 def _build_step_title(content: ContentLibrary | None) -> str:
@@ -255,9 +244,7 @@ def finalize_plan(
                 raise FinalizationError("invalid_plan_duration") from exc
             plan.total_days = locked_draft.total_days
 
-        if not plan.load:
-            logger.error("Attempted to activate plan without load")
-            raise RuntimeError("Active plan must have non-null load")
+        # T5.2: plan.load is nullable for v5 plans — load concept removed.
 
         db.add(plan)
         db.flush()
@@ -307,8 +294,15 @@ def finalize_plan(
             .filter(ContentLibrary.id.in_(exercise_ids))
             .all()
         }
-        if exercise_ids - set(content_entries.keys()):
-            raise FinalizationError("content_library_missing")
+        # T5.2: v5 exercise IDs may not be in DB content_library (sourced from JSON).
+        # Log a warning instead of hard-failing.
+        missing_from_db = exercise_ids - set(content_entries.keys())
+        if missing_from_db:
+            logger.warning(
+                "content_library: %d exercises not in DB (v5 JSON source): %s",
+                len(missing_from_db),
+                missing_from_db,
+            )
 
         last_scheduled_for: datetime | None = None
         day_orders: dict[int, int] = defaultdict(int)
@@ -337,10 +331,11 @@ def finalize_plan(
             )
             expires = step_expires_at(scheduled_for, tz)
 
-            step_type = _map_step_type(step_row.slot_type)
-            assert step_type in {entry.value for entry in StepType}
-            difficulty = _map_difficulty(step_row.difficulty)
-            assert difficulty in {entry.value for entry in DifficultyLevel}
+            # T5.2: v5 plans have no REST slots and no difficulty tiers.
+            step_type = StepType.ACTION.value
+            difficulty = DifficultyLevel.EASY.value
+            # mechanic is snapshotted at build time — never recomputed (invariant 6, T5.1).
+            mechanic = getattr(step_row, "mechanic", None) or "switch"
             order_in_day = day_orders[day_number]
             day_orders[day_number] += 1
             db.add(
@@ -351,6 +346,7 @@ def finalize_plan(
                     description=_build_step_description(content),
                     step_type=step_type,
                     difficulty=difficulty,
+                    mechanic=mechanic,
                     order_in_day=order_in_day,
                     time_slot=time_slot,
                     scheduled_for=scheduled_for,

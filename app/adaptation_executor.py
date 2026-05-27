@@ -327,7 +327,8 @@ class AdaptationExecutor:
         raise NotImplementedError("INCREASE_DIFFICULTY implementation in TASK-3.5")
 
     def _extend_plan_duration(self, db: Session, plan: AIPlan, params: dict | None) -> list[int]:
-        from app.plan_drafts.service import build_plan_draft
+        # T5.2: build_plan_draft removed. Update before enabling ADAPTATIONS_ENABLED.
+        from app.plan_drafts.service import build_plan_draft  # noqa: F401 — will fail at call time
 
         if plan.status != "active":
             raise AdaptationNotEligibleError("plan_not_active")
@@ -715,8 +716,9 @@ class AdaptationExecutor:
     def _change_main_category(self, db: Session, plan: AIPlan, params: dict | None) -> tuple[list[int], list[int]]:
         """Change main focus category by pausing old plan and creating new active plan."""
         from app.plan_adaptations import _iter_future_steps
-        from app.plan_drafts.draft_builder import DraftValidationError
-        from app.plan_drafts.service import InsufficientLibraryError, build_plan_draft
+        # T5.2: draft_builder and build_plan_draft removed. Update before enabling ADAPTATIONS_ENABLED.
+        from app.plan_drafts.draft_builder import DraftValidationError  # noqa: F401 — will fail at call time
+        from app.plan_drafts.service import InsufficientLibraryError, build_plan_draft  # noqa: F401
 
         if plan.status != "active":
             raise AdaptationNotEligibleError("plan_not_active")
