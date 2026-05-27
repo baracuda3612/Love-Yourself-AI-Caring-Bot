@@ -45,12 +45,30 @@ def create_plan(
     """
     from app.plan_finalization import finalize_plan
 
+    from app.plan_drafts.plan_builder_v5 import MissingEveningSlotError
+
     profile = db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
 
     # Read time slots from profile if not provided explicitly
     time_slots: dict = (profile.daily_time_slots or {}) if profile else {}
     resolved_day_time = day_time or time_slots.get("DAY", "14:00")
-    resolved_evening = evening_time or (time_slots.get("EVENING") if plan_type == "MEDIUM" else None)
+
+    # MEDIUM requires an explicitly collected evening time.
+    # UserProfile.daily_time_slots always has a default EVENING value ("21:00"),
+    # so we must not fall back to it unless evening_slot_collected=True —
+    # otherwise a MEDIUM plan silently uses the default instead of asking the user.
+    if plan_type == "MEDIUM":
+        if evening_time is not None:
+            resolved_evening: Optional[str] = evening_time
+        elif profile and profile.evening_slot_collected:
+            resolved_evening = time_slots.get("EVENING")
+        else:
+            raise MissingEveningSlotError(
+                "MEDIUM plan requires evening_time; "
+                "evening_slot_collected is False — collect it before calling create_plan()"
+            )
+    else:
+        resolved_evening = None
 
     builder = get_default_builder()
     draft_v5: PlanDraftV5 = builder.build(
