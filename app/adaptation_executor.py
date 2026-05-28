@@ -327,7 +327,15 @@ class AdaptationExecutor:
         raise NotImplementedError("INCREASE_DIFFICULTY implementation in TASK-3.5")
 
     def _extend_plan_duration(self, db: Session, plan: AIPlan, params: dict | None) -> list[int]:
-        from app.plan_drafts.service import build_plan_draft
+        # T5.2: build_plan_draft / DraftBuilder removed. Must be rewritten against
+        # create_plan() / PlanBuilderV5 before ADAPTATIONS_ENABLED is flipped to True.
+        # Raise clearly now so the error is NotImplementedError, not a cryptic ImportError.
+        raise NotImplementedError(
+            "_extend_plan_duration requires rewrite for T5.2 runtime. "
+            "build_plan_draft was removed. Rewrite against create_plan() before enabling "
+            "ADAPTATIONS_ENABLED. See T5.3."
+        )
+        # ── unreachable — preserved for reference during rewrite ─────────────
 
         if plan.status != "active":
             raise AdaptationNotEligibleError("plan_not_active")
@@ -346,24 +354,7 @@ class AdaptationExecutor:
         if not plan.start_date:
             raise AdaptationNotEligibleError("plan_has_no_start_date")
 
-        # Duration mapping для DraftBuilder
-        target_duration_map = {14: "MEDIUM", 21: "STANDARD", 90: "LONG"}
-        draft_duration = target_duration_map[target_days]
-
-        slot_strings = plan.preferred_time_slots or []
-
-        params_dict = {
-            "duration": draft_duration,
-            "focus": plan.focus or "somatic",
-            "load": plan.load,
-            "preferred_time_slots": slot_strings,
-        }
-
-        # Генеруємо повний план для target_days.
-        # TODO: TASK-extend-cooldown — pass exercise_last_used from existing plan steps
-        # into DraftBuilder so cooldown tracking is continuous across old and new days.
-        # Current behavior: new days may repeat exercises from last ~cooldown_days of existing plan.
-        draft = build_plan_draft(params_dict)
+        raise RuntimeError("unreachable")
 
         # Беремо тільки нові дні — після current_total
         new_steps = [s for s in draft.steps if s.day_number > current_total]
@@ -714,9 +705,15 @@ class AdaptationExecutor:
 
     def _change_main_category(self, db: Session, plan: AIPlan, params: dict | None) -> tuple[list[int], list[int]]:
         """Change main focus category by pausing old plan and creating new active plan."""
+        # T5.2: build_plan_draft / DraftBuilder removed. Must be rewritten against
+        # create_plan() / PlanBuilderV5 before ADAPTATIONS_ENABLED is flipped to True.
+        raise NotImplementedError(
+            "_change_main_category requires rewrite for T5.2 runtime. "
+            "build_plan_draft was removed. Rewrite against create_plan() before enabling "
+            "ADAPTATIONS_ENABLED. See T5.3."
+        )
+        # ── unreachable — preserved for reference during rewrite ─────────────
         from app.plan_adaptations import _iter_future_steps
-        from app.plan_drafts.draft_builder import DraftValidationError
-        from app.plan_drafts.service import InsufficientLibraryError, build_plan_draft
 
         if plan.status != "active":
             raise AdaptationNotEligibleError("plan_not_active")

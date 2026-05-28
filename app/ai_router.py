@@ -116,9 +116,9 @@ Every user has exactly one active state.
 
 | State | Journey moment |
 |-------|----------------|
-| `IDLE_NEW` | First contact. No history. |
-| `IDLE_ONBOARDED` | Knows the system, hasn't started a plan. |
-| `IDLE_PLAN_ABORTED` | Started plan creation, exited before completion. |
+| `IDLE_NEW` | First contact. Onboarding not yet complete. |
+| `IDLE_ONBOARDED` | Onboarding done. No plan yet. |
+| `IDLE_PLAN_ABORTED` | Had a plan, cancelled it explicitly. |
 | `IDLE_FINISHED` | Completed a plan naturally. |
 | `IDLE_DROPPED` | Abandoned a plan mid-execution. |
 
@@ -132,48 +132,22 @@ Every user has exactly one active state.
 
 ---
 
-### PLAN_FLOW — Plan Creation Tunnel
-
-| State | Journey moment |
-|-------|----------------|
-| `PLAN_FLOW:DATA_COLLECTION` | Choosing Duration, Focus, Load. |
-| `PLAN_FLOW:CONFIRMATION_PENDING` | Reviewing choices before confirmation. |
-| `PLAN_FLOW:FINALIZATION` | Confirmed. Plan is being generated. |
-
----
-
 ### ACTIVE — Plan Execution
 
 | State | Journey moment |
 |-------|----------------|
-| `ACTIVE` | Executing daily tasks. |
-| `ACTIVE_PAUSED` | Plan frozen temporarily. |
-| `ACTIVE_PAUSED_CONFIRMATION` | Confirming plan pause. |
+| `ACTIVE` | Plan running. Daily tasks delivered on schedule. |
+| `ACTIVE_PAUSED` | Plan paused. Delivery stopped until resumed. |
 
 ---
 
-### ADAPTATION — Plan Modification Tunnel
+### SCHEDULE_ADJUSTMENT — Time Slot Change
 
 | State | Journey moment |
 |-------|----------------|
-| `ADAPTATION_SELECTION` | User choosing which adaptation to apply. |
-| `ADAPTATION_PARAMS` | Collecting parameters for selected adaptation. |
-| `ADAPTATION_CONFIRMATION` | User confirming adaptation changes. |
-
-Coach agent is available for clarification and support inside this tunnel.
-Plan agent handles structured choices and progression.
-
----
-
-### SCHEDULE_ADJUSTMENT — Task Delivery Time Tunnel
-
-| State | Journey moment |
-|-------|----------------|
-| `SCHEDULE_ADJUSTMENT` | User selecting new delivery time for task slots. |
+| `SCHEDULE_ADJUSTMENT` | User changing delivery time for task slots. |
 
 Entry: from `ACTIVE` or `ACTIVE_PAUSED`.
-Coach agent is available for questions inside this tunnel.
-Plan agent handles time selection, confirmation, and cancellation.
 
 ---
 
@@ -286,26 +260,6 @@ Different FSM states define different expected interaction patterns.
 
 **AVOID** routing cancellation signals to coach in tunnel states.
 
-**Examples — ADAPTATION:**
-
-User in ADAPTATION_SELECTION, says "зменш навантаження":
-`{"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"}`
-
-User in ADAPTATION_SELECTION, says "передумав":
-`{"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"}`
-
-User in ADAPTATION_CONFIRMATION, says "нехай залишиться як є":
-`{"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"}`
-
-User in ADAPTATION_CONFIRMATION, says "скасуй":
-`{"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"}`
-
-User in ADAPTATION_PARAMS, says "не хочу міняти":
-`{"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"}`
-
-User in ADAPTATION_SELECTION, says "що таке REDUCE_DAILY_LOAD?":
-`{"target_agent": "coach", "confidence": "MEDIUM", "intent_bucket": "MEANING"}`
-
 **Examples — SCHEDULE_ADJUSTMENT:**
 
 User in SCHEDULE_ADJUSTMENT, says "21:00":
@@ -323,26 +277,14 @@ User in SCHEDULE_ADJUSTMENT, says "скасувати":
 User in SCHEDULE_ADJUSTMENT, says "а чому саме цей слот?":
 `{"target_agent": "coach", "confidence": "MEDIUM", "intent_bucket": "MEANING"}`
 
-**Examples — PLAN_FLOW:**
-
-User in PLAN_FLOW:DATA_COLLECTION, Plan Agent asked "Обери тривалість", user says "21":
-`{"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"}`
-
-User in PLAN_FLOW:DATA_COLLECTION, says "не впевнений що краще, 21 чи 90 днів":
-`{"target_agent": "coach", "confidence": "HIGH", "intent_bucket": "MEANING"}`
-
-User in PLAN_FLOW:CONFIRMATION_PENDING, says "підтверджую":
-`{"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"}`
-
 ---
 
 ## 4.3 ACTIVE / ACTIVE_PAUSED
 
-Three structural intents exist in these states — all route to **plan**:
+Two structural intents exist in these states — all route to **plan**:
 
-1. **New plan:** "створи план", "хочу новий план", "починаємо", "перезапусти план"
-2. **Plan adaptation:** "хочу змінити план", "зменш навантаження", "адаптуй", "пауза"
-3. **Task delivery time:** explicit time ("о 21:00", "перенеси на 19:00"), or direct reference to task timing ("перенеси завдання", "змін час завдань", "переніси завдання на ранок")
+1. **Plan control:** "поставити на паузу", "скасувати план", "відновити", "хочу новий план"
+2. **Task delivery time:** explicit time ("о 21:00", "перенеси на 19:00"), or direct reference to task timing ("перенеси завдання", "змін час завдань", "переніси завдання на ранок")
 
 All other signals → **coach**.
 

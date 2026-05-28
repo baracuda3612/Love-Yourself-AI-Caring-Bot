@@ -97,9 +97,8 @@ class User(Base):
         CheckConstraint(
             "current_state IN ("
             "'IDLE_NEW','IDLE_ONBOARDED','IDLE_PLAN_ABORTED','IDLE_FINISHED','IDLE_DROPPED',"
-            "'PLAN_FLOW:DATA_COLLECTION','PLAN_FLOW:CONFIRMATION_PENDING',"
-            "'PLAN_FLOW:FINALIZATION','ACTIVE','ACTIVE_CONFIRMATION','ACTIVE_PAUSED',"
-            "'ACTIVE_PAUSED_CONFIRMATION','ADAPTATION_SELECTION','ADAPTATION_PARAMS','ADAPTATION_CONFIRMATION'"
+            "'ACTIVE','ACTIVE_PAUSED',"
+            "'SCHEDULE_ADJUSTMENT'"
             ") OR current_state LIKE 'ONBOARDING:%'",
             name="ck_users_current_state",
         ),
@@ -223,7 +222,7 @@ class AIPlan(Base):
 
     duration = Column(String(20), nullable=True)
     focus = Column(String(20), nullable=True)
-    load = Column(String(20), nullable=False)
+    load = Column(String(20), nullable=True)   # nullable since T5.2 — v5 plans have no load concept
     preferred_time_slots = Column(JSONB, default=list, nullable=False)
     total_days = Column(Integer, nullable=True)
     
@@ -364,8 +363,9 @@ class PlanDraftRecord(Base):
     status = Column(String(20), nullable=False, default="DRAFT")
 
     duration = Column(String(20), nullable=False)
-    focus = Column(String(20), nullable=False)
-    load = Column(String(20), nullable=False)
+    # focus / load: nullable since T5.2 — v5 plans do not use these concepts
+    focus = Column(String(20), nullable=True)
+    load = Column(String(20), nullable=True)
 
     draft_data = Column(JSONB, nullable=False)
 
@@ -392,10 +392,12 @@ class PlanDraftStep(Base):
 
     day_number = Column(Integer, nullable=False)
     exercise_id = Column(String(50), nullable=False)
-    slot_type = Column(String(20), nullable=False)
+    # mechanic: snapshot from library at build time (T5.2). "switch" | "unload"
+    mechanic = Column(String(10), nullable=True)  # nullable: legacy rows pre-T5.2
+    slot_type = Column(String(20), nullable=True)   # legacy; not used in v5
     time_slot = Column(String(20), nullable=False)
-    category = Column(String(30), nullable=False)
-    difficulty = Column(Integer, nullable=False)
+    category = Column(String(30), nullable=True)    # legacy; not used in v5
+    difficulty = Column(Integer, nullable=True)     # legacy; not used in v5
 
     draft = relationship("PlanDraftRecord", back_populates="steps")
 
