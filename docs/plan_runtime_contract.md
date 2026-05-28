@@ -184,33 +184,38 @@
 
 ---
 
-## Стани користувача (спрощено)
+## Стани користувача
 
 ```
 IDLE_NEW
-  ↓ онбординг
+  ↓ ONBOARDING:* (збір профілю)
 IDLE_ONBOARDED
-  ↓ create_first_plan()  [internal, auto]
-ACTIVE ←─────────────────────────────────────┐
-  ↓ pause_plan()              resume_plan()   │
-ACTIVE_PAUSED ────────────────────────────────┘
-  │                 ↓ план завершується
-  ↓ cancel_plan()       IDLE_FINISHED
-IDLE_PLAN_ABORTED         ↓ create_followup_plan()
-  ↓ create_followup_plan()
-ACTIVE
+  ↓ create_first_plan()  [SHORT, auto після онбордингу]
+ACTIVE ←─────────────────────────────────────────┐
+  ↓ pause_plan()                   resume_plan()  │
+ACTIVE_PAUSED ──────────────────────────────────┘
+  │                      ↓ план завершується природньо
+  ↓ cancel_plan()            IDLE_FINISHED
+IDLE_PLAN_ABORTED              │
+  │                            ├─ create_followup_plan()
+  └──── create_followup_plan() ┘
+              ↓
+           ACTIVE
 ```
+
+`IDLE_DROPPED` — виставляється фоновим процесом, якщо план кинули без cancel_plan(). Поведінка аналогічна IDLE_PLAN_ABORTED для create_followup_plan().
 
 **Допустимі операції в кожному стані:**
 
 | Стан | create_first | create_followup | pause | resume | cancel | change_time |
 |------|:---:|:---:|:---:|:---:|:---:|:---:|
 | IDLE_NEW | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| IDLE_ONBOARDED | internal | ❌ | ❌ | ❌ | ❌ | ✅ |
+| IDLE_ONBOARDED | ✅ internal | ❌ | ❌ | ❌ | ❌ | ✅ |
 | ACTIVE | ❌ | ❌ | ✅ | ❌ | ✅ | ✅ |
 | ACTIVE_PAUSED | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ |
 | IDLE_FINISHED | ❌ | ✅ | ❌ | ❌ | ❌ | ✅ |
 | IDLE_PLAN_ABORTED | ❌ | ✅ | ❌ | ❌ | ❌ | ✅ |
+| IDLE_DROPPED | ❌ | ✅ | ❌ | ❌ | ❌ | ✅ |
 
 ---
 
