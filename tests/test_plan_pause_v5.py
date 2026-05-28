@@ -76,7 +76,7 @@ def test_pause_sets_is_paused_and_increments_count() -> None:
 
 
 def test_pause_raises_when_not_active() -> None:
-    user = _make_user("IDLE_ONBOARDED")
+    user = _make_user("IDLE_FINISHED")
     profile = _make_profile()
     db = _make_db(user, profile)
 

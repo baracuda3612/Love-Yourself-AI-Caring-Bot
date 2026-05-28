@@ -64,7 +64,6 @@ from app.fsm.states import (
     ADAPTATION_PARAMS,
     ADAPTATION_SELECTION,
     FSM_ALLOWED_STATES,
-    PLAN_FLOW_ALLOWED_TRANSITIONS,
     PLAN_FLOW_ENTRYPOINTS,
     PLAN_FLOW_STATES,
     ADAPTATION_ENTRY_STATES,
@@ -610,11 +609,6 @@ def _guard_fsm_transition(
     if normalized_current is None:
         return normalized_signal, None
 
-    # PLAN finalization has additional runtime requirement beyond state graph validity.
-    if normalized_current == "PLAN_FLOW:FINALIZATION" and normalized_signal == "ACTIVE":
-        if not plan_persisted:
-            return None, "plan_flow_exit_blocked_not_persisted"
-
     if not can_transition(normalized_current, normalized_signal):
         return None, "transition_blocked_by_guards"
 
@@ -892,7 +886,7 @@ def _auto_drop_plan_for_new_flow(user_id: int) -> bool:
         user: Optional[User] = db.query(User).filter(User.id == user_id).first()
         if not user:
             return False
-        if user.current_state not in {"ACTIVE", "ACTIVE_PAUSED", "ACTIVE_PAUSED_CONFIRMATION"}:
+        if user.current_state not in {"ACTIVE", "ACTIVE_PAUSED"}:
             return False
 
         active_plan = (
@@ -2192,7 +2186,7 @@ async def handle_incoming_message(
         transition_signal = worker_result.get("transition_signal")
         current_state = context_payload.get("current_state")
         if transition_signal == "PLAN_FLOW:DATA_COLLECTION":
-            if current_state in {"ACTIVE", "ACTIVE_PAUSED", "ACTIVE_PAUSED_CONFIRMATION"}:
+            if current_state in {"ACTIVE", "ACTIVE_PAUSED"}:
                 did_drop = _auto_drop_plan_for_new_flow(user_id)
                 if did_drop:
                     current_state = "IDLE_DROPPED"
@@ -2713,7 +2707,7 @@ async def handle_incoming_message(
                 else:
                     reply_text = preview_text
     if transition_signal == "PLAN_FLOW:DATA_COLLECTION":
-        if context_payload.get("current_state") in {"ACTIVE", "ACTIVE_PAUSED", "ACTIVE_PAUSED_CONFIRMATION"}:
+        if context_payload.get("current_state") in {"ACTIVE", "ACTIVE_PAUSED"}:
             did_drop = _auto_drop_plan_for_new_flow(user_id)
             if did_drop:
                 context_payload["current_state"] = "IDLE_DROPPED"

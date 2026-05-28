@@ -38,7 +38,7 @@ async def test_non_coach_agent_returns_immediately(monkeypatch):
     monkeypatch.setattr(orchestrator, "session_memory", dummy_memory)
 
     async def fake_build_user_context(user_id, message_text):
-        return {"message_text": message_text, "current_state": "IDLE_ONBOARDED"}
+        return {"message_text": message_text, "current_state": "IDLE_FINISHED"}
 
     async def fake_call_router(user_id, message_text, context):
         return {
@@ -80,7 +80,7 @@ async def test_coach_agent_allows_single_reroute(monkeypatch):
     monkeypatch.setattr(orchestrator, "session_memory", dummy_memory)
 
     async def fake_build_user_context(user_id, message_text):
-        return {"message_text": message_text, "current_state": "IDLE_ONBOARDED"}
+        return {"message_text": message_text, "current_state": "IDLE_FINISHED"}
 
     async def fake_call_router(user_id, message_text, context):
         return {
@@ -189,7 +189,7 @@ async def test_plan_tool_call_invokes_handler(monkeypatch):
     monkeypatch.setattr(orchestrator, "session_memory", dummy_memory)
 
     async def fake_build_user_context(user_id, message_text):
-        return {"message_text": message_text, "current_state": "IDLE_ONBOARDED"}
+        return {"message_text": message_text, "current_state": "IDLE_FINISHED"}
 
     async def fake_call_router(user_id, message_text, context):
         return {
@@ -485,40 +485,6 @@ async def test_plan_in_idle_new_returns_onboarding_guard(monkeypatch):
 
     assert response["reply_text"] == "Спочатку пройди вітальний процес. Напиши 'почати'."
     assert invoke_calls == []
-
-
-@pytest.mark.anyio
-async def test_plan_in_forbidden_state_falls_back_to_coach(monkeypatch):
-    dummy_memory = DummyMemory()
-    monkeypatch.setattr(orchestrator, "session_memory", dummy_memory)
-
-    async def fake_build_user_context(user_id, message_text):
-        return {"message_text": message_text, "current_state": "PLAN_FLOW:FINALIZATION"}
-
-    async def fake_call_router(user_id, message_text, context):
-        return {
-            "router_result": {"target_agent": "plan", "confidence": "HIGH", "intent_bucket": "STRUCTURAL"},
-            "router_meta": {},
-            "fsm_state": "PLAN_FLOW:FINALIZATION",
-            "session_id": None,
-            "input_message": message_text,
-            "context_payload": context,
-        }
-
-    invoke_calls = []
-
-    async def fake_invoke_agent(target_agent, payload):
-        invoke_calls.append(target_agent)
-        return {"reply_text": "coach fallback"}
-
-    monkeypatch.setattr(orchestrator, "build_user_context", fake_build_user_context)
-    monkeypatch.setattr(orchestrator, "call_router", fake_call_router)
-    monkeypatch.setattr(orchestrator, "_invoke_agent", fake_invoke_agent)
-
-    response = await orchestrator.handle_incoming_message(user_id=11, message_text="план")
-
-    assert response["reply_text"] == "coach fallback"
-    assert invoke_calls == ["coach"]
 
 
 @pytest.mark.anyio

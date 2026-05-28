@@ -117,7 +117,6 @@ Every user has exactly one active state.
 | State | Journey moment |
 |-------|----------------|
 | `IDLE_NEW` | First contact. No history. |
-| `IDLE_ONBOARDED` | Knows the system, hasn't started a plan. |
 | `IDLE_PLAN_ABORTED` | Started plan creation, exited before completion. |
 | `IDLE_FINISHED` | Completed a plan naturally. |
 | `IDLE_DROPPED` | Abandoned a plan mid-execution. |
@@ -136,9 +135,7 @@ Every user has exactly one active state.
 
 | State | Journey moment |
 |-------|----------------|
-| `PLAN_FLOW:DATA_COLLECTION` | Choosing Duration, Focus, Load. |
-| `PLAN_FLOW:CONFIRMATION_PENDING` | Reviewing choices before confirmation. |
-| `PLAN_FLOW:FINALIZATION` | Confirmed. Plan is being generated. |
+| `PLAN_FLOW:DATA_COLLECTION` | Collecting slot preferences before plan creation. |
 
 ---
 
@@ -148,7 +145,6 @@ Every user has exactly one active state.
 |-------|----------------|
 | `ACTIVE` | Executing daily tasks. |
 | `ACTIVE_PAUSED` | Plan frozen temporarily. |
-| `ACTIVE_PAUSED_CONFIRMATION` | Confirming plan pause. |
 
 ---
 

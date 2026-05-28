@@ -124,10 +124,7 @@ def main() -> None:
                 raise RuntimeError(f"user_id {args.user_id} not found")
 
             _set_state(db, user, "PLAN_FLOW:DATA_COLLECTION")
-            _set_state(db, user, "PLAN_FLOW:FINALIZATION")
             _generate_plan(db, user)
-
-            _set_state(db, user, "ACTIVE_CONFIRMATION")
             _set_state(db, user, "ACTIVE")
 
             _set_state(db, user, "ADAPTATION_FLOW")

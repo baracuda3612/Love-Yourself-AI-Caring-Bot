@@ -193,11 +193,7 @@ This is a structured funnel.
 
 States:
 - `PLAN_FLOW:DATA_COLLECTION`
-  The user is selecting **Duration, Focus, Load**.
-- `PLAN_FLOW:CONFIRMATION_PENDING`
-  The user is reviewing the chosen parameters.
-- `PLAN_FLOW:FINALIZATION`
-  The plan is being generated and locked in.
+  Collecting time slot preferences before plan creation.
 
 Meaning:
 The user does NOT have an active plan yet.
@@ -211,11 +207,7 @@ The user has a live plan and is executing it.
 
 States:
 - `ACTIVE`
-  Normal execution.
-- `ACTIVE_CONFIRMATION`
-  System is waiting for a final confirmation after a plan or adaptation was created.
-- `ACTIVE_PAUSED_CONFIRMATION`
-  System is confirming a pause before entering the paused state.
+  Normal execution. Plan was created and is scheduled.
 
 Meaning:
 The plan is real.
@@ -257,7 +249,6 @@ The user does not currently have a running plan.
 
 States:
 - `IDLE_NEW` — first time user, no plan yet
-- `IDLE_ONBOARDED` — onboarding finished, still no plan
 - `IDLE_PLAN_ABORTED` — user exited plan setup
 - `IDLE_FINISHED` — a plan ended naturally
 - `IDLE_DROPPED` — a plan was abandoned
