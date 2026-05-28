@@ -49,6 +49,13 @@ ALLOWED_BASE_STATES = IDLE_STATES | ACTIVE_STATES | PAUSE_STATES
 
 FSM_ALLOWED_STATES = ALLOWED_BASE_STATES | {SCHEDULE_ADJUSTMENT}
 
+
+def is_valid_fsm_state(state: str) -> bool:
+    """Return True for any valid FSM state, including ONBOARDING:* wildcards."""
+    if state in FSM_ALLOWED_STATES:
+        return True
+    return any(state.startswith(prefix + ":") for prefix in PREFIXED_STATES)
+
 # States where the plan agent may be invoked (for plan creation).
 ENTRY_PROMPT_ALLOWED_STATES = PLAN_CREATION_ENTRY_STATES
 
@@ -68,4 +75,6 @@ ADAPTATION_FLOW_ENTRY_STATES: set[str] = set()      # removed
 PLAN_FLOW_STATES: set[str] = set()      # removed from active FSM
 PLAN_FLOW_ENTRYPOINTS: set[str] = set() # removed
 
-PREFIXED_STATES: set[str] = set()       # PLAN_FLOW prefix removed
+# Wildcard state families — matched via startswith(prefix + ":") in guards and DB LIKE.
+# ONBOARDING:* covers all sub-states of the onboarding flow (ONBOARDING:START, etc.).
+PREFIXED_STATES = {"ONBOARDING"}
