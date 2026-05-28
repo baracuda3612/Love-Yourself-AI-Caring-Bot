@@ -44,16 +44,7 @@ from app.time_slots import compute_scheduled_for, resolve_daily_time_slots
 from app.ux.persona import get_persona
 from app.ux.plan_messages import build_activation_info_message
 from app.ux.adaptation_preview import build_adaptation_preview, build_adaptation_success_message
-from app.plan_drafts.service import (
-    DraftValidationError,
-    InsufficientLibraryError,
-    build_plan_draft,
-    delete_latest_draft,
-    get_latest_draft,
-    overwrite_plan_draft,
-    persist_plan_draft,
-)
-from app.plan_drafts.preview import build_confirmation_preview, render_confirmation_preview
+from app.plan_drafts.service import create_plan
 from app.plan_finalization import (
     ActivePlanExistsError,
     DraftNotFoundError,
@@ -492,6 +483,12 @@ async def handle_confirmation_pending_action(
     reply_text: str,
     context_payload: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
+    # FROZEN T5.2: PLAN_FLOW:CONFIRMATION_PENDING tunnel is disabled.
+    # Plan creation goes directly through create_plan() → ACTIVE.
+    # This function is unreachable in normal flow when LEGACY_PLAN_FLOW_ENABLED=False.
+    from app.config import settings
+    if not settings.LEGACY_PLAN_FLOW_ENABLED:
+        return None
     # CONFIRMATION_PENDING is intentionally minimal.
     # There are only two actions:
     # - FSM transition
@@ -1943,32 +1940,8 @@ async def build_plan_draft_preview(
     user_id: int,
     parameters_for_draft: Dict[str, Any],
 ) -> str:
-    try:
-        draft = build_plan_draft(parameters_for_draft, user_id=str(user_id))
-        with SessionLocal() as db:
-            persist_plan_draft(db, user_id, draft)
-            db.commit()
-    except DraftValidationError as exc:
-        logger.error(
-            "[PLAN_DRAFT] Draft creation validation failed for user %s: %s (duration=%s focus=%s load=%s slots=%s)",
-            user_id,
-            exc,
-            parameters_for_draft.get("duration"),
-            parameters_for_draft.get("focus"),
-            parameters_for_draft.get("load"),
-            parameters_for_draft.get("preferred_time_slots"),
-        )
-        return PLAN_GENERATION_ERROR_MESSAGE
-    except (InsufficientLibraryError, IntegrityError) as exc:
-        logger.error(
-            "[PLAN_DRAFT] Draft creation failed for user %s: %s",
-            user_id,
-            exc,
-        )
-        return PLAN_GENERATION_ERROR_MESSAGE
-    log_metric("plan_draft_created", extra={"user_id": user_id})
-    preview = build_confirmation_preview(draft, parameters_for_draft)
-    return render_confirmation_preview(preview)
+    # FROZEN T5.2: plan preview removed. Plan is created immediately via create_plan().
+    return ""
 
 
 async def handle_incoming_message(
@@ -2020,12 +1993,9 @@ async def handle_incoming_message(
         await session_memory.clear_schedule_adjustment_soft_prompted(user_id)
 
     show_plan_actions = False
-    if context_payload.get("current_state") == "PLAN_FLOW:CONFIRMATION_PENDING":
-        with SessionLocal() as db:
-            latest_draft = get_latest_draft(db, user_id)
-            context_payload["draft_plan_artifact"] = (
-                latest_draft.draft_data if latest_draft else None
-            )
+    # T5.2: PLAN_FLOW:CONFIRMATION_PENDING draft injection disabled (LEGACY_PLAN_FLOW_ENABLED=False)
+    if settings.LEGACY_PLAN_FLOW_ENABLED and context_payload.get("current_state") == "PLAN_FLOW:CONFIRMATION_PENDING":
+        context_payload["draft_plan_artifact"] = None  # get_latest_draft removed in T5.2
     router_output = await call_router(user_id, message_text, context_payload)
 
     router_result = router_output.get("router_result", {})
@@ -2513,7 +2483,7 @@ async def handle_incoming_message(
         normalized_reply = _normalize_confirmation_reply(confirmation_reply)
         if normalized_reply is not None:
             return await _finalize_reply(**normalized_reply)
-        if transition_signal == "PLAN_FLOW:FINALIZATION":
+        if settings.LEGACY_PLAN_FLOW_ENABLED and transition_signal == "PLAN_FLOW:FINALIZATION":
             lock_key = f"finalization_lock:{user_id}"
             already_running = True
             if redis_client is not None:

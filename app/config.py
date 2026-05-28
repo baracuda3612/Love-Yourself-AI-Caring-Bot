@@ -74,6 +74,11 @@ class Settings:
     # Adaptation layer is not active. No new AdaptationHistory records may be
     # created while this is False. Flip to True only when adaptation agent is ready.
     ADAPTATIONS_ENABLED: bool = False
+    # LEGACY_PLAN_FLOW_ENABLED: frozen at False for P1 (T5.2).
+    # When False: plan creation goes through create_plan() directly to ACTIVE.
+    # The old PLAN_FLOW:DATA_COLLECTION → CONFIRMATION_PENDING → FINALIZATION
+    # tunnel in orchestrator.py is gated behind this flag.
+    LEGACY_PLAN_FLOW_ENABLED: bool = False
 
     def __post_init__(self) -> None:
         bot_token = os.getenv("BOT_TOKEN")
@@ -123,6 +128,8 @@ class Settings:
             raise RuntimeError("REPORT_TOKEN_SECRET must be set in production")
         # ADAPTATIONS_ENABLED is always False in P1 — not env-driven yet
         self.ADAPTATIONS_ENABLED = False
+        # LEGACY_PLAN_FLOW_ENABLED is always False in P1 — not env-driven yet
+        self.LEGACY_PLAN_FLOW_ENABLED = False
 
 
 settings = Settings()
@@ -150,3 +157,4 @@ REPORT_TOKEN_SECRET = settings.REPORT_TOKEN_SECRET
 APP_BASE_URL = settings.APP_BASE_URL
 BOT_USERNAME = settings.BOT_USERNAME
 ADAPTATIONS_ENABLED = settings.ADAPTATIONS_ENABLED
+LEGACY_PLAN_FLOW_ENABLED = settings.LEGACY_PLAN_FLOW_ENABLED
