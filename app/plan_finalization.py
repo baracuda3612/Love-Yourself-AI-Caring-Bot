@@ -335,7 +335,14 @@ def finalize_plan(
             step_type = StepType.ACTION.value
             difficulty = DifficultyLevel.EASY.value
             # mechanic is snapshotted at build time — never recomputed (invariant 6, T5.1).
-            mechanic = getattr(step_row, "mechanic", None) or "switch"
+            mechanic = getattr(step_row, "mechanic", None)
+            if mechanic is None:
+                # Legacy row pre-T5.2 — acceptable fallback.
+                # If this appears in logs for NEW plans, _persist_v5_draft is not writing mechanic correctly.
+                logger.debug(
+                    "mechanic not set on step %s — legacy row, defaulting to switch", step_row.id
+                )
+                mechanic = "switch"
             order_in_day = day_orders[day_number]
             day_orders[day_number] += 1
             db.add(

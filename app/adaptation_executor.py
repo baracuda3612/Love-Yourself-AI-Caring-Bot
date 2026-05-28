@@ -327,18 +327,15 @@ class AdaptationExecutor:
         raise NotImplementedError("INCREASE_DIFFICULTY implementation in TASK-3.5")
 
     def _extend_plan_duration(self, db: Session, plan: AIPlan, params: dict | None) -> list[int]:
-        # T5.2: this method relies on build_plan_draft / DraftBuilder which were removed.
-        # It must be rewritten before ADAPTATIONS_ENABLED is flipped to True.
-        from app.config import settings
-        if not settings.ADAPTATIONS_ENABLED:
-            raise NotImplementedError(
-                "_extend_plan_duration is not compatible with T5.2 runtime. "
-                "Rewrite before enabling ADAPTATIONS_ENABLED."
-            )
-
-        # NOTE: all code below this line is unreachable while ADAPTATIONS_ENABLED=False.
-        # build_plan_draft / DraftBuilder were removed in T5.2 — rewrite this method
-        # against create_plan() / PlanBuilderV5 before re-enabling.
+        # T5.2: build_plan_draft / DraftBuilder removed. Must be rewritten against
+        # create_plan() / PlanBuilderV5 before ADAPTATIONS_ENABLED is flipped to True.
+        # Raise clearly now so the error is NotImplementedError, not a cryptic ImportError.
+        raise NotImplementedError(
+            "_extend_plan_duration requires rewrite for T5.2 runtime. "
+            "build_plan_draft was removed. Rewrite against create_plan() before enabling "
+            "ADAPTATIONS_ENABLED. See T5.3."
+        )
+        # ── unreachable — preserved for reference during rewrite ─────────────
 
         if plan.status != "active":
             raise AdaptationNotEligibleError("plan_not_active")
@@ -708,18 +705,14 @@ class AdaptationExecutor:
 
     def _change_main_category(self, db: Session, plan: AIPlan, params: dict | None) -> tuple[list[int], list[int]]:
         """Change main focus category by pausing old plan and creating new active plan."""
-        # T5.2: this method relies on build_plan_draft / DraftBuilder which were removed.
-        # It must be rewritten before ADAPTATIONS_ENABLED is flipped to True.
-        from app.config import settings
-        if not settings.ADAPTATIONS_ENABLED:
-            raise NotImplementedError(
-                "_change_main_category is not compatible with T5.2 runtime. "
-                "Rewrite before enabling ADAPTATIONS_ENABLED."
-            )
-
-        # NOTE: all code below is unreachable while ADAPTATIONS_ENABLED=False.
-        # build_plan_draft / DraftBuilder were removed in T5.2 — rewrite this method
-        # against create_plan() / PlanBuilderV5 before re-enabling.
+        # T5.2: build_plan_draft / DraftBuilder removed. Must be rewritten against
+        # create_plan() / PlanBuilderV5 before ADAPTATIONS_ENABLED is flipped to True.
+        raise NotImplementedError(
+            "_change_main_category requires rewrite for T5.2 runtime. "
+            "build_plan_draft was removed. Rewrite against create_plan() before enabling "
+            "ADAPTATIONS_ENABLED. See T5.3."
+        )
+        # ── unreachable — preserved for reference during rewrite ─────────────
         from app.plan_adaptations import _iter_future_steps
 
         if plan.status != "active":

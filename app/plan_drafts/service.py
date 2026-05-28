@@ -29,7 +29,7 @@ _PLAN_TYPE_TOTAL_DAYS = {
 def create_plan(
     db: Session,
     user_id: int,
-    plan_type: str,                 # "SHORT" | "MEDIUM"
+    plan_type: str,                  # "SHORT" | "MEDIUM"
     day_time: Optional[str] = None,  # "HH:MM"; if None, read from user_profile
     evening_time: Optional[str] = None,  # "HH:MM"; required for MEDIUM
 ) -> AIPlan:
@@ -39,11 +39,20 @@ def create_plan(
     orchestrator does not need to pass them.
 
     Raises:
-        MissingEveningSlotError  if plan_type == "MEDIUM" and evening_time is None
+        ValueError               if first plan is not SHORT (invariant: product_internal_spec §5)
+        MissingEveningSlotError  if plan_type == "MEDIUM" and evening_time not collected
         NoCandidatesError        if the library has no candidates for a slot
         FinalizationError        on DB or scheduling failure
     """
     from app.plan_finalization import finalize_plan
+
+    # Invariant: first plan is always SHORT (product_internal_spec.md §5).
+    # No choice of type for the first plan — onboarding wires this, not the user.
+    if not _has_previous_plan(db, user_id) and plan_type != "SHORT":
+        raise ValueError(
+            f"First plan must be SHORT, got {plan_type!r}. "
+            "MEDIUM is only available for follow-up plans."
+        )
 
     from app.plan_drafts.plan_builder_v5 import MissingEveningSlotError
 
@@ -151,6 +160,14 @@ def _persist_v5_draft(
         )
 
     return record
+
+
+def _has_previous_plan(db: Session, user_id: int) -> bool:
+    """Return True if the user has ever had a plan (active, completed, or aborted).
+
+    Used to enforce the invariant: first plan is always SHORT.
+    """
+    return db.query(AIPlan).filter(AIPlan.user_id == user_id).first() is not None
 
 
 __all__ = ["create_plan"]
