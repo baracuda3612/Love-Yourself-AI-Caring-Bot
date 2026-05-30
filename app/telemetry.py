@@ -12,8 +12,6 @@ import pytz
 from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 
-from app.logic.rule_engine import RuleEngine
-
 from app.db import (
     AIPlan,
     ContentLibrary,
@@ -34,12 +32,6 @@ TASK_EVENT_TYPES = {
     "task_ignored",
     "task_delayed",
 }
-ADAPTATION_EVENT_TYPES = {
-    "adaptation_proposed",
-    "adaptation_rejected",
-    "adaptation_undo_requested",
-    "adaptation_undo_blocked",
-}
 RESOURCE_EVENT_TYPES = {"task_viewed_resource"}
 FRICTION_EVENT_TYPES = {"task_skipped", "task_ignored", "task_delayed", "task_failed"}
 SKIP_STREAK_EVENT_TYPES = {"task_skipped", "task_ignored", "task_failed"}
@@ -50,17 +42,6 @@ COMPLETION_EVENT_TYPES = {
     "task_ignored",
     "task_delayed",
     "task_failed",
-}
-
-PROPOSAL_MESSAGES = {
-    RuleEngine.PROPOSAL_REDUCE_LOAD: (
-        "Ми помітили, що виконання зараз просідає.\n"
-        "Хочеш зменшити навантаження або змінити план?"
-    ),
-    RuleEngine.PROPOSAL_OBSERVATION: (
-        "Схоже, зараз важко тримати ритм.\n"
-        "Хочеш змінити план або залишити як є?"
-    ),
 }
 
 logger = logging.getLogger(__name__)
@@ -340,98 +321,6 @@ def _maybe_create_failure_signal(
     )
 
 
-def _maybe_emit_system_prompt(
-    db: Session,
-    user: User,
-    window: PlanExecutionWindow,
-    event_type: str,
-) -> None:
-    logger.info(
-        "[ADAPTATION_PROMPT] Evaluate trigger user_id=%s event_type=%s state=%s window_id=%s",
-        user.id,
-        event_type,
-        user.current_state,
-        window.id,
-    )
-    if event_type not in {"task_skipped", "task_ignored", "task_failed"}:
-        logger.info("[ADAPTATION_PROMPT] Exit: unsupported event_type=%s", event_type)
-        return
-    if user.current_state != "ACTIVE":
-        logger.info("[ADAPTATION_PROMPT] Exit: user_id=%s state=%s", user.id, user.current_state)
-        return
-
-    active_plan = (
-        db.query(AIPlan)
-        .filter(AIPlan.user_id == user.id, AIPlan.status == "active")
-        .order_by(AIPlan.id.desc())
-        .first()
-    )
-    if active_plan is None:
-        logger.info("[ADAPTATION_PROMPT] Exit: user_id=%s has no active plan", user.id)
-        return
-
-    if not active_plan.load:
-        raise RuntimeError("Invariant violation: active plan without load")
-
-    normalized_load = active_plan.load.strip().upper()
-    if normalized_load == "LITE":
-        logger.info("[ADAPTATION_PROMPT] Exit: user_id=%s load=LITE", user.id)
-        return
-
-    threshold = RuleEngine.LOAD_THRESHOLDS.get(normalized_load)
-    if threshold is None:
-        logger.info("[ADAPTATION_PROMPT] Exit: unsupported load=%s", normalized_load)
-        return
-
-    skip_streak = get_skip_streak(db, user.id, RuleEngine.MAX_SKIP_THRESHOLD)
-    logger.info(
-        "[ADAPTATION_PROMPT] user_id=%s load=%s skip_streak=%s threshold=%s",
-        user.id,
-        normalized_load,
-        skip_streak,
-        threshold,
-    )
-    if skip_streak != threshold:
-        logger.info("[ADAPTATION_PROMPT] Exit: skip_streak(%s) != threshold(%s)", skip_streak, threshold)
-        return
-
-    proposal = RuleEngine().evaluate(
-        load=normalized_load,
-        skip_streak=skip_streak,
-    )
-    if not proposal:
-        logger.info("[ADAPTATION_PROMPT] Exit: no proposal from rule engine")
-        return
-    logger.info("[ADAPTATION_PROMPT] Proposal=%s for user_id=%s", proposal, user.id)
-
-    message = PROPOSAL_MESSAGES.get(proposal)
-    if not message:
-        logger.warning("[ADAPTATION_PROMPT] Exit: message template missing for proposal=%s", proposal)
-        return
-
-    logger.info("[ADAPTATION_PROMPT] Dispatching system prompt for user_id=%s", user.id)
-    _dispatch_system_message(user, message)
-    try:
-        log_user_event(
-            db=db,
-            user_id=user.id,
-            event_type="adaptation_proposed",
-            context={
-                "proposal_type": proposal,
-                "plan_id": str(active_plan.id),
-                "plan_load": normalized_load,
-                "skip_streak": skip_streak,
-                "plan_execution_window_id": str(window.id),
-            },
-        )
-    except Exception:
-        logger.error(
-            "[ADAPTATION_PROMPT] Failed to log adaptation_proposed for user_id=%s",
-            user.id,
-            exc_info=True,
-        )
-
-
 def _maybe_increment_batch_completion(
     db: Session,
     window: PlanExecutionWindow,
@@ -542,10 +431,6 @@ def log_user_event(
                 event_context,
                 server_now,
             )
-
-    if event_type in {"task_skipped", "task_ignored", "task_failed"} and step_value:
-        db.flush()
-        _maybe_emit_system_prompt(db, user, window, event_type)
 
     return event
 
