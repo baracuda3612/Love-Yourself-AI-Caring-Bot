@@ -7,6 +7,8 @@ from app.fsm.states import (  # noqa: F401
     is_valid_fsm_state,
     PAUSE_STATES,
     PLAN_CREATION_ENTRY_STATES,
+    PLAN_FLOW_ENTRYPOINTS,  # legacy stub — see states.py
+    PLAN_FLOW_STATES,       # legacy stub — see states.py
     PREFIXED_STATES,
     SCHEDULE_ADJUSTMENT,
     SCHEDULE_ADJUSTMENT_ALLOWED_TRANSITIONS,

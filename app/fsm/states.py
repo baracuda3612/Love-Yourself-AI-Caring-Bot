@@ -61,3 +61,10 @@ ENTRY_PROMPT_ALLOWED_STATES = PLAN_CREATION_ENTRY_STATES
 # Wildcard state families — matched via startswith(prefix + ":") in guards and DB LIKE.
 # ONBOARDING:* covers all sub-states of the onboarding flow (ONBOARDING:START, etc.).
 PREFIXED_STATES = {"ONBOARDING"}
+
+# ── Legacy stubs (T5.3) ───────────────────────────────────────────────────────
+# PLAN_FLOW tunnel was removed in T5.3. orchestrator.py still imports these names
+# in dead code guarded by LEGACY_PLAN_FLOW_ENABLED=False. Keep empty stubs until
+# those imports/usages are cleaned up (backlog).
+PLAN_FLOW_STATES: frozenset[str] = frozenset()
+PLAN_FLOW_ENTRYPOINTS: frozenset[str] = frozenset()
