@@ -35,8 +35,8 @@ def test_tokens_padding_edge_case_no_extra_padding_needed():
 @dataclass
 class _Step:
     id: int
-    canceled_by_adaptation: bool = False
     scheduled_for: datetime | None = None
+    step_status: str = "pending"
 
 
 @dataclass
@@ -129,10 +129,11 @@ def test_timeline_future_days():
     assert timeline and timeline[0].status == "future"
 
 
-def test_timeline_all_canceled_returns_empty():
-    days = [_Day(1, [_Step(1, canceled_by_adaptation=True)])]
+def test_timeline_all_expired_returns_ignored():
+    days = [_Day(1, [_Step(1, step_status="expired")])]
     db = _TimelineDB(plan=SimpleNamespace(id=10, user_id=1), days=days, events=[])
-    assert get_plan_timeline(db, user_id=1, plan_id=10) == []
+    result = get_plan_timeline(db, user_id=1, plan_id=10)
+    assert result and result[0].status == "ignored"
 
 
 def test_timeline_empty_plan_step_ids_returns_empty():

@@ -13,9 +13,8 @@ from app.plan_completion.tokens import make_report_token
 
 @dataclass
 class _Step:
-    canceled_by_adaptation: bool = False
     is_completed: bool = False
-    status: str | None = None
+    step_status: str = "pending"
 
 
 @dataclass
@@ -130,31 +129,32 @@ def test_ratio_3step_day_partial():
     assert data.days[0].completion_ratio == 0.33
 
 
-def test_ratio_ignores_canceled():
+def test_ratio_partial_completion():
     days = _make_days(21)
-    days[0].steps = [_Step(is_completed=True), _Step(canceled_by_adaptation=True, is_completed=False)]
+    days[0].steps = [_Step(is_completed=True), _Step(is_completed=False)]
     data = build_pulse_data(1, _DB(SimpleNamespace(id=1, user_id=10, total_days=21, current_day=1), SimpleNamespace(profile={}), days))
-    assert data.days[0].completion_ratio == 1.0
+    assert data.days[0].completion_ratio == 0.5
 
 
-def test_adapted_via_canceled_step():
+def test_adapted_is_always_false():
+    """adapted flag is always False since adaptation schema was removed."""
     days = _make_days(21)
-    days[3].steps = [_Step(canceled_by_adaptation=True)]
+    days[3].steps = [_Step(step_status="expired")]
     plan = SimpleNamespace(id=1, user_id=10, total_days=21, current_day=14)
     data = build_pulse_data(1, _DB(plan, SimpleNamespace(profile={}), days))
-    assert data.days[3].adapted is True
+    assert data.days[3].adapted is False
 
 
-def test_adapted_does_not_affect_ratio():
+def test_expired_step_not_completed():
     days = _make_days(21)
     days[3].steps = [
-        _Step(canceled_by_adaptation=True),
+        _Step(step_status="expired"),
         _Step(is_completed=True),
     ]
     plan = SimpleNamespace(id=1, user_id=10, total_days=21, current_day=14)
     data = build_pulse_data(1, _DB(plan, SimpleNamespace(profile={}), days))
-    assert data.days[3].adapted is True
-    assert data.days[3].completion_ratio == 1.0
+    assert data.days[3].adapted is False
+    assert data.days[3].completion_ratio == 0.5
 
 
 def test_is_today_by_active_day():

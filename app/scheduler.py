@@ -286,7 +286,7 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
         db_step = _db.query(AIPlanStep).filter(AIPlanStep.id == step.id).first()
         all_today = (
             _db.query(AIPlanStep)
-            .filter(AIPlanStep.day_id == step.day_id, AIPlanStep.canceled_by_adaptation == False)
+            .filter(AIPlanStep.day_id == step.day_id)
             .order_by(AIPlanStep.order_in_day)
             .all()
         )
@@ -400,7 +400,6 @@ async def schedule_daily_loop():
                 User.is_active == True,
                 User.current_state == "ACTIVE",
                 AIPlanStep.step_status == "pending",
-                AIPlanStep.canceled_by_adaptation == False,
                 AIPlanStep.scheduled_for != None, # Only schedule if time is set
                 AIPlanStep.scheduled_for > now_utc
             )
@@ -667,7 +666,6 @@ def expire_overdue_steps() -> None:
             .join(User, User.id == AIPlan.user_id)
             .filter(
                 AIPlanStep.step_status.in_(["pending", "delivered"]),
-                AIPlanStep.canceled_by_adaptation == False,
                 or_(
                     AIPlanStep.expires_at.is_(None),
                     AIPlanStep.expires_at < now_utc,
@@ -744,7 +742,6 @@ def _maybe_schedule_plan_completion(user_id: int, plan_id: int) -> None:
             .filter(
                 AIPlanDay.plan_id == plan_id,
                 AIPlanStep.scheduled_for > datetime.now(pytz.UTC),
-                AIPlanStep.canceled_by_adaptation == False,
             )
             .count()
         )

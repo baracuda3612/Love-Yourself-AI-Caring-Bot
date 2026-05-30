@@ -50,10 +50,6 @@ def _is_step_completed(step: object) -> bool:
     return bool(getattr(step, "is_completed", False))
 
 
-def _is_step_canceled(step: object) -> bool:
-    return bool(getattr(step, "canceled_by_adaptation", False))
-
-
 def _resolve_active_day_number(plan: AIPlan, days: list[AIPlanDay]) -> int:
     current = getattr(plan, "current_day", None)
     if isinstance(current, int) and current > 0:
@@ -112,16 +108,11 @@ def build_pulse_data(plan_id: int, db: Session) -> PulseData:
     entries: list[PulseDayEntry] = []
     for d in days:
         steps = list(getattr(d, "steps", []) or [])
-        delivered = sum(1 for s in steps if not _is_step_canceled(s))
-        completed = sum(
-            1 for s in steps if (not _is_step_canceled(s) and _is_step_completed(s))
-        )
+        delivered = len(steps)
+        completed = sum(1 for s in steps if _is_step_completed(s))
         completion_ratio = _to_ratio(completed, delivered)
 
-        adapted = any(
-            getattr(s, "canceled_by_adaptation", False)
-            for s in (getattr(d, "steps", None) or [])
-        )
+        adapted = False
 
         if d.day_number < window_start:
             window = "past"

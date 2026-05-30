@@ -71,8 +71,6 @@ class Settings:
     IS_PROD: bool = False
     # ── Feature flags ─────────────────────────────────────────────────────────
     # ADAPTATIONS_ENABLED: frozen at False for P1.
-    # Adaptation layer is not active. No new AdaptationHistory records may be
-    # created while this is False. Flip to True only when adaptation agent is ready.
     ADAPTATIONS_ENABLED: bool = False
     # LEGACY_PLAN_FLOW_ENABLED: frozen at False for P1 (T5.2).
     # When False: plan creation goes through create_plan() directly to ACTIVE.

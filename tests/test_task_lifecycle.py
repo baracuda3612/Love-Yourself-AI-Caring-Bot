@@ -146,7 +146,6 @@ class TestCompletionRateExcludesFuture:
         class _FakeStep:
             step_status: str
             scheduled_for: datetime
-            canceled_by_adaptation: bool = False
 
         eligible_statuses = ("completed", "skipped", "expired")
         steps = [
@@ -159,7 +158,6 @@ class TestCompletionRateExcludesFuture:
             s for s in steps
             if s.step_status in eligible_statuses
             and s.scheduled_for <= now
-            and not s.canceled_by_adaptation
         ]
 
         total_delivered = len(eligible)
@@ -178,7 +176,6 @@ class TestCompletionRateExcludesFuture:
         class _FakeStep:
             step_status: str
             scheduled_for: datetime
-            canceled_by_adaptation: bool = False
 
         eligible_statuses = ("completed", "skipped", "expired")
         steps = [
@@ -190,7 +187,6 @@ class TestCompletionRateExcludesFuture:
             s for s in steps
             if s.step_status in eligible_statuses
             and s.scheduled_for <= now
-            and not s.canceled_by_adaptation
         ]
 
         rate = sum(1 for s in eligible if s.step_status == "completed") / len(eligible)
@@ -329,7 +325,6 @@ class TestThreeMetrics:
         class _S:
             step_status: str
             scheduled_for: datetime
-            canceled_by_adaptation: bool = False
 
         steps = [_S(s, past) for s in statuses]
         eligible_statuses = ("completed", "skipped", "expired")
@@ -337,7 +332,6 @@ class TestThreeMetrics:
             s for s in steps
             if s.step_status in eligible_statuses
             and s.scheduled_for <= now
-            and not s.canceled_by_adaptation
         ]
 
     def test_completion_rate(self):
@@ -355,8 +349,8 @@ class TestThreeMetrics:
         rate = sum(1 for s in el if s.step_status == "expired") / len(el)
         assert round(rate, 4) == round(2 / 3, 4)
 
-    def test_canceled_excluded_from_denominator(self):
-        """canceled steps must not appear in eligible (canceled_by_adaptation filter)."""
+    def test_expired_excluded_from_numerator_only(self):
+        """expired steps count in denominator but not numerator (step_status filter)."""
         now = datetime.now(timezone.utc)
         past = now - timedelta(hours=1)
 
@@ -364,16 +358,16 @@ class TestThreeMetrics:
         class _S:
             step_status: str
             scheduled_for: datetime
-            canceled_by_adaptation: bool
 
         steps = [
-            _S("completed", past, False),
-            _S("canceled", past, True),   # must be excluded
+            _S("completed", past),
+            _S("expired", past),   # in denominator, not numerator
+            _S("pending", now + timedelta(hours=1)),  # future — excluded
         ]
         eligible = [
             s for s in steps
             if s.step_status in ("completed", "skipped", "expired")
-            and not s.canceled_by_adaptation
+            and s.scheduled_for <= now
         ]
-        assert len(eligible) == 1
+        assert len(eligible) == 2
         assert eligible[0].step_status == "completed"

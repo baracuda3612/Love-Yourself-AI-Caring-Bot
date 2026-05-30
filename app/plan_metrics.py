@@ -111,7 +111,7 @@ def get_completion_rate(db: Session, user_id: int, plan_id: int) -> float:
     """
     completion_rate = completed / eligible
     eligible = steps where step_status in (completed, skipped, expired)
-               AND scheduled_at <= now AND not canceled_by_adaptation
+               AND scheduled_at <= now
     Future pending/delivered tasks are excluded.
     """
     from app.db import AIPlanDay
@@ -124,7 +124,6 @@ def get_completion_rate(db: Session, user_id: int, plan_id: int) -> float:
             AIPlanDay.plan_id == plan_id,
             AIPlanStep.step_status.in_(["completed", "skipped", "expired"]),
             AIPlanStep.scheduled_for <= now_utc,
-            AIPlanStep.canceled_by_adaptation == False,
         )
         .all()
     )
@@ -147,7 +146,6 @@ def _fetch_eligible_steps(db: Session, plan_id: int):
             AIPlanDay.plan_id == plan_id,
             AIPlanStep.step_status.in_(["completed", "skipped", "expired"]),
             AIPlanStep.scheduled_for <= now_utc,
-            AIPlanStep.canceled_by_adaptation == False,
         )
         .all()
     )
