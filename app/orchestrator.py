@@ -48,8 +48,6 @@ from app.workers.coach_agent import _build_idle_finished_context, coach_agent
 from app.fsm.guards import can_transition
 from app.fsm.states import (
     FSM_ALLOWED_STATES,
-    PLAN_FLOW_ENTRYPOINTS,
-    PLAN_FLOW_STATES,
     ENTRY_PROMPT_ALLOWED_STATES,
     IDLE_STATES,
     PLAN_CREATION_ENTRY_STATES,
@@ -456,94 +454,6 @@ async def run_plan_tool_call(tool_call: Dict[str, Any]) -> Dict[str, Any]:
     return {"user_text": ""}
 
 
-async def handle_confirmation_pending_action(
-    user_id: int,
-    plan_updates: Any,
-    transition_signal: Any,
-    reply_text: str,
-    context_payload: Dict[str, Any],
-) -> Optional[Dict[str, Any]]:
-    # FROZEN T5.2: PLAN_FLOW:CONFIRMATION_PENDING tunnel is disabled.
-    # Plan creation goes directly through create_plan() → ACTIVE.
-    # This function is unreachable in normal flow when LEGACY_PLAN_FLOW_ENABLED=False.
-    from app.config import settings
-    if not settings.LEGACY_PLAN_FLOW_ENABLED:
-        return None
-    # CONFIRMATION_PENDING is intentionally minimal.
-    # There are only two actions:
-    # - FSM transition
-    # - rebuild (plan_updates != {})
-    # Any other logic is a bug.
-    current_state = context_payload.get("current_state")
-    if current_state != "PLAN_FLOW:CONFIRMATION_PENDING":
-        return None
-
-    if transition_signal == "PLAN_FLOW:DATA_COLLECTION" and plan_updates is None:
-        await session_memory.clear_plan_parameters(user_id)
-        with SessionLocal() as db:
-            delete_latest_draft(db, user_id)
-            db.commit()
-        log_metric("plan_flow_restarted", extra={"user_id": user_id})
-        log_metric("plan_draft_deleted", extra={"user_id": user_id})
-        return None
-
-    if transition_signal == "IDLE_PLAN_ABORTED":
-        await session_memory.clear_plan_parameters(user_id)
-        with SessionLocal() as db:
-            delete_latest_draft(db, user_id)
-            db.commit()
-        log_metric("plan_flow_aborted", extra={"user_id": user_id})
-        log_metric("plan_draft_deleted", extra={"user_id": user_id})
-        return None
-
-    if transition_signal is None and isinstance(plan_updates, dict):
-        parameters_for_draft = context_payload.get("known_parameters") or {}
-        action = None
-        if plan_updates:
-            action = "plan_draft_rebuilt_parameters"
-        if action:
-            try:
-                draft = build_plan_draft(parameters_for_draft, user_id=str(user_id))
-                with SessionLocal() as db:
-                    overwrite_plan_draft(db, user_id, draft)
-                    db.commit()
-                log_metric(action, extra={"user_id": user_id})
-                preview = build_confirmation_preview(draft, parameters_for_draft)
-                rendered_preview = render_confirmation_preview(preview)
-                return {"reply_text": rendered_preview, "show_plan_actions": True}
-            except DraftValidationError as exc:
-                logger.error(
-                    "[PLAN_DRAFT] Draft update validation failed for user %s: %s (duration=%s focus=%s load=%s slots=%s)",
-                    user_id,
-                    exc,
-                    parameters_for_draft.get("duration"),
-                    parameters_for_draft.get("focus"),
-                    parameters_for_draft.get("load"),
-                    parameters_for_draft.get("preferred_time_slots"),
-                )
-                return {"reply_text": PLAN_GENERATION_ERROR_MESSAGE, "show_plan_actions": False}
-            except (InsufficientLibraryError, IntegrityError) as exc:
-                logger.error(
-                    "[PLAN_DRAFT] Draft update failed for user %s: %s",
-                    user_id,
-                    exc,
-                )
-                return {"reply_text": PLAN_GENERATION_ERROR_MESSAGE, "show_plan_actions": False}
-    return None
-
-
-def _normalize_confirmation_reply(payload: Any) -> Optional[Dict[str, Any]]:
-    if payload is None:
-        return None
-    if not isinstance(payload, dict):
-        return None
-    reply_text = payload.get("reply_text")
-    if not isinstance(reply_text, str):
-        return None
-    show_plan_actions = payload.get("show_plan_actions", False)
-    if not isinstance(show_plan_actions, bool):
-        return None
-    return {"reply_text": reply_text, "show_plan_actions": show_plan_actions}
 
 
 def _normalize_fsm_state(raw_state: Optional[str]) -> Optional[str]:
@@ -575,11 +485,6 @@ def _guard_fsm_transition(
         return None, None
 
     normalized_current = _normalize_fsm_state(current_state) if current_state else None
-    if normalized_current in PLAN_FLOW_STATES:
-        if target_agent == "coach":
-            return None, None
-        if target_agent != "plan":
-            return None, "non_plan_agent_in_tunnel"
 
     normalized_signal = _normalize_fsm_state(transition_signal)
     if normalized_signal is None:
@@ -901,7 +806,7 @@ def _auto_drop_plan_for_new_flow(user_id: int) -> bool:
     if step_ids:
         cancel_plan_step_jobs(step_ids)
     logger.info(
-        "[FSM] Auto-dropped plan before new PLAN_FLOW for user %s",
+        "[FSM] Auto-dropped plan before new plan flow for user %s",
         user_id,
     )
     return True
@@ -964,16 +869,12 @@ async def _commit_fsm_transition(
 
     if db is not None:
         previous_state = _apply_transition(db)
-        if next_state == "PLAN_FLOW:DATA_COLLECTION" and previous_state not in PLAN_FLOW_STATES:
-            await session_memory.clear_plan_parameters(user_id)
         return previous_state
 
     with SessionLocal() as managed_db:
         previous_state = _apply_transition(managed_db)
         managed_db.commit()
 
-    if next_state == "PLAN_FLOW:DATA_COLLECTION" and previous_state not in PLAN_FLOW_STATES:
-        await session_memory.clear_plan_parameters(user_id)
     return previous_state
 
 
@@ -1392,9 +1293,6 @@ async def handle_incoming_message(
         await session_memory.clear_schedule_adjustment_soft_prompted(user_id)
 
     show_plan_actions = False
-    # T5.2: PLAN_FLOW:CONFIRMATION_PENDING draft injection disabled (LEGACY_PLAN_FLOW_ENABLED=False)
-    if settings.LEGACY_PLAN_FLOW_ENABLED and context_payload.get("current_state") == "PLAN_FLOW:CONFIRMATION_PENDING":
-        context_payload["draft_plan_artifact"] = None  # get_latest_draft removed in T5.2
     router_output = await call_router(user_id, message_text, context_payload)
 
     router_result = router_output.get("router_result", {})
@@ -1504,94 +1402,11 @@ async def handle_incoming_message(
         tool_result = await run_plan_tool_call(worker_result["tool_call"])
         return await _finalize_reply(str(tool_result.get("user_text") or ""), keyboard=tool_result.get("keyboard"))
 
-    # NOTE:
-    # Auto-start PLAN_FLOW commits FSM transition eagerly and re-invokes Plan Agent.
-    # The standard FSM transition logic below MUST NOT re-commit the same transition.
-    auto_start_entry_states = PLAN_CREATION_ENTRY_STATES - {"ACTIVE_PAUSED"}
-    if (
-        target_agent == "plan"
-        and context_payload.get("current_state") in auto_start_entry_states
-        and worker_result.get("transition_signal") == "PLAN_FLOW:DATA_COLLECTION"
-    ):
-        transition_signal = worker_result.get("transition_signal")
-        current_state = context_payload.get("current_state")
-        if transition_signal == "PLAN_FLOW:DATA_COLLECTION":
-            if current_state in {"ACTIVE", "ACTIVE_PAUSED"}:
-                did_drop = _auto_drop_plan_for_new_flow(user_id)
-                if did_drop:
-                    current_state = "IDLE_DROPPED"
-                    context_payload["current_state"] = current_state
-                else:
-                    logger.warning(
-                        "[FSM] Auto-drop failed, blocking PLAN_FLOW entry for user %s",
-                        user_id,
-                    )
-                    transition_signal = None
-        # TASK-4.3: PLAN_FLOW guard enforced via _guard_fsm_transition/can_transition.
-        next_state, rejection_reason = _guard_fsm_transition(
-            current_state,
-            transition_signal,
-            target_agent,
-        )
-        if transition_signal is not None and next_state is None:
-            logger.warning(
-                "[FSM] Ignoring transition_signal for user %s: %s (reason=%s, agent=%s)",
-                user_id,
-                transition_signal,
-                rejection_reason or "invalid_state",
-                target_agent,
-            )
-            log_metric(
-                "fsm_transition_blocked",
-                extra={
-                    "user_id": user_id,
-                    "agent": target_agent,
-                    "current_state": current_state,
-                    "transition_signal": transition_signal,
-                    "reason": rejection_reason or "invalid_state",
-                },
-            )
-        elif next_state is not None:
-            previous_state = await _commit_fsm_transition(user_id, target_agent, next_state)
-            if previous_state is not None:
-                context_payload["current_state"] = next_state
-                worker_payload["current_state"] = next_state
-                if (
-                    next_state == "PLAN_FLOW:DATA_COLLECTION"
-                    and previous_state not in PLAN_FLOW_STATES
-                ):
-                    refreshed_parameters = normalize_plan_parameters(
-                        await session_memory.get_plan_parameters(user_id)
-                    )
-                    context_payload["known_parameters"] = refreshed_parameters
-                    worker_payload["known_parameters"] = refreshed_parameters
-                log_router_decision(
-                    {
-                        "event_type": "agent_invocation",
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "agent_name": target_agent,
-                        "payload": worker_payload,
-                    }
-                )
-                worker_result = await _invoke_agent(target_agent, worker_payload)
-
-    if (
-        context_payload.get("current_state") == "PLAN_FLOW:CONFIRMATION_PENDING"
-        and target_agent == "plan"
-        and worker_result.get("transition_signal") is None
-        and worker_result.get("plan_updates") is None
-        and not str(worker_result.get("reply_text") or "").strip()
-    ):
-        coach_result = await coach_agent(worker_payload)
-        worker_result = coach_result
-        target_agent = "coach"
-
     reply_text = str(worker_result.get("reply_text") or "")
     defer_draft = False
     plan_draft_parameters: Optional[Dict[str, Any]] = None
 
     current_state = context_payload.get("current_state")
-    blocked_persistence_states = {"PLAN_FLOW:DATA_COLLECTION", "PLAN_FLOW:CONFIRMATION_PENDING"}
 
     error_payload = worker_result.get("error")
     if error_payload is not None:
@@ -1619,7 +1434,7 @@ async def handle_incoming_message(
 
     plan_persisted = False
     generated_plan_object = worker_result.get("generated_plan_object")
-    if generated_plan_object is not None and current_state not in blocked_persistence_states:
+    if generated_plan_object is not None:
         with SessionLocal() as db:
             user: Optional[User] = db.query(User).filter(User.id == user_id).first()
             if not user:
@@ -1659,249 +1474,10 @@ async def handle_incoming_message(
                 )
 
     plan_updates = worker_result.get("plan_updates")
-    draft_parameters = None
-    if (
-        target_agent == "plan"
-        and isinstance(plan_updates, dict)
-        and current_state in PLAN_FLOW_STATES
-        and current_state != "PLAN_FLOW:DATA_COLLECTION"
-    ):
-        clean_updates = _sanitize_plan_updates(plan_updates)
-        persistent_parameters = await session_memory.get_plan_parameters(user_id)
-        updated_parameters = dict(persistent_parameters)
-        if clean_updates:
-            updated_parameters.update(clean_updates)
-            await session_memory.set_plan_parameters(user_id, updated_parameters)
-            context_payload["known_parameters"] = updated_parameters
-            draft_parameters = updated_parameters
     transition_signal = worker_result.get("transition_signal")
-    data_collection_notice: str | None = None
-    if target_agent == "plan" and current_state == "PLAN_FLOW:DATA_COLLECTION":
-        transition_signal = None
-        persistent_parameters = normalize_plan_parameters(
-            await session_memory.get_plan_parameters(user_id)
-        )
-
-        clean_updates: Dict[str, Any] = {}
-        if isinstance(plan_updates, dict):
-            clean_updates = _sanitize_plan_updates(plan_updates) or {}
-
-        proposed_parameters = dict(persistent_parameters)
-        if clean_updates:
-            if "duration" in clean_updates:
-                proposed_parameters["duration"] = clean_updates["duration"]
-            if "focus" in clean_updates:
-                proposed_parameters["focus"] = clean_updates["focus"]
-            if "load" in clean_updates:
-                proposed_parameters["load"] = clean_updates["load"]
-                proposed_parameters.pop("preferred_time_slots", None)
-            if "preferred_time_slots" in clean_updates:
-                proposed_slots = [
-                    slot for slot in clean_updates["preferred_time_slots"] if slot in PLAN_TIME_SLOT_VALUES
-                ]
-                proposed_parameters["preferred_time_slots"] = proposed_slots
-
-        load = proposed_parameters.get("load")
-        slots = proposed_parameters.get("preferred_time_slots") or []
-        normalized_slots = [slot for slot in slots if slot in PLAN_TIME_SLOT_VALUES]
-
-        if load == "INTENSIVE":
-            proposed_parameters["preferred_time_slots"] = INTENSIVE_AUTO_SLOTS.copy()
-            normalized_slots = INTENSIVE_AUTO_SLOTS.copy()
-            data_collection_notice = (
-                "Для інтенсивного плану автоматично призначено 3 слоти:\nMORNING / DAY / EVENING"
-            )
-        elif load == "MID" and "preferred_time_slots" in clean_updates and len(normalized_slots) != 2:
-            params_to_save = {k: v for k, v in proposed_parameters.items() if k != "preferred_time_slots"}
-            persistent_without_slots = {
-                k: v for k, v in persistent_parameters.items() if k != "preferred_time_slots"
-            }
-            if params_to_save != persistent_without_slots:
-                await session_memory.set_plan_parameters(user_id, params_to_save)
-                context_payload["known_parameters"] = params_to_save
-                draft_parameters = params_to_save
-            reply_text = (
-                "Для MID потрібно обрати рівно 2 часові слоти.\n\n"
-                "Якщо хочеш 3 слоти — обери INTENSIVE.\n"
-                "Якщо 1 слот — обери LITE.\n\n"
-                "Які 2 часові слоти підходять?\n"
-                "MORNING / DAY / EVENING"
-            )
-            return await _finalize_reply(reply_text)
-        elif load == "LITE" and "preferred_time_slots" in clean_updates and len(normalized_slots) != 1:
-            params_to_save = {k: v for k, v in proposed_parameters.items() if k != "preferred_time_slots"}
-            persistent_without_slots = {
-                k: v for k, v in persistent_parameters.items() if k != "preferred_time_slots"
-            }
-            if params_to_save != persistent_without_slots:
-                await session_memory.set_plan_parameters(user_id, params_to_save)
-                context_payload["known_parameters"] = params_to_save
-                draft_parameters = params_to_save
-            reply_text = (
-                "Для LITE потрібно обрати рівно 1 часовий слот.\n\n"
-                "Якщо хочеш 2 слоти — обери MID.\n"
-                "Якщо 3 — обери INTENSIVE.\n\n"
-                "Який часовий слот підходить?\n"
-                "MORNING / DAY / EVENING"
-            )
-            return await _finalize_reply(reply_text)
-
-        if proposed_parameters != persistent_parameters:
-            await session_memory.set_plan_parameters(user_id, proposed_parameters)
-            context_payload["known_parameters"] = proposed_parameters
-            draft_parameters = proposed_parameters
-
-        persistent_parameters = normalize_plan_parameters(
-            await session_memory.get_plan_parameters(user_id)
-        )
-        duration = persistent_parameters.get("duration")
-        focus = persistent_parameters.get("focus")
-        load = persistent_parameters.get("load")
-        slots = persistent_parameters.get("preferred_time_slots") or []
-        normalized_slots = [slot for slot in slots if slot in PLAN_TIME_SLOT_VALUES]
-
-        if duration is not None and focus is not None and load is not None:
-            expected_slots = _expected_time_slots_for_load(load)
-            if load == "MID" and len(normalized_slots) != 2:
-                reply_text = (
-                    "Для MID потрібно обрати рівно 2 часові слоти.\n\n"
-                    "Якщо хочеш 3 слоти — обери INTENSIVE.\n"
-                    "Якщо 1 слот — обери LITE.\n\n"
-                    "Які 2 часові слоти підходять?\n"
-                    "MORNING / DAY / EVENING"
-                )
-            elif load == "LITE" and len(normalized_slots) != 1:
-                reply_text = (
-                    "Для LITE потрібно обрати рівно 1 часовий слот.\n\n"
-                    "Якщо хочеш 2 слоти — обери MID.\n"
-                    "Якщо 3 — обери INTENSIVE.\n\n"
-                    "Який часовий слот підходить?\n"
-                    "MORNING / DAY / EVENING"
-                )
-            elif load == "INTENSIVE":
-                if normalized_slots != INTENSIVE_AUTO_SLOTS:
-                    persistent_parameters["preferred_time_slots"] = INTENSIVE_AUTO_SLOTS.copy()
-                    await session_memory.set_plan_parameters(user_id, persistent_parameters)
-                    context_payload["known_parameters"] = persistent_parameters
-                    draft_parameters = persistent_parameters
-                    normalized_slots = INTENSIVE_AUTO_SLOTS.copy()
-                    reply_text = (
-                        "В інтенсивному режимі завжди використовується 3 часові слоти:\nMORNING / DAY / EVENING"
-                    )
-                transition_signal = "PLAN_FLOW:CONFIRMATION_PENDING"
-            elif expected_slots is not None and len(normalized_slots) == expected_slots:
-                transition_signal = "PLAN_FLOW:CONFIRMATION_PENDING"
-    if target_agent == "plan" and current_state == "PLAN_FLOW:CONFIRMATION_PENDING":
-        confirmation_reply = await handle_confirmation_pending_action(
-            user_id,
-            plan_updates,
-            transition_signal,
-            reply_text,
-            context_payload,
-        )
-        normalized_reply = _normalize_confirmation_reply(confirmation_reply)
-        if normalized_reply is not None:
-            return await _finalize_reply(**normalized_reply)
-        if settings.LEGACY_PLAN_FLOW_ENABLED and transition_signal == "PLAN_FLOW:FINALIZATION":
-            lock_key = f"finalization_lock:{user_id}"
-            already_running = True
-            if redis_client is not None:
-                try:
-                    already_running = bool(await redis_client.set(lock_key, "1", nx=True, ex=30))
-                except Exception as exc:
-                    logger.warning("[PLAN_FINALIZATION] Failed to acquire redis lock for user %s: %s", user_id, exc)
-                    already_running = True
-            if not already_running:
-                return await _finalize_reply("⏳ Plan is already being activated, please wait.")
-
-            async def _run_finalization() -> None:
-                try:
-                    with SessionLocal.begin() as db:
-                        draft = validate_for_finalization(db, user_id)
-                        activation_time_utc = datetime.now(timezone.utc)
-                        plan = finalize_plan(
-                            db,
-                            user_id,
-                            draft,
-                            activation_time_utc=activation_time_utc,
-                        )
-                        current_parameters = normalize_plan_parameters(
-                            await session_memory.get_plan_parameters(user_id)
-                        )
-                        active_plan = get_active_plan(db, user_id)
-                        _slots = (current_parameters or {}).get("preferred_time_slots") or []
-                        if _slots and active_plan:
-                            active_plan.preferred_time_slots = [
-                                s for s in ["MORNING", "DAY", "EVENING"] if s in _slots
-                            ]
-                    await asyncio.to_thread(activate_plan_side_effects, plan.id, user_id)
-                    log_metric("plan_finalized", extra={"user_id": user_id, "plan_id": plan.id})
-                    await _commit_fsm_transition(user_id, "plan", "ACTIVE")
-                    selected_slots = [
-                        slot
-                        for slot in (current_parameters.get("preferred_time_slots") or [])
-                        if slot in PLAN_TIME_SLOT_VALUES
-                    ]
-                    await session_memory.clear_plan_parameters(user_id)
-                    try:
-                        from app.telegram import bot as tg_bot
-                        with SessionLocal() as db:
-                            user = db.query(User).filter(User.id == user_id).first()
-                            tg_id = user.tg_id if user else None
-                        if tg_id:
-                            activation_msg = (
-                                "✅ План активовано.\n"
-                                "Перші завдання надійдуть згідно з обраними часовими слотами."
-                            )
-                            activation_info = build_activation_info_message(selected_slots, None)
-                            await tg_bot.send_message(tg_id, f"{activation_msg}\n\n{activation_info}")
-                    except Exception as notify_exc:
-                        logger.error(
-                            "[PLAN_FINALIZATION] Failed to send activation confirmation to user %s: %s",
-                            user_id,
-                            notify_exc,
-                        )
-                except (
-                    DraftNotFoundError,
-                    InvalidDraftError,
-                    ActivePlanExistsError,
-                    FinalizationError,
-                ) as exc:
-                    logger.error(
-                        "[PLAN_FINALIZATION] Failed to finalize plan for user %s: %s",
-                        user_id,
-                        exc,
-                    )
-                    try:
-                        from app.telegram import bot as tg_bot
-                        with SessionLocal() as db:
-                            user = db.query(User).filter(User.id == user_id).first()
-                            tg_id = user.tg_id if user else None
-                        if tg_id:
-                            await tg_bot.send_message(tg_id, PLAN_FINALIZATION_ERROR_MESSAGE)
-                    except Exception as send_exc:
-                        logger.error(
-                            "[PLAN_FINALIZATION] Failed to send finalization error to user %s: %s",
-                            user_id,
-                            send_exc,
-                        )
-                finally:
-                    if redis_client is not None:
-                        try:
-                            await redis_client.delete(lock_key)
-                        except Exception as exc:
-                            logger.warning(
-                                "[PLAN_FINALIZATION] Failed to release redis lock for user %s: %s",
-                                user_id,
-                                exc,
-                            )
-
-            asyncio.create_task(_run_finalization())
-            return await _finalize_reply("⏳ План генерується…")
     if (
         plan_updates
         and isinstance(plan_updates, dict)
-        and current_state not in blocked_persistence_states
     ):
         allowed_execution_adaptations = {"pause", "resume", "PAUSE_PLAN", "RESUME_PLAN"}
         should_persist_updates = bool(generated_plan_object) or (
@@ -2013,36 +1589,7 @@ async def handle_incoming_message(
                         user.plan_end_date,
                     )
 
-    if transition_signal == "PLAN_FLOW:CONFIRMATION_PENDING":
-        parameters_for_draft = draft_parameters or (context_payload.get("known_parameters") or {})
-        if defer_plan_draft:
-            defer_draft = True
-            plan_draft_parameters = parameters_for_draft
-            reply_text = data_collection_notice if data_collection_notice else ""
-            show_plan_actions = True
-        else:
-            preview_text = await build_plan_draft_preview(user_id, parameters_for_draft)
-            if preview_text == PLAN_GENERATION_ERROR_MESSAGE:
-                transition_signal = None
-                reply_text = preview_text
-            else:
-                show_plan_actions = True
-                if data_collection_notice:
-                    reply_text = f"{data_collection_notice}\n\n{preview_text}"
-                else:
-                    reply_text = preview_text
-    if transition_signal == "PLAN_FLOW:DATA_COLLECTION":
-        if context_payload.get("current_state") in {"ACTIVE", "ACTIVE_PAUSED"}:
-            did_drop = _auto_drop_plan_for_new_flow(user_id)
-            if did_drop:
-                context_payload["current_state"] = "IDLE_DROPPED"
-            else:
-                logger.warning(
-                    "[FSM] Auto-drop failed, blocking PLAN_FLOW entry for user %s",
-                    user_id,
-                )
-                transition_signal = None
-    # TASK-4.3: PLAN_FLOW guard enforced via _guard_fsm_transition/can_transition.
+    # FSM guard enforced via _guard_fsm_transition/can_transition.
     next_state, rejection_reason = _guard_fsm_transition(
         context_payload.get("current_state"),
         transition_signal,
@@ -2073,30 +1620,6 @@ async def handle_incoming_message(
         previous_state = await _commit_fsm_transition(user_id, target_agent, next_state)
         if previous_state is None:
             return await _finalize_reply(reply_text)
-        if next_state == "PLAN_FLOW:DATA_COLLECTION" and previous_state in PLAN_FLOW_STATES:
-            refreshed_parameters = normalize_plan_parameters(
-                await session_memory.get_plan_parameters(user_id)
-            )
-            context_payload["current_state"] = next_state
-            worker_payload["current_state"] = next_state
-            context_payload["known_parameters"] = refreshed_parameters
-            worker_payload["known_parameters"] = refreshed_parameters
-            log_router_decision(
-                {
-                    "event_type": "agent_invocation",
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "agent_name": target_agent,
-                    "payload": worker_payload,
-                }
-            )
-            worker_result = await _invoke_agent(target_agent, worker_payload)
-            reply_text = str(worker_result.get("reply_text") or "")
-            return await _finalize_reply(
-                reply_text,
-                defer_draft=defer_draft,
-                plan_draft_parameters=plan_draft_parameters,
-                show_plan_actions=show_plan_actions,
-            )
 
     return await _finalize_reply(
         reply_text,
