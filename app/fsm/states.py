@@ -1,16 +1,13 @@
 """FSM state definitions.
 
-T5.3: Adaptation flow and Plan flow tunnels fully removed.
-Active FSM (9 states):
+T5.3 / T5.4: Adaptation flow and Plan flow tunnels removed.
+Active FSM (9 state groups):
 
   IDLE_NEW → ONBOARDING:* → IDLE_ONBOARDED → ACTIVE
   ACTIVE ↔ ACTIVE_PAUSED
   ACTIVE / ACTIVE_PAUSED → IDLE_FINISHED / IDLE_PLAN_ABORTED / IDLE_DROPPED
   IDLE_FINISHED / IDLE_PLAN_ABORTED / IDLE_DROPPED → ACTIVE
   ACTIVE / ACTIVE_PAUSED ↔ SCHEDULE_ADJUSTMENT  (future: call tool — backlog)
-
-T5.4 backlog: delete adaptation_executor.py, orchestrator adaptation blocks,
-              ai_plans adaptation prompts/tools, related tests.
 """
 
 from __future__ import annotations
@@ -60,20 +57,6 @@ def is_valid_fsm_state(state: str) -> bool:
 ENTRY_PROMPT_ALLOWED_STATES = PLAN_CREATION_ENTRY_STATES
 
 
-# ── Stub constants — kept so legacy imports don't fail before T5.4 cleanup ──
-# These states are NO LONGER part of active FSM.
-# T5.4: delete these stubs along with adaptation code in orchestrator / ai_plans.py.
-
-ADAPTATION_SELECTION = "ADAPTATION_SELECTION"
-ADAPTATION_PARAMS = "ADAPTATION_PARAMS"
-ADAPTATION_CONFIRMATION = "ADAPTATION_CONFIRMATION"
-ADAPTATION_FLOW_STATES: set[str] = set()           # removed from active FSM
-ADAPTATION_FLOW_ALLOWED_TRANSITIONS: set = set()    # removed from active FSM
-ADAPTATION_ENTRY_STATES: set[str] = set()           # removed
-ADAPTATION_FLOW_ENTRY_STATES: set[str] = set()      # removed
-
-PLAN_FLOW_STATES: set[str] = set()      # removed from active FSM
-PLAN_FLOW_ENTRYPOINTS: set[str] = set() # removed
 
 # Wildcard state families — matched via startswith(prefix + ":") in guards and DB LIKE.
 # ONBOARDING:* covers all sub-states of the onboarding flow (ONBOARDING:START, etc.).

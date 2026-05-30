@@ -47,18 +47,6 @@ _PLAN_ACTIONS = [
     ("🔄 Restart from scratch", "plan_restart", "почни спочатку"),
 ]
 
-_ADAPTATION_ACTIONS = [
-    ("✅ Підтвердити", "adapt_confirm", "підтверджую"),
-    ("✏️ Змінити параметр", "adapt_edit_params", "змінити параметр"),
-    ("🔀 Інша адаптація", "adapt_change_type", "хочу вибрати іншу адаптацію"),
-    ("❌ Скасувати", "adapt_cancel", "скасувати"),
-]
-
-_ADAPTATION_TIMEOUT_CALLBACKS = [
-    "adaptation_timeout_reset",
-    "adaptation_timeout_continue",
-]
-
 _SCHEDULE_ADJ_TIMEOUT_CALLBACKS = [
     "sched_adj_timeout_reset",
     "sched_adj_timeout_continue",
@@ -74,20 +62,6 @@ def _build_plan_action_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def _build_adaptation_action_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=label, callback_data=cb)]
-            for label, cb, _ in _ADAPTATION_ACTIONS
-        ]
-    )
-
-
-def _adaptation_action_text(callback_data: str) -> str:
-    for _, cb, text in _ADAPTATION_ACTIONS:
-        if cb == callback_data:
-            return text
-    return "скасувати"
 
 
 def _plan_action_text(callback_data: str) -> str:
@@ -331,57 +305,6 @@ async def on_plan_action(callback_query: CallbackQuery):
         raise RuntimeError("handle_incoming_message response must include reply_text")
     if callback_query.message:
         await _send_agent_response(callback_query.message, user.id, response)
-
-
-@router.callback_query(F.data.in_([action[1] for action in _ADAPTATION_ACTIONS]))
-async def on_adaptation_action(callback_query: CallbackQuery):
-    cb_data = callback_query.data or ""
-    message_text = _adaptation_action_text(cb_data)
-
-    with SessionLocal() as db:
-        user, _ = _ensure_user(db, callback_query.from_user)
-        db.add(ChatHistory(user_id=user.id, role="user", text=message_text))
-        db.commit()
-
-    await callback_query.answer()
-    response = await handle_incoming_message(user.id, message_text, defer_plan_draft=True)
-    if not isinstance(response, dict) or "reply_text" not in response:
-        raise RuntimeError("handle_incoming_message response must include reply_text")
-    if callback_query.message:
-        await _send_agent_response(callback_query.message, user.id, response)
-
-
-@router.callback_query(F.data.in_(_ADAPTATION_TIMEOUT_CALLBACKS))
-async def on_adaptation_timeout_action(callback_query: CallbackQuery):
-    from app.session_memory import session_memory
-
-    cb_data = callback_query.data or ""
-    with SessionLocal() as db:
-        user, _ = _ensure_user(db, callback_query.from_user)
-
-        if cb_data == "adaptation_timeout_reset":
-            user.current_state = "ACTIVE"
-            db.add(user)
-            db.commit()
-            await session_memory.clear_adaptation_context(user.id)
-            await session_memory.clear_adaptation_last_active(user.id)
-            await session_memory.clear_adaptation_soft_prompted(user.id)
-            await callback_query.answer()
-            if callback_query.message:
-                await callback_query.message.edit_reply_markup(reply_markup=None)
-            await bot.send_message(
-                user.tg_id,
-                "Повертаємось до плану. Наступне завдання прийде за розкладом. 👍",
-            )
-
-        elif cb_data == "adaptation_timeout_continue":
-            await session_memory.set_adaptation_last_active(user.id)
-            await session_memory.clear_adaptation_soft_prompted(user.id)
-            await callback_query.answer()
-            if callback_query.message:
-                await callback_query.message.edit_reply_markup(reply_markup=None)
-
-
 
 
 @router.callback_query(F.data.startswith("sched_task:"))
@@ -758,8 +681,6 @@ async def _send_agent_response(message: Message, user_id: int, response: dict) -
         preview_text = _sanitize_message_text(preview_text)
         if response.get("show_plan_actions"):
             reply_markup = _build_plan_action_keyboard()
-        elif _user_state == "ADAPTATION_CONFIRMATION":
-            reply_markup = _build_adaptation_action_keyboard()
         else:
             reply_markup = None
         await message.answer(preview_text, reply_markup=reply_markup)
@@ -775,8 +696,6 @@ async def _send_agent_response(message: Message, user_id: int, response: dict) -
         reply_markup = keyboard
     elif response.get("show_plan_actions"):
         reply_markup = _build_plan_action_keyboard()
-    elif _user_state == "ADAPTATION_CONFIRMATION":
-        reply_markup = _build_adaptation_action_keyboard()
     else:
         reply_markup = None
     await message.answer(reply_text, reply_markup=reply_markup)
