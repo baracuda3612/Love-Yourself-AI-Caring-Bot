@@ -6,10 +6,8 @@ from datetime import datetime
 import pytz
 from sqlalchemy.orm import Session
 
-from app.adaptation_metrics import get_adaptation_count
 from app.active_days import consecutive_active_days_gap, resolve_active_days
 from app.db import AIPlan, AIPlanDay, AIPlanStep
-from app.plan_metrics import fetch_delivered_steps
 
 
 STRONG_THRESHOLD = 0.80
@@ -112,6 +110,25 @@ def _compute_current_streak(
     return streak
 
 
+def _fetch_eligible_steps(
+    db: Session,
+    plan_id: int,
+    now_utc: datetime,
+) -> list[AIPlanStep]:
+    """Query steps eligible for completion metrics (completed | skipped | expired)."""
+    return (
+        db.query(AIPlanStep)
+        .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+        .filter(
+            AIPlanDay.plan_id == plan_id,
+            AIPlanStep.step_status.in_(["completed", "skipped", "expired"]),
+            AIPlanStep.scheduled_for <= now_utc,
+            AIPlanStep.canceled_by_adaptation == False,
+        )
+        .all()
+    )
+
+
 def _resolve_outcome_tier(completion_rate: float) -> str:
     if completion_rate >= STRONG_THRESHOLD:
         return "STRONG"
@@ -137,21 +154,13 @@ def build_completion_metrics(
     if plan is None:
         raise ValueError(f"Plan {plan_id} not found for user {user_id}")
 
-    adaptation_count = get_adaptation_count(db, plan_id)
+    # T5.4: adaptations removed — always 0. Remove field from CompletionMetrics when
+    # completion report is redesigned (backlog).
+    adaptation_count = 0
 
     # Eligible steps: completed | skipped | expired, scheduled <= now, not canceled
     now_utc = datetime.now(pytz.UTC)
-    eligible_steps = (
-        db.query(AIPlanStep)
-        .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
-        .filter(
-            AIPlanDay.plan_id == plan_id,
-            AIPlanStep.step_status.in_(["completed", "skipped", "expired"]),
-            AIPlanStep.scheduled_for <= now_utc,
-            AIPlanStep.canceled_by_adaptation == False,
-        )
-        .all()
-    )
+    eligible_steps = _fetch_eligible_steps(db, plan_id, now_utc)
 
     total_delivered = len(eligible_steps)
 

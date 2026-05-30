@@ -28,14 +28,6 @@ from app.db import (
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from app.logging.router_logging import log_metric, log_router_decision
 from app.plan_adaptations import PlanAdaptationError, apply_plan_adaptation
-from app.adaptation_executor import AdaptationExecutor, AdaptationResult
-from app.adaptation_types import (
-    AdaptationIntent,
-    AdaptationNotEligibleError,
-    check_adaptation_conflict,
-    check_rate_limit,
-    get_inverse_intent,
-)
 from app.plan_parameters import normalize_plan_parameters
 from app.scheduler import cancel_plan_step_jobs, reschedule_plan_steps
 from app.redis_client import redis_client
@@ -43,7 +35,6 @@ from app.session_memory import SessionMemory
 from app.time_slots import compute_scheduled_for, resolve_daily_time_slots
 from app.ux.persona import get_persona
 from app.ux.plan_messages import build_activation_info_message
-from app.ux.adaptation_preview import build_adaptation_preview, build_adaptation_success_message
 from app.plan_drafts.service import create_plan
 from app.plan_finalization import (
     ActivePlanExistsError,
@@ -57,16 +48,9 @@ from app.plan_finalization import (
 from app.workers.coach_agent import _build_idle_finished_context, coach_agent
 from app.fsm.guards import can_transition
 from app.fsm.states import (
-    ADAPTATION_CONFIRMATION,
-    ADAPTATION_FLOW_ALLOWED_TRANSITIONS,
-    ADAPTATION_FLOW_ENTRY_STATES,
-    ADAPTATION_FLOW_STATES,
-    ADAPTATION_PARAMS,
-    ADAPTATION_SELECTION,
     FSM_ALLOWED_STATES,
     PLAN_FLOW_ENTRYPOINTS,
     PLAN_FLOW_STATES,
-    ADAPTATION_ENTRY_STATES,
     ENTRY_PROMPT_ALLOWED_STATES,
     IDLE_STATES,
     PLAN_CREATION_ENTRY_STATES,
@@ -594,7 +578,7 @@ def _guard_fsm_transition(
         return None, None
 
     normalized_current = _normalize_fsm_state(current_state) if current_state else None
-    if normalized_current in PLAN_FLOW_STATES or normalized_current in ADAPTATION_FLOW_STATES:
+    if normalized_current in PLAN_FLOW_STATES:
         if target_agent == "coach":
             return None, None
         if target_agent != "plan":
@@ -602,8 +586,6 @@ def _guard_fsm_transition(
 
     normalized_signal = _normalize_fsm_state(transition_signal)
     if normalized_signal is None:
-        if transition_signal in {"EXECUTE_ADAPTATION", "UNDO_LAST_ADAPTATION"}:
-            return transition_signal, None
         return None, "invalid_state"
 
     if normalized_current is None:
@@ -669,14 +651,12 @@ def _auto_complete_plan_if_needed(db: Session, user: User) -> None:
     db.add(user)
 
     completion_rate = None
-    adaptation_count = None
+    adaptation_count = 0
     metrics_error = False
     try:
         from app.plan_metrics import get_completion_rate
-        from app.adaptation_metrics import get_adaptation_count
 
         completion_rate = get_completion_rate(db, user.id, plan.id)
-        adaptation_count = get_adaptation_count(db, plan.id)
     except Exception as e:
         metrics_error = True
         logger.warning("[COMPLETION] metrics failed user=%s plan=%s: %s", user.id, plan.id, e)
@@ -1326,60 +1306,6 @@ def get_active_plan(db: Session, user_id: int) -> Optional[AIPlan]:
     )
 
 
-def compute_available_adaptations(db: Session, plan: AIPlan) -> List[AdaptationIntent]:
-    available: List[AdaptationIntent] = []
-
-    current_daily_count = get_daily_task_count(db, plan)
-    if current_daily_count > 1:
-        available.append(AdaptationIntent.REDUCE_DAILY_LOAD)
-    if current_daily_count < 3:
-        available.append(AdaptationIntent.INCREASE_DAILY_LOAD)
-
-    steps = (
-        db.query(AIPlanStep)
-        .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
-        .filter(AIPlanDay.plan_id == plan.id)
-        .all()
-    )
-    if steps:
-        difficulty_map = {
-            "EASY": 1,
-            "MEDIUM": 2,
-            "HARD": 3,
-        }
-
-        normalized_difficulties = [
-            difficulty_map.get(str(step.difficulty).upper(), 1)
-            for step in steps
-        ]
-        min_difficulty = min(normalized_difficulties)
-        max_difficulty = max(normalized_difficulties)
-
-        if max_difficulty > 1:
-            available.append(AdaptationIntent.LOWER_DIFFICULTY)
-        if min_difficulty < 3:
-            available.append(AdaptationIntent.INCREASE_DIFFICULTY)
-
-    current_day = plan.current_day or 1
-
-    # EXTEND: дозволено якщо є куди розширювати
-    if plan.total_days in {7, 14, 21}:
-        available.append(AdaptationIntent.EXTEND_PLAN_DURATION)
-
-    # SHORTEN: показуємо якщо current_day < total_days.
-    # Детальна перевірка current_day > target_days — в executor.
-    if plan.total_days in {21, 90} and current_day < plan.total_days:
-        available.append(AdaptationIntent.SHORTEN_PLAN_DURATION)
-
-    if plan.status == "active":
-        available.append(AdaptationIntent.PAUSE_PLAN)
-    elif plan.status == "paused":
-        available.append(AdaptationIntent.RESUME_PLAN)
-
-    available.append(AdaptationIntent.CHANGE_MAIN_CATEGORY)
-    return available
-
-
 def get_daily_task_count(db: Session, plan: AIPlan) -> int:
     first_day = (
         db.query(AIPlanDay)
@@ -1421,513 +1347,6 @@ def get_avg_difficulty(db: Session, plan: AIPlan) -> int:
     ]
 
     return round(sum(values) / len(values))
-
-
-async def build_adaptation_payload(
-    user_id: int,
-    message_text: str,
-    current_state: str,
-    db: Session,
-) -> Dict[str, Any]:
-    active_plan = get_active_plan(db, user_id)
-    if not active_plan:
-        raise ValueError("No active plan for adaptation")
-
-    adaptation_context = await session_memory.get_adaptation_context(user_id) or {
-        "intent": None,
-        "params": None,
-    }
-
-    payload: Dict[str, Any] = {
-        "current_state": current_state,
-        "message_text": message_text,
-        "adaptation_context": adaptation_context,
-    }
-
-    if current_state == ADAPTATION_SELECTION:
-        available = compute_available_adaptations(db, active_plan)
-        payload["available_adaptations"] = [intent.value for intent in available]
-        payload["active_plan"] = {
-            "load": active_plan.load,
-            "duration": active_plan.total_days,
-            "status": active_plan.status,
-            "preferred_time_slots": active_plan.preferred_time_slots or [],
-        }
-    elif current_state == ADAPTATION_PARAMS:
-        payload["active_plan"] = {
-            "duration": active_plan.total_days,
-            "load": active_plan.load,
-            "preferred_time_slots": active_plan.preferred_time_slots or [],
-            "current_day": active_plan.current_day or 1,
-            "focus": (active_plan.focus or "").lower(),
-        }
-    elif current_state == ADAPTATION_CONFIRMATION:
-        payload["active_plan"] = {
-            "load": active_plan.load,
-            "duration": active_plan.total_days,
-            "focus": active_plan.focus,
-            "daily_task_count": get_daily_task_count(db, active_plan),
-            "difficulty_level": get_avg_difficulty(db, active_plan),
-            "status": active_plan.status,
-            "current_day": active_plan.current_day or 1,
-        }
-
-    return payload
-
-
-def check_adaptation_eligibility(
-    db: Session,
-    plan: AIPlan,
-    intent: AdaptationIntent,
-) -> str | None:
-    """Full pre-execution eligibility check."""
-    last_entry = (
-        db.query(AdaptationHistory)
-        .filter(
-            AdaptationHistory.plan_id == plan.id,
-            AdaptationHistory.is_rolled_back == False,
-        )
-        .order_by(AdaptationHistory.applied_at.desc())
-        .first()
-    )
-    last_intent = None
-    if last_entry:
-        try:
-            last_intent = AdaptationIntent(last_entry.intent)
-        except ValueError:
-            pass
-
-    conflict_reason = check_adaptation_conflict(
-        intent=intent,
-        last_applied_intent=last_intent,
-        current_plan_load=plan.load,
-        current_plan_status=plan.status,
-    )
-    if conflict_reason:
-        return conflict_reason
-
-    all_history = (
-        db.query(AdaptationHistory)
-        .filter(AdaptationHistory.plan_id == plan.id)
-        .order_by(AdaptationHistory.applied_at.desc())
-        .all()
-    )
-    now_utc = datetime.now(timezone.utc)
-    return check_rate_limit(intent, all_history, now_utc)
-
-
-async def handle_undo_last_adaptation(
-    user_id: int,
-    db: Session,
-    current_state: str,
-) -> tuple[str, list[str]]:
-    """Handles semantic undo: cancel last adaptation via inverse intent."""
-    active_plan = get_active_plan(db, user_id)
-    if not active_plan:
-        # Known limitation: `adaptation_undo_blocked` analytics are plan-scoped.
-        # Logging this event with `plan_id=None` causes a silent mismatch in
-        # acceptance-rate queries that filter by plan_id.
-        await session_memory.clear_adaptation_context(user_id)
-        return "Немає активного плану.", []
-
-    try:
-        log_user_event(
-            db=db,
-            user_id=user_id,
-            event_type="adaptation_undo_requested",
-            context={
-                "plan_id": str(active_plan.id) if active_plan else None,
-                "current_state": current_state,
-            },
-        )
-    except Exception:
-        logger.warning("[ADAPTATION] Failed to log undo_requested for user %s", user_id, exc_info=True)
-
-    last_entry = (
-        db.query(AdaptationHistory)
-        .filter(
-            AdaptationHistory.plan_id == active_plan.id,
-            AdaptationHistory.is_rolled_back == False,
-        )
-        .order_by(AdaptationHistory.applied_at.desc())
-        .first()
-    )
-    if not last_entry:
-        try:
-            log_user_event(
-                db=db,
-                user_id=user_id,
-                event_type="adaptation_undo_blocked",
-                context={
-                    "plan_id": str(active_plan.id),
-                    "reason": "no_history",
-                    "last_intent": None,
-                },
-            )
-        except Exception:
-            logger.warning("[ADAPTATION] Failed to log undo_blocked for user %s", user_id, exc_info=True)
-        await session_memory.clear_adaptation_context(user_id)
-        return "Немає змін для скасування.", []
-
-    try:
-        last_intent = AdaptationIntent(last_entry.intent)
-    except ValueError:
-        try:
-            log_user_event(
-                db=db,
-                user_id=user_id,
-                event_type="adaptation_undo_blocked",
-                context={
-                    "plan_id": str(active_plan.id),
-                    "reason": "invalid_intent_in_history",
-                    "last_intent": last_entry.intent if last_entry else None,
-                },
-            )
-        except Exception:
-            logger.warning("[ADAPTATION] Failed to log undo_blocked for user %s", user_id, exc_info=True)
-        await session_memory.clear_adaptation_context(user_id)
-        return "Не вдалось визначити останню адаптацію.", []
-
-    inverse = get_inverse_intent(last_intent)
-    if inverse is None:
-        try:
-            log_user_event(
-                db=db,
-                user_id=user_id,
-                event_type="adaptation_undo_blocked",
-                context={
-                    "plan_id": str(active_plan.id),
-                    "reason": "non_invertible_intent",
-                    "last_intent": last_intent.value if last_intent else None,
-                },
-            )
-        except Exception:
-            logger.warning("[ADAPTATION] Failed to log undo_blocked for user %s", user_id, exc_info=True)
-        await session_memory.clear_adaptation_context(user_id)
-        return (
-            f"❌ Цю зміну ({last_intent.value}) неможливо скасувати автоматично.\n"
-            "Структурні зміни плану потребують ручного коригування.",
-            [],
-        )
-
-    original_params = last_entry.params or {}
-    inverse_params: dict | None = None
-
-    if last_intent == AdaptationIntent.REDUCE_DAILY_LOAD:
-        slot = original_params.get("slot_to_remove")
-        if slot:
-            inverse_params = {"slot_to_add": slot}
-
-    elif last_intent == AdaptationIntent.INCREASE_DAILY_LOAD:
-        slot = original_params.get("slot_to_add")
-        if slot:
-            inverse_params = {"slot_to_remove": slot}
-        else:
-            try:
-                log_user_event(
-                    db=db,
-                    user_id=user_id,
-                    event_type="adaptation_undo_blocked",
-                    context={
-                        "plan_id": str(active_plan.id),
-                        "reason": "missing_slot_params",
-                        "last_intent": last_intent.value if last_intent else None,
-                    },
-                )
-            except Exception:
-                logger.warning("[ADAPTATION] Failed to log undo_blocked for user %s", user_id, exc_info=True)
-            await session_memory.clear_adaptation_context(user_id)
-            return (
-                "❌ Не вдалось скасувати цю зміну автоматично.\n"
-                "Параметр слоту не збережено. Зміни навантаження вручну.",
-                [],
-            )
-
-    fake_llm_response = {
-        "adaptation_intent": inverse.value,
-        "adaptation_params": inverse_params,
-        "transition_signal": "EXECUTE_ADAPTATION",
-        "reply_text": "",
-    }
-    return await handle_adaptation_response(
-        user_id=user_id,
-        llm_response=fake_llm_response,
-        current_state=current_state,
-        db=db,
-        skip_eligibility_checks=True,
-    )
-
-
-async def execute_adaptation(
-    user_id: int,
-    llm_response: Dict[str, Any],
-    db: Session,
-) -> AdaptationResult:
-    """Returns post-commit scheduler actions for adaptation."""
-    adaptation_intent_str = llm_response.get("adaptation_intent")
-    adaptation_params = llm_response.get("adaptation_params")
-
-    try:
-        intent = AdaptationIntent(adaptation_intent_str)
-    except ValueError:
-        logger.error("Invalid adaptation_intent: %s", adaptation_intent_str)
-        raise
-
-    active_plan = get_active_plan(db, user_id)
-    if not active_plan:
-        raise ValueError("No active plan for adaptation")
-
-    executor = AdaptationExecutor()
-    return executor.execute(
-        db=db,
-        plan_id=active_plan.id,
-        intent=intent,
-        params=adaptation_params,
-    )
-
-
-async def handle_adaptation_response(
-    user_id: int,
-    llm_response: Dict[str, Any],
-    current_state: str,
-    db: Session,
-    skip_eligibility_checks: bool = False,
-) -> Tuple[str, List[str]]:
-    """Handle LLM response for adaptation flow using caller session."""
-    reply_text = str(llm_response.get("reply_text") or "")
-    transition_signal = llm_response.get("transition_signal")
-    adaptation_intent = llm_response.get("adaptation_intent")
-    adaptation_params = llm_response.get("adaptation_params")
-    followups: List[str] = []
-
-    if adaptation_intent or adaptation_params:
-        await session_memory.update_adaptation_context(
-            user_id,
-            {"intent": adaptation_intent, "params": adaptation_params},
-        )
-
-    if transition_signal == "UNDO_LAST_ADAPTATION":
-        return await handle_undo_last_adaptation(user_id, db, current_state)
-
-    if transition_signal == "EXECUTE_ADAPTATION":
-        adaptation_intent_str = llm_response.get("adaptation_intent")
-        next_state_after = "ACTIVE"
-        _intent: AdaptationIntent | None = None
-        try:
-            _intent = AdaptationIntent(adaptation_intent_str)
-            if _intent == AdaptationIntent.PAUSE_PLAN:
-                next_state_after = "ACTIVE_PAUSED"
-        except (ValueError, TypeError):
-            pass
-
-        step_ids_to_reschedule: list[int] = []
-        step_ids_to_cancel: list[int] = []
-        adaptation_applied = False
-        try:
-            active_plan = get_active_plan(db, user_id)
-            if not active_plan:
-                followups.append("Немає активного плану для адаптації.")
-                next_state_after = current_state
-            else:
-                if _intent is None:
-                    followups.append("Невалідний тип адаптації.")
-                    return reply_text or "Ця зміна зараз недоступна.", followups
-                if not skip_eligibility_checks:
-                    eligibility_reason = check_adaptation_eligibility(db, active_plan, _intent)
-                    if eligibility_reason:
-                        followups.append(f"Адаптація недоступна: {eligibility_reason}")
-                        return reply_text or "Ця зміна зараз недоступна.", followups
-                adaptation_result = await execute_adaptation(user_id, llm_response, db)
-                step_ids_to_reschedule = adaptation_result.step_ids_to_reschedule
-                step_ids_to_cancel = adaptation_result.step_ids_to_cancel
-                adaptation_applied = True
-        except AdaptationNotEligibleError as exc:
-            logger.warning(
-                "[ADAPTATION] Not eligible for user %s: %s", user_id, exc.reason
-            )
-            followups.append(f"Ця дія недоступна: {exc.reason}")
-            next_state_after = current_state
-        except NotImplementedError:
-            db.rollback()
-            followups.append("Ця адаптація ще в розробці. Спробуй іншу зміну.")
-            next_state_after = current_state
-        except Exception:
-            db.rollback()
-            logger.exception("Adaptation execution failed for user %s", user_id)
-            followups.append("Не вдалось застосувати зміни. Спробуй пізніше.")
-            next_state_after = current_state
-
-        if adaptation_applied:
-            # next_state_after is final here (updated in exception branches when needed).
-            # FSM transition — commits user.current_state + plan.status зміни разом
-            if not can_transition(current_state, next_state_after):
-                logger.error(
-                    "[FSM] Blocked illegal transition %s -> %s",
-                    current_state,
-                    next_state_after,
-                )
-                db.rollback()  # 🔒 Rollback mutated plan state
-                await session_memory.clear_adaptation_context(user_id)
-                return reply_text or "Помилка переходу. Спробуй ще раз.", followups
-            await _commit_fsm_transition(
-                user_id=user_id,
-                target_agent="plan",
-                next_state=next_state_after,
-                db=db,
-                reason="adaptation_executed",
-            )
-
-            # 🔒 Explicit commit before any scheduler interaction
-            db.commit()
-
-            # 🕒 Post-commit side effects only
-            if step_ids_to_cancel:
-                try:
-                    cancel_plan_step_jobs(step_ids_to_cancel)
-                except Exception:
-                    logger.error(
-                        "[ADAPTATION] cancel jobs failed after commit for user %s, step_ids=%s",
-                        user_id,
-                        step_ids_to_cancel,
-                        exc_info=True,
-                    )
-
-            if step_ids_to_reschedule:
-                try:
-                    reschedule_plan_steps(step_ids_to_reschedule)
-                except Exception:
-                    logger.error(
-                        "[ADAPTATION] reschedule failed after commit for user %s, step_ids=%s",
-                        user_id,
-                        step_ids_to_reschedule,
-                        exc_info=True,
-                    )
-
-            adaptation_intent_str = llm_response.get("adaptation_intent") or ""
-            reply_text = build_adaptation_success_message(adaptation_intent_str)
-
-        await session_memory.clear_adaptation_context(user_id)
-        return reply_text, followups
-
-    if transition_signal == "ACTIVE":
-        if current_state == "ADAPTATION_CONFIRMATION":
-            adaptation_ctx = await session_memory.get_adaptation_context(user_id)
-            rejected_intent = (adaptation_ctx or {}).get("intent")
-            rejected_params = (adaptation_ctx or {}).get("params")
-            if rejected_intent:
-                try:
-                    log_user_event(
-                        db=db,
-                        user_id=user_id,
-                        event_type="adaptation_rejected",
-                        context={
-                            "rejected_intent": rejected_intent,
-                            "rejected_params": rejected_params,
-                            "reason": "user_declined",
-                        },
-                    )
-                except Exception:
-                    logger.warning(
-                        "[ADAPTATION] Failed to log adaptation_rejected for user %s",
-                        user_id,
-                        exc_info=True,
-                    )
-
-        if not can_transition(current_state, "ACTIVE"):
-            logger.error(
-                "[FSM] Blocked illegal transition %s -> %s",
-                current_state,
-                "ACTIVE",
-            )
-            db.rollback()
-            await session_memory.clear_adaptation_context(user_id)
-            return reply_text or "Помилка переходу. Спробуй ще раз.", followups
-        await _commit_fsm_transition(
-            user_id=user_id,
-            target_agent="plan",
-            next_state="ACTIVE",
-            db=db,
-            reason="adaptation_aborted",
-        )
-        await session_memory.clear_adaptation_context(user_id)
-        return reply_text, followups
-
-    if transition_signal in ADAPTATION_FLOW_STATES:
-        if not can_transition(current_state, transition_signal):
-            logger.error(
-                "[FSM] Blocked illegal transition %s -> %s",
-                current_state,
-                transition_signal,
-            )
-            db.rollback()
-            return reply_text or "Помилка переходу. Спробуй ще раз.", followups
-        await _commit_fsm_transition(
-            user_id=user_id,
-            target_agent="plan",
-            next_state=transition_signal,
-            db=db,
-            reason=f"adaptation_flow_{current_state}_to_{transition_signal}",
-        )
-        return reply_text, followups
-
-    if transition_signal is None:
-        return reply_text, followups
-
-    logger.error("Unknown adaptation transition_signal: %s", transition_signal)
-    if not can_transition(current_state, "ACTIVE"):
-        logger.error(
-            "[FSM] Blocked illegal transition %s -> %s",
-            current_state,
-            "ACTIVE",
-        )
-        db.rollback()
-        await session_memory.clear_adaptation_context(user_id)
-        return reply_text or "Помилка переходу. Спробуй ще раз.", followups
-    await _commit_fsm_transition(
-        user_id=user_id,
-        target_agent="plan",
-        next_state="ACTIVE",
-        db=db,
-        reason="invalid_signal_fallback",
-    )
-    await session_memory.clear_adaptation_context(user_id)
-    return reply_text or "Помилка. Спробуй ще раз.", followups
-
-
-async def handle_adaptation_flow(
-    user_id: int,
-    message_text: str,
-    current_state: str,
-    db: Session,
-) -> Tuple[str, List[str]]:
-    payload = await build_adaptation_payload(user_id, message_text, current_state, db)
-    llm_response = await plan_agent(payload)
-    reply_text, followups = await handle_adaptation_response(
-        user_id, llm_response, current_state, db
-    )
-
-    transition = llm_response.get("transition_signal")
-    # Inject preview ONLY when staying in ADAPTATION_CONFIRMATION.
-    # Exclude all transitions: executing, aborting, going back to params or selection.
-    _no_preview_transitions = {
-        "EXECUTE_ADAPTATION",
-        "ACTIVE",
-        "IDLE_PLAN_ABORTED",
-        "ADAPTATION_SELECTION",
-        "ADAPTATION_PARAMS",  # user asked to edit params — don't show stale confirm card
-    }
-    if current_state == ADAPTATION_CONFIRMATION and transition not in _no_preview_transitions:
-        adaptation_context = await session_memory.get_adaptation_context(user_id) or {}
-        intent = adaptation_context.get("intent")
-        params = adaptation_context.get("params") or {}
-        active_plan_data = payload.get("active_plan") or {}
-        if intent:
-            preview_text = build_adaptation_preview(intent, params, active_plan_data)
-            # Replace reply_text entirely: preview card already ends with "Підтвердити?"
-            # so LLM's conversational line is redundant and causes visual duplication.
-            reply_text = preview_text
-
-    return reply_text, followups
 
 
 async def build_plan_draft_preview(
@@ -1975,13 +1394,6 @@ async def handle_incoming_message(
         }
 
     context_payload = await build_user_context(user_id, message_text)
-    if context_payload.get("current_state") in ADAPTATION_FLOW_STATES and hasattr(
-        session_memory, "set_adaptation_last_active"
-    ):
-        await session_memory.set_adaptation_last_active(user_id)
-        if hasattr(session_memory, "clear_adaptation_soft_prompted"):
-            await session_memory.clear_adaptation_soft_prompted(user_id)
-
     if context_payload.get("current_state") == SCHEDULE_ADJUSTMENT:
         await session_memory.set_schedule_adjustment_last_active(user_id)
         await session_memory.clear_schedule_adjustment_soft_prompted(user_id)
@@ -2026,35 +1438,6 @@ async def handle_incoming_message(
 
     # ==================== EARLY HANDLING (OPTION C) ====================
 
-    if target_agent == "plan" and current_state in ADAPTATION_FLOW_STATES:
-        logger.info(
-            "User %s in adaptation tunnel (state=%s), handling via tunnel prompt",
-            user_id,
-            current_state,
-        )
-        with SessionLocal() as db:
-            try:
-                reply_text, followups = await handle_adaptation_flow(
-                    user_id,
-                    message_text,
-                    current_state,
-                    db,
-                )
-                db.commit()
-                return await _finalize_reply(reply_text, followup_messages=followups)
-            except Exception as exc:
-                db.rollback()
-                logger.error(
-                    "Adaptation flow failed for user %s in state %s: %s",
-                    user_id,
-                    current_state,
-                    exc,
-                    exc_info=True,
-                )
-                return await _finalize_reply(
-                    "Щось пішло не так. Спробуй ще раз або напиши 'скасувати'."
-                )
-
     if target_agent == "coach":
         coach_payload = {
             "user_id": user_id,
@@ -2071,18 +1454,11 @@ async def handle_incoming_message(
                 "Спочатку пройди вітальний процес. Напиши 'почати'."
             )
 
-        if current_state in ADAPTATION_ENTRY_STATES:
-            logger.warning(
-                "Plan agent signal in adaptation entry state %s bypassed to coach for user %s",
-                current_state,
-                user_id,
-            )
-        else:
-            logger.warning(
-                "Plan agent invoked from forbidden state %s for user %s, routing to coach",
-                current_state,
-                user_id,
-            )
+        logger.warning(
+            "Plan agent invoked from forbidden state %s for user %s, routing to coach",
+            current_state,
+            user_id,
+        )
         coach_result = await _invoke_agent("coach", {"user_id": user_id, **context_payload, "message_text": message_text})
         return await _finalize_reply(str(coach_result.get("reply_text") or ""))
 
@@ -2134,45 +1510,6 @@ async def handle_incoming_message(
         }
         tool_result = await run_plan_tool_call(worker_result["tool_call"])
         return await _finalize_reply(str(tool_result.get("user_text") or ""), keyboard=tool_result.get("keyboard"))
-
-    if target_agent == "plan" and worker_result.get("transition_signal") == ADAPTATION_SELECTION:
-        with SessionLocal() as db:
-            active_plan = get_active_plan(db, user_id)
-            if not active_plan:
-                return await _finalize_reply(
-                    "Спочатку потрібно створити план. Напиши 'створи план'."
-                )
-            try:
-                await _commit_fsm_transition(
-                    user_id=user_id,
-                    target_agent=target_agent,
-                    next_state=ADAPTATION_SELECTION,
-                    db=db,
-                    reason="user_initiated_adaptation",
-                )
-                await session_memory.set_adaptation_last_active(user_id)
-                await session_memory.clear_adaptation_soft_prompted(user_id)
-            except ValueError as exc:
-                logger.error(
-                    "FSM transition blocked for user %s: %s -> %s, reason: %s",
-                    user_id,
-                    context_payload.get("current_state"),
-                    ADAPTATION_SELECTION,
-                    exc,
-                )
-                return await _finalize_reply(
-                    "Не можу розпочати адаптацію зараз. Спробуй пізніше або створи новий план."
-                )
-
-            reply_text, followups = await handle_adaptation_flow(
-                user_id,
-                message_text,
-                ADAPTATION_SELECTION,
-                db,
-            )
-            db.commit()
-
-        return await _finalize_reply(reply_text, followup_messages=followups)
 
     # NOTE:
     # Auto-start PLAN_FLOW commits FSM transition eagerly and re-invokes Plan Agent.
@@ -2327,11 +1664,6 @@ async def handle_incoming_message(
                     "plan_generated_ok",
                     extra={"user_id": user_id, "agent": target_agent},
                 )
-                if context_payload.get("current_state") in ADAPTATION_FLOW_STATES:
-                    log_metric(
-                        "adaptation_created",
-                        extra={"user_id": user_id, "agent": target_agent},
-                    )
 
     plan_updates = worker_result.get("plan_updates")
     draft_parameters = None
