@@ -303,8 +303,8 @@ async def test_cannot_complete_when_plan_paused(monkeypatch):
 
 @pytest.mark.anyio
 async def test_cannot_complete_when_user_not_active(monkeypatch):
-    """User in ADAPTATION_FLOW → no state changes."""
-    user = DummyUser(tg_id=123, user_id=42, current_state="ADAPTATION_FLOW")
+    """User not in ACTIVE state → no state changes."""
+    user = DummyUser(tg_id=123, user_id=42, current_state="ACTIVE_PAUSED")
     plan = DummyPlan(user=user, status="active")
     day = DummyDay(plan=plan, day_number=1)
     step = DummyStep(step_id=101, day=day)

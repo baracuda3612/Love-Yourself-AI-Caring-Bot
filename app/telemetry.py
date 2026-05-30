@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -90,47 +89,6 @@ def _ensure_content_stub(db: Session, step_id: str, context: dict[str, Any]) -> 
             is_active=False,
         )
     )
-
-
-async def _send_system_message_async(chat_id: int, text: str) -> None:
-    from app.telegram import bot as tg_bot
-
-    try:
-        logger.info("[ADAPTATION_PROMPT] Sending system prompt to chat_id=%s", chat_id)
-        await tg_bot.send_message(chat_id, text)
-        logger.info("[ADAPTATION_PROMPT] System prompt sent to chat_id=%s", chat_id)
-    except Exception as exc:  # pragma: no cover - safety net for runtime failures
-        logger.error("[ADAPTATION_PROMPT] Failed to send system prompt to %s: %s", chat_id, exc)
-
-
-def _dispatch_system_message(user: User, text: str) -> None:
-    if not user.tg_id:
-        logger.warning("[ADAPTATION_PROMPT] Skip dispatch: user_id=%s has no tg_id", user.id)
-        return
-
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-
-    if loop and loop.is_running():
-        logger.info(
-            "[ADAPTATION_PROMPT] Dispatch via running loop for user_id=%s chat_id=%s",
-            user.id,
-            user.tg_id,
-        )
-        loop.create_task(_send_system_message_async(user.tg_id, text))
-        return
-
-    try:
-        logger.info(
-            "[ADAPTATION_PROMPT] Dispatch via asyncio.run for user_id=%s chat_id=%s",
-            user.id,
-            user.tg_id,
-        )
-        asyncio.run(_send_system_message_async(user.tg_id, text))
-    except RuntimeError as exc:
-        logger.error("[ADAPTATION_PROMPT] Failed to dispatch system prompt for user %s: %s", user.id, exc)
 
 
 def _utc_now() -> datetime:
