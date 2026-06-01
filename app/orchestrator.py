@@ -26,7 +26,6 @@ from app.db import (
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from app.logging.router_logging import log_metric, log_router_decision
 from app.plan_adaptations import PlanAdaptationError, apply_plan_adaptation
-from app.plan_parameters import normalize_plan_parameters
 from app.scheduler import cancel_plan_step_jobs, reschedule_plan_steps
 from app.redis_client import redis_client
 from app.session_memory import SessionMemory
@@ -47,7 +46,6 @@ from app.workers.coach_agent import _build_idle_finished_context, coach_agent
 from app.fsm.guards import can_transition
 from app.fsm.states import (
     FSM_ALLOWED_STATES,
-    ENTRY_PROMPT_ALLOWED_STATES,
     IDLE_STATES,
     PLAN_CREATION_ENTRY_STATES,
     SCHEDULE_ADJUSTMENT,
@@ -967,8 +965,7 @@ def _persist_generated_plan(db: Session, user: User, plan_payload: Dict[str, Any
     if latest_plan and latest_plan.status == "active":
         latest_plan.status = "abandoned"
 
-    known_parameters = normalize_plan_parameters(plan_payload.get("known_parameters"))
-    plan_load = (known_parameters.get("load") or plan_payload.get("load"))
+    plan_load = plan_payload.get("load")
     if not plan_load:
         logger.error("Attempted to activate plan without load")
         raise RuntimeError("Active plan must have non-null load")
@@ -1150,9 +1147,6 @@ async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
     ltm_snapshot = await get_ltm_snapshot(user_id)
     fsm_state = await get_fsm_state(user_id)
     temporal_context = await get_temporal_context(user_id)
-    known_parameters = normalize_plan_parameters(
-        await session_memory.get_plan_parameters(user_id)
-    )
 
     schedule_adjustment_context = await session_memory.get_schedule_adjustment_context(user_id)
 
@@ -1162,7 +1156,6 @@ async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
         "profile_snapshot": ltm_snapshot,
         "current_state": fsm_state,
         "temporal_context": temporal_context,
-        "known_parameters": known_parameters,
         "schedule_adjustment_context": schedule_adjustment_context,
     }
 

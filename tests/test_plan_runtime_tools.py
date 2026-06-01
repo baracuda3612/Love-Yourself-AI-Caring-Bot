@@ -30,6 +30,8 @@ _db_stub = _make_stub("app.db")
 _service_stub = _make_stub("app.plan_drafts.service")
 _pause_stub = _make_stub("app.plan_pause")
 _scheduler_stub = _make_stub("app.scheduler")
+_finalization_stub = _make_stub("app.plan_finalization")
+_time_slots_stub = _make_stub("app.time_slots")
 
 # Now import is safe — no real DB engine fires
 from app.plan_runtime import tools  # noqa: E402
@@ -83,7 +85,7 @@ def _make_session_cm(query_side_effects: list) -> MagicMock:
 
 
 def test_create_first_plan_happy_path():
-    """IDLE_ONBOARDED + day_time → plan created, state becomes ACTIVE."""
+    """IDLE_ONBOARDED + day_time → plan created, state becomes ACTIVE, side effects called."""
     user = DummyUser("IDLE_ONBOARDED")
     profile = DummyProfile(day_time="13:00")
     fake_plan = MagicMock()
@@ -95,6 +97,7 @@ def test_create_first_plan_happy_path():
     _db_stub.User = MagicMock()
     _db_stub.UserProfile = MagicMock()
     _service_stub.create_plan.return_value = fake_plan
+    _finalization_stub.activate_plan_side_effects.reset_mock()
 
     result = tools.create_first_plan(user_id=1)
 
@@ -103,6 +106,7 @@ def test_create_first_plan_happy_path():
     _service_stub.create_plan.assert_called_once()
     call_kwargs = _service_stub.create_plan.call_args
     assert call_kwargs.kwargs.get("plan_type") == "SHORT" or call_kwargs.args[2] == "SHORT"
+    _finalization_stub.activate_plan_side_effects.assert_called_once_with(42, 1)
 
 
 def test_create_first_plan_wrong_state():
@@ -137,7 +141,7 @@ def test_create_first_plan_no_day_time():
 
 
 def test_create_followup_plan_short():
-    """IDLE_FINISHED → SHORT plan created, state becomes ACTIVE."""
+    """IDLE_FINISHED → SHORT plan created, state becomes ACTIVE, side effects called."""
     user = DummyUser("IDLE_FINISHED")
     profile = DummyProfile(day_time="14:00")
     fake_plan = MagicMock()
@@ -148,11 +152,13 @@ def test_create_followup_plan_short():
     _db_stub.User = MagicMock()
     _db_stub.UserProfile = MagicMock()
     _service_stub.create_plan.return_value = fake_plan
+    _finalization_stub.activate_plan_side_effects.reset_mock()
 
     result = tools.create_followup_plan(user_id=1, plan_type="SHORT")
 
     assert result == {"status": "ok", "plan_type": "SHORT"}
     assert user.current_state == "ACTIVE"
+    _finalization_stub.activate_plan_side_effects.assert_called_once_with(7, 1)
 
 
 def test_create_followup_plan_medium_needs_evening():
@@ -171,7 +177,7 @@ def test_create_followup_plan_medium_needs_evening():
 
 
 def test_create_followup_plan_medium_ok():
-    """IDLE_FINISHED + evening_slot_collected=True → MEDIUM plan, ACTIVE."""
+    """IDLE_FINISHED + evening_slot_collected=True → MEDIUM plan, ACTIVE, side effects called."""
     user = DummyUser("IDLE_FINISHED")
     profile = DummyProfile(
         day_time="14:00",
@@ -186,6 +192,7 @@ def test_create_followup_plan_medium_ok():
     _db_stub.User = MagicMock()
     _db_stub.UserProfile = MagicMock()
     _service_stub.create_plan.return_value = fake_plan
+    _finalization_stub.activate_plan_side_effects.reset_mock()
 
     result = tools.create_followup_plan(user_id=1, plan_type="MEDIUM")
 
@@ -194,6 +201,7 @@ def test_create_followup_plan_medium_ok():
     # Verify evening_time was passed
     create_call = _service_stub.create_plan.call_args
     assert "MEDIUM" in create_call.args or create_call.kwargs.get("plan_type") == "MEDIUM"
+    _finalization_stub.activate_plan_side_effects.assert_called_once_with(9, 1)
 
 
 # ─── record_evening_time ──────────────────────────────────────────────────────
@@ -226,47 +234,27 @@ def test_record_evening_time_bad_format():
 
 
 def test_change_day_time_reschedules():
-    """change_day_time updates profile.daily_time_slots and calls reschedule."""
+    """change_day_time calls update_user_time_slots and reschedule_plan_steps."""
     user = DummyUser("ACTIVE")
     profile = DummyProfile(day_time="14:00")
 
-    # _load_user_and_profile: user, profile
-    # _get_active_plan: fake_plan
-    # _get_future_slot_step_ids inner join query → returns step rows
-    fake_plan = MagicMock()
-    fake_plan.id = 5
-    fake_plan.status = "active"
-
-    cm, db = _make_session_cm([user, profile, fake_plan])
-    # The join chain for step IDs
-    db.query.return_value.join.return_value.filter.return_value.all.return_value = [
-        (1,), (2,)
-    ]
-    db.query.return_value.join.return_value.join.return_value.filter.return_value.all.return_value = [
-        (1,), (2,)
-    ]
+    cm, db = _make_session_cm([user, profile])
 
     _db_stub.SessionLocal.return_value = cm
     _db_stub.User = MagicMock()
     _db_stub.UserProfile = MagicMock()
-    _db_stub.AIPlan = MagicMock()
-    _db_stub.AIPlanDay = MagicMock()
-    _db_stub.AIPlanStep = MagicMock()
-    _db_stub.AIPlanStep.id = MagicMock()
-    _db_stub.AIPlanStep.time_slot = MagicMock()
-    _db_stub.AIPlanStep.step_status = MagicMock()
-    # scheduled_for > datetime must return a truthy expression without raising
-    _db_stub.AIPlanStep.scheduled_for = MagicMock()
-    _db_stub.AIPlanStep.scheduled_for.__gt__ = MagicMock(return_value=MagicMock())
+    # update_user_time_slots returns (updated_ids, active_ids)
+    _time_slots_stub.update_user_time_slots.return_value = ([1, 2], [1, 2])
+    _time_slots_stub.TimeSlotError = ValueError
     _scheduler_stub.reschedule_plan_steps.return_value = 2
 
     result = tools.change_day_time(user_id=1, hhmm="11:00")
 
     assert result["status"] == "ok"
     assert result["day_time"] == "11:00"
-    assert profile.daily_time_slots["DAY"] == "11:00"
-    # reschedule was called (step_ids may vary based on mock chain)
-    _scheduler_stub.reschedule_plan_steps.assert_called()
+    assert result["rescheduled"] == 2
+    _time_slots_stub.update_user_time_slots.assert_called_once_with(db, user, {"DAY": "11:00"})
+    _scheduler_stub.reschedule_plan_steps.assert_called_once_with([1, 2])
 
 
 # ─── pause_plan / resume_plan ─────────────────────────────────────────────────
@@ -334,3 +322,59 @@ def test_pause_wrong_state():
 
     with pytest.raises(ValueError, match="ACTIVE"):
         tools.pause_plan(user_id=1)
+
+
+# ─── cancel_plan ──────────────────────────────────────────────────────────────
+
+
+def test_cancel_plan_from_active():
+    """ACTIVE user → cancel_plan sets plan to abandoned, state to IDLE_PLAN_ABORTED,
+    and calls cancel_plan_step_jobs with pending step IDs."""
+    user = DummyUser("ACTIVE")
+    profile = DummyProfile()
+
+    fake_plan = MagicMock(spec=["id", "status", "end_date"])
+    fake_plan.id = 10
+    fake_plan.status = "active"
+    fake_plan.end_date = None
+
+    # _load_user_and_profile uses filter().first()
+    # _get_active_plan uses filter().order_by().first()
+    cm, db = _make_session_cm([user, profile])
+    db.query.return_value.filter.return_value.order_by.return_value.first.return_value = fake_plan
+
+    # The join query for step IDs returns two rows
+    db.query.return_value.join.return_value.filter.return_value.all.return_value = [
+        (3,), (4,)
+    ]
+
+    _db_stub.SessionLocal.return_value = cm
+    _db_stub.User = MagicMock()
+    _db_stub.UserProfile = MagicMock()
+    _db_stub.AIPlan = MagicMock()
+    _db_stub.AIPlanDay = MagicMock()
+    _db_stub.AIPlanStep = MagicMock()
+    _db_stub.AIPlanStep.id = MagicMock()
+    _db_stub.AIPlanStep.step_status = MagicMock()
+    _scheduler_stub.cancel_plan_step_jobs.reset_mock()
+
+    result = tools.cancel_plan(user_id=1)
+
+    assert result == {"status": "ok"}
+    assert user.current_state == "IDLE_PLAN_ABORTED"
+    assert fake_plan.status == "abandoned"
+    _scheduler_stub.cancel_plan_step_jobs.assert_called_once_with([3, 4])
+
+
+def test_cancel_plan_wrong_state():
+    """IDLE_ONBOARDED state → ValueError when calling cancel_plan."""
+    user = DummyUser("IDLE_ONBOARDED")
+    profile = DummyProfile()
+
+    cm, db = _make_session_cm([user, profile])
+    _db_stub.SessionLocal.return_value = cm
+    _db_stub.User = MagicMock()
+    _db_stub.UserProfile = MagicMock()
+
+    with pytest.raises(ValueError, match="cancel_plan requires ACTIVE or ACTIVE_PAUSED"):
+        tools.cancel_plan(user_id=1)

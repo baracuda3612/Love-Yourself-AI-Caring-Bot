@@ -56,29 +56,6 @@ def _get_active_plan(db, user_id: int):
     )
 
 
-def _get_future_slot_step_ids(db, user_id: int, time_slot: str) -> list:
-    """Return IDs of future pending/delivered steps in the given time_slot."""
-    from app.db import AIPlan, AIPlanDay, AIPlanStep  # lazy
-
-    plan = _get_active_plan(db, user_id)
-    if plan is None:
-        return []
-
-    now_utc = datetime.now(timezone.utc)
-
-    rows = (
-        db.query(AIPlanStep.id)
-        .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
-        .filter(
-            AIPlanDay.plan_id == plan.id,
-            AIPlanStep.time_slot == time_slot,
-            AIPlanStep.step_status.in_(["pending", "delivered"]),
-            AIPlanStep.scheduled_for > now_utc,
-        )
-        .all()
-    )
-    return [row[0] for row in rows]
-
 
 # ─── Public tools ─────────────────────────────────────────────────────────────
 
@@ -121,6 +98,9 @@ def create_first_plan(user_id: int) -> dict:
         user.current_state = "ACTIVE"
         db.add(user)
         db.commit()
+
+    from app.plan_finalization import activate_plan_side_effects  # lazy
+    activate_plan_side_effects(plan.id, user_id)
 
     logger.info("[plan_runtime] create_first_plan: user=%s plan_id=%s", user_id, plan.id)
     return {"status": "ok", "plan_type": "SHORT"}
@@ -174,6 +154,9 @@ def create_followup_plan(user_id: int, plan_type: str) -> dict:
         db.add(user)
         db.commit()
 
+    from app.plan_finalization import activate_plan_side_effects  # lazy
+    activate_plan_side_effects(plan.id, user_id)
+
     logger.info(
         "[plan_runtime] create_followup_plan: user=%s plan_id=%s type=%s",
         user_id, plan.id, plan_type,
@@ -211,34 +194,24 @@ def record_evening_time(user_id: int, hhmm: str) -> dict:
 def change_day_time(user_id: int, hhmm: str) -> dict:
     """Change the DAY slot delivery time and reschedule pending/delivered steps.
 
-    Updates profile.daily_time_slots["DAY"] and reschedules all future DAY-slot
-    steps on the active plan.
+    Updates profile.daily_time_slots["DAY"], rewrites scheduled_for on all
+    future pending steps via update_user_time_slots, then reschedules jobs.
     """
     _validate_hhmm(hhmm)
 
     from app.db import SessionLocal  # lazy
+    from app.time_slots import TimeSlotError, update_user_time_slots  # lazy
     from app.scheduler import reschedule_plan_steps  # lazy
 
     with SessionLocal() as db:
-        user, profile = _load_user_and_profile(db, user_id)
-
-        if profile is None:
-            from app.db import UserProfile  # lazy
-            profile = UserProfile(user_id=user_id)
-            db.add(profile)
-
-        time_slots: dict = dict(profile.daily_time_slots or {})
-        time_slots["DAY"] = hhmm
-        profile.daily_time_slots = time_slots
-        db.add(profile)
+        user, _ = _load_user_and_profile(db, user_id)
+        try:
+            _, active_ids = update_user_time_slots(db, user, {"DAY": hhmm})
+        except TimeSlotError as exc:
+            raise ValueError(str(exc)) from exc
         db.commit()
 
-        step_ids = _get_future_slot_step_ids(db, user_id, "DAY")
-
-    rescheduled = 0
-    if step_ids:
-        rescheduled = reschedule_plan_steps(step_ids)
-
+    rescheduled = reschedule_plan_steps(active_ids) if active_ids else 0
     logger.info(
         "[plan_runtime] change_day_time: user=%s hhmm=%s rescheduled=%d",
         user_id, hhmm, rescheduled,
@@ -249,38 +222,73 @@ def change_day_time(user_id: int, hhmm: str) -> dict:
 def change_evening_time(user_id: int, hhmm: str) -> dict:
     """Change the EVENING slot delivery time and reschedule pending/delivered steps.
 
-    Updates profile.daily_time_slots["EVENING"] and reschedules future EVENING steps.
+    Updates profile.daily_time_slots["EVENING"], rewrites scheduled_for on all
+    future pending steps via update_user_time_slots, then reschedules jobs.
     """
     _validate_hhmm(hhmm)
 
     from app.db import SessionLocal  # lazy
+    from app.time_slots import TimeSlotError, update_user_time_slots  # lazy
     from app.scheduler import reschedule_plan_steps  # lazy
 
     with SessionLocal() as db:
-        user, profile = _load_user_and_profile(db, user_id)
-
-        if profile is None:
-            from app.db import UserProfile  # lazy
-            profile = UserProfile(user_id=user_id)
-            db.add(profile)
-
-        time_slots: dict = dict(profile.daily_time_slots or {})
-        time_slots["EVENING"] = hhmm
-        profile.daily_time_slots = time_slots
-        db.add(profile)
+        user, _ = _load_user_and_profile(db, user_id)
+        try:
+            _, active_ids = update_user_time_slots(db, user, {"EVENING": hhmm})
+        except TimeSlotError as exc:
+            raise ValueError(str(exc)) from exc
         db.commit()
 
-        step_ids = _get_future_slot_step_ids(db, user_id, "EVENING")
-
-    rescheduled = 0
-    if step_ids:
-        rescheduled = reschedule_plan_steps(step_ids)
-
+    rescheduled = reschedule_plan_steps(active_ids) if active_ids else 0
     logger.info(
         "[plan_runtime] change_evening_time: user=%s hhmm=%s rescheduled=%d",
         user_id, hhmm, rescheduled,
     )
     return {"status": "ok", "evening_time": hhmm, "rescheduled": rescheduled}
+
+
+def cancel_plan(user_id: int) -> dict:
+    """Cancel an active or paused plan. Transitions to IDLE_PLAN_ABORTED.
+
+    Invariants:
+      - user.current_state in {"ACTIVE", "ACTIVE_PAUSED"} → else ValueError
+      - Sets plan.status = "abandoned", plan.end_date = now
+      - Sets user.current_state = "IDLE_PLAN_ABORTED"
+    """
+    from app.db import AIPlan, AIPlanDay, AIPlanStep, SessionLocal  # lazy
+    from app.scheduler import cancel_plan_step_jobs  # lazy
+
+    with SessionLocal() as db:
+        user, _ = _load_user_and_profile(db, user_id)
+        if user.current_state not in {"ACTIVE", "ACTIVE_PAUSED"}:
+            raise ValueError(
+                f"cancel_plan requires ACTIVE or ACTIVE_PAUSED, got {user.current_state!r}"
+            )
+
+        plan = _get_active_plan(db, user_id)
+        step_ids: list[int] = []
+        if plan:
+            rows = (
+                db.query(AIPlanStep.id)
+                .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+                .filter(
+                    AIPlanDay.plan_id == plan.id,
+                    AIPlanStep.step_status.in_(["pending", "delivered"]),
+                )
+                .all()
+            )
+            step_ids = [row[0] for row in rows]
+            plan.status = "abandoned"
+            plan.end_date = datetime.now(timezone.utc)
+
+        user.current_state = "IDLE_PLAN_ABORTED"
+        db.commit()
+
+    if step_ids:
+        cancel_plan_step_jobs(step_ids)
+
+    logger.info("[plan_runtime] cancel_plan: user=%s step_ids_canceled=%d", user_id, len(step_ids))
+    return {"status": "ok"}
 
 
 def get_plan_status(user_id: int) -> dict:
