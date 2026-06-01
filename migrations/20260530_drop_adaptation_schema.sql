@@ -1,12 +1,14 @@
 -- T5.4: Remove adaptation schema.
 -- Adaptations are fully removed from application code.
 
--- 1. Migrate canceled_by_adaptation steps to terminal status
---    so they are not accidentally delivered if the column is removed.
+-- 1. Migrate canceled_by_adaptation steps to 'canceled' (not 'expired').
+--    'expired' = user missed a delivery window → counted in silent_miss_rate.
+--    'canceled' = system-removed step → excluded from completion metrics.
+--    Using 'expired' here would inflate churn signals for users who had adapted plans.
 UPDATE ai_plan_steps
-    SET step_status = 'expired'
+    SET step_status = 'canceled'
     WHERE canceled_by_adaptation = TRUE
-      AND step_status NOT IN ('completed', 'skipped', 'expired');
+      AND step_status NOT IN ('completed', 'skipped', 'expired', 'canceled');
 
 -- 2. Drop adaptation_history table (no runtime writers since T5.4)
 DROP TABLE IF EXISTS adaptation_history CASCADE;
