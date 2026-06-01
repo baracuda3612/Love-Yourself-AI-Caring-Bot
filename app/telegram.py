@@ -509,7 +509,6 @@ async def handle_task_completed(callback_query: CallbackQuery):
 
                 all_today = db.query(AIPlanStep).filter(
                     AIPlanStep.day_id == day.id,
-                    AIPlanStep.canceled_by_adaptation == False,
                 ).all()
                 all_done = all(s.is_completed for s in all_today)
 

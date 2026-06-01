@@ -105,8 +105,7 @@ def maybe_advance_current_day(db: Session, plan_id: int, day_number: int) -> boo
     steps_to_deliver = [
         s
         for s in list(getattr(day, "steps", []) or [])
-        if not getattr(s, "canceled_by_adaptation", False)
-        and getattr(s, "scheduled_for", None) is not None
+        if getattr(s, "scheduled_for", None) is not None
     ]
     if not steps_to_deliver:
         return False

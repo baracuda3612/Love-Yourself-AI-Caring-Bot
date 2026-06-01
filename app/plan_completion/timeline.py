@@ -32,7 +32,7 @@ def get_plan_timeline(db: Session, user_id: int, plan_id: int) -> list[DayEntry]
     )
 
     plan_step_ids = [
-        step.id for day in days for step in day.steps if not step.canceled_by_adaptation
+        step.id for day in days for step in day.steps
     ]
 
     if not plan_step_ids:
@@ -60,7 +60,7 @@ def get_plan_timeline(db: Session, user_id: int, plan_id: int) -> list[DayEntry]
     result: list[DayEntry] = []
 
     for day in days:
-        active = [s for s in day.steps if not s.canceled_by_adaptation]
+        active = list(day.steps)
         if not active:
             continue
         ids = {s.id for s in active}

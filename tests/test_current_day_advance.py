@@ -10,7 +10,6 @@ from app.ux.task_notification import maybe_advance_current_day
 @dataclass
 class _Step:
     scheduled_for: datetime | None
-    canceled_by_adaptation: bool = False
     is_delivered: bool = False
     delivered_at: datetime | None = None
 
@@ -84,9 +83,10 @@ def test_no_advance_if_steps_remaining():
     assert plan.current_day == 3
 
 
-def test_canceled_steps_not_counted():
+def test_step_without_scheduled_for_not_counted():
+    """Steps with scheduled_for=None are excluded from delivery check."""
     plan = SimpleNamespace(id=1, current_day=3, total_days=21)
-    day = _Day(1, 3, [_Step(_dt(10), is_delivered=True), _Step(_dt(-10), canceled_by_adaptation=True)])
+    day = _Day(1, 3, [_Step(_dt(10), is_delivered=True), _Step(None)])
     db = _DB(plan, day)
 
     advanced = maybe_advance_current_day(db, 1, 3)

@@ -123,7 +123,6 @@ def _fetch_eligible_steps(
             AIPlanDay.plan_id == plan_id,
             AIPlanStep.step_status.in_(["completed", "skipped", "expired"]),
             AIPlanStep.scheduled_for <= now_utc,
-            AIPlanStep.canceled_by_adaptation == False,
         )
         .all()
     )

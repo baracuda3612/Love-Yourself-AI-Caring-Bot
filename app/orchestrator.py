@@ -18,7 +18,6 @@ from app.db import (
     AIPlanStep,
     ChatHistory,
     ContentLibrary,
-    AdaptationHistory,
     PlanInstance,
     SessionLocal,
     User,
@@ -134,7 +133,6 @@ def _get_plan_active_tasks(plan_id: int, current_day: int, user: User, db: Sessi
         .filter(
             AIPlanDay.plan_id == plan_id,
             AIPlanDay.day_number >= current_day,
-            AIPlanStep.canceled_by_adaptation == False,
         )
         .distinct()
         .all()
@@ -348,7 +346,6 @@ async def _handle_schedule_adjustment_apply(user_id: int, tool_args: Dict[str, A
                 AIPlanDay.plan_id == active_plan.id,
                 AIPlanDay.day_number >= current_day,
                 AIPlanStep.time_slot == old_slot,
-                AIPlanStep.canceled_by_adaptation == False,
                 AIPlanStep.scheduled_for > now_utc,
             )
             .all()
@@ -1062,8 +1059,6 @@ def _persist_generated_plan(db: Session, user: User, plan_payload: Dict[str, Any
         .first()
     )
     _validate_plan_exercise_ids(db, user, plan_payload, latest_plan)
-    # Design rule: every adaptation creates a new plan version and abandons the previous one.
-    adaptation_version = (latest_plan.adaptation_version + 1) if latest_plan else 1
     if latest_plan and latest_plan.status == "active":
         latest_plan.status = "abandoned"
 
@@ -1090,7 +1085,6 @@ def _persist_generated_plan(db: Session, user: User, plan_payload: Dict[str, Any
         goal_description=parsed_plan.reasoning,
         status="active",
         load=normalized_plan_load,
-        adaptation_version=adaptation_version,
         start_date=plan_start,
         total_days=parsed_plan.duration_days,
     )
@@ -1319,7 +1313,6 @@ def get_daily_task_count(db: Session, plan: AIPlan) -> int:
         db.query(AIPlanStep)
         .filter(
             AIPlanStep.day_id == first_day.id,
-            AIPlanStep.canceled_by_adaptation == False,
             AIPlanStep.step_status.notin_(["completed", "skipped", "expired"]),
         )
         .count()
