@@ -9,7 +9,6 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.ai_plans import PlanAgentEnvelopeError, plan_agent
 from app.config import settings
 from app.ai_router import cognitive_route_message
 from app.db import (
@@ -64,6 +63,11 @@ from app.telemetry import log_user_event
 
 session_memory = SessionMemory(limit=20)
 logger = logging.getLogger(__name__)
+
+
+class PlanAgentEnvelopeError(ValueError):
+    """Raised when a generated plan payload is structurally invalid."""
+
 
 PLAN_CONTRACT_VERSION = "v1"
 PLAN_SCHEMA_VERSION = "v1"
@@ -1339,16 +1343,16 @@ async def handle_incoming_message(
         reply_text = str(worker_result.get("reply_text") or "")
         return await _finalize_reply(reply_text)
 
-    if target_agent == "plan" and current_state not in (ENTRY_PROMPT_ALLOWED_STATES | {SCHEDULE_ADJUSTMENT}):
+    if target_agent == "plan":
+        # T5.6: plan_agent removed. All "plan" routing goes to coach_agent.
         if current_state == "IDLE_NEW":
             return await _finalize_reply(
                 "Спочатку пройди вітальний процес. Напиши 'почати'."
             )
-
-        logger.warning(
-            "Plan agent invoked from forbidden state %s for user %s, routing to coach",
-            current_state,
+        logger.info(
+            "Plan routing redirected to coach for user %s (state=%s)",
             user_id,
+            current_state,
         )
         coach_result = await _invoke_agent("coach", {"user_id": user_id, **context_payload, "message_text": message_text})
         return await _finalize_reply(str(coach_result.get("reply_text") or ""))
@@ -1636,23 +1640,5 @@ async def _invoke_agent(target_agent: str, payload: Dict[str, Any]) -> Dict[str,
         return await mock_onboarding_agent(payload)
     if target_agent == "manager":
         return await mock_manager_agent(payload)
-    if target_agent == "plan":
-        try:
-            return await plan_agent(payload)
-        except Exception as exc:
-            user_id = payload.get("user_id")
-            log_router_decision(
-                {
-                    "event_type": "plan_agent_error",
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "user_id": user_id,
-                    "error": str(exc),
-                }
-            )
-            logger.error(
-                "[PLAN_AGENT] Error during plan agent call for user %s",
-                user_id,
-                exc_info=exc,
-            )
-            return _plan_agent_fallback_envelope()
+    # "plan" routing is now handled by coach_agent (T5.6 — plan_agent removed).
     return await coach_agent(payload)
