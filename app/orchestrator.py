@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.ai_router import cognitive_route_message
 from app.db import (
     AIPlan,
     AIPlanDay,
@@ -23,7 +24,7 @@ from app.db import (
     UserProfile,
 )
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from app.logging.router_logging import log_metric
+from app.logging.router_logging import log_metric, log_router_decision
 from app.plan_adaptations import PlanAdaptationError, apply_plan_adaptation
 from app.scheduler import cancel_plan_step_jobs, reschedule_plan_steps
 from app.redis_client import redis_client
@@ -50,6 +51,7 @@ from app.fsm.states import (
     SCHEDULE_ADJUSTMENT,
 )
 from app.workers.mock_workers import (
+    mock_manager_agent,
     mock_onboarding_agent,
     mock_safety_agent,
 )
@@ -209,7 +211,7 @@ async def _handle_schedule_adjustment_init(user_id: int, tool_args: Dict[str, An
 
     await _commit_fsm_transition(
         user_id=user_id,
-        agent="plan",
+        target_agent="plan",
         next_state=SCHEDULE_ADJUSTMENT,
         db=db,
         reason="schedule_adjustment_initiated",
@@ -298,7 +300,7 @@ async def _handle_schedule_adjustment_apply(user_id: int, tool_args: Dict[str, A
         return_state = "ACTIVE_PAUSED" if plan_was_paused else "ACTIVE"
         await _commit_fsm_transition(
             user_id=user_id,
-            agent="plan",
+            target_agent="plan",
             next_state=return_state,
             db=db,
             reason="no_plan",
@@ -310,7 +312,7 @@ async def _handle_schedule_adjustment_apply(user_id: int, tool_args: Dict[str, A
         return_state = "ACTIVE_PAUSED" if plan_was_paused else "ACTIVE"
         await _commit_fsm_transition(
             user_id=user_id,
-            agent="plan",
+            target_agent="plan",
             next_state=return_state,
             db=db,
             reason="no_changes",
@@ -400,7 +402,7 @@ async def _handle_schedule_adjustment_apply(user_id: int, tool_args: Dict[str, A
     return_state = "ACTIVE_PAUSED" if plan_was_paused else "ACTIVE"
     await _commit_fsm_transition(
         user_id=user_id,
-        agent="plan",
+        target_agent="plan",
         next_state=return_state,
         db=db,
         reason="schedule_adjustment_applied",
@@ -419,7 +421,7 @@ async def _handle_schedule_adjustment_cancel(user_id: int, tool_args: Dict[str, 
 
     await _commit_fsm_transition(
         user_id=user_id,
-        agent="plan",
+        target_agent="plan",
         next_state=return_state,
         db=db,
         reason="schedule_adjustment_cancelled",
@@ -478,7 +480,7 @@ def _normalize_fsm_state(raw_state: Optional[str]) -> Optional[str]:
 def _guard_fsm_transition(
     current_state: Optional[str],
     transition_signal: Any,
-    agent: str,
+    target_agent: str,
     plan_persisted: bool = False,
 ) -> Tuple[Optional[str], Optional[str]]:
     if transition_signal is None:
@@ -814,7 +816,7 @@ def _auto_drop_plan_for_new_flow(user_id: int) -> bool:
 
 async def _commit_fsm_transition(
     user_id: int,
-    agent: str,
+    target_agent: str,
     next_state: str,
     db: Optional[Session] = None,
     reason: str = "",
@@ -836,7 +838,7 @@ async def _commit_fsm_transition(
                 "[FSM] No-op transition for user %s already in %s (agent=%s)",
                 user_id,
                 next_state,
-                agent,
+                target_agent,
             )
             return previous_state
 
@@ -852,18 +854,18 @@ async def _commit_fsm_transition(
             user_id,
             previous_state,
             next_state,
-            agent,
+            target_agent,
             reason,
         )
-        log_metric(
-            "fsm_transition",
-            extra={
+        log_router_decision(
+            {
+                "event_type": "fsm_transition",
                 "user_id": user_id,
-                "agent": agent,
+                "agent": target_agent,
                 "from_state": previous_state,
                 "to_state": next_state,
                 "reason": reason,
-            },
+            }
         )
         return previous_state
 
@@ -1047,9 +1049,9 @@ def _persist_generated_plan(db: Session, user: User, plan_payload: Dict[str, Any
     tz = _safe_timezone(user.timezone)
     user.plan_end_date = _derive_plan_end_date(parsed_plan, tz)
 
-    log_metric(
-        "plan_snapshot",
-        extra={
+    log_router_decision(
+        {
+            "event_type": "plan_snapshot",
             "timestamp": datetime.utcnow().isoformat(),
             "user_id": user.id,
             "plan_summary": parsed_plan.title,
@@ -1059,7 +1061,7 @@ def _persist_generated_plan(db: Session, user: User, plan_payload: Dict[str, Any
                 "schedule_days": len(parsed_plan.schedule),
                 "milestones": len(parsed_plan.milestones),
             },
-        },
+        }
     )
     return ai_plan
 
@@ -1158,6 +1160,31 @@ async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
     }
 
 
+async def call_router(user_id: int, message_text: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Сервісний хелпер: збирає контекст, формує payload для Router'а,
+    викликає router і повертає JSON-відповідь (target_agent, confidence, intent_bucket).
+    """
+
+    context_payload = context or await build_user_context(user_id, message_text)
+
+    # STRICT: Router only reads user_id, current_state, latest_user_message, short_term_history
+    router_input = {
+        "user_id": user_id,
+        "current_state": context_payload.get("current_state"),
+        "latest_user_message": context_payload.get("message_text", message_text),
+        "short_term_history": context_payload.get("short_term_history"),
+    }
+
+    router_output = await cognitive_route_message(router_input)
+    return {
+        "router_result": router_output.get("router_result", {}),
+        "router_meta": router_output.get("router_meta", {}),
+        "fsm_state": context_payload.get("current_state"),
+        "session_id": None,
+        "input_message": message_text,
+        "context_payload": context_payload,
+    }
 
 
 
@@ -1227,14 +1254,11 @@ async def handle_incoming_message(
     defer_plan_draft: bool = False,
 ) -> Dict[str, Any]:
     """
-    Main orchestrator:
-    - appends message to session memory
-    - auto-completes plan if needed
-    - builds user context (FSM state, history, etc.)
-    - if state is IDLE_NEW or ONBOARDING:* → calls onboarding handler, returns
-    - else → calls coach_agent directly
-    - handles generated_plan_object, plan_updates, FSM transition signal
-    - returns reply
+    Головний оркестратор:
+    - збирає контекст
+    - викликає Router
+    - за target_agent викликає відповідний mock-агент
+    - повертає відповідь та метадані для транспорту
     """
 
     await session_memory.append_message(user_id, "user", message_text)
@@ -1261,63 +1285,146 @@ async def handle_incoming_message(
         }
 
     context_payload = await build_user_context(user_id, message_text)
-    current_state = context_payload.get("current_state")
-
-    if current_state == SCHEDULE_ADJUSTMENT:
+    if context_payload.get("current_state") == SCHEDULE_ADJUSTMENT:
         await session_memory.set_schedule_adjustment_last_active(user_id)
         await session_memory.clear_schedule_adjustment_soft_prompted(user_id)
 
+    show_plan_actions = False
+    router_output = await call_router(user_id, message_text, context_payload)
+
+    router_result = router_output.get("router_result", {})
+    router_meta = router_output.get("router_meta", {})
+
+    log_payload = {
+        "event_type": "router_decision",
+        "timestamp": datetime.utcnow().isoformat(),
+        "user_id": user_id,
+        "session_id": router_output.get("session_id"),
+        "input_message": router_output.get("input_message", message_text),
+        "fsm_state": router_output.get("fsm_state"),
+        "target_agent": router_result.get("target_agent"),
+        "confidence": router_result.get("confidence"),
+        "intent_bucket": router_result.get("intent_bucket"),
+        "llm_prompt_tokens": router_meta.get("llm_prompt_tokens"),
+        "llm_response_tokens": router_meta.get("llm_response_tokens"),
+        "router_latency_ms": router_meta.get("router_latency_ms"),
+    }
+
+    log_router_decision(log_payload)
+
+    target_agent = router_result.get("target_agent", "coach")
+    fallback_to_coach = target_agent == "coach"
+    current_state = context_payload.get("current_state")
+
     # Inject completion_context for IDLE_FINISHED state
-    if current_state == "IDLE_FINISHED":
+    completion_context = None
+    if context_payload.get("current_state") == "IDLE_FINISHED":
         with SessionLocal() as db:
             completion_context = _build_idle_finished_context(db, user_id)
-        if completion_context is not None:
-            context_payload["completion_context"] = completion_context
+    if completion_context is not None:
+        context_payload["completion_context"] = completion_context
 
-    # Onboarding path — state-based branch, not routing
-    if current_state == "IDLE_NEW" or (
-        isinstance(current_state, str) and current_state.startswith("ONBOARDING:")
-    ):
-        onboarding_payload = {
+    # ==================== EARLY HANDLING (OPTION C) ====================
+
+    if target_agent == "coach":
+        coach_payload = {
             "user_id": user_id,
             **context_payload,
             "message_text": message_text,
         }
-        onboarding_result = await mock_onboarding_agent(onboarding_payload)
-        return await _finalize_reply(str(onboarding_result.get("reply_text") or ""))
+        worker_result = await _invoke_agent("coach", coach_payload)
+        reply_text = str(worker_result.get("reply_text") or "")
+        return await _finalize_reply(reply_text)
 
-    # All live-user states → coach_agent directly
-    coach_payload = {
+    if target_agent == "plan":
+        # T5.6: plan_agent removed. All "plan" routing goes to coach_agent.
+        if current_state == "IDLE_NEW":
+            return await _finalize_reply(
+                "Спочатку пройди вітальний процес. Напиши 'почати'."
+            )
+        logger.info(
+            "Plan routing redirected to coach for user %s (state=%s)",
+            user_id,
+            current_state,
+        )
+        coach_result = await _invoke_agent("coach", {"user_id": user_id, **context_payload, "message_text": message_text})
+        return await _finalize_reply(str(coach_result.get("reply_text") or ""))
+
+    worker_payload = {
         "user_id": user_id,
+        "router_result": router_result,
         **context_payload,
-        "message_text": message_text,
     }
-    worker_result = await coach_agent(coach_payload)
+
+    log_router_decision(
+        {
+            "event_type": "router_routing_decision",
+            "timestamp": datetime.utcnow().isoformat(),
+            "user_id": user_id,
+            "target_agent": target_agent,
+            "confidence": router_result.get("confidence"),
+            "intent_bucket": router_result.get("intent_bucket"),
+            "fallback_to_coach": fallback_to_coach,
+            "router_result": router_result,
+            "router_meta": router_meta,
+        }
+    )
+
+    log_router_decision(
+        {
+            "event_type": "agent_invocation",
+            "timestamp": datetime.utcnow().isoformat(),
+            "agent_name": target_agent,
+            "payload": worker_payload,
+        }
+    )
+
+    worker_result = await _invoke_agent(target_agent, worker_payload)
+
+    if target_agent == "plan" and isinstance(worker_result.get("tool_call"), dict):
+        worker_result["tool_call"]["user_id"] = user_id
+        tool_result = await run_plan_tool_call(worker_result["tool_call"])
+        return await _finalize_reply(
+            str(tool_result.get("user_text") or ""),
+            keyboard=tool_result.get("keyboard"),
+        )
+
+
+    if target_agent == "plan" and worker_result.get("transition_signal") == SCHEDULE_ADJUSTMENT:
+        worker_result["tool_call"] = {
+            "name": "schedule_adjustment_init",
+            "arguments": {"user_text": str(worker_result.get("reply_text") or "")},
+            "user_id": user_id,
+        }
+        tool_result = await run_plan_tool_call(worker_result["tool_call"])
+        return await _finalize_reply(str(tool_result.get("user_text") or ""), keyboard=tool_result.get("keyboard"))
 
     reply_text = str(worker_result.get("reply_text") or "")
     defer_draft = False
     plan_draft_parameters: Optional[Dict[str, Any]] = None
-    show_plan_actions = False
+
+    current_state = context_payload.get("current_state")
 
     error_payload = worker_result.get("error")
     if error_payload is not None:
         if error_payload.get("code") == "CONTRACT_MISMATCH":
             log_metric(
                 "plan_contract_mismatch",
-                extra={"user_id": user_id, "agent": "coach"},
+                extra={"user_id": user_id, "agent": target_agent},
             )
-        log_metric(
-            "plan_agent_error",
-            extra={
+        log_router_decision(
+            {
+                "event_type": "plan_agent_error",
                 "timestamp": datetime.utcnow().isoformat(),
                 "user_id": user_id,
-                "agent": "coach",
+                "agent": target_agent,
                 "error": error_payload,
-            },
+            }
         )
         logger.warning(
-            "[PLAN_AGENT] Error payload received for user %s (agent=coach): %s",
+            "[PLAN_AGENT] Error payload received for user %s (agent=%s): %s",
             user_id,
+            target_agent,
             error_payload,
         )
         return await _finalize_reply(reply_text)
@@ -1329,8 +1436,9 @@ async def handle_incoming_message(
             user: Optional[User] = db.query(User).filter(User.id == user_id).first()
             if not user:
                 logger.warning(
-                    "[PLAN] Generated plan ignored — user %s not found (agent=coach)",
+                    "[PLAN] Generated plan ignored — user %s not found (agent=%s)",
                     user_id,
+                    target_agent,
                 )
                 return await _finalize_reply(reply_text)
             try:
@@ -1339,46 +1447,53 @@ async def handle_incoming_message(
             except (IntegrityError, PlanAgentEnvelopeError) as exc:
                 db.rollback()
                 logger.error(
-                    "[PLAN] Failed to persist generated plan for user %s (agent=coach)",
+                    "[PLAN] Failed to persist generated plan for user %s (agent=%s)",
                     user_id,
+                    target_agent,
                     exc_info=exc,
                 )
                 log_metric(
                     "plan_validation_rejected",
-                    extra={"user_id": user_id, "agent": "coach"},
+                    extra={"user_id": user_id, "agent": target_agent},
                 )
                 fallback_text = _plan_agent_fallback_envelope().get("reply_text", "")
                 return await _finalize_reply(fallback_text)
             else:
                 logger.info(
-                    "[PLAN] Generated plan persisted for user %s (agent=coach)",
+                    "[PLAN] Generated plan persisted for user %s (agent=%s)",
                     user_id,
+                    target_agent,
                 )
                 plan_persisted = True
                 log_metric(
                     "plan_generated_ok",
-                    extra={"user_id": user_id, "agent": "coach"},
+                    extra={"user_id": user_id, "agent": target_agent},
                 )
 
     plan_updates = worker_result.get("plan_updates")
     transition_signal = worker_result.get("transition_signal")
-    if plan_updates and isinstance(plan_updates, dict):
+    if (
+        plan_updates
+        and isinstance(plan_updates, dict)
+    ):
         allowed_execution_adaptations = {"pause", "resume", "PAUSE_PLAN", "RESUME_PLAN"}
         should_persist_updates = bool(generated_plan_object) or (
             plan_updates.get("adaptation_type") in allowed_execution_adaptations
         )
         if not should_persist_updates:
             logger.info(
-                "[PLAN] Skipping plan updates outside allowed persistence window (user=%s, agent=coach, state=%s)",
+                "[PLAN] Skipping plan updates outside allowed persistence window (user=%s, agent=%s, state=%s)",
                 user_id,
+                target_agent,
                 current_state,
             )
         elif "adaptation_type" in plan_updates:
             if plan_updates.get("adaptation_type") not in allowed_execution_adaptations:
                 logger.info(
-                    "[PLAN] Skipping non-execution adaptation type %s for user %s (agent=coach)",
+                    "[PLAN] Skipping non-execution adaptation type %s for user %s (agent=%s)",
                     plan_updates.get("adaptation_type"),
                     user_id,
+                    target_agent,
                 )
                 return await _finalize_reply(reply_text)
             adaptation_result = None
@@ -1386,8 +1501,9 @@ async def handle_incoming_message(
                 user: Optional[User] = db.query(User).filter(User.id == user_id).first()
                 if not user:
                     logger.warning(
-                        "[PLAN] Adaptation ignored — user %s not found (agent=coach)",
+                        "[PLAN] Adaptation ignored — user %s not found (agent=%s)",
                         user_id,
+                        target_agent,
                     )
                     return await _finalize_reply(reply_text)
                 active_plan = (
@@ -1398,8 +1514,9 @@ async def handle_incoming_message(
                 )
                 if not active_plan:
                     logger.warning(
-                        "[PLAN] Adaptation ignored — active plan missing (user=%s, agent=coach)",
+                        "[PLAN] Adaptation ignored — active plan missing (user=%s, agent=%s)",
                         user_id,
+                        target_agent,
                     )
                     return await _finalize_reply(reply_text)
                 try:
@@ -1408,15 +1525,16 @@ async def handle_incoming_message(
                 except (PlanAdaptationError, IntegrityError) as exc:
                     db.rollback()
                     logger.error(
-                        "[PLAN] Failed to apply adaptation for user %s (agent=coach): %s",
+                        "[PLAN] Failed to apply adaptation for user %s (agent=%s): %s",
                         user_id,
+                        target_agent,
                         exc,
                     )
                     log_metric(
                         "plan_adaptation_failed",
                         extra={
                             "user_id": user_id,
-                            "agent": "coach",
+                            "agent": target_agent,
                             "adaptation_type": plan_updates.get("adaptation_type"),
                         },
                     )
@@ -1425,7 +1543,7 @@ async def handle_incoming_message(
                         "plan_adaptation_applied",
                         extra={
                             "user_id": user_id,
-                            "agent": "coach",
+                            "agent": target_agent,
                             "adaptation_type": adaptation_result.adaptation_type,
                             "scope": adaptation_result.scope,
                             "step_diff_count": adaptation_result.step_diff_count,
@@ -1441,8 +1559,9 @@ async def handle_incoming_message(
                 user: Optional[User] = db.query(User).filter(User.id == user_id).first()
                 if not user:
                     logger.warning(
-                        "[PLAN] Updates ignored — user %s not found (agent=coach)",
+                        "[PLAN] Updates ignored — user %s not found (agent=%s)",
                         user_id,
+                        target_agent,
                     )
                     return await _finalize_reply(reply_text)
                 try:
@@ -1456,8 +1575,9 @@ async def handle_incoming_message(
                 except (ValueError, IntegrityError):
                     db.rollback()
                     logger.error(
-                        "[PLAN] Failed to persist updates for user %s (agent=coach)",
+                        "[PLAN] Failed to persist updates for user %s (agent=%s)",
                         user_id,
+                        target_agent,
                     )
                 else:
                     logger.info(
@@ -1470,21 +1590,22 @@ async def handle_incoming_message(
     next_state, rejection_reason = _guard_fsm_transition(
         context_payload.get("current_state"),
         transition_signal,
-        "coach",
+        target_agent,
         plan_persisted=plan_persisted,
     )
     if transition_signal is not None and next_state is None:
         logger.warning(
-            "[FSM] Ignoring transition_signal for user %s: %s (reason=%s, agent=coach)",
+            "[FSM] Ignoring transition_signal for user %s: %s (reason=%s, agent=%s)",
             user_id,
             transition_signal,
             rejection_reason or "invalid_state",
+            target_agent,
         )
         log_metric(
             "fsm_transition_blocked",
             extra={
                 "user_id": user_id,
-                "agent": "coach",
+                "agent": target_agent,
                 "current_state": context_payload.get("current_state"),
                 "transition_signal": transition_signal,
                 "reason": rejection_reason or "invalid_state",
@@ -1493,7 +1614,7 @@ async def handle_incoming_message(
         defer_draft = False
         plan_draft_parameters = None
     elif next_state is not None:
-        previous_state = await _commit_fsm_transition(user_id, "coach", next_state)
+        previous_state = await _commit_fsm_transition(user_id, target_agent, next_state)
         if previous_state is None:
             return await _finalize_reply(reply_text)
 
@@ -1503,3 +1624,14 @@ async def handle_incoming_message(
         plan_draft_parameters=plan_draft_parameters,
         show_plan_actions=show_plan_actions,
     )
+
+
+async def _invoke_agent(target_agent: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    if target_agent == "safety":
+        return await mock_safety_agent(payload)
+    if target_agent == "onboarding":
+        return await mock_onboarding_agent(payload)
+    if target_agent == "manager":
+        return await mock_manager_agent(payload)
+    # "plan" routing is now handled by coach_agent (T5.6 — plan_agent removed).
+    return await coach_agent(payload)

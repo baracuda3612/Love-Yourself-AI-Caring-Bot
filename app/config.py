@@ -56,7 +56,7 @@ class Settings:
     MODEL: str = "gpt-5-mini"
     PLAN_MODEL: str = "gpt-4.1-mini"
     COACH_MODEL: str = "gpt-5.1"
-
+    ROUTER_MODEL: str = "gpt-5-mini"
     MAX_TOKENS: int = 300
     TEMPERATURE: float = 0.7
     DEFAULT_DAILY_LIMIT: int = 10
@@ -72,6 +72,11 @@ class Settings:
     # ── Feature flags ─────────────────────────────────────────────────────────
     # ADAPTATIONS_ENABLED: frozen at False for P1.
     ADAPTATIONS_ENABLED: bool = False
+    # LEGACY_PLAN_FLOW_ENABLED: frozen at False for P1 (T5.2).
+    # When False: plan creation goes through create_plan() directly to ACTIVE.
+    # The old PLAN_FLOW:DATA_COLLECTION → CONFIRMATION_PENDING → FINALIZATION
+    # tunnel in orchestrator.py is gated behind this flag.
+    LEGACY_PLAN_FLOW_ENABLED: bool = False
 
     def __post_init__(self) -> None:
         bot_token = os.getenv("BOT_TOKEN")
@@ -103,6 +108,7 @@ class Settings:
             or os.getenv("HIGH_REASONING_MODEL")
             or "gpt-5.1"
         )
+        self.ROUTER_MODEL = os.getenv("ROUTER_MODEL", "gpt-5-mini")
         self.MAX_TOKENS = _as_int(os.getenv("MAX_TOKENS"), 300)
         self.TEMPERATURE = _as_float(os.getenv("TEMPERATURE"), 0.7)
         self.DEFAULT_DAILY_LIMIT = _as_int(os.getenv("DEFAULT_DAILY_LIMIT"), 10)
@@ -120,6 +126,8 @@ class Settings:
             raise RuntimeError("REPORT_TOKEN_SECRET must be set in production")
         # ADAPTATIONS_ENABLED is always False in P1 — not env-driven yet
         self.ADAPTATIONS_ENABLED = False
+        # LEGACY_PLAN_FLOW_ENABLED is always False in P1 — not env-driven yet
+        self.LEGACY_PLAN_FLOW_ENABLED = False
 
 
 settings = Settings()
@@ -132,7 +140,7 @@ TZ = settings.TZ
 MODEL = settings.MODEL
 PLAN_MODEL = settings.PLAN_MODEL
 COACH_MODEL = settings.COACH_MODEL
-
+ROUTER_MODEL = settings.ROUTER_MODEL
 MAX_TOKENS = settings.MAX_TOKENS
 TEMPERATURE = settings.TEMPERATURE
 DEFAULT_DAILY_LIMIT = settings.DEFAULT_DAILY_LIMIT
@@ -147,3 +155,4 @@ REPORT_TOKEN_SECRET = settings.REPORT_TOKEN_SECRET
 APP_BASE_URL = settings.APP_BASE_URL
 BOT_USERNAME = settings.BOT_USERNAME
 ADAPTATIONS_ENABLED = settings.ADAPTATIONS_ENABLED
+LEGACY_PLAN_FLOW_ENABLED = settings.LEGACY_PLAN_FLOW_ENABLED
