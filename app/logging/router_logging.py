@@ -17,7 +17,7 @@ if not logger.handlers:
 logger.propagate = False
 
 
-def log_router_decision(data: Dict[str, Any]) -> None:
+def _emit(data: Dict[str, Any]) -> None:
     try:
         logger.info(json.dumps(data, ensure_ascii=False))
     except Exception:
@@ -32,4 +32,4 @@ def log_metric(metric_name: str, value: int = 1, extra: Dict[str, Any] | None = 
     }
     if extra:
         payload.update(extra)
-    log_router_decision(payload)
+    _emit(payload)
