@@ -126,8 +126,6 @@ async def cmd_start(message: Message):
 
 async def _handle_newplan_deeplink(message: Message, args: str) -> None:
     from app.orchestrator import handle_incoming_message
-    from app.plan_parameters import normalize_plan_parameters
-    from app.session_memory import SessionMemory
 
     parts = args.split("_")
     if len(parts) != 4:
@@ -149,17 +147,6 @@ async def _handle_newplan_deeplink(message: Message, args: str) -> None:
             )
             return
         internal_id = user.id
-
-    redis = create_redis_client()
-    session = SessionMemory(redis_client=redis)
-    try:
-        params = normalize_plan_parameters(
-            {"duration": duration, "load": load, "focus": focus}
-        )
-        await session.set_plan_parameters(internal_id, params)
-    except Exception:
-        await message.answer("Щось пішло не так. Спробуй ще раз.")
-        return
 
     response = await handle_incoming_message(
         user_id=internal_id, message_text="створити план"
