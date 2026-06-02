@@ -48,18 +48,7 @@ async def mock_onboarding_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
 
 
-async def mock_manager_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
-    _log_agent_call("mock_manager_agent", payload)
-
-    return _build_response(
-        agent_name="mock_manager_agent",
-        reply_text="Я мок-менеджер. Зараз би обговорював з тобою корпоративні умови, але це тест.",
-        payload=payload,
-    )
-
-
 MOCK_AGENTS: Dict[str, Any] = {
     "mock_safety_agent": mock_safety_agent,
     "mock_onboarding_agent": mock_onboarding_agent,
-    "mock_manager_agent": mock_manager_agent,
 }
