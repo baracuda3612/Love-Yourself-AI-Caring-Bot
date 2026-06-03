@@ -33,6 +33,40 @@ class SessionMemory:
     def _schedule_adjustment_soft_prompted_key(self, user_id: int) -> str:
         return f"session:{user_id}:schedule_adjustment_soft_prompted"
 
+    def _pending_action_key(self, user_id: int) -> str:
+        return f"session:{user_id}:pending_action"
+
+    async def set_pending_action(self, user_id: int | None, action: str, ttl_seconds: int = 3600) -> None:
+        """Store a short-lived pending action (e.g. collect_evening_time_for_medium)."""
+        if user_id is None or self.redis is None:
+            return
+        try:
+            await self.redis.set(self._pending_action_key(user_id), action, ex=ttl_seconds)
+        except Exception:
+            logger.warning("Failed to set pending_action for user %s", user_id, exc_info=True)
+
+    async def get_pending_action(self, user_id: int | None) -> str | None:
+        """Return the current pending action or None if absent/expired."""
+        if user_id is None or self.redis is None:
+            return None
+        try:
+            raw = await self.redis.get(self._pending_action_key(user_id))
+            if raw is None:
+                return None
+            return raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+        except Exception:
+            logger.warning("Failed to get pending_action for user %s", user_id, exc_info=True)
+            return None
+
+    async def clear_pending_action(self, user_id: int | None) -> None:
+        """Clear the pending action."""
+        if user_id is None or self.redis is None:
+            return
+        try:
+            await self.redis.delete(self._pending_action_key(user_id))
+        except Exception:
+            logger.warning("Failed to clear pending_action for user %s", user_id, exc_info=True)
+
     async def append_message(self, user_id: int | None, role: str, text: str) -> None:
         """Append a message to the tail of the user's history."""
 

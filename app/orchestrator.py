@@ -72,20 +72,17 @@ PLAN_GENERATION_ERROR_MESSAGE = (
     "⚠️ Не вдалося згенерувати план.\nСпробуй ще раз або зміни параметри."
 )
 PLAN_FINALIZATION_ERROR_MESSAGE = "⚠️ Не вдалося активувати план."
+# T5.8A: removed PLAN_FOCUS_VALUES, PLAN_LOAD_VALUES (only in dead _sanitize_plan_updates),
+# PLAN_TIME_SLOT_VALUES, INTENSIVE_AUTO_SLOTS, and MORNING slot (PlanBuilderV5 uses DAY/EVENING only).
+# PLAN_DURATION_VALUES kept — still used in _persist_generated_plan validation.
 PLAN_DURATION_VALUES = {"SHORT", "MEDIUM", "STANDARD", "LONG"}
-PLAN_FOCUS_VALUES = {"SOMATIC", "COGNITIVE", "BOUNDARIES", "REST", "MIXED"}
 PLAN_LOAD_VALUES = {"LITE", "MID", "INTENSIVE"}
-PLAN_TIME_SLOT_VALUES = {"MORNING", "DAY", "EVENING"}
-INTENSIVE_AUTO_SLOTS = ["MORNING", "DAY", "EVENING"]
-
-
 
 SLOT_RANGES = {
-    "MORNING": (time(6, 0), time(11, 59)),
     "DAY": (time(12, 0), time(17, 59)),
     "EVENING": (time(18, 0), time(23, 59)),
 }
-SLOT_DEFAULT_TIMES = {"MORNING": "08:00", "DAY": "13:00", "EVENING": "20:00"}
+SLOT_DEFAULT_TIMES = {"DAY": "13:00", "EVENING": "20:00"}
 
 
 def infer_slot(t: time) -> str | None:
@@ -170,26 +167,6 @@ def _resume_plan_if_paused(db: Session, plan: AIPlan) -> Tuple[bool, List[int]]:
     return resumed, list(result.rescheduled_step_ids or [])
 
 
-def _sanitize_plan_updates(plan_updates: Any) -> Optional[Dict[str, Any]]:
-    if not isinstance(plan_updates, dict):
-        return None
-    clean_updates: Dict[str, Any] = {}
-    for key, value in plan_updates.items():
-        if value is None:
-            continue
-        if key == "duration" and value in PLAN_DURATION_VALUES:
-            clean_updates[key] = value
-        elif key == "focus" and value in PLAN_FOCUS_VALUES:
-            clean_updates[key] = value
-        elif key == "load" and value in PLAN_LOAD_VALUES:
-            clean_updates[key] = value
-        elif key == "preferred_time_slots":
-            if not isinstance(value, list) or not value:
-                continue
-            slots = [slot for slot in value if slot in PLAN_TIME_SLOT_VALUES]
-            if slots:
-                clean_updates[key] = slots
-    return clean_updates
 
 
 async def _handle_schedule_adjustment_init(user_id: int, tool_args: Dict[str, Any], db: Session) -> Dict[str, Any]:
