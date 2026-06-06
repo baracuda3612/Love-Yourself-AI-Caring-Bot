@@ -72,17 +72,21 @@ PLAN_GENERATION_ERROR_MESSAGE = (
     "⚠️ Не вдалося згенерувати план.\nСпробуй ще раз або зміни параметри."
 )
 PLAN_FINALIZATION_ERROR_MESSAGE = "⚠️ Не вдалося активувати план."
-# T5.8A: removed PLAN_FOCUS_VALUES, PLAN_LOAD_VALUES (only in dead _sanitize_plan_updates),
-# PLAN_TIME_SLOT_VALUES, INTENSIVE_AUTO_SLOTS, and MORNING slot (PlanBuilderV5 uses DAY/EVENING only).
-# PLAN_DURATION_VALUES kept — still used in _persist_generated_plan validation.
+# T5.8A: removed PLAN_FOCUS_VALUES, PLAN_TIME_SLOT_VALUES, INTENSIVE_AUTO_SLOTS
+# (only used in dead _sanitize_plan_updates). PLAN_LOAD_VALUES, PLAN_DURATION_VALUES kept —
+# still used in _persist_generated_plan validation.
+# MORNING kept in SLOT_RANGES/SLOT_DEFAULT_TIMES: PlanBuilderV5 no longer creates MORNING steps,
+# but legacy DB rows may still have them; _get_plan_active_tasks filters on SLOT_RANGES,
+# so removing MORNING would silently drop those steps from schedule adjustment.
 PLAN_DURATION_VALUES = {"SHORT", "MEDIUM", "STANDARD", "LONG"}
 PLAN_LOAD_VALUES = {"LITE", "MID", "INTENSIVE"}
 
 SLOT_RANGES = {
+    "MORNING": (time(6, 0), time(11, 59)),
     "DAY": (time(12, 0), time(17, 59)),
     "EVENING": (time(18, 0), time(23, 59)),
 }
-SLOT_DEFAULT_TIMES = {"DAY": "13:00", "EVENING": "20:00"}
+SLOT_DEFAULT_TIMES = {"MORNING": "08:00", "DAY": "13:00", "EVENING": "20:00"}
 
 
 def infer_slot(t: time) -> str | None:
