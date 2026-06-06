@@ -1151,7 +1151,6 @@ def _build_idle_finished_context(
     Called only when current_state == 'IDLE_FINISHED'.
     """
     from app.plan_completion.metrics import build_completion_metrics
-    from app.plan_completion.cta import get_next_plan_recommendation
     from app.db import AIPlan
 
     plan = (
@@ -1168,7 +1167,6 @@ def _build_idle_finished_context(
 
     try:
         metrics = build_completion_metrics(db, user_id, plan.id)
-        cta = get_next_plan_recommendation(metrics)
     except Exception as e:
         logger.warning(
             "[COACH] Failed to build completion context user=%s plan=%s: %s",
@@ -1178,15 +1176,14 @@ def _build_idle_finished_context(
         )
         return None
 
+    # T5.8A: removed adaptation_count (always 0 since T5.4), recommended_load/focus/duration
+    # (old architecture — plan no longer has focus/load params). Prompt uses only:
+    # total_days, completion_rate, best_streak, outcome_tier.
     return {
         "total_days": metrics.total_days,
         "completion_rate": round(metrics.completion_rate * 100),
         "best_streak": metrics.best_streak,
-        "adaptation_count": metrics.adaptation_count,
         "outcome_tier": metrics.outcome_tier,
-        "recommended_duration": cta.recommended_duration,
-        "recommended_load": cta.recommended_load,
-        "recommended_focus": cta.recommended_focus,
     }
 
 
