@@ -1195,6 +1195,95 @@ async def build_plan_draft_preview(
     return ""
 
 
+# Tool name → callable map (allowlist).
+# Only these tools may be invoked by Coach via tool_call signal.
+_PLAN_TOOL_REGISTRY: Dict[str, Any] = {}
+
+
+def _build_tool_registry() -> Dict[str, Any]:
+    """Lazy-build the tool registry so imports stay at call time."""
+    from app.plan_runtime.tools import (
+        cancel_plan,
+        change_day_time,
+        change_evening_time,
+        create_first_plan,
+        create_followup_plan,
+        get_plan_status,
+        pause_plan,
+        record_evening_time,
+        resume_plan,
+    )
+    return {
+        "create_first_plan":    lambda uid, _args: create_first_plan(uid),
+        "create_followup_plan": lambda uid, args: create_followup_plan(uid, args.get("plan_type", "SHORT")),
+        "record_evening_time":  lambda uid, args: record_evening_time(uid, args["hhmm"]),
+        "change_day_time":      lambda uid, args: change_day_time(uid, args["hhmm"]),
+        "change_evening_time":  lambda uid, args: change_evening_time(uid, args["hhmm"]),
+        "get_plan_status":      lambda uid, _args: get_plan_status(uid),
+        "pause_plan":           lambda uid, _args: pause_plan(uid),
+        "resume_plan":          lambda uid, _args: resume_plan(uid),
+        "cancel_plan":          lambda uid, _args: cancel_plan(uid),
+    }
+
+
+# Deterministic reply templates — no second LLM call needed.
+_TOOL_REPLY_TEMPLATES: Dict[str, str] = {
+    "create_first_plan":    "✅ Перший 7-денний ритм запущено. Перше завдання прийде в обраний час.",
+    "create_followup_plan": "✅ Новий план запущено. Завдання приходитимуть за розкладом.",
+    "record_evening_time":  "✅ Вечірній час збережено.",
+    "change_day_time":      "✅ Денний час змінено. Наступні завдання прийдуть у новий час.",
+    "change_evening_time":  "✅ Вечірній час змінено.",
+    "get_plan_status":      None,   # returns dynamic data — formatted below
+    "pause_plan":           "⏸ План поставлено на паузу. Завдання не надходитимуть до відновлення.",
+    "resume_plan":          "▶️ План відновлено. Завдання повернуться за розкладом.",
+    "cancel_plan":          "🛑 План зупинено. Твоя статистика збережена.",
+}
+
+
+async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optional[str]:
+    """
+    Execute an allowlisted plan_runtime tool and return a user-facing reply string.
+    Returns None if the tool name is not in the allowlist (orchestrator continues normally).
+    """
+    tool_name = str(tool_call.get("name") or "")
+    tool_args = tool_call.get("arguments") or {}
+    if not isinstance(tool_args, dict):
+        tool_args = {}
+
+    registry = _build_tool_registry()
+    handler = registry.get(tool_name)
+    if handler is None:
+        logger.warning("[TOOL] Unknown tool_call name=%r for user=%s — skipping", tool_name, user_id)
+        return None
+
+    try:
+        result = handler(user_id, tool_args)
+        log_metric("plan_tool_executed", extra={"user_id": user_id, "tool": tool_name})
+    except ValueError as exc:
+        logger.warning("[TOOL] tool=%s user=%s failed: %s", tool_name, user_id, exc)
+        return f"⚠️ {exc}"
+    except Exception as exc:
+        logger.error("[TOOL] tool=%s user=%s error: %s", tool_name, user_id, exc, exc_info=True)
+        return "⚠️ Не вдалось виконати дію. Спробуй ще раз."
+
+    # Special case: get_plan_status returns a dict to format
+    if tool_name == "get_plan_status":
+        if result.get("plan_active"):
+            return (
+                f"📋 Стан: активний план\n"
+                f"День {result.get('days_completed', 0)} з {result.get('days_total', 0)}"
+            )
+        return "📋 Активного плану зараз немає."
+
+    # needs_evening_time soft result from create_followup_plan
+    if isinstance(result, dict) and result.get("status") == "needs_evening_time":
+        await session_memory.set_pending_action(user_id, "collect_evening_time_for_medium")
+        return "О котрій зручно отримувати вечірній момент? Напиши час у форматі 20:30"
+
+    template = _TOOL_REPLY_TEMPLATES.get(tool_name, "✅ Готово.")
+    return template
+
+
 async def handle_incoming_message(
     user_id: int,
     message_text: str,
@@ -1295,6 +1384,17 @@ async def handle_incoming_message(
             error_payload,
         )
         return await _finalize_reply(reply_text)
+
+    # ── Tool call execution (T5.8B) ───────────────────────────────────────────
+    # Coach returns {"tool_call": {"name": "...", "arguments": {...}}}
+    # Orchestrator executes allowlisted plan_runtime tools, then returns
+    # a deterministic confirmation message — no second LLM round-trip needed.
+    # Rule: tool_call is processed before transition_signal / generated_plan_object.
+    raw_tool_call = worker_result.get("tool_call")
+    if raw_tool_call and isinstance(raw_tool_call, dict):
+        tool_result = await _execute_plan_tool(user_id, raw_tool_call)
+        if tool_result is not None:
+            return await _finalize_reply(tool_result)
 
     plan_persisted = False
     generated_plan_object = worker_result.get("generated_plan_object")
