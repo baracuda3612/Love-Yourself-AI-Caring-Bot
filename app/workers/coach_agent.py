@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
-from app.ai import _usage_dict, async_client, extract_output_text
+from app.ai import _usage_dict, async_client, extract_output_text, extract_tool_call
 from app.config import settings
 from app.db import SessionLocal
 from sqlalchemy.orm import Session
@@ -1246,6 +1246,91 @@ def _normalize_content(content: Any) -> str:
     return str(content)
 
 
+# OpenAI tool definitions — registered with every Coach API call.
+# Coach calls one of these when the user clearly intends a runtime action.
+# Execution happens in orchestrator._execute_plan_tool (T5.8B).
+COACH_TOOLS = [
+    {
+        "type": "function",
+        "name": "create_first_plan",
+        "description": "Create the first 7-day plan for a user who has completed onboarding (IDLE_ONBOARDED). Call only when the user explicitly wants to start their first plan.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "type": "function",
+        "name": "create_followup_plan",
+        "description": "Create a follow-up plan after a plan has ended (IDLE_FINISHED, IDLE_DROPPED, IDLE_PLAN_ABORTED). plan_type must be SHORT (7 days) or MEDIUM (14 days, needs evening time).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "plan_type": {"type": "string", "enum": ["SHORT", "MEDIUM"], "description": "7 days = SHORT, 14 days = MEDIUM"},
+            },
+            "required": ["plan_type"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "record_evening_time",
+        "description": "Save the user's chosen evening delivery time. Use only after the user provides a concrete HH:MM time and wants a 14-day plan.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "hhmm": {"type": "string", "description": "Time in HH:MM format, e.g. 20:30"},
+            },
+            "required": ["hhmm"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "change_day_time",
+        "description": "Change the daytime delivery time. Use only when the user clearly wants to change the time and provides a concrete HH:MM.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "hhmm": {"type": "string", "description": "New time in HH:MM format"},
+            },
+            "required": ["hhmm"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "change_evening_time",
+        "description": "Change the evening delivery time for users with a 14-day plan.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "hhmm": {"type": "string", "description": "New time in HH:MM format"},
+            },
+            "required": ["hhmm"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "pause_plan",
+        "description": "Pause an active plan. Delivery stops until resume. Use only when the user confirms they want to pause.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "type": "function",
+        "name": "resume_plan",
+        "description": "Resume a paused plan. Use only when the user confirms they want to resume.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "type": "function",
+        "name": "cancel_plan",
+        "description": "Cancel an active or paused plan permanently. Requires explicit user confirmation. Explain that this is irreversible before calling.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "type": "function",
+        "name": "get_plan_status",
+        "description": "Get the current plan status. Use only when the user asks about their plan and the info is not already in context.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+]
+
+
 async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
     context_payload = dict(payload)
 
@@ -1267,6 +1352,7 @@ async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
             model=settings.COACH_MODEL,
             input=messages,
             max_output_tokens=settings.MAX_TOKENS,
+            tools=COACH_TOOLS,
         )
     except Exception as exc:
         logger.error("[coach_model_unavailable] %s: %s", exc.__class__.__name__, exc, exc_info=True)
@@ -1274,7 +1360,7 @@ async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
             "agent_name": "coach_agent",
             "reply_type": "error",
             "reply_text": "",
-            "tool_calls": [],
+            "tool_call": None,
             "usage": _usage_dict(None),
             "debug": {
                 "note": "Coach agent unavailable",
@@ -1284,6 +1370,19 @@ async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
             },
         }
 
+    # Check for tool call first — if model chose to call a tool,
+    # reply_text will be empty and tool_call carries the action.
+    tool_call = extract_tool_call(response)
+    if tool_call:
+        logger.info("[coach_tool_call] tool=%s args=%s", tool_call["name"], tool_call["arguments"])
+        return {
+            "agent_name": "coach_agent",
+            "reply_type": "tool_call",
+            "reply_text": "",
+            "tool_call": tool_call,
+            "usage": _usage_dict(response),
+        }
+
     content = extract_output_text(response)
     logger.info("[coach_response] reply_preview=%s", content[:500])
 
@@ -1291,7 +1390,7 @@ async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
         "agent_name": "coach_agent",
         "reply_type": "text",
         "reply_text": content,
-        "tool_calls": [],
+        "tool_call": None,
         "usage": _usage_dict(response),
         "debug": {
             "note": "Coach agent response",

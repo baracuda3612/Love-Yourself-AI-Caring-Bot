@@ -51,6 +51,35 @@ def extract_output_text(response: Any) -> str:
     return ""
 
 
+def extract_tool_call(response: Any) -> dict | None:
+    """Return the first tool/function call from an OpenAI Responses object, or None.
+
+    Responses API: tool calls appear as items in response.output with
+    type == "function_call". Each item has .name and .arguments (JSON string).
+    Returns {"name": str, "arguments": dict} or None if no tool call present.
+    """
+    import json
+
+    try:
+        output = getattr(response, "output", None)
+        if not output:
+            return None
+        for item in output:
+            if getattr(item, "type", None) == "function_call":
+                name = getattr(item, "name", None)
+                raw_args = getattr(item, "arguments", None) or "{}"
+                try:
+                    arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                except (ValueError, TypeError):
+                    arguments = {}
+                if name:
+                    return {"name": name, "arguments": arguments}
+    except Exception:
+        pass
+
+    return None
+
+
 async def _call_openai(messages):
     """Базовий виклик OpenAI; залишається для сумісності клієнта."""
     resp = await async_client.responses.create(
@@ -62,4 +91,4 @@ async def _call_openai(messages):
     return extract_output_text(resp), _usage_dict(resp)
 
 
-__all__ = ["async_client", "_call_openai", "extract_output_text"]
+__all__ = ["async_client", "_call_openai", "extract_output_text", "extract_tool_call"]
