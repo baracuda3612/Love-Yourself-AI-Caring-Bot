@@ -1116,7 +1116,6 @@ async def get_fsm_state(user_id: int) -> Optional[str]:
 
 async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
     stm_history = await get_stm_history(user_id)
-    ltm_snapshot = await get_ltm_snapshot(user_id)
     fsm_state = await get_fsm_state(user_id)
     temporal_context = await get_temporal_context(user_id)
 
@@ -1125,7 +1124,6 @@ async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
     return {
         "message_text": message_text,
         "short_term_history": stm_history,
-        "profile_snapshot": ltm_snapshot,
         "current_state": fsm_state,
         "temporal_context": temporal_context,
         "schedule_adjustment_context": schedule_adjustment_context,
@@ -1279,6 +1277,21 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
     if isinstance(result, dict) and result.get("status") == "needs_evening_time":
         await session_memory.set_pending_action(user_id, "collect_evening_time_for_medium")
         return "О котрій зручно отримувати вечірній момент? Напиши час у форматі 20:30"
+
+    # After record_evening_time: if pending_action is collect_evening_time_for_medium,
+    # deterministically create the MEDIUM plan — no second LLM round-trip.
+    if tool_name == "record_evening_time" and result.get("status") == "ok":
+        pending = await session_memory.get_pending_action(user_id)
+        if pending == "collect_evening_time_for_medium":
+            await session_memory.clear_pending_action(user_id)
+            registry = _build_tool_registry()
+            try:
+                registry["create_followup_plan"](user_id, {"plan_type": "MEDIUM"})
+                log_metric("plan_tool_executed", extra={"user_id": user_id, "tool": "create_followup_plan"})
+                return _TOOL_REPLY_TEMPLATES["create_followup_plan"]
+            except Exception as exc:
+                logger.error("[TOOL] cascade create_followup_plan(MEDIUM) user=%s: %s", user_id, exc, exc_info=True)
+                return "⚠️ Час збережено, але план не вдалось запустити. Спробуй ще раз."
 
     template = _TOOL_REPLY_TEMPLATES.get(tool_name, "✅ Готово.")
     return template
