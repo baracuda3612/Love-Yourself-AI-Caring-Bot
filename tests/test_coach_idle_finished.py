@@ -49,38 +49,48 @@ def test_build_idle_finished_context_returns_dict_for_completed_plan(monkeypatch
         assert user_id == 7
         assert plan_id == 123
         return SimpleNamespace(
-            total_days=28,
+            total_days=14,
             completion_rate=0.86,
             best_streak=9,
-            adaptation_count=2,
             outcome_tier="STRONG",
         )
 
-    def fake_get_recommendation(_metrics):
-        return SimpleNamespace(
-            recommended_duration="STANDARD",
-            recommended_load="MID",
-            recommended_focus="MIXED",
-        )
-
     import app.plan_completion.metrics as metrics_mod
-    import app.plan_completion.cta as cta_mod
 
     monkeypatch.setattr(metrics_mod, "build_completion_metrics", fake_build_metrics)
-    monkeypatch.setattr(cta_mod, "get_next_plan_recommendation", fake_get_recommendation)
 
     result = coach_agent._build_idle_finished_context(_DummyDB(plan), user_id=7)
 
     assert result == {
-        "total_days": 28,
+        "total_days": 14,
         "completion_rate": 86,
         "best_streak": 9,
-        "adaptation_count": 2,
         "outcome_tier": "STRONG",
-        "recommended_duration": "STANDARD",
-        "recommended_load": "MID",
-        "recommended_focus": "MIXED",
     }
+
+
+def test_build_idle_finished_context_no_legacy_fields(monkeypatch):
+    """adaptation_count, recommended_* removed in T5.8C — must not appear."""
+    plan = SimpleNamespace(id=1, user_id=1, status="completed", end_date=datetime.now(timezone.utc))
+
+    def fake_build_metrics(_db, _uid, _pid):
+        return SimpleNamespace(
+            total_days=7,
+            completion_rate=0.5,
+            best_streak=3,
+            outcome_tier="NEUTRAL",
+        )
+
+    import app.plan_completion.metrics as metrics_mod
+
+    monkeypatch.setattr(metrics_mod, "build_completion_metrics", fake_build_metrics)
+
+    result = coach_agent._build_idle_finished_context(_DummyDB(plan), user_id=1)
+
+    assert "adaptation_count" not in result
+    assert "recommended_duration" not in result
+    assert "recommended_load" not in result
+    assert "recommended_focus" not in result
 
 
 def test_build_idle_finished_context_returns_none_when_plan_missing():
@@ -104,17 +114,27 @@ def test_build_idle_finished_context_returns_none_on_metrics_exception(monkeypat
 
 def test_context_message_includes_completion_context_when_present():
     payload = {
-        "profile_snapshot": {"name": "Alex"},
         "temporal_context": "2026-01-01T10:00:00Z",
         "current_state": "IDLE_FINISHED",
-        "completion_context": {"total_days": 21, "completion_rate": 95},
+        "completion_context": {"total_days": 14, "completion_rate": 95},
     }
 
     message = coach_agent._context_message(payload)
 
     assert '"completion_context"' in message
-    assert '"total_days": 21' in message
+    assert '"total_days": 14' in message
     assert '"completion_rate": 95' in message
+
+
+def test_context_message_no_profile_snapshot():
+    """profile_snapshot removed in T5.8C — must not appear in context block."""
+    payload = {
+        "temporal_context": "2026-01-01T10:00:00Z",
+        "current_state": "IDLE_FINISHED",
+    }
+    message = coach_agent._context_message(payload)
+    assert "profile_snapshot" not in message
+    assert "user_profile" not in message
 
 
 @pytest.mark.anyio
