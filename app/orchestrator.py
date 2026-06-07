@@ -1116,7 +1116,6 @@ async def get_fsm_state(user_id: int) -> Optional[str]:
 
 async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
     stm_history = await get_stm_history(user_id)
-    ltm_snapshot = await get_ltm_snapshot(user_id)
     fsm_state = await get_fsm_state(user_id)
     temporal_context = await get_temporal_context(user_id)
 
@@ -1125,7 +1124,6 @@ async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
     return {
         "message_text": message_text,
         "short_term_history": stm_history,
-        "profile_snapshot": ltm_snapshot,
         "current_state": fsm_state,
         "temporal_context": temporal_context,
         "schedule_adjustment_context": schedule_adjustment_context,
@@ -1240,6 +1238,28 @@ _TOOL_REPLY_TEMPLATES: Dict[str, str] = {
 }
 
 
+def _humanize_tool_error(tool_name: str, raw: str) -> str:
+    """Map raw ValueError messages from plan_runtime/tools.py to user-friendly Ukrainian."""
+    r = raw.lower()
+    if "invalid time format" in r:
+        return "Схоже, час введено неправильно. Напиши у форматі HH:MM, наприклад 09:30."
+    if "only allowed from idle_onboarded" in r:
+        return "Ця дія зараз недоступна — схоже, план уже є або щось пішло не так."
+    if "only allowed from" in r and "followup" in r or "create_followup" in tool_name:
+        return "Новий план можна запустити тільки після завершення поточного."
+    if "cancel_plan requires" in r:
+        return "Скасувати можна тільки активний або призупинений план."
+    if "pause_plan requires" in r:
+        return "Поставити на паузу можна тільки активний план."
+    if "resume_plan requires" in r:
+        return "Відновити можна тільки призупинений план."
+    if "user" in r and "not found" in r:
+        return "⚠️ Не вдалось виконати дію. Спробуй ще раз."
+    # fallback — hide raw internals
+    logger.debug("[TOOL] unmapped ValueError tool=%s: %s", tool_name, raw)
+    return "⚠️ Не вдалось виконати дію. Спробуй ще раз."
+
+
 async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optional[str]:
     """
     Execute an allowlisted plan_runtime tool and return a user-facing reply string.
@@ -1261,7 +1281,7 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
         log_metric("plan_tool_executed", extra={"user_id": user_id, "tool": tool_name})
     except ValueError as exc:
         logger.warning("[TOOL] tool=%s user=%s failed: %s", tool_name, user_id, exc)
-        return f"⚠️ {exc}"
+        return _humanize_tool_error(tool_name, str(exc))
     except Exception as exc:
         logger.error("[TOOL] tool=%s user=%s error: %s", tool_name, user_id, exc, exc_info=True)
         return "⚠️ Не вдалось виконати дію. Спробуй ще раз."
@@ -1279,6 +1299,22 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
     if isinstance(result, dict) and result.get("status") == "needs_evening_time":
         await session_memory.set_pending_action(user_id, "collect_evening_time_for_medium")
         return "О котрій зручно отримувати вечірній момент? Напиши час у форматі 20:30"
+
+    # After record_evening_time: if pending_action is collect_evening_time_for_medium,
+    # deterministically create the MEDIUM plan — no second LLM round-trip.
+    if tool_name == "record_evening_time" and result.get("status") == "ok":
+        pending = await session_memory.get_pending_action(user_id)
+        if pending == "collect_evening_time_for_medium":
+            registry = _build_tool_registry()
+            try:
+                registry["create_followup_plan"](user_id, {"plan_type": "MEDIUM"})
+                log_metric("plan_tool_executed", extra={"user_id": user_id, "tool": "create_followup_plan"})
+                await session_memory.clear_pending_action(user_id)  # only after success
+                return _TOOL_REPLY_TEMPLATES["create_followup_plan"]
+            except Exception as exc:
+                logger.error("[TOOL] cascade create_followup_plan(MEDIUM) user=%s: %s", user_id, exc, exc_info=True)
+                # pending_action preserved — user can retry
+                return "⚠️ Час збережено, але план не вдалось запустити. Спробуй ще раз."
 
     template = _TOOL_REPLY_TEMPLATES.get(tool_name, "✅ Готово.")
     return template
