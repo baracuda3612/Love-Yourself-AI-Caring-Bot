@@ -1,5 +1,76 @@
 # Prompt Review — TODO (відкриті задачі між сесіями)
 
+## НАСТУПНА СЕСІЯ починає тут: integration pass перед merge PR #245 — НЕ МЕРДЖИТИ поки не зроблено
+
+PR [#245](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/245)
+відкритий, **не мерджити**. Незалежний рев'ю (кодекс) перевірив файл
+з диска і remote SHA (`eb3aa82`) — версії локально/на GitHub не
+роз'їхались, файловий scope PR чистий (жодних `.DS_Store`/`.venv`/`R&D`/
+чужих файлів). Проблема інша: **весь prompt cleanup застосовувався до
+`COACH_SYSTEM_PROMPT`, але не синхронізувався з іншими джерелами правди
+в тому самому файлі** — класичний duplicate source of truth drift, не
+git-проблема і не проблема пам'яті чату.
+
+**Не робити повторний повний рефакторинг файлу.** Потрібен вузький
+integration pass по 5 стиках:
+```
+1. COACH_SYSTEM_PROMPT ↔ COACH_TOOLS
+2. Section 4 ↔ _context_message() / _compose_messages()
+3. Product Map ↔ фактичний lifecycle
+4. Section 7 ↔ orchestrator execution/result handling
+5. Tool descriptions ↔ runtime guards і аргументи
+```
+
+**Merge-blocker (обов'язково перед merge):**
+
+1. **`COACH_TOOLS` не синхронізовано з фінальною Section 7.**
+   Файл: `app/workers/coach_agent.py:803` (номер рядка орієнтовний,
+   звірити заново). Конкретно:
+   - `create_followup_plan` tool description досі дозволяє
+     `IDLE_FINISHED` та `IDLE_DROPPED` — Section 7 звузила до тільки
+     `IDLE_PLAN_ABORTED`.
+   - time tools (`change_day_time`/`change_evening_time`/
+     `record_evening_time`) tool descriptions досі вимагають від
+     користувача писати точний `HH:MM` — Section 7 Time Arguments
+     дозволяє natural language з нормалізацією на боці Coach.
+   - `cancel_plan` tool description досі містить старий keyword-парсер
+     `"permanently"/"forever"` і наказ пропонувати pause — Section 7
+     це прибрала (neutral disambiguation, не steering).
+
+   **Чому це особливо погано:** модель бачить `COACH_SYSTEM_PROMPT` і
+   `COACH_TOOLS` разом в одному API-виклику — два суперечливі контракти
+   одночасно, не "стара версія десь забута", а активна суперечність
+   яку модель отримує щоразу.
+
+2. **`_context_message()` досі каже `"treat as remembered facts"`.**
+   Файл: `app/workers/coach_agent.py:750` (орієнтовно). Section 4
+   навмисно прибрала весь "as if you remember" framing (Memory
+   Honesty) — цей рядок у коді нижче промпту досі суперечить.
+
+3. **Section 7 досі містить пропущений `Mention an available
+   alternative...` рядок.** Файл: `app/workers/coach_agent.py:668`
+   (орієнтовно). Фінальне рішення — прибрати retention-offer,
+   тільки пояснювати недоступність дії без пропозиції альтернативи.
+   Проста мікроправка, яку не встигли застосувати.
+
+4. **Product Map (`conceptual_map.md:71`) досі описує старий вибір
+   після завершення 7 днів**, не `FD-01` auto-continuation. Це вже
+   відоме відкладене питання (Product Map lifecycle — Section 2.5
+   TODO записи вище), але оскільки документ **постійно передається
+   Coach-у** (`COACH_PRODUCT_MAP` в кожному API-виклику), конфлікт
+   реальний, не гіпотетичний — Coach бачить дві версії lifecycle
+   одночасно.
+
+**Тести на момент рев'ю:** `25 passed, 2 failed` — обидва fails через
+відсутній `trio` в environment, той самий давній issue, не пов'язаний
+з цією роботою. Python компілюється. У changelog є trailing whitespace
+— косметика, не блокер.
+
+**Статус:** PR лишається відкритим, не мерджити. Наступна сесія починає
+з цих 4 пунктів (COACH_TOOLS sync — найважливіший, потім два
+one-line фікси, потім Product Map lifecycle рядок), не з повного
+перечитування файлу.
+
 ## Sequencing decision: фінальний прохід Section 1-2 — ПІСЛЯ завершення MVP-аудиту
 
 **Питання:** Section 1-2 писались до появи `pre_mvp_code_audit_findings.md`.
