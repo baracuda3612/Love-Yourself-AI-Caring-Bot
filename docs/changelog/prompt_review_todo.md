@@ -1,5 +1,89 @@
 # Prompt Review — TODO (відкриті задачі між сесіями)
 
+## Architecture decision: Bounded Tool-Result Loop — P1, до першого зовнішнього MVP-юзера
+
+**Контекст.** Поточна архітектура Coach — one-shot command dispatcher:
+```
+Coach → tool call → orchestrator executes → deterministic Telegram template
+```
+Coach ніколи не отримує результат виконання назад. `reply_text`
+примусово порожній при tool_call, `_TOOL_REPLY_TEMPLATES` формує
+відповідь захардкодженим текстом українською, незалежно від мови/тону
+поточної розмови (DSM language mirroring тут не діє — canned template
+завжди українською, навіть якщо розмова йшла англійською).
+
+Це відрізняється від типового tool-use flow в Claude/OpenAI (Codex,
+Claude Agent SDK), де: модель повертає `tool_use`/function call →
+runtime виконує → результат повертається моделі як `tool_result` →
+модель формує фінальну відповідь на основі факту. Наша схема свідомо
+спрощена — дешевша, швидша, Coach не може перекрутити результат
+операції. Але має реальну ціну.
+
+**Знайдений доказ проблеми (не гіпотетичний):** `get_plan_status` для
+paused-стану хардкодом відповідає "активний план" (див. Backend Audit
+Backlog вище, пункт 4, верифіковано в коді). Це не просто менш
+"людський" UX — canned templates є **окремим source of truth**, який
+дрейфує від runtime і вже реально розійшовся в одному підтвердженому
+місці.
+
+**Founder-оцінка ризику:** цільова аудиторія (програмісти) звикла до
+сучасного tool-use UX де AI застосував tool call і далі пише по-людськи
+з урахуванням результату. Раптова поява захардкодженого "SUCCESS"-стилю
+повідомлення посеред живої розмови одразу читається як "грубо склеєний
+workflow" — конкретний репутаційний ризик для цієї аудиторії, не
+абстрактна естетика.
+
+**Рішення: Bounded Tool-Result Loop, не необмежений agent loop.**
+```
+1. Coach робить максимум один tool call.
+2. Backend виконує його.
+3. Результат повертається Coach-у як структуровані факти
+   (не Python-помилка, не internal state name):
+   {"status": "success", "action": "pause_plan",
+    "facts": {"delivery_paused": true, "sequence_preserved": true}}
+   {"status": "error", "code": "plan_not_active"}
+4. На фінальному LLM-виклику tools вимкнені — Coach не може
+   ланцюжком викликати наступну дію.
+5. Coach формує лише природну відповідь мовою/тоном поточної розмови
+   на основі отриманих фактів.
+6. Якщо другий LLM-виклик падає — deterministic template fallback
+   (поточні `_TOOL_REPLY_TEMPLATES` лишаються, але як аварійний
+   резерв, не основний шлях).
+```
+
+**Оцінка обсягу роботи (не архітектурний перепис):**
+- мінімально запустити loop: 2-4 години
+- нормально, з тестами всіх результатів: ~1 робочий день
+- разом з чисткою всіх старих tool contracts і каскаду
+  `record_evening_time`: до 1.5 дня
+
+**Технічні кроки:**
+1. Зберігати `response.id`/`call_id` першого Coach-виклику.
+2. `_execute_plan_tool()` повертає структурований результат
+   (`{"status", "action", "facts"}` або `{"status": "error", "code"}`),
+   не готовий текст.
+3. Надсилати результат другим Responses API-викликом як
+   `function_call_output`.
+4. На другому виклику — tools вимкнені.
+5. Coach формує одну фінальну відповідь тільки з отриманих фактів.
+6. Поточні templates — fallback якщо другий LLM-виклик впав.
+7. Тести: success, known error, unexpected error, cascade
+   (`record_evening_time` → `create_followup_plan`), відсутність
+   повторного tool call на другому кроці.
+
+**Найбільша реальна робота — не сам API loop, а уніфікувати результати
+всіх 8 tools** щоб Coach отримував чисті факти, не Python exceptions чи
+internal state names (`ACTIVE_PAUSED` тощо не повинні просочуватись у
+`facts`).
+
+**Статус:** архітектурне рішення прийняте, **P1 до першого зовнішнього
+MVP-юзера, не P0, не цієї сесії.** Поточний `After a Tool Call` блок у
+промпті (Section 7) навмисно лишається чесним до фактичної one-shot
+архітектури — короткий, без "orchestrator handles templates" деталей
+реалізації, без "You do not know the result" (вже виражено через
+заборону стверджувати success). Коли loop буде реалізований — замінити
+на окремий блок `Tool Result Handling` у промпті.
+
 ## Product decision: timezone — B2B company-level, не user-level (2026-07-15)
 
 **Рішення (founder):** timezone НЕ збирається на рівні окремого юзера
@@ -125,15 +209,42 @@ will write at this new time.'"` — наслідок пояснює Product Map,
    слотом. Runtime/context gap, не суто prompt-текст.
 
 3. **`pause_plan`/`resume_plan` — доставки що припали на паузу
-   втрачаються.** Scheduler не перепланує пропущені під час паузи
-   доставки; твердження в промпті "delivery resumes on the original
-   schedule" потребує верифікації проти реальної поведінки
-   `plan_pause.py`/`scheduler.py`. Файли: `app/plan_pause.py:47`,
-   `app/scheduler.py:109`. Пріоритет: P1 audit finding.
+   втрачаються. ВЕРИФІКОВАНО в коді, не гіпотеза.**
+   `plan_pause.py:pause_plan()` докстрінг буквально каже: *"Does NOT
+   rewrite or reschedule any plan steps."* Обидва `pause_plan` і
+   `resume_plan` тільки перемикають `profile.is_paused` і
+   `user.current_state` — жодних змін у розкладі кроків.
+   `scheduler.py:113` має gate `user.current_state == "ACTIVE"` перед
+   відправкою — джоби що спрацьовують під час паузи мовчки
+   пропускаються (не переносяться на потім, не видаляються — просто
+   ігноруються в момент спрацювання). `resume_plan` після цього не
+   перепланує нічого, тому пропущені кроки втрачені назавжди.
+   Промпт раніше стверджував "delivery resumes on the original
+   schedule" — це фактично неправда, формулювання виправлено в
+   промпті (див. запис нижче "Section 7 — pause_plan/resume_plan").
 
-4. **`get_plan_status` — баг для paused стану.** Runtime повертає
-   реальний стан, але orchestrator жорстко пише "Стан: активний план"
-   навіть коли план `ACTIVE_PAUSED`. Файл: `app/orchestrator.py:1289`.
+   **Цільовий backend-контракт (ще не реалізовано):**
+   ```
+   pause  → preserve remaining sequence
+   resume → reschedule remaining steps from the next valid workday
+   ```
+   Додатково перевірити: чи зміна часу (`change_day_time`) під час
+   паузи коректно застосовується до `scheduled_for` кроків, і чи jobs
+   гарантовано відновлюються після `resume` з новим часом.
+
+   Файли: `app/plan_pause.py:47-113`, `app/scheduler.py:113`.
+   Пріоритет: **P1**, обов'язкова MVP-задача (не "nice to have" —
+   зараз продукт технічно не виконує власну обіцянку).
+
+4. **`get_plan_status` — баг для paused стану. ВЕРИФІКОВАНО в коді,
+   точний механізм.** `_execute_plan_tool` при `tool_name ==
+   "get_plan_status"` перевіряє лише `result.get("plan_active")`
+   (True/False) — гілка `if result.get("plan_active"):` завжди виводить
+   `f"📋 Стан: активний план\n"` незалежно від значення `result["state"]`
+   (`ACTIVE` чи `ACTIVE_PAUSED"). Поле `state` взагалі не читається в
+   цій гілці форматування. Файл: `app/orchestrator.py:1286-1297`.
+   Fix: розрізняти `state == "ACTIVE_PAUSED"` окремо і виводити
+   "план на паузі" замість "активний план".
 
 5. **`create_followup_plan` — відсутній аргумент тихо створює SHORT.**
    Tool schema вимагає `plan_type`, але registry робить

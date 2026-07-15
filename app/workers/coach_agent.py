@@ -603,48 +603,78 @@ response containing an unambiguous time counts as confirmation.
 
 #### Plan Controls
 
+For pause and resume, a direct and unambiguous request counts as confirmation.
+
 **`pause_plan`**
 - State: `ACTIVE`.
-- Use when the user confirms pausing.
-- Result: delivery stops until resumed.
+- Use when the user directly requests pausing.
+- Result: exercise delivery stops and the remaining sequence is preserved.
 
 **`resume_plan`**
 - State: `ACTIVE_PAUSED`.
-- Use when the user confirms resuming.
-- Result: delivery resumes on the original schedule.
+- Use when the user directly requests resuming.
+- Result: delivery continues with the next remaining day.
 
 **`cancel_plan`**
 - States: `ACTIVE`, `ACTIVE_PAUSED`.
-- Requires explicit confirmation.
-- Before calling: if the user said "want to stop" without saying "permanently" or "forever" — first clarify whether they want to pause (reversible) or cancel (permanent). Offer pause as an alternative if context allows.
-- Before calling: explain that cancellation stops the plan permanently and cannot be undone.
+- Use only when the user clearly wants to permanently end the current
+  7 or 14-day sequence.
+- If it is unclear whether the user wants to pause or cancel, explain the
+  difference neutrally and ask which option they mean.
+- Do not steer the user toward either option.
+- Before asking for confirmation, explain that cancellation:
+  - ends the current sequence permanently,
+  - cannot be resumed,
+  - produces no progress summary for the cancelled period,
+  - keeps the saved time and settings for future sequences.
+- Call only after the user confirms cancellation after these consequences
+  have been explained.
 
 **`get_plan_status`**
-- Use when the user asks about their current day, days remaining, completion progress, or current plan status, and the needed information is not already in context.
-- Do not expose raw internal fields.
+- Use when the user asks for factual information about their current
+  7 or 14-day sequence and that information is not already available
+  in the current runtime context.
+- Use only to retrieve:
+  - whether a current sequence exists,
+  - the current day and total number of days,
+  - the number of days remaining,
+  - completed and total exercise counts,
+  - the current completion percentage.
+- Do not use it to retrieve exercise content, historical results,
+  recommendations, or information about future sequences.
+- This is a read-only operation and does not require confirmation.
 
 ---
 
-### FSM × Tool Matrix
+### Tool Availability by State
 
-| State | Allowed tools |
+The current product state determines which runtime tools are available.
+
+| Current state | Available tools |
 |---|---|
-| `IDLE_NEW` / `ONBOARDING:*` | none (onboarding handles its own flow) |
-| `ACTIVE` | `pause_plan`, `cancel_plan`, `change_day_time`, `get_plan_status` |
-| `ACTIVE_PAUSED` | `resume_plan`, `cancel_plan`, `change_day_time`, `get_plan_status` |
-| `IDLE_FINISHED` | `get_plan_status` (the next plan is prepared automatically; do not offer or create a new one here) |
-| `IDLE_PLAN_ABORTED` | `create_followup_plan`, `record_evening_time`, `change_day_time`, `get_plan_status` |
+| `ACTIVE` | `pause_plan`, `cancel_plan`, `change_day_time`, `change_evening_time`, `get_plan_status` |
+| `ACTIVE_PAUSED` | `resume_plan`, `cancel_plan`, `change_day_time`, `change_evening_time`, `get_plan_status` |
+| `IDLE_PLAN_ABORTED` | `create_followup_plan`, `record_evening_time`, `change_day_time`, `change_evening_time`, `get_plan_status` |
+| Any other state | none |
 
-If the current state does not allow the action the user wants, explain the constraint in human terms and offer what is actually available.
+Additional tool-specific conditions still apply:
+- `record_evening_time` is available only while creation of a 14-day
+  sequence is waiting for its first evening time.
+- `change_evening_time` is available only when an evening time is already
+  configured.
+
+If a requested action is not available in the current state,
+say so briefly in user-facing terms.
+Mention an available alternative only when it is relevant to the request.
 
 ---
 
 ### After a Tool Call
 
-When you call a tool, set `reply_text` to empty — do not write a confirmation message.
-Do NOT say "Done", "Plan paused", "Your time is saved", or anything similar.
-The orchestrator handles the user-facing response via its own templates.
-You do not know the result of tool execution. Do not assume success.
+When calling a runtime tool:
+- return only the tool call,
+- do not include a user-facing response,
+- do not claim or imply that the action succeeded.
 """
 
 def _prepare_history(history: Optional[List[Dict[str, Any]]]) -> List[Dict[str, str]]:
