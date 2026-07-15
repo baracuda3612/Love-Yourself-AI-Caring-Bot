@@ -1,5 +1,35 @@
 # Prompt Review — TODO (відкриті задачі між сесіями)
 
+## Sequencing decision: фінальний прохід Section 1-2 — ПІСЛЯ завершення MVP-аудиту
+
+**Питання:** Section 1-2 писались до появи `pre_mvp_code_audit_findings.md`.
+Чи перепройти їх зараз з урахуванням аудиту, чи спершу завершити аудит?
+
+**Рішення:** завершити MVP-аудит першим, потім один фінальний прохід
+Section 1-2.
+
+**Чому:**
+- Section 1 (Identity & Persona) — про тон і персону, майже не залежить
+  від продуктової механіки. Низький ризик застарілості, може почекати
+  без шкоди.
+- Section 2 (System Awareness & Boundaries) — прямо залежить від блоків
+  аудиту які **ще не пройдені**: Privacy межа (individual vs
+  company-facing — стосується того що Coach каже про конфіденційність),
+  Content library (slot not user-facing — стосується Exercise
+  Explanation Boundary), Delivery renderer P0 (стосується того що Coach
+  може вважати "вже доставленим" юзеру), Plan generation (SHORT/
+  state_switch — може вплинути на Product Support формулювання).
+- Якщо переписати Section 2 зараз під те що вже відомо (`FD-01`,
+  `FD-04`, `ONB`-знахідки), а потім Privacy/Content Library/Delivery
+  Renderer аудит принесе нові рішення — доведеться редагувати той самий
+  текст втретє. Та сама проблема яку вичищали весь prompt cleanup:
+  не робити роботу яку доведеться переробляти.
+
+**Наслідок:** Section 1-2 фінальний прохід — окрема задача, запланована
+після завершення (або принаймні суттєвого просування) блоків Privacy,
+Content Library, Delivery Renderer, Plan Generation з
+`pre_mvp_code_audit_findings.md`.
+
 ## Architecture decision: Bounded Tool-Result Loop — P1, до першого зовнішнього MVP-юзера
 
 **Контекст.** Поточна архітектура Coach — one-shot command dispatcher:
