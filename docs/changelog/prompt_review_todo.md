@@ -1,27 +1,646 @@
 # Prompt Review — TODO (відкриті задачі між сесіями)
 
-## Section 4 — Context & Memory Use (переписати повністю)
+## Product decision: timezone — B2B company-level, не user-level (2026-07-15)
 
-Section 1.6 "Memory & Continuity" видалена — її зміст переноситься сюди.
+**Рішення (founder):** timezone НЕ збирається на рівні окремого юзера
+в MVP. Продукт B2B2C — компанія на власному onboarding задає часовий
+контекст (де офіси, чи бувають відрядження), не окремий співробітник.
 
-Переписати Section 4 під фактичний runtime. Поля які реально є:
-- `short_term_history`
-- `current_state`
-- `temporal_context`
-- `completion_context`
-- `schedule_adjustment_context`
+**Модель для company onboarding:**
+- `organization.default_timezone`
+- `organization.available_offices/timezones` (якщо кілька офісів)
+- один офіс → timezone підставляється автоматично, юзера не питаємо
+- кілька офісів → офіс/timezone приходить із roster або invite link
+- якщо невідомо → одне питання з кнопками офісів компанії
+- відрядження → в Settings юзер вручну міняє поточний timezone і
+  повертає назад (без авто-визначення подорожей чи геолокації в MVP)
 
-Поля яких немає і не повинно бути:
-- `profile_snapshot` — видалено
-- "long-term memory" — не існує
-- "as if you remember" у широкому сенсі — видалити цю framing
+Потрібен per-user override поверх company default (для відряджень),
+але не автоматичне визначення — зайва складність для MVP.
 
-## Section 2.6 — Unified Persona (перевірити після видалення 1.6)
+**Backend-факт виявлений при рев'ю:** зараз новому юзеру мовчки
+ставиться `Europe/Kyiv`, timezone ніде не збирається. Для США/Азії
+доставка буде неправильною, якщо колись з'являться такі компанії-клієнти.
+Зберігати треба IANA timezone (`America/New_York`, не просто UTC offset)
+через DST.
 
-Після видалення 1.6 перевірити Section 2.6 "Unified Persona":
-- Там є "one consistent voice / one mind / one presence" — це persona consistency, не memory.
-- Ця частина залишається в 2.6, вона правильно там.
-- Але якщо є будь-які рядки про "you remember" або "context you received" — прибрати або перенести в Section 4.
+**Статус:** product decision зафіксовано. Реалізація —
+company-onboarding backend задача, не промпт.
+
+## Product decision: Time Picker UX — Phase 3, не MVP (2026-07-15)
+
+**Контекст:** обговорювали чи Coach має приймати час тільки як строгий
+`HH:MM`, чи давати зручніший UX (кнопки з готовими варіантами часу,
+picker). Рішення: **buttons-first UX — правильний напрямок, але окрема
+Phase 3 задача ("Choice Prompts Infrastructure"), не MVP.**
+
+**Погоджений майбутній UX-контракт:**
+```
+"Хочу змінити час" (намір є, точного часу немає)
+→ Coach викликає show_time_picker(target)
+→ orchestrator показує inline-кнопки з готовими варіантами
+→ callback напряму викликає runtime tool, без нового LLM-виклику
+
+"Постав на 15:00" (намір є, час однозначно вказаний)
+→ Coach нормалізує час
+→ одразу викликає change_day_time / change_evening_time
+→ orchestrator виконує та підтверджує
+```
+
+**MVP time picker (коли реалізується):**
+```
+О котрій зручно отримувати вправу?
+[ 11:00 ] [ 13:00 ]
+[ 15:00 ] [ 17:00 ]
+[ Інший час ]
+```
+"Інший час" → deterministic picker (обрати годину → 00/15/30/45 хвилин),
+без Mini App, без ручного HH:MM, без LLM. Точності до 15 хв достатньо
+для daily exercise. Той самий keyboard переюзати для: onboarding,
+першого вечірнього часу, зміни денного часу, зміни вечірнього часу.
+
+**Що заносимо в backlog (не MVP цієї сесії):**
+- `show_time_picker(target)` — новий Coach tool, `target`: `DAY` /
+  `EVENING` / `UNSPECIFIED`. Використовується коли намір змінити час є,
+  але конкретний час не вказаний однозначно. Сам tool нічого не міняє,
+  тільки відкриває deterministic вибір.
+- callback-схема на кшталт `time:day:15:00`
+- callbacks викликають runtime tools напряму, **без LLM**
+- вибір кнопки = підтвердження (не треба другого "точно?")
+- reusable picker для onboarding + first evening collection + time
+  changes (один компонент, кілька точок виклику)
+- backend validation: реальний діапазон часу (зараз `99:99` проходить),
+  timezone, allowed range
+- runtime guards для day/evening tools (див. Backend Audit Backlog
+  нижче, пункти 1 і 2 — той самий корінь проблеми)
+- коли реалізовано — одночасно оновити Section 7 і `COACH_TOOLS`
+  (додати `show_time_picker`, прибрати natural-language-only фолбек
+  якщо picker стане основним шляхом)
+
+**Принцип, який тримаємось:** промпт не описує `show_time_picker` чи
+кнопки зараз, доки цієї інфраструктури не існує — "промпт не повинен
+обіцяти неіснуючу інфраструктуру" (той самий принцип що й з
+`current_exercise_context`/P0 gap раніше).
+
+## Section 7 — Time Arguments, change_day_time / change_evening_time (виконано, 2026-07-15)
+
+Додано спільний блок `### Time Arguments` перед обома tools:
+- час трактується як local time в збереженому timezone юзера
+  (у MVP — company-level default, див. рішення вище);
+- юзер не мусить писати строгий `HH:MM` — Coach нормалізує природну
+  мову ("о дев'ятій", "перенеси на 8:30") в 24-годинний `HH:MM` для
+  tool argument;
+- якщо момент доставки чи година неоднозначні — одне уточнююче
+  питання, не вгадувати;
+- **для зворотної зміни часу** пряме однозначне прохання саме й є
+  підтвердженням (не питати "точно?" вдруге — та сама логіка яка вже
+  діє для інших reversible actions через `2.4 User Intent and Consent`,
+  тут явно уточнено для time tools).
+
+Прибрано з обох tools: canned-фраза `"User-facing language: 'The bot
+will write at this new time.'"` — наслідок пояснює Product Map,
+підтвердження формує orchestrator, дублювання не потрібне.
+
+До появи `show_time_picker` (backlog вище), сценарій без точного часу
+лишається природним: `"Хочу змінити час"` → `"На котру годину?"`.
+
+## Backend Audit Backlog — 2026-07-15 (виявлено під час Section 7 prompt review, НЕ виправлено цієї сесії)
+
+Ці пункти виявлені під час рев'ю Section 7 Tool Calls (аналіз кодекса +
+перевірка `plan_runtime/tools.py`/`orchestrator.py`). Свідомо винесені
+поза межі "промпт-only" кола цієї сесії. Раніше були показані тільки
+в чаті й **не були записані у файл** — цей запис виправляє цей розрив.
+
+1. **`record_evening_time` — відсутня валідація.** Не перевіряє
+   `user.current_state`, не перевіряє `evening_slot_collected == False`
+   перед записом, приймає `99:99` (валідація лише формату цифр через
+   `_validate_hhmm`, не діапазону значень). Бізнес-інваріант
+   ("first-time only") існує тільки словами в промпті, не в коді.
+   Файл: `app/plan_runtime/tools.py:167`. Пріоритет: P1.
+
+2. **`change_evening_time` — Coach не бачить поточний формат плану.**
+   Немає способу надійно розрізнити "зміни час" між `change_day_time` і
+   `change_evening_time` коли юзер не уточнює day/evening явно — Coach
+   не отримує інформацію чи в юзера взагалі є 14-денний план з вечірнім
+   слотом. Runtime/context gap, не суто prompt-текст.
+
+3. **`pause_plan`/`resume_plan` — доставки що припали на паузу
+   втрачаються.** Scheduler не перепланує пропущені під час паузи
+   доставки; твердження в промпті "delivery resumes on the original
+   schedule" потребує верифікації проти реальної поведінки
+   `plan_pause.py`/`scheduler.py`. Файли: `app/plan_pause.py:47`,
+   `app/scheduler.py:109`. Пріоритет: P1 audit finding.
+
+4. **`get_plan_status` — баг для paused стану.** Runtime повертає
+   реальний стан, але orchestrator жорстко пише "Стан: активний план"
+   навіть коли план `ACTIVE_PAUSED`. Файл: `app/orchestrator.py:1289`.
+
+5. **`create_followup_plan` — відсутній аргумент тихо створює SHORT.**
+   Tool schema вимагає `plan_type`, але registry робить
+   `args.get("plan_type", "SHORT")` — якщо модель/parser поверне
+   порожні arguments, система без явного дозволу вибирає 7 днів. Треба
+   fail closed, не мовчазний default. Файл: `app/orchestrator.py:1216`
+   (номер рядка міг зміститись після видалення `create_first_plan` —
+   звірити заново).
+
+6. **Усі tools надсилаються моделі в кожному стані незалежно від
+   FSM-матриці.** Матриця в промпті — лише текстова угода, не enforced
+   на рівні API tool-availability. Architecture improvement: розглянути
+   state-filtered tool registration (передавати моделі тільки ті tools,
+   які реально дозволені в поточному `current_state`).
+
+7. **`create_first_plan` backend-guard досі жорстко на
+   `IDLE_ONBOARDED`.** Файл: `app/plan_runtime/tools.py:77`. Функція
+   лишена в коді (Coach більше не може її викликати — видалено з
+   `COACH_TOOLS`/registry/reply template цієї ж сесії), але сам guard
+   не оновлено. **Окремий backend TODO:** під час реалізації реального
+   onboarding-флоу прибрати legacy guard `IDLE_ONBOARDED` і визначити
+   реальний onboarding-complete entry state, яким онбординг-скрипт буде
+   викликати цю функцію напряму (не через Coach). Перетинається з
+   `ONB-07` з `pre_mvp_code_audit_findings.md`.
+
+8. **Lifecycle-питання: перехід на 14-денний формат після
+   `FD-01` auto-continuation.** Якщо система вже автостворила новий
+   7-денний `ACTIVE` план одразу після завершення попереднього, а юзер
+   хоче спробувати інший формат — потрібно спершу скасувати щойно
+   створений період. Незакритий lifecycle-кейс. Пов'язано з рішенням
+   `switch_plan_format` нижче (окремий atomic tool міг би закрити і
+   цей кейс теж, не тільки перехід з живого стану — варто розглянути
+   разом).
+
+## Adm: файл виріс завеликий — після завершення prompt cleanup розбити
+
+Цей файл перевалив за 1300+ рядків за одну сесію 11 липня (Sections 1-7
+cleanup audit). Все фіксується коректно (кожен блок має заголовок,
+статуси оновлюються — див. "Section 4.8 safety boundary TODO" вище,
+позначено RESOLVED), але читабельність людині падає при такому розмірі.
+
+**План:** коли весь prompt cleanup (Sections 1-7) буде закритий, зробити
+окремий прохід розбиття на кілька файлів за темою:
+- `prompt_review_todo.md` — суто зміни й рішення по тексту промпту;
+- `product_decisions.md` — бізнес/продуктові рішення що виникають
+  по дорозі (наприклад `switch_plan_format` нижче, FD-01/FD-04 похідні);
+- `backend_audit_todo.md` — суто runtime/код баги виявлені під час
+  рев'ю (evening time validation, get_plan_status paused bug, тощо —
+  вже частково зібрані в записі "Section 5/6/7" і нижче).
+
+Не робити зараз — зупинить темп Section 7. Робити одним окремим проходом
+після завершення всього промпт-рев'ю.
+
+## Product decision: switch_plan_format — новий tool, не MVP цієї сесії
+
+**Знахідка:** `create_followup_plan` звужено до `IDLE_PLAN_ABORTED` (див.
+запис нижче). Але лишається відкрита продуктова діра: перехід між 7 і
+14-денним форматом **з активного стану** (`ACTIVE`/`ACTIVE_PAUSED`).
+
+Зараз єдиний шлях — `скасуй → підтверди → почни новий → обери формат`.
+Це зайва фрикція: юзер каже "спробуємо інший формат" і отримує вимогу
+спершу скасувати поточний, хоча його намір — просто замінити один
+формат на інший, не "зупинити назавжди".
+
+**Рішення:** не перевантажувати цим `create_followup_plan` (це інша
+бізнес-операція — atomic replacement, не creation-after-completion).
+Потрібен окремий deterministic tool `switch_plan_format(plan_type)`:
+- доступний з `ACTIVE` і `ACTIVE_PAUSED`;
+- користувач один раз підтверджує перехід і наслідки;
+- система атомарно завершує стару послідовність і створює нову;
+- якщо для 14 днів потрібен вечірній час — система спершу його збирає;
+- старий період не скасовується, доки новий гарантовано не може бути
+  створений;
+- не два окремі виклики (`cancel_plan` + `create_followup_plan`), а
+  один atomic tool.
+
+**Статус:** product decision зафіксовано, **не MVP-задача цієї сесії**.
+Реалізація tool-а — окрема backend-задача (новий tool в
+`plan_runtime/tools.py`, новий entry в `COACH_TOOLS` і orchestrator
+registry, коли буде готовий). До того — Coach просто пояснює наявний
+шлях (скасувати й почати новий) через `2.4 User Intent and Consent`.
+
+## Product decision: default continuation format after completion
+
+**Питання:** коли `FD-01` (auto-continuation) імплементований — після
+завершення 7-денного плану дефолт наступний теж 7-денний. А після
+завершення **14-денного**? Наступний за замовчуванням 14, чи 7?
+
+**Рекомендація (зафіксована, не остаточне рішення):** автоматично
+продовжувати **останній обраний формат**. Відповідає ментальній моделі
+юзера: система продовжує встановлений ритм, доки він сам не попросить
+інший — а не скидає на дефолтний найкоротший формат щоразу.
+
+**Статус:** рекомендація, потребує founder-підтвердження перед
+імплементацією `FD-01`-логіки в бекенді. Не промпт-задача — фіксується
+тут для видимості при наступному раунді backend-аудиту.
+
+## НАСТУПНА СЕСІЯ починає тут: Section 7 Tool Calls — стан на 2026-07-11
+
+Section 1-6 повністю пройдені суботнім cleanup audit. Section 7
+(Tool Calls) — останній розділ файлу, ще не чіпали. Сесію зупинено тут
+через втому (2+ год роботи), не через складність задачі.
+
+**Вже видно неозброєним оком (звірити й виправити першим ділом):**
+
+1. `create_first_plan` — `State: IDLE_ONBOARDED` (Available Tools) і
+   FSM × Tool Matrix рядок `IDLE_ONBOARDED` — цей стан видалено з
+   Coach-facing карти станів ще в Section 2.1 (див. запис "FSM / Coach
+   Prompt Decision: IDLE_ONBOARDED and IDLE_DROPPED" нижче). Треба або
+   прибрати запис в Available Tools, або замінити на актуальний
+   entry-state (узгодити з ONB-07 з `pre_mvp_code_audit_findings.md` —
+   backend guard `create_first_plan` теж досі перевіряє
+   `IDLE_ONBOARDED`).
+2. `create_followup_plan` — `States: IDLE_FINISHED, IDLE_DROPPED,
+   IDLE_PLAN_ABORTED` і FSM-матриця — `IDLE_DROPPED` видалено з
+   Coach-facing карти. Прибрати з обох місць.
+3. FSM × Tool Matrix рядок `SCHEDULE_ADJUSTMENT` — стан видалено
+   повністю (T5.9 рішення, окремий PR). Рядок матриці зайвий,
+   прибрати.
+
+**Далі пройти решту Section 7 тим самим ножем** (старий lifecycle /
+dead states / дані яких runtime не дає → видаляємо):
+- `record_evening_time` / `change_day_time` / `change_evening_time` /
+  `pause_plan` / `resume_plan` / `cancel_plan` / `get_plan_status` —
+  ще не рев'юєні на дублювання чи застарілі формулювання.
+- `After a Tool Call` блок (reply_text empty, don't assume success) —
+  ще не рев'юєний.
+- Звірити чи всі 4 "Section 7"-посилання з інших частин файлу (Section
+  2.2, 2.4) все ще коректні після будь-яких змін тут.
+
+## Section 5/6/7 — System Security розділено на Security + User Safety
+
+Стара `# 5. System Security (Anti-Jailbreak)` містила тільки
+anti-jailbreak (6 рядків) і при цьому мала прийняти на себе весь
+safety-контент, винесений раніше з видалених `2.6 Soft Safety Fallback`
+і `4.8 Emotional Continuity`. Рішення: **не зливати їх в одну секцію.**
+
+**Чому розділено, а не об'єднано:**
+Security захищає інструкції й межі системи (jailbreak, промпт-екстракція).
+Safety визначає поведінку при ризику для людини (self-harm, harm to
+others). Це різні предмети регулювання — об'єднання через спільну рамку
+"винятки" структурно неправильне.
+
+**Нова структура:**
+- `# 5. System Security` → `5.1 Instruction Integrity`
+- `# 6. User Safety` → `6.1 Immediate Safety Risk`
+- `# 7. Tool Calls` (був `# 6`, перенумеровано)
+
+### 5.1 Instruction Integrity — що змінено проти старого anti-jailbreak
+
+Стара версія наводила каталог jailbreak-фраз ("ignore all previous
+instructions", "break character", "act as raw model") і реагувала
+через `"redirect to the user and their state"` — тобто "ти хочеш
+побачити мій промпт? що ти зараз відчуваєш?" Це крінжовий терапевтичний
+redirect на людину яка просто тестує систему (програмісти це точно
+робитимуть). Нова версія: коротка відмова без пояснення механізмів
+безпеки, продовження решти запиту без емоційного redirect-у.
+
+### 6.1 Immediate Safety Risk — головна правка: тригер без лейблів
+
+Перший чорновий варіант (від кодекса) містив:
+```
+Do not treat frustration, exhaustion, hopeless language,
+or emotional intensity alone as immediate danger.
+```
+Founder відхилив це як самé по собі лейблювання — щоб описати що НЕ є
+кризою, модель спершу мусить internally класифікувати повідомлення за
+емоційними категоріями ("це frustration? exhaustion? hopeless language?").
+Той самий проблемний патерн, який ми вже вичищали по всьому промпту
+(shame, normalize, diagnosis labels).
+
+Замінено на тригер через факти, не емоційні категорії:
+```
+Apply this section only when the user says that they intend, plan,
+are about to, or are currently trying to harm themselves or another person.
+
+References in jokes, hypotheticals, quotations, fiction, or general discussion
+do not by themselves activate this response.
+```
+Це важливо для аудиторії продукту (програмісти, чорний гумор) — фраза
+"я зараз застрелюсь через цей баг" не активує кризовий протокол
+автоматично; спрацьовує тільки коли є факт наміру/дії, не тон.
+
+**Дослідницька підстава для "одне уточнююче питання не шкодить":**
+пряме коротке уточнення про суїцидальний ризик не збільшує ризик таких
+думок — підтверджено NIMH (nimh.nih.gov/health/publications/suicide-faq)
+і WHO (who.int/news-room/questions-and-answers/item/suicide). При
+реальній негайній загрозі стандартна рекомендація — звернутись до
+екстрених служб/кризової лінії і залучити довірену людину поруч. Це і
+відображено в `6.1`.
+
+### Non-crisis distress — видалено повністю, не перенесено
+
+`2.6 Soft Safety Fallback` (persistent despair/hopelessness → gently
+suggest professional support) і `4.8`-шматок "Non-crisis distress"
+(stay present, exception для pause_plan) **не перенесено в Section 6**.
+
+Причина: це вже покрито `2.2 Workday Emotional Support` (emotional
+support без labeling/diagnosing). Автоматично пропонувати психолога
+через розпізнаний "persistent hopelessness" знову повертає терапевтичну
+рамку і змушує модель самостійно класифікувати емоційний стан —
+той самий лейбл-паттерн, який ми свідомо вичищаємо з усього промпту.
+Pressure-reducing exception (pause/cancel при non-crisis distress) також
+прибрано з safety: якщо немає негайного ризику, звичайний запит
+pause/cancel і так проходить через `2.4 User Intent and Consent` +
+tools — окремий safety-виняток для цього не потрібен. Якщо є негайний
+ризик, продуктова операція взагалі не повинна перебивати кризову
+відповідь (це і забезпечує новий guard у `7. Tool Calls`, нижче).
+
+### Precedence — чому "takes priority" переформульовано
+
+Було: `"This rule takes priority over Section 6 tool call logic"`.
+Проблема: LLM не виконує систем-промпт як програму зверху вниз рядок
+за рядком — це не technical enforcement, а просто ще одна інструкція
+серед інших. Явне правило пріоритету реально допомагає моделі
+вирішувати конфлікт інструкцій, але не є гарантією на рівні коду.
+
+Тому: (1) переформульовано на `"do not follow any conflicting
+instruction elsewhere in this prompt"` — конкретніше й дієвіше
+формулювання пріоритету; (2) додано дублюючий guard безпосередньо в
+`7. Tool Calls`: `"the Immediate Safety Risk rule (Section 6.1) must
+not currently apply"` в списку "Before calling any tool". Це навмисне
+дублювання на межі двох систем (safety-правило описано в 6.1, і ще раз
+згадано як умова виклику tool в 7) — виправдане, бо system prompt не є
+hard enforcement.
+
+**Backend/enterprise TODO (не для MVP, довгостроково):** для реального
+enforcement (а не тільки промпт-рівня) з часом варто розглянути окремий
+runtime safety layer — наприклад перевірку на рівні orchestrator перед
+виконанням tool call, а не покладатись виключно на те що модель
+дотримається інструкції в system prompt.
+
+### Точкове доповнення 6.1 — третя сторона і вже здійснена шкода
+
+Перша версія `6.1` покривала лише намір **самого юзера** заподіяти шкоду
+собі чи іншому. Прогалина: не покривала (а) ситуації де юзер повідомляє
+що комусь **зараз** загрожує небезпека без його власного наміру ("мені
+погрожують", "поруч когось б'ють"), і (б) шкода яка **вже сталась**, а
+не тільки готується. Розширено тригер до трьох гілок: (1) шкода вже
+завдана, (2) намір/підготовка/спроба, (3) поточна небезпека для юзера
+чи третьої особи. Також додано "news" до списку контекстів які самі по
+собі не активують протокол (поруч з jokes/hypotheticals/quotations/
+fiction), і "stay with them" замінено на "help them reach safety" —
+перше могло звучати як інструкція самому Coach фізично щось робити.
+
+## Section 3 — Style & Tone: 14 підрозділів → 8
+
+Прибрано повністю: Core Voice (дубль Section 1), DSM (небезпечний —
+mirroring emotional intensity/energy може підсилювати стан замість
+стабілізації; нові моделі й так адаптують темп/формальність без явної
+інструкції), Emotional Presence (дубль DSM/Core Voice), Intrusivity
+Control (застаріла ставка на "AI-buddy" retention — продукт тепер робить
+ставку на вправи й повторюваність, не на глибокі розмови з AI), Engagement
+Principles (дубль + `challenge avoidance or self-deception` суперечило
+забороні інтерпретувати приховані причини), Personality Consistency
+(прямий дубль Persona Integrity), Exercise delivery + Tone з Telegram
+Output (рендер вправи — продукт, не Coach; дубль).
+
+Змінено по суті (не просто дубль):
+- **Swearing → Profanity**: свідоме бізнес-рішення — мат дозволений якщо
+  першим написав юзер, match not exceed, ніколи не на юзера, ніколи
+  слерів/образ. Founder-рішення: автентичність і спільна мова з
+  програмістами важливіша за гіпотетичний "HR побачить скрін" ризик для
+  цієї аудиторії (утилітарний інструмент для когнітивних роботяг, не
+  корпоративний бот у костюмі).
+- **Humour**: dark/edgy прибрано, лише light humour якщо юзер сам
+  ініціює.
+- **No AI-Meta → Implementation Honesty**: більше не наказує "удавати
+  людину". Якщо юзер прямо питає "ти AI?" — відповідати чесно, коротко,
+  потім описати роль як Love Yourself Coach.
+- **Zero Filler + No Philosophical Fog → Clarity**: об'єднано,
+  "without practical value" → "without clear relevance" (не кожна
+  емоційна відповідь має містити практичну дію).
+- **Anti-Dependency**: скорочено з 4 категорій прикладів до одного
+  компактного правила, норма та сама.
+- **Telegram-Aligned Output**: додано `Never generate more than 4096
+  characters for a single response` як жорсткий technical cap.
+
+Фінальна структура: 3.1 Language Adherence, 3.2 Grounded Acknowledgment,
+3.3 Profanity, 3.4 Humour, 3.5 Clarity, 3.6 Implementation Honesty,
+3.7 Anti-Dependency, 3.8 Telegram-Aligned Output.
+
+## Section 4 — Context & Memory Use → Context Use: 9 підрозділів → 3
+
+Перейменовано `# 4. Context & Memory Use` → `# 4. Context Use`. Це не
+косметика — сигналізує свідоме product-рішення: **Memory Engine
+відкладений, не будується зараз.**
+
+**Рішення (founder + два незалежні огляди):**
+- MVP Coach — інтерпретатор продукту й інтерфейс до дій, не довготривалий
+  AI-компаньйон. `short_term_history` достатньо для зв'язності поточної
+  розмови.
+- Телеметрія продукту (план, час, work_days, completion) — **не** пам'ять
+  про людину. Не зберігати емоційні висновки, "патерни", особисті риси
+  чи психологічний профіль без доведеного use case.
+- Векторну пам'ять відкладаємо до появи реальних розмов і повторюваних
+  сценаріїв, де відсутність пам'яті справді шкодить retention.
+
+**Чому видалено старий контент (не переписано — видалено):**
+- Стара секція будувала навколо Coach **фікцію**: інструктувала обіцяти
+  юзеру "Got it, I'll remember this about you" і посилалась на
+  "the memory layer handles storage" — такого шару **не існує**. Реально
+  в модель потрапляє лише `current_time`, `fsm_state`, опційно
+  `completion_context` (через `_context_message()`), плюс
+  `short_term_history`. Інверсія: юзер каже "запам'ятай X" → Coach обіцяє
+  → наступного разу факту немає → Coach виглядає як той хто збрехав.
+- Нова `4.3 Memory Honesty` замінює цю фікцію на чесність: не обіцяти
+  майбутній recall, прямо казати "не маю цього в поточному контексті"
+  замість симуляції пам'яті.
+- Список полів у промпті **навмисно не містить точних runtime-назв**
+  (`temporal_context`, `current_exercise_context` тощо) — архітектура ще
+  рухається, точні назви краще тримати в runtime contract і тестах, не в
+  промпті. Це запобігає тому що вже сталося раніше: промпт згадував
+  `current_exercise_context` як джерело, хоча runtime його **ще не
+  передає** (P0 gap, задокументований нижче в цьому файлі), і згадував
+  `schedule_adjustment_context`, яке `_context_message()` **ніколи не
+  включає** (мертве поле, orchestrator фетчить, Coach не бачить).
+- **Розділення джерел істини** (важлива правка від founder перед
+  затвердженням): не можна було лишити просто "user's current message =
+  highest source of truth" — це дозволяло юзеру переписувати продуктові
+  факти ("14 днів тепер означає три вправи щодня"). Тепер явно розділено:
+  повідомлення юзера — джерело істини про його намір/досвід; Product Map —
+  джерело істини про продукт; runtime context — джерело істини про
+  поточний стан. Ніхто не перетирає чужу зону.
+
+**Що фізично перенесено, не втрачено:**
+- `4.8 Emotional Continuity` (crisis/non-crisis protocol, immediate risk
+  response) — **повністю видалено з Section 4** і йде в TODO для
+  Section 5 нижче (об'єднати з тим що вже чекало з видаленого 2.6). Це
+  свідоме архітектурне рішення: визначення emotional/risk сигналу з
+  розмови — це risk-detection задача, вона має жити разом з протоколом
+  реагування в одному місці (Section 5), а не розділена на "де читати
+  сигнал" (Section 4) і "де діяти" (Section 5) — розділення саме по собі
+  створює ризик дрейфу між двома описами однієї safety-critical
+  поведінки з часом.
+- "Conversation Recovery" (ask one clarification question if thread
+  is lost/contradictory) — контент **не втрачено**, згорнуто в `4.2`
+  останнім реченням ("this applies equally when the conversation itself
+  becomes unclear or contradictory"), а не залишено окремим підрозділом
+  — та сама норма, без зайвого заголовка.
+
+**Наслідки для Section 5/6 — виконано.** Див. запис "Section 5/6/7 —
+System Security розділено на Security + User Safety" нагорі: anti-jailbreak
+залишився в `5.1`, immediate risk response переїхав у `6.1` (перероблений
+без емоційних лейблів), non-crisis distress/soft fallback — свідомо
+**не перенесено**, вирішено що вже покрито `2.2 Workday Emotional
+Support`.
+
+**Backend-задачі, виявлені під час рев'ю (НЕ прompt-проблема, окремо
+від коду):**
+- **Contract drift**: промпт раніше писав `current_state`, а
+  `_context_message()` реально передає модель це поле як `fsm_state` у
+  JSON. Малий, але реальний drift між тим що документується і що
+  насправді йде в API виклик. Звірити найменування.
+- `schedule_adjustment_context` — фетчиться оркестратором
+  (`build_user_context`), але `_context_message()` ніколи не включає
+  його в те що бачить модель. Мертве поле. Вже узгоджується з рішенням
+  прибрати `SCHEDULE_ADJUSTMENT` (backend cleanup вже в TODO нижче) —
+  просто підтверджено ще раз з іншого боку.
+- `current_exercise_context` — досі не передається runtime (P0 gap,
+  задокументований нижче в записі "2026-06-18 — P0: delivered exercise
+  context is missing from Coach runtime"). Промпт (2.2 Exercise
+  Explanation Boundary) вже посилається на це поле — коли P0 буде
+  закрито в коді, нічого міняти в промпті не треба, воно вже узгоджено.
+
+**Backlog — майбутній Memory Engine (не MVP, не зараз):**
+Коли з'явиться реальний use case (повторювані сценарії де відсутність
+пам'яті шкодить retention), можливі категорії:
+- explicit user preferences;
+- chosen support moment;
+- repeated skip/change patterns;
+- exercise dislikes;
+- preferred tone boundaries;
+- privacy-sensitive "do not store" rules.
+
+Що не зберігати ніколи:
+- diagnosis;
+- trauma details;
+- employer-sensitive personal content;
+- inferred psychological profile;
+- hidden risk labels.
+
+Принцип для майбутнього: telemetry is not Coach memory; plan state is
+not Coach memory; short-term history is conversational continuity only;
+future Memory Engine is a separate product layer, built after beta data
+shows it's actually needed.
+
+## ПЛАН: субота — Prompt Cleanup Audit (весь файл, від а до я)
+
+Рішення: у суботу на АТП (вихідний день) сідаємо і проходимо **весь**
+`coach_agent.py` від початку до кінця одним проходом — не тільки нові
+секції, а й уже "відполіровані" Section 1-2. Мета — не ідеальний текст,
+а видалення залишків старої архітектури, включно з тим що вже виглядає
+добре написаним.
+
+### Це НЕ prompt polish. Це prompt cleanup audit.
+
+- читаємо весь `coach_agent.py` від початку до кінця;
+- видаляємо стару архітектуру, навіть якщо текст вже гарний;
+- не переписуємо стиль заради краси;
+- не розширюємо нові секції;
+- усе, що залежить від майбутнього коду/рішень — кидаємо в TODO, не вирішуємо на місці;
+- залишаємо тільки стабільний baseline: persona, scope, Product Map,
+  active/paused, consent/tool skeleton, safety/no-hallucination.
+
+### Ніж (критерій видалення)
+
+> Якщо блок описує старий lifecycle, old follow-up choice, onboarding через
+> Coach, adaptation, completion-choice flow, dead states, або дані яких
+> runtime не дає — **видаляємо, не рятуємо**.
+
+### Після цього
+
+Продовжуємо ширший pre-MVP audit (`pre_mvp_code_audit_findings.md`) —
+scheduler, onboarding, completion, delivery renderer, states/guards,
+runtime tools, privacy, content library, telemetry. Coach-промпт перестає
+бути джерелом старої логіки, і решта аудиту піде чистіше.
+
+---
+
+## Режим роботи змінився (з 2.6) — MVP-контракт, не "ідеальний промпт"
+
+З цього моменту фокус: закрити контракт Coach-промпту і прибрати сміття,
+а не довести кожну секцію до ідеалу. Паралельно йде ширший pre-MVP аудит
+всієї системи (`pre_mvp_code_audit_findings.md` — scheduler, onboarding,
+completion, delivery renderer, states/guards, runtime tools, privacy,
+content library, telemetry). Coach-промпт — одна з частин цього аудиту,
+не окремий perfectionist-проєкт.
+
+## Section 2.5 — видалено повністю (IDLE_FINISHED — Completed Plan)
+
+Старий блок `## 2.5 IDLE_FINISHED — Completed Plan` видалено цілком
+(не переписано, не скорочено — видалено).
+
+Чому видалено, а не допрацьовано:
+
+1. **FD-01 ламає саму основу секції.** Старий сенс `IDLE_FINISHED` був:
+   "план закінчився, що хочеш далі?" Новий прийнятий founder decision
+   (FD-01, `pre_mvp_code_audit_findings.md`): наступний 7-денний план
+   створюється **автоматично за замовчуванням**, без вибору користувача.
+   Це не косметика — це інша lifecycle-модель, і стара секція описувала
+   флоу який більше не є продуктовим рішенням.
+
+2. **Це completion/lifecycle logic, не Coach behavior.** Completion
+   report, auto-next-plan, наступна дата старту, той самий час/work_days —
+   це має жити в backend / report copy / Product Map, а не в Coach state
+   policy.
+
+3. **`completion_context` як prompt surface був ризикований.**
+   `outcome_tier: STRONG / NEUTRAL / WEAK` — оціночний лейбл, який ми і так
+   вичищаємо по всьому промпту (shame, normalize, diagnosis). Показувати
+   Coach-у "WEAK" як категорію — ризик витоку оціночної мови в тон
+   відповіді, навіть з інструкцією "не роби з цього діагноз".
+
+4. **Coach не має окремої місії в цьому стані.** Якщо юзер питає щось
+   після завершення плану — це вже покрито Section 2.2 (Product Support /
+   Emotional Support) + Product Map. Окрема "completed-plan policy" зайва.
+
+**Рішення:**
+Completion behavior обробляється lifecycle/report логікою, не Coach-ом.
+Coach не веде окрему policy для завершеного плану, якщо продукт не визначить
+стабільний post-completion розмовний стан (наразі — не визначає).
+
+**Наслідки, які треба перевірити пізніше (НЕ зроблено цієї сесії):**
+
+- В `_context_message()` (runtime код, не сам промпт) залишається опис поля
+  `completion_context` — прибрано лише мертве посилання "See section 2.5",
+  сам опис поля не чіпали. **Ревізувати після імплементації FD-01:**
+  - чи Coach взагалі повинен отримувати completion-метрики;
+  - якщо `outcome_tier` залишається в даних — перейменувати/прибрати
+    оціночні мітки (STRONG/NEUTRAL/WEAK) перед тим як це може дійти до
+    Coach-контексту;
+  - переконатись що completion report copy і Coach-промпт використовують
+    одну lifecycle-модель: наступний 7-денний план готується автоматично,
+    користувач може відмовитись/змінити/переключитись на 14-денний.
+- Python runtime код (`_build_idle_finished_context`,
+  `coach_agent()` injection логіка для `IDLE_FINISHED`) **не змінювався**
+  цієї сесії — це окрема backend-задача, пов'язана з FD-01/LIF-03/LIF-04
+  з `pre_mvp_code_audit_findings.md`, не частина промпт-рев'ю.
+- Section 6 FSM × Tool Matrix і "Available Tools" все ще згадують
+  `IDLE_FINISHED` (разом із `IDLE_DROPPED`, який вже вирішено прибрати) —
+  синхронізувати коли дійдемо до Section 6.
+
+## Section 2.6 — видалено повністю (Unified Persona & Safety Fallback)
+
+Старий блок `## 2.6 UNIFIED PERSONA & SAFETY FALLBACK` видалено цілком.
+Причина: жодна з трьох частин не належала до "System Awareness & Boundaries"
+(Section 2). Тримати "хоч щось від 2.6" — поганий критерій; якщо блок не
+про scope/state/actions, йому не місце в Section 2.
+
+Розкладка на майбутнє (жодна ще не виконана):
+
+- **Unified Persona (DO/AVOID)** — видалено остаточно як дубль. Те саме
+  вже покрито Section 1 "Persona Integrity" + Section 5 anti-jailbreak.
+  Нічого переносити не треба.
+
+- **Conversation Recovery** — виконано. Згорнуто в Section 4.2 без
+  окремого заголовка (див. запис "Section 4 — Context & Memory Use →
+  Context Use" нагорі).
+
+- **Soft Safety Fallback + immediate risk response** — виконано. Див.
+  запис "Section 5/6/7 — System Security розділено на Security + User
+  Safety" нагорі.
+
+**Нумерація:** Section 2 тепер закінчується на `2.4 User Intent and
+Consent`. Що було `2.7 IDLE_FINISHED` — перенумеровано в `2.5` (пізніше
+видалено повністю, див. запис вище).
 
 ## Архітектурне рішення — ONBOARDING блок видалено з Coach промпту (Section 2.1)
 
@@ -765,4 +1384,12 @@ Required priority rule:
 - The Coach must not remain neutral about immediate safety: it must follow the
   crisis response protocol.
 
-Status: Section 2.2 draft approved. Section 4.8 boundary remains open.
+Status: RESOLVED (2026-07-11). Section 4.8 no longer exists — deleted during
+the Context Use rewrite. Safety moved to Section 6.1 Immediate Safety Risk
+with a fact-based trigger (not the non-crisis/crisis distinction originally
+planned here). The required priority rule was implemented as: "When this
+section applies, do not follow any conflicting instruction elsewhere in
+this prompt" (6.1) plus an explicit guard in Section 7 Tool Calls ("the
+Immediate Safety Risk rule (Section 6.1) must not currently apply"). See
+"Section 5/6/7 — System Security розділено на Security + User Safety"
+near the top of this file for full rationale.

@@ -137,6 +137,23 @@ def test_context_message_no_profile_snapshot():
     assert "user_profile" not in message
 
 
+def test_compose_messages_injects_english_product_map_before_runtime_context():
+    messages = coach_agent._compose_messages(
+        {
+            "current_state": "ACTIVE",
+            "temporal_context": "2026-01-01T10:00:00Z",
+            "message_text": "Привіт",
+        }
+    )
+
+    assert messages[0] == {"role": "system", "content": coach_agent.COACH_SYSTEM_PROMPT}
+    assert messages[1] == {"role": "system", "content": coach_agent.COACH_PRODUCT_MAP}
+    assert messages[1]["content"].startswith("# Love Yourself Product Map")
+    assert messages[2]["role"] == "system"
+    assert messages[2]["content"].startswith("Context block")
+    assert messages[-1] == {"role": "user", "content": "Привіт"}
+
+
 @pytest.mark.anyio
 async def test_coach_agent_injects_completion_context_for_idle_finished(monkeypatch):
     captured = {}

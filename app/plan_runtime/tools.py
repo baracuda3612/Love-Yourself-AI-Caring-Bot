@@ -302,14 +302,35 @@ def get_plan_status(user_id: int) -> dict:
         if plan is None:
             return {"state": user.current_state, "plan_active": False}
 
-        days_total = plan.total_days or 0
-        days_completed = max(0, (plan.current_day or 1) - 1)
+        days_total = max(0, int(plan.total_days or 0))
+        current_day = max(1, int(plan.current_day or 1))
+        if days_total:
+            current_day = min(current_day, days_total)
+        days_completed = max(0, current_day - 1)
+        days_remaining = max(0, days_total - current_day + 1)
+
+        eligible_steps = [
+            step
+            for day in list(getattr(plan, "days", []) or [])
+            for step in list(getattr(day, "steps", []) or [])
+            if getattr(step, "step_status", None) != "canceled"
+        ]
+        steps_total = len(eligible_steps)
+        steps_completed = sum(
+            1 for step in eligible_steps if getattr(step, "step_status", None) == "completed"
+        )
+        completion_rate = round((steps_completed / steps_total) * 100) if steps_total else 0
 
         return {
             "state": user.current_state,
             "plan_active": True,
             "days_total": days_total,
+            "current_day": current_day,
             "days_completed": days_completed,
+            "days_remaining": days_remaining,
+            "steps_total": steps_total,
+            "steps_completed": steps_completed,
+            "completion_rate": completion_rate,
         }
 
 

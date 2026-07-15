@@ -1204,7 +1204,6 @@ def _build_tool_registry() -> Dict[str, Any]:
         cancel_plan,
         change_day_time,
         change_evening_time,
-        create_first_plan,
         create_followup_plan,
         get_plan_status,
         pause_plan,
@@ -1212,7 +1211,6 @@ def _build_tool_registry() -> Dict[str, Any]:
         resume_plan,
     )
     return {
-        "create_first_plan":    lambda uid, _args: create_first_plan(uid),
         "create_followup_plan": lambda uid, args: create_followup_plan(uid, args.get("plan_type", "SHORT")),
         "record_evening_time":  lambda uid, args: record_evening_time(uid, args["hhmm"]),
         "change_day_time":      lambda uid, args: change_day_time(uid, args["hhmm"]),
@@ -1226,7 +1224,6 @@ def _build_tool_registry() -> Dict[str, Any]:
 
 # Deterministic reply templates — no second LLM call needed.
 _TOOL_REPLY_TEMPLATES: Dict[str, str] = {
-    "create_first_plan":    "✅ Перший 7-денний ритм запущено. Перше завдання прийде в обраний час.",
     "create_followup_plan": "✅ Новий план запущено. Завдання приходитимуть за розкладом.",
     "record_evening_time":  "✅ Вечірній час збережено.",
     "change_day_time":      "✅ Денний час змінено. Наступні завдання прийдуть у новий час.",
@@ -1291,7 +1288,11 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
         if result.get("plan_active"):
             return (
                 f"📋 Стан: активний план\n"
-                f"День {result.get('days_completed', 0)} з {result.get('days_total', 0)}"
+                f"День {result.get('current_day', 1)} з {result.get('days_total', 0)} · "
+                f"залишилось {result.get('days_remaining', 0)}\n"
+                f"Виконано вправ: {result.get('steps_completed', 0)} з "
+                f"{result.get('steps_total', 0)} "
+                f"({result.get('completion_rate', 0)}%)"
             )
         return "📋 Активного плану зараз немає."
 
