@@ -958,20 +958,20 @@ HH:MM range validator to `record_evening_time()`.
 
 Founder decision needed: No — enforcement of an already-agreed contract.
 
-#### COACH-02 — get_plan_status paused-state display bug
+#### COACH-02 — get_plan_status paused-state display bug — RESOLVED
 
-Severity: P1
-Status: confirmed (code-verified)
+Severity: was P1
+Status: RESOLVED (commit `83370f8`, "fix(T5.8C): report paused delivery in plan status")
 
-`orchestrator.py::_execute_plan_tool`, in the `get_plan_status` branch,
-checks only `result.get("plan_active")` (True/False) and always renders
-`"📋 Стан: активний план"` when true — it never reads `result["state"]`
-to distinguish `ACTIVE` from `ACTIVE_PAUSED`.
+Was: `orchestrator.py::_execute_plan_tool`, in the `get_plan_status`
+branch, checked only `result.get("plan_active")` (True/False) and always
+rendered `"📋 Стан: активний план"` when true — never read
+`result["state"]` to distinguish `ACTIVE` from `ACTIVE_PAUSED`.
 
-Minimal fix: branch on `result["state"] == "ACTIVE_PAUSED"` and render
-"план на паузі" instead of "активний план".
-
-Founder decision needed: No.
+Fix shipped: new `_format_plan_status()` helper branches on
+`result.get("state") == "ACTIVE_PAUSED"` and renders "доставка вправ
+призупинена" vs "доставка вправ активна". Covered by new tests in
+`tests/test_orchestrator.py`.
 
 #### COACH-03 — create_followup_plan silently defaults a missing plan_type
 
@@ -1124,9 +1124,12 @@ Status: accepted as target architecture, not implemented
 Current: Coach is a one-shot command dispatcher — it returns a tool
 call, the orchestrator executes it, and a hardcoded Ukrainian template
 is sent back. Coach never sees the result and cannot phrase a
-context-aware, tone-consistent reply. Concrete evidence that templates
-already drift from truth: COACH-02 above (paused state rendered as
-active).
+context-aware, tone-consistent reply. Concrete evidence that this class
+of drift is real, not hypothetical: COACH-02 above — a hardcoded
+template rendered "active" for a paused sequence until it was fixed
+directly in the template. This general risk (a canned string silently
+diverging from runtime truth) remains even after that specific instance
+is resolved.
 
 Target: bounded two-step loop. Coach makes at most one tool call;
 runtime executes it; a structured result
@@ -1209,7 +1212,8 @@ with `switch_plan_format`.
 
 ### Required work before beta
 
-* fix COACH-01 through COACH-05 (runtime validation/rendering gaps);
+* fix remaining COACH-01, COACH-03, COACH-04, COACH-05 (runtime
+  validation/scheduling gaps — COACH-02 already resolved);
 * implement Bounded Tool-Result Loop (COACH-09) before first external
   user;
 * fix P0 delivered exercise context (COACH-08) before ACTIVE-state
