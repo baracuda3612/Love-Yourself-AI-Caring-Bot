@@ -70,35 +70,29 @@ PR [#245](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/245)
 PR не вважати production-ready, доки backend не реалізує відсутні
 lifecycle-механізми та Bounded Tool-Result Loop, зафіксований нижче.
 
-## Sequencing decision: фінальний прохід Section 1-2 — ПІСЛЯ завершення MVP-аудиту
+## Sequencing decision: Section 1-2 — точковий прохід зроблено 2026-07-16, повний фінальний прохід досі ПІСЛЯ завершення MVP-аудиту
 
-**Питання:** Section 1-2 писались до появи `pre_mvp_code_audit_findings.md`.
-Чи перепройти їх зараз з урахуванням аудиту, чи спершу завершити аудит?
+**Оновлення (2026-07-16):** Section 1-2 отримали точковий integration-pass
+у межах тієї ж сесії що й `COACH_TOOLS`/Product Map sync — виправлено
+consent wording (reversible actions), `current_state`/`fsm_state`
+розсинхрон, видалено `IDLE_FINISHED` з 2.1 (0 продакшн-юзерів, тому
+без ризику), закрито prompt-injection шлях в ACTIVE PLAN ("or
+conversation"), перенумеровано `2.4 → 2.3`, точний pointer на `Section
+6.1` замість розмитого "dedicated safety guidance". Це виправлення
+конкретних багів/розсинхронів, не audit-informed рерайт.
 
-**Рішення:** завершити MVP-аудит першим, потім один фінальний прохід
-Section 1-2.
+**Досі відкрито:** повний фінальний прохід Section 2 (System Awareness
+& Boundaries) — з урахуванням Privacy межі (individual vs
+company-facing), Content library (slot not user-facing), Delivery
+renderer P0, Plan generation (SHORT/state_switch) — ці блоки
+`pre_mvp_code_audit_findings.md` **ще не пройдені**. Причина чекати та
+сама: переписати Section 2 під часткові знахідки зараз means редагувати
+той самий текст ще раз коли решта аудиту принесе нові рішення.
 
-**Чому:**
-- Section 1 (Identity & Persona) — про тон і персону, майже не залежить
-  від продуктової механіки. Низький ризик застарілості, може почекати
-  без шкоди.
-- Section 2 (System Awareness & Boundaries) — прямо залежить від блоків
-  аудиту які **ще не пройдені**: Privacy межа (individual vs
-  company-facing — стосується того що Coach каже про конфіденційність),
-  Content library (slot not user-facing — стосується Exercise
-  Explanation Boundary), Delivery renderer P0 (стосується того що Coach
-  може вважати "вже доставленим" юзеру), Plan generation (SHORT/
-  state_switch — може вплинути на Product Support формулювання).
-- Якщо переписати Section 2 зараз під те що вже відомо (`FD-01`,
-  `FD-04`, `ONB`-знахідки), а потім Privacy/Content Library/Delivery
-  Renderer аудит принесе нові рішення — доведеться редагувати той самий
-  текст втретє. Та сама проблема яку вичищали весь prompt cleanup:
-  не робити роботу яку доведеться переробляти.
-
-**Наслідок:** Section 1-2 фінальний прохід — окрема задача, запланована
-після завершення (або принаймні суттєвого просування) блоків Privacy,
-Content Library, Delivery Renderer, Plan Generation з
-`pre_mvp_code_audit_findings.md`.
+**Наслідок:** Section 1 можна вважати стабільним (тон/персона, низька
+залежність від продуктової механіки). Section 2 — точкові баги
+виправлені, але **повний узгоджений прохід все ще чекає** Privacy/
+Content Library/Delivery Renderer/Plan Generation з аудиту.
 
 ## Architecture decision: Bounded Tool-Result Loop — P1, до першого зовнішнього MVP-юзера
 
