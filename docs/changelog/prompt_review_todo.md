@@ -93,171 +93,32 @@ generation (SHORT/state_switch) — ці блоки `pre_mvp_code_audit_findings
 **повний узгоджений прохід усього промпту все ще чекає** Privacy/
 Content Library/Delivery Renderer/Plan Generation з аудиту.
 
-## Architecture decision: Bounded Tool-Result Loop — P1, до першого зовнішнього MVP-юзера
+## Architecture decision: Bounded Tool-Result Loop — ПЕРЕНЕСЕНО в pre_mvp_code_audit_findings.md
 
-**Контекст.** Поточна архітектура Coach — one-shot command dispatcher:
-```
-Coach → tool call → orchestrator executes → deterministic Telegram template
-```
-Coach ніколи не отримує результат виконання назад. `reply_text`
-примусово порожній при tool_call, `_TOOL_REPLY_TEMPLATES` формує
-відповідь захардкодженим текстом українською, незалежно від мови/тону
-поточної розмови (DSM language mirroring тут не діє — canned template
-завжди українською, навіть якщо розмова йшла англійською).
+Повний опис, оцінка обсягу роботи, технічні кроки — тепер `COACH-09` у
+секції "Coach / Orchestrator Integration Findings" в
+`pre_mvp_code_audit_findings.md` (не Coach-специфічний backend-документ,
+а частина ширшого MVP-аудиту). Короткий підсумок: Coach зараз one-shot
+dispatcher, не бачить результат tool call, canned templates дрейфують
+від runtime (доказ — `get_plan_status` paused-баг, `COACH-02`). P1 до
+першого зовнішнього MVP-юзера, не P0.
 
-Це відрізняється від типового tool-use flow в Claude/OpenAI (Codex,
-Claude Agent SDK), де: модель повертає `tool_use`/function call →
-runtime виконує → результат повертається моделі як `tool_result` →
-модель формує фінальну відповідь на основі факту. Наша схема свідомо
-спрощена — дешевша, швидша, Coach не може перекрутити результат
-операції. Але має реальну ціну.
+## Product decision: timezone — ПЕРЕНЕСЕНО в pre_mvp_code_audit_findings.md
 
-**Знайдений доказ проблеми (не гіпотетичний):** `get_plan_status` для
-paused-стану хардкодом відповідає "активний план" (див. Backend Audit
-Backlog вище, пункт 4, верифіковано в коді). Це не просто менш
-"людський" UX — canned templates є **окремим source of truth**, який
-дрейфує від runtime і вже реально розійшовся в одному підтвердженому
-місці.
+Повний опис тепер `MISC-01` в секції "Miscellaneous Findings"
+(`pre_mvp_code_audit_findings.md`) — чекає власного audit round
+"Company / B2B Onboarding". Короткий підсумок: timezone НЕ збирається
+на рівні окремого юзера в MVP, компанія задає це на власному onboarding
+(`organization.default_timezone`/`available_offices`), per-user override
+для відряджень. Код зараз мовчки ставить `Europe/Kyiv` всім.
 
-**Founder-оцінка ризику:** цільова аудиторія (програмісти) звикла до
-сучасного tool-use UX де AI застосував tool call і далі пише по-людськи
-з урахуванням результату. Раптова поява захардкодженого "SUCCESS"-стилю
-повідомлення посеред живої розмови одразу читається як "грубо склеєний
-workflow" — конкретний репутаційний ризик для цієї аудиторії, не
-абстрактна естетика.
+## Product decision: Time Picker UX — ПЕРЕНЕСЕНО в pre_mvp_code_audit_findings.md
 
-**Рішення: Bounded Tool-Result Loop, не необмежений agent loop.**
-```
-1. Coach робить максимум один tool call.
-2. Backend виконує його.
-3. Результат повертається Coach-у як структуровані факти
-   (не Python-помилка, не internal state name):
-   {"status": "success", "action": "pause_plan",
-    "facts": {"delivery_paused": true, "sequence_preserved": true}}
-   {"status": "error", "code": "plan_not_active"}
-4. На фінальному LLM-виклику tools вимкнені — Coach не може
-   ланцюжком викликати наступну дію.
-5. Coach формує лише природну відповідь мовою/тоном поточної розмови
-   на основі отриманих фактів.
-6. Якщо другий LLM-виклик падає — deterministic template fallback
-   (поточні `_TOOL_REPLY_TEMPLATES` лишаються, але як аварійний
-   резерв, не основний шлях).
-```
-
-**Оцінка обсягу роботи (не архітектурний перепис):**
-- мінімально запустити loop: 2-4 години
-- нормально, з тестами всіх результатів: ~1 робочий день
-- разом з чисткою всіх старих tool contracts і каскаду
-  `record_evening_time`: до 1.5 дня
-
-**Технічні кроки:**
-1. Зберігати `response.id`/`call_id` першого Coach-виклику.
-2. `_execute_plan_tool()` повертає структурований результат
-   (`{"status", "action", "facts"}` або `{"status": "error", "code"}`),
-   не готовий текст.
-3. Надсилати результат другим Responses API-викликом як
-   `function_call_output`.
-4. На другому виклику — tools вимкнені.
-5. Coach формує одну фінальну відповідь тільки з отриманих фактів.
-6. Поточні templates — fallback якщо другий LLM-виклик впав.
-7. Тести: success, known error, unexpected error, cascade
-   (`record_evening_time` → `create_followup_plan`), відсутність
-   повторного tool call на другому кроці.
-
-**Найбільша реальна робота — не сам API loop, а уніфікувати результати
-всіх 8 tools** щоб Coach отримував чисті факти, не Python exceptions чи
-internal state names (`ACTIVE_PAUSED` тощо не повинні просочуватись у
-`facts`).
-
-**Статус:** архітектурне рішення прийняте, **P1 до першого зовнішнього
-MVP-юзера, не P0, не цієї сесії.** Поточний `After a Tool Call` блок у
-промпті (Section 7) навмисно лишається чесним до фактичної one-shot
-архітектури — короткий, без "orchestrator handles templates" деталей
-реалізації, без "You do not know the result" (вже виражено через
-заборону стверджувати success). Коли loop буде реалізований — замінити
-на окремий блок `Tool Result Handling` у промпті.
-
-## Product decision: timezone — B2B company-level, не user-level (2026-07-15)
-
-**Рішення (founder):** timezone НЕ збирається на рівні окремого юзера
-в MVP. Продукт B2B2C — компанія на власному onboarding задає часовий
-контекст (де офіси, чи бувають відрядження), не окремий співробітник.
-
-**Модель для company onboarding:**
-- `organization.default_timezone`
-- `organization.available_offices/timezones` (якщо кілька офісів)
-- один офіс → timezone підставляється автоматично, юзера не питаємо
-- кілька офісів → офіс/timezone приходить із roster або invite link
-- якщо невідомо → одне питання з кнопками офісів компанії
-- відрядження → в Settings юзер вручну міняє поточний timezone і
-  повертає назад (без авто-визначення подорожей чи геолокації в MVP)
-
-Потрібен per-user override поверх company default (для відряджень),
-але не автоматичне визначення — зайва складність для MVP.
-
-**Backend-факт виявлений при рев'ю:** зараз новому юзеру мовчки
-ставиться `Europe/Kyiv`, timezone ніде не збирається. Для США/Азії
-доставка буде неправильною, якщо колись з'являться такі компанії-клієнти.
-Зберігати треба IANA timezone (`America/New_York`, не просто UTC offset)
-через DST.
-
-**Статус:** product decision зафіксовано. Реалізація —
-company-onboarding backend задача, не промпт.
-
-## Product decision: Time Picker UX — Phase 3, не MVP (2026-07-15)
-
-**Контекст:** обговорювали чи Coach має приймати час тільки як строгий
-`HH:MM`, чи давати зручніший UX (кнопки з готовими варіантами часу,
-picker). Рішення: **buttons-first UX — правильний напрямок, але окрема
-Phase 3 задача ("Choice Prompts Infrastructure"), не MVP.**
-
-**Погоджений майбутній UX-контракт:**
-```
-"Хочу змінити час" (намір є, точного часу немає)
-→ Coach викликає show_time_picker(target)
-→ orchestrator показує inline-кнопки з готовими варіантами
-→ callback напряму викликає runtime tool, без нового LLM-виклику
-
-"Постав на 15:00" (намір є, час однозначно вказаний)
-→ Coach нормалізує час
-→ одразу викликає change_day_time / change_evening_time
-→ orchestrator виконує та підтверджує
-```
-
-**MVP time picker (коли реалізується):**
-```
-О котрій зручно отримувати вправу?
-[ 11:00 ] [ 13:00 ]
-[ 15:00 ] [ 17:00 ]
-[ Інший час ]
-```
-"Інший час" → deterministic picker (обрати годину → 00/15/30/45 хвилин),
-без Mini App, без ручного HH:MM, без LLM. Точності до 15 хв достатньо
-для daily exercise. Той самий keyboard переюзати для: onboarding,
-першого вечірнього часу, зміни денного часу, зміни вечірнього часу.
-
-**Що заносимо в backlog (не MVP цієї сесії):**
-- `show_time_picker(target)` — новий Coach tool, `target`: `DAY` /
-  `EVENING` / `UNSPECIFIED`. Використовується коли намір змінити час є,
-  але конкретний час не вказаний однозначно. Сам tool нічого не міняє,
-  тільки відкриває deterministic вибір.
-- callback-схема на кшталт `time:day:15:00`
-- callbacks викликають runtime tools напряму, **без LLM**
-- вибір кнопки = підтвердження (не треба другого "точно?")
-- reusable picker для onboarding + first evening collection + time
-  changes (один компонент, кілька точок виклику)
-- backend validation: реальний діапазон часу (зараз `99:99` проходить),
-  timezone, allowed range
-- runtime guards для day/evening tools (див. Backend Audit Backlog
-  нижче, пункти 1 і 2 — той самий корінь проблеми)
-- коли реалізовано — одночасно оновити Section 7 і `COACH_TOOLS`
-  (додати `show_time_picker`, прибрати natural-language-only фолбек
-  якщо picker стане основним шляхом)
-
-**Принцип, який тримаємось:** промпт не описує `show_time_picker` чи
-кнопки зараз, доки цієї інфраструктури не існує — "промпт не повинен
-обіцяти неіснуючу інфраструктуру" (той самий принцип що й з
-`current_exercise_context`/P0 gap раніше).
+Повний опис тепер `MISC-02` в секції "Miscellaneous Findings"
+(`pre_mvp_code_audit_findings.md`) — чекає власного audit round
+"Delivery UX". Короткий підсумок: buttons-first UX для вибору часу,
+Phase 3, не MVP. Coach поки використовує natural-language fallback
+(Section 7 Time Arguments).
 
 ## Section 7 — Time Arguments, change_day_time / change_evening_time (виконано, 2026-07-15)
 
@@ -281,96 +142,14 @@ will write at this new time.'"` — наслідок пояснює Product Map,
 До появи `show_time_picker` (backlog вище), сценарій без точного часу
 лишається природним: `"Хочу змінити час"` → `"На котру годину?"`.
 
-## Backend Audit Backlog — 2026-07-15 (виявлено під час Section 7 prompt review, НЕ виправлено цієї сесії)
+## Backend Audit Backlog — ПЕРЕНЕСЕНО в pre_mvp_code_audit_findings.md
 
-Ці пункти виявлені під час рев'ю Section 7 Tool Calls (аналіз кодекса +
-перевірка `plan_runtime/tools.py`/`orchestrator.py`). Свідомо винесені
-поза межі "промпт-only" кола цієї сесії. Раніше були показані тільки
-в чаті й **не були записані у файл** — цей запис виправляє цей розрив.
-
-1. **`record_evening_time` — відсутня валідація.** Не перевіряє
-   `user.current_state`, не перевіряє `evening_slot_collected == False`
-   перед записом, приймає `99:99` (валідація лише формату цифр через
-   `_validate_hhmm`, не діапазону значень). Бізнес-інваріант
-   ("first-time only") існує тільки словами в промпті, не в коді.
-   Файл: `app/plan_runtime/tools.py:167`. Пріоритет: P1.
-
-2. **`change_evening_time` — Coach не бачить поточний формат плану.**
-   Немає способу надійно розрізнити "зміни час" між `change_day_time` і
-   `change_evening_time` коли юзер не уточнює day/evening явно — Coach
-   не отримує інформацію чи в юзера взагалі є 14-денний план з вечірнім
-   слотом. Runtime/context gap, не суто prompt-текст.
-
-3. **`pause_plan`/`resume_plan` — доставки що припали на паузу
-   втрачаються. ВЕРИФІКОВАНО в коді, не гіпотеза.**
-   `plan_pause.py:pause_plan()` докстрінг буквально каже: *"Does NOT
-   rewrite or reschedule any plan steps."* Обидва `pause_plan` і
-   `resume_plan` тільки перемикають `profile.is_paused` і
-   `user.current_state` — жодних змін у розкладі кроків.
-   `scheduler.py:113` має gate `user.current_state == "ACTIVE"` перед
-   відправкою — джоби що спрацьовують під час паузи мовчки
-   пропускаються (не переносяться на потім, не видаляються — просто
-   ігноруються в момент спрацювання). `resume_plan` після цього не
-   перепланує нічого, тому пропущені кроки втрачені назавжди.
-   Промпт раніше стверджував "delivery resumes on the original
-   schedule" — це фактично неправда, формулювання виправлено в
-   промпті (див. запис нижче "Section 7 — pause_plan/resume_plan").
-
-   **Цільовий backend-контракт (ще не реалізовано):**
-   ```
-   pause  → preserve remaining sequence
-   resume → reschedule remaining steps from the next valid workday
-   ```
-   Додатково перевірити: чи зміна часу (`change_day_time`) під час
-   паузи коректно застосовується до `scheduled_for` кроків, і чи jobs
-   гарантовано відновлюються після `resume` з новим часом.
-
-   Файли: `app/plan_pause.py:47-113`, `app/scheduler.py:113`.
-   Пріоритет: **P1**, обов'язкова MVP-задача (не "nice to have" —
-   зараз продукт технічно не виконує власну обіцянку).
-
-4. **`get_plan_status` — баг для paused стану. ВЕРИФІКОВАНО в коді,
-   точний механізм.** `_execute_plan_tool` при `tool_name ==
-   "get_plan_status"` перевіряє лише `result.get("plan_active")`
-   (True/False) — гілка `if result.get("plan_active"):` завжди виводить
-   `f"📋 Стан: активний план\n"` незалежно від значення `result["state"]`
-   (`ACTIVE` чи `ACTIVE_PAUSED"). Поле `state` взагалі не читається в
-   цій гілці форматування. Файл: `app/orchestrator.py:1286-1297`.
-   Fix: розрізняти `state == "ACTIVE_PAUSED"` окремо і виводити
-   "план на паузі" замість "активний план".
-
-5. **`create_followup_plan` — відсутній аргумент тихо створює SHORT.**
-   Tool schema вимагає `plan_type`, але registry робить
-   `args.get("plan_type", "SHORT")` — якщо модель/parser поверне
-   порожні arguments, система без явного дозволу вибирає 7 днів. Треба
-   fail closed, не мовчазний default. Файл: `app/orchestrator.py:1216`
-   (номер рядка міг зміститись після видалення `create_first_plan` —
-   звірити заново).
-
-6. **Усі tools надсилаються моделі в кожному стані незалежно від
-   FSM-матриці.** Матриця в промпті — лише текстова угода, не enforced
-   на рівні API tool-availability. Architecture improvement: розглянути
-   state-filtered tool registration (передавати моделі тільки ті tools,
-   які реально дозволені в поточному `current_state`).
-
-7. **`create_first_plan` backend-guard досі жорстко на
-   `IDLE_ONBOARDED`.** Файл: `app/plan_runtime/tools.py:77`. Функція
-   лишена в коді (Coach більше не може її викликати — видалено з
-   `COACH_TOOLS`/registry/reply template цієї ж сесії), але сам guard
-   не оновлено. **Окремий backend TODO:** під час реалізації реального
-   onboarding-флоу прибрати legacy guard `IDLE_ONBOARDED` і визначити
-   реальний onboarding-complete entry state, яким онбординг-скрипт буде
-   викликати цю функцію напряму (не через Coach). Перетинається з
-   `ONB-07` з `pre_mvp_code_audit_findings.md`.
-
-8. **Lifecycle-питання: перехід на 14-денний формат після
-   `FD-01` auto-continuation.** Якщо система вже автостворила новий
-   7-денний `ACTIVE` план одразу після завершення попереднього, а юзер
-   хоче спробувати інший формат — потрібно спершу скасувати щойно
-   створений період. Незакритий lifecycle-кейс. Пов'язано з рішенням
-   `switch_plan_format` нижче (окремий atomic tool міг би закрити і
-   цей кейс теж, не тільки перехід з живого стану — варто розглянути
-   разом).
+Усі 8 пунктів (виявлені під час рев'ю Section 7 Tool Calls) тепер
+`COACH-01` через `COACH-08` в секції "Coach / Orchestrator Integration
+Findings" (`pre_mvp_code_audit_findings.md`), у форматі Severity/Status/
+Fix узгодженому з рештою audit-документа. `COACH-06` (state-filtered
+tool registration) там же позначений **RESOLVED** — реалізовано цієї
+сесії через `_coach_tools_for_state()`.
 
 ## Adm: файл виріс завеликий — після завершення prompt cleanup розбити
 
@@ -391,52 +170,14 @@ cleanup audit). Все фіксується коректно (кожен бло�
 Не робити зараз — зупинить темп Section 7. Робити одним окремим проходом
 після завершення всього промпт-рев'ю.
 
-## Product decision: switch_plan_format — CONFIRMED founder decision, ціль зафіксована в Product Map (2026-07-16)
+## Product decision: switch_plan_format — ПЕРЕНЕСЕНО в pre_mvp_code_audit_findings.md
 
-**Знахідка:** `create_followup_plan` звужено до `IDLE_PLAN_ABORTED`. Але
-лишається відкрита продуктова діра: перехід між 7 і 14-денним форматом
-**з активного стану** (`ACTIVE`/`ACTIVE_PAUSED`).
-
-Стара версія: `скасуй → підтверди → почни новий → обери формат` — зайва
-фрикція: юзер каже "спробуємо інший формат" і отримує вимогу спершу
-скасувати поточний, хоча його намір — просто замінити один формат на
-інший, не "зупинити назавжди".
-
-**Рішення (CONFIRMED, не рекомендація):** не перевантажувати цим
-`create_followup_plan` (це інша бізнес-операція — atomic replacement,
-не creation-after-completion). Потрібен окремий deterministic tool
-`switch_plan_format(plan_type)`:
-- доступний з `ACTIVE` і `ACTIVE_PAUSED`;
-- користувач один раз підтверджує перехід і наслідки;
-- система атомарно завершує стару послідовність і створює нову;
-- якщо для 14 днів потрібен вечірній час — система спершу його збирає;
-- старий період не скасовується, доки новий гарантовано не може бути
-  створений;
-- не два окремі виклики (`cancel_plan` + `create_followup_plan`), а
-  один atomic tool.
-
-**Product Map вже оновлено під цю цільову модель** (2026-07-16,
-`conceptual_map.md`/`conceptual_map_en.md`, розділ 5 і розділ про
-скасування): описує формат-switch як "one user-confirmed action".
-Це навмисно — Product Map описує **цільову архітектуру**, той самий
-принцип що й скрізь у цьому prompt cleanup (target contract зараз,
-backend наздоганяє пізніше).
-
-**Тимчасовий розрив (прийнятний, той самий клас що create_first_plan/
-IDLE_FINISHED — 0 продакшн-юзерів, режим ремонту):** `switch_plan_format`
-tool **ще не реалізований** — немає ні в `plan_runtime/tools.py`, ні в
-`COACH_TOOLS`, ні в orchestrator registry. Якщо юзер зараз попросить
-"перейти на 14 днів" з `ACTIVE`, Coach прочитає в Product Map що це
-"одна дія", але фізично матиме тільки `cancel_plan` +
-`create_followup_plan` (два кроки, другий тільки з `IDLE_PLAN_ABORTED`).
-До реалізації tool-а Coach має пояснювати наявний двокроковий шлях,
-не обіцяти atomic switch якого не може виконати.
-
-**Статус:** founder-рішення прийняте й зафіксоване в обох Product Map.
-Реалізація tool-а — окрема backend-задача (новий tool в
-`plan_runtime/tools.py`, новий entry в `COACH_TOOLS` і orchestrator
-registry). До реалізації — тримати в увазі розрив між Product Map і
-Coach tool-list вище.
+Повний опис тепер `COACH-11` (і пов'язаний `COACH-12` — lifecycle
+friction після FD-01 auto-continuation) в секції "Coach / Orchestrator
+Integration Findings" (`pre_mvp_code_audit_findings.md`). Короткий
+підсумок: CONFIRMED founder decision, Product Map вже описує atomic
+format-switch як ціль, tool ще не реалізований — тимчасовий, прийнятний
+розрив (0 продакшн-юзерів).
 
 ## Product decision: default continuation format after completion — RESOLVED 2026-07-16
 
@@ -1224,198 +965,22 @@ When reviewing `Exercise Visibility Boundary`:
 Status: open. Review these items when Section 2.2 and Exercise Visibility
 Boundary are reached.
 
-## 2026-06-18 — P0: delivered exercise context is missing from Coach runtime
+## 2026-06-18 — P0: delivered exercise context missing — ПЕРЕНЕСЕНО в pre_mvp_code_audit_findings.md
 
-### Verified current behavior
+Повний опис (JSON payload shape, тести, пов'язаний renderer-баг з
+точними назвами функцій) тепер `COACH-08` в секції "Coach / Orchestrator
+Integration Findings" (`pre_mvp_code_audit_findings.md`). Короткий
+підсумок: Coach не отримує `current_exercise_context` жодним шляхом —
+не через `short_term_history`, не через structured payload. P0 перед
+продакшном, разом з окремим P0 в renderer (`display.*` не читається).
 
-The Coach currently does **not** receive `display.steps` for the exercise that
-was delivered to the user.
+## Backlog — Product question escalation flow — ПЕРЕНЕСЕНО в pre_mvp_code_audit_findings.md
 
-The delivered exercise is not available through either supported path:
-
-1. **`short_term_history`**
-   - Scheduled exercise messages are sent directly by `app.scheduler`.
-   - `send_scheduled_message()` sends the Telegram message and records telemetry,
-     but does not append the notification text to Redis session history.
-   - It also does not create an assistant `ChatHistory` row.
-   - Therefore `get_stm_history()` cannot return the delivered exercise message.
-
-2. **Structured Coach context**
-   - `build_user_context()` currently returns:
-     `message_text`, `short_term_history`, `current_state`,
-     `temporal_context`, and `schedule_adjustment_context`.
-   - It does not return `current_exercise_context`, `exercise_id`,
-     `display.steps`, or the delivered exercise text.
-   - `_context_message()` narrows the Coach runtime context further and currently
-     includes only current time, FSM state, and completion context when present.
-
-### Product consequence
-
-The agreed ACTIVE PLAN prompt says the Coach may explain how to perform the
-relevant exercise using instructions available in current context or
-conversation.
-
-With the current runtime, those instructions are normally unavailable.
-Shipping that prompt would create a guaranteed contract gap:
-
-- the prompt permits and expects exercise clarification;
-- the system does not provide the original exercise steps;
-- the Coach must either refuse a basic support question or invent instructions.
-
-This is a **P0 fix for T5.8 before the ACTIVE PLAN block goes to production**.
-Without it, the new ACTIVE contract promises support that the runtime physically
-cannot provide.
-
-### Recommended implementation
-
-Add a structured `current_exercise_context` to the Coach payload rather than
-relying only on `short_term_history`.
-
-Minimum payload exposed to the Coach:
-
-```json
-{
-  "title": "Дихання",
-  "steps": [
-    "Вдих — повільно, на 4 рахунки.",
-    "Затримай подих на 7.",
-    "Видих — повільно, на 8.",
-    "Повтори 4 рази."
-  ],
-  "duration_label": "30–60 сек"
-}
-```
-
-The context should be built from the latest relevant delivered `AIPlanStep`
-and its trusted `ContentLibrary.content_payload.display` data.
-
-`delivered_today` must be evaluated in the user's local timezone. In the
-14-day format, where two exercises can be delivered on the same working day,
-use the most recently delivered exercise as `current_exercise_context`.
-If a later workflow needs the Coach to distinguish both exercises explicitly,
-expand this to `delivered_exercises_today`; do not silently guess which one the
-user means.
-
-If no exercise has actually been delivered today:
-
-```json
-{
-  "current_exercise_context": null
-}
-```
-
-The Coach may clarify or repeat only the supplied `title`, `steps`, and duration.
-It must not create variations, add steps, alter the exercise, or infer missing
-instructions.
-
-Add tests proving:
-
-- the latest delivered exercise is included for `ACTIVE`;
-- `display.steps` and `duration_label` are preserved exactly;
-- future, pending, skipped, canceled, or unrelated exercises are not exposed as
-  the current exercise;
-- missing content produces `current_exercise_context = null`, not invented data;
-- the context reaches `_compose_messages()` before the user message.
-
-### Related P0 discovered during verification: v5 delivery rendering
-
-The v5 content library stores user instructions under:
-
-```text
-content_payload.display.title
-content_payload.display.steps
-content_payload.display.duration_label
-```
-
-However:
-
-- `plan_finalization._build_step_title()` reads root `content_payload.title`;
-- `plan_finalization._build_step_description()` reads root
-  `description`, `text`, or `instructions`;
-- `format_task_notification()` reads root `instructions` and root duration
-  fields.
-
-The content loader preserves the nested `display` object and does not flatten
-it. Therefore the current delivery path may fail to render the v5
-`display.steps` in the Telegram exercise notification.
-
-Verify and fix the notification renderer to read the canonical v5
-`content_payload.display` fields. This is separate from, but required alongside,
-the Coach context fix: the user and the Coach must receive the same trusted
-exercise instructions.
-
-Priority order:
-
-1. **P0 — Telegram renderer**
-   Fix and test the core scheduled notification first. If the user does not
-   receive `display.title`, `display.steps`, and `display.duration_label`, the
-   primary daily product loop is broken independently of the Coach.
-
-2. **P0 — `current_exercise_context`**
-   Add the delivered exercise data to the Coach runtime before enabling the new
-   ACTIVE PLAN prompt behavior.
-
-Status: open, P0 before production.
-
-## Backlog — Product question escalation flow
-
-Design and implement a real escalation path for factual product questions that
-cannot be answered from the Product Map or current runtime context.
-
-### Product decision required
-
-Decide:
-
-- where escalated questions go;
-- who receives and answers them;
-- whether the user receives an answer in the same Telegram conversation;
-- whether escalation is automatic or requires explicit user confirmation;
-- what response-time expectation, if any, is shown to the user;
-- whether the unresolved question should be stored for future Product Map
-  updates.
-
-Possible implementation options:
-
-- a deterministic support contact or support button;
-- a support queue persisted in the database;
-- an `escalate_product_question` runtime tool available to the Coach;
-- an admin notification with a later human reply flow.
-
-### Required Coach behavior before implementation
-
-If the Product Map and current context do not contain the requested factual
-detail, the Coach must:
-
-- say that it does not have that detail;
-- avoid guessing, approximating, or inventing an answer;
-- avoid claiming that the question was sent, escalated, or reported to the
-  product team.
-
-The Coach may claim successful escalation only after a real escalation action
-has completed and the runtime has returned a successful result.
-
-### Future tool contract
-
-If implemented as a tool, the minimum input should include:
-
-```json
-{
-  "question": "The user's unresolved product question",
-  "relevant_context": "Minimal context required to understand the question"
-}
-```
-
-The tool result should explicitly distinguish:
-
-- accepted for human review;
-- already answered by an existing source;
-- failed to submit.
-
-### Status
-
-Backlog. Not required to continue the current line-by-line prompt review, but
-must be resolved before the Coach is instructed to offer product escalation as
-an available user action.
+Повний опис тепер `COACH-10` в секції "Coach / Orchestrator Integration
+Findings" (`pre_mvp_code_audit_findings.md`). Короткий підсумок:
+escalation-каналу немає, Coach поки безпечно каже "не маю цієї деталі"
+і не вигадує. Founder decision потрібне: куди йдуть питання, хто
+відповідає, automatic vs confirmed escalation.
 
 ## 2026-06-19 — Remove SCHEDULE_ADJUSTMENT from Coach-facing architecture
 
