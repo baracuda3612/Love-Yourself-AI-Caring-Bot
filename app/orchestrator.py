@@ -1204,7 +1204,6 @@ def _build_tool_registry() -> Dict[str, Any]:
         cancel_plan,
         change_day_time,
         change_evening_time,
-        create_first_plan,
         create_followup_plan,
         get_plan_status,
         pause_plan,
@@ -1212,7 +1211,6 @@ def _build_tool_registry() -> Dict[str, Any]:
         resume_plan,
     )
     return {
-        "create_first_plan":    lambda uid, _args: create_first_plan(uid),
         "create_followup_plan": lambda uid, args: create_followup_plan(uid, args.get("plan_type", "SHORT")),
         "record_evening_time":  lambda uid, args: record_evening_time(uid, args["hhmm"]),
         "change_day_time":      lambda uid, args: change_day_time(uid, args["hhmm"]),
@@ -1226,7 +1224,6 @@ def _build_tool_registry() -> Dict[str, Any]:
 
 # Deterministic reply templates — no second LLM call needed.
 _TOOL_REPLY_TEMPLATES: Dict[str, str] = {
-    "create_first_plan":    "✅ Перший 7-денний ритм запущено. Перше завдання прийде в обраний час.",
     "create_followup_plan": "✅ Новий план запущено. Завдання приходитимуть за розкладом.",
     "record_evening_time":  "✅ Вечірній час збережено.",
     "change_day_time":      "✅ Денний час змінено. Наступні завдання прийдуть у новий час.",
@@ -1234,8 +1231,27 @@ _TOOL_REPLY_TEMPLATES: Dict[str, str] = {
     "get_plan_status":      None,   # returns dynamic data — formatted below
     "pause_plan":           "⏸ План поставлено на паузу. Завдання не надходитимуть до відновлення.",
     "resume_plan":          "▶️ План відновлено. Завдання повернуться за розкладом.",
-    "cancel_plan":          "🛑 План зупинено. Твоя статистика збережена.",
+    "cancel_plan":          "🛑 Поточну серію вправ скасовано.",
 }
+
+
+def _format_plan_status(result: Dict[str, Any]) -> str:
+    if not result.get("plan_active"):
+        return "📋 Активних 7 або 14 днів зараз немає."
+
+    status_label = (
+        "доставка вправ призупинена"
+        if result.get("state") == "ACTIVE_PAUSED"
+        else "доставка вправ активна"
+    )
+    return (
+        f"📋 Стан: {status_label}\n"
+        f"День {result.get('current_day', 1)} з {result.get('days_total', 0)} · "
+        f"залишилось {result.get('days_remaining', 0)}\n"
+        f"Виконано вправ: {result.get('steps_completed', 0)} з "
+        f"{result.get('steps_total', 0)} "
+        f"({result.get('completion_rate', 0)}%)"
+    )
 
 
 def _humanize_tool_error(tool_name: str, raw: str) -> str:
@@ -1288,12 +1304,7 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
 
     # Special case: get_plan_status returns a dict to format
     if tool_name == "get_plan_status":
-        if result.get("plan_active"):
-            return (
-                f"📋 Стан: активний план\n"
-                f"День {result.get('days_completed', 0)} з {result.get('days_total', 0)}"
-            )
-        return "📋 Активного плану зараз немає."
+        return _format_plan_status(result)
 
     # needs_evening_time soft result from create_followup_plan
     if isinstance(result, dict) and result.get("status") == "needs_evening_time":
@@ -1315,6 +1326,11 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
                 logger.error("[TOOL] cascade create_followup_plan(MEDIUM) user=%s: %s", user_id, exc, exc_info=True)
                 # pending_action preserved — user can retry
                 return "⚠️ Час збережено, але план не вдалось запустити. Спробуй ще раз."
+
+    if tool_name == "cancel_plan":
+        total_days = result.get("total_days")
+        if total_days in {7, 14}:
+            return f"🛑 Поточні {total_days} днів скасовано."
 
     template = _TOOL_REPLY_TEMPLATES.get(tool_name, "✅ Готово.")
     return template

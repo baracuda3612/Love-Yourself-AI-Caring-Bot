@@ -116,6 +116,39 @@ def test_get_avg_difficulty_empty_steps_returns_default_one():
     assert result == 1
 
 
+@pytest.mark.parametrize(
+    ("state", "expected_status"),
+    [
+        ("ACTIVE", "Стан: доставка вправ активна"),
+        ("ACTIVE_PAUSED", "Стан: доставка вправ призупинена"),
+    ],
+)
+def test_format_plan_status_uses_runtime_state(state, expected_status):
+    result = orchestrator._format_plan_status(
+        {
+            "state": state,
+            "plan_active": True,
+            "current_day": 3,
+            "days_total": 7,
+            "days_remaining": 5,
+            "steps_completed": 2,
+            "steps_total": 7,
+            "completion_rate": 29,
+        }
+    )
+
+    assert expected_status in result
+    assert "День 3 з 7 · залишилось 5" in result
+
+
+def test_format_plan_status_without_current_sequence():
+    result = orchestrator._format_plan_status(
+        {"state": "IDLE_PLAN_ABORTED", "plan_active": False}
+    )
+
+    assert result == "📋 Активних 7 або 14 днів зараз немає."
+
+
 def test_auto_complete_marks_plan_completed_and_logs_event_with_metrics_error(monkeypatch):
     user = type("UserStub", (), {})()
     user.id = 77
@@ -258,4 +291,3 @@ def test_get_avg_difficulty_unknown_value_falls_back_to_one():
     result = orchestrator.get_avg_difficulty(db, plan)
 
     assert result == 2
-

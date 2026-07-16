@@ -333,10 +333,11 @@ def test_cancel_plan_from_active():
     user = DummyUser("ACTIVE")
     profile = DummyProfile()
 
-    fake_plan = MagicMock(spec=["id", "status", "end_date"])
+    fake_plan = MagicMock(spec=["id", "status", "end_date", "total_days"])
     fake_plan.id = 10
     fake_plan.status = "active"
     fake_plan.end_date = None
+    fake_plan.total_days = 7
 
     # _load_user_and_profile uses filter().first()
     # _get_active_plan uses filter().order_by().first()
@@ -360,7 +361,7 @@ def test_cancel_plan_from_active():
 
     result = tools.cancel_plan(user_id=1)
 
-    assert result == {"status": "ok"}
+    assert result == {"status": "ok", "total_days": 7}
     assert user.current_state == "IDLE_PLAN_ABORTED"
     assert fake_plan.status == "abandoned"
     _scheduler_stub.cancel_plan_step_jobs.assert_called_once_with([3, 4])
@@ -378,3 +379,64 @@ def test_cancel_plan_wrong_state():
 
     with pytest.raises(ValueError, match="cancel_plan requires ACTIVE or ACTIVE_PAUSED"):
         tools.cancel_plan(user_id=1)
+
+
+# ─── get_plan_status ─────────────────────────────────────────────────────────
+
+
+def test_get_plan_status_returns_day_remaining_and_completion_progress():
+    user = DummyUser("ACTIVE")
+    profile = DummyProfile()
+
+    day_one = MagicMock()
+    day_one.steps = [
+        MagicMock(step_status="completed"),
+        MagicMock(step_status="skipped"),
+    ]
+    day_two = MagicMock()
+    day_two.steps = [
+        MagicMock(step_status="completed"),
+        MagicMock(step_status="pending"),
+        MagicMock(step_status="canceled"),
+    ]
+    plan = MagicMock()
+    plan.total_days = 7
+    plan.current_day = 3
+    plan.days = [day_one, day_two]
+
+    cm, db = _make_session_cm([user, profile])
+    db.query.return_value.filter.return_value.order_by.return_value.first.return_value = plan
+    _db_stub.SessionLocal.return_value = cm
+    _db_stub.User = MagicMock()
+    _db_stub.UserProfile = MagicMock()
+    _db_stub.AIPlan = MagicMock()
+
+    result = tools.get_plan_status(user_id=1)
+
+    assert result == {
+        "state": "ACTIVE",
+        "plan_active": True,
+        "days_total": 7,
+        "current_day": 3,
+        "days_completed": 2,
+        "days_remaining": 5,
+        "steps_total": 4,
+        "steps_completed": 2,
+        "completion_rate": 50,
+    }
+
+
+def test_get_plan_status_without_active_plan():
+    user = DummyUser("IDLE_FINISHED")
+    profile = DummyProfile()
+
+    cm, db = _make_session_cm([user, profile])
+    db.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+    _db_stub.SessionLocal.return_value = cm
+    _db_stub.User = MagicMock()
+    _db_stub.UserProfile = MagicMock()
+    _db_stub.AIPlan = MagicMock()
+
+    result = tools.get_plan_status(user_id=1)
+
+    assert result == {"state": "IDLE_FINISHED", "plan_active": False}
