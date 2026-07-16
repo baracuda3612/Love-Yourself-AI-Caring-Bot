@@ -70,7 +70,7 @@ PR [#245](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/245)
 PR не вважати production-ready, доки backend не реалізує відсутні
 lifecycle-механізми та Bounded Tool-Result Loop, зафіксований нижче.
 
-## Sequencing decision: Section 1-2 — точковий прохід зроблено 2026-07-16, повний фінальний прохід досі ПІСЛЯ завершення MVP-аудиту
+## Sequencing decision: Coach prompt (весь файл) — точковий прохід зроблено 2026-07-16, повний фінальний прохід досі ПІСЛЯ завершення MVP-аудиту
 
 **Оновлення (2026-07-16):** Section 1-2 отримали точковий integration-pass
 у межах тієї ж сесії що й `COACH_TOOLS`/Product Map sync — виправлено
