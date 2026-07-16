@@ -1235,6 +1235,25 @@ _TOOL_REPLY_TEMPLATES: Dict[str, str] = {
 }
 
 
+def _format_plan_status(result: Dict[str, Any]) -> str:
+    if not result.get("plan_active"):
+        return "📋 Активних 7 або 14 днів зараз немає."
+
+    status_label = (
+        "доставка вправ призупинена"
+        if result.get("state") == "ACTIVE_PAUSED"
+        else "доставка вправ активна"
+    )
+    return (
+        f"📋 Стан: {status_label}\n"
+        f"День {result.get('current_day', 1)} з {result.get('days_total', 0)} · "
+        f"залишилось {result.get('days_remaining', 0)}\n"
+        f"Виконано вправ: {result.get('steps_completed', 0)} з "
+        f"{result.get('steps_total', 0)} "
+        f"({result.get('completion_rate', 0)}%)"
+    )
+
+
 def _humanize_tool_error(tool_name: str, raw: str) -> str:
     """Map raw ValueError messages from plan_runtime/tools.py to user-friendly Ukrainian."""
     r = raw.lower()
@@ -1285,16 +1304,7 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
 
     # Special case: get_plan_status returns a dict to format
     if tool_name == "get_plan_status":
-        if result.get("plan_active"):
-            return (
-                f"📋 Стан: активний план\n"
-                f"День {result.get('current_day', 1)} з {result.get('days_total', 0)} · "
-                f"залишилось {result.get('days_remaining', 0)}\n"
-                f"Виконано вправ: {result.get('steps_completed', 0)} з "
-                f"{result.get('steps_total', 0)} "
-                f"({result.get('completion_rate', 0)}%)"
-            )
-        return "📋 Активного плану зараз немає."
+        return _format_plan_status(result)
 
     # needs_evening_time soft result from create_followup_plan
     if isinstance(result, dict) and result.get("status") == "needs_evening_time":
