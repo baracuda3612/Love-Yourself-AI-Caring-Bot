@@ -15,8 +15,8 @@ when appropriate, direct the user to support.
 
 ## 1. What Love Yourself is
 
-Love Yourself adds a short, concrete action to the workday at a time the user
-chooses in advance.
+Love Yourself adds a short, concrete action to the workday at a time and on
+working days the user chooses in advance.
 
 The basic 7-day format has one moment per working day. The 14-day format adds a
 second moment closer to the end of the working day.
@@ -25,8 +25,9 @@ Each action takes between 30 seconds and 3 minutes. It is not an arbitrary task
 that happens to be short: every exercise uses a specific way to switch through
 movement, breathing, attention, or a brief unload of thoughts.
 
-The user chooses the time once, and the action is already prepared. They do not
-have to decide again in the moment when to pause or what to do.
+The user chooses the time and working days once, and the action is already
+prepared. They do not have to decide again in the moment when to pause or what
+to do.
 
 ---
 
@@ -62,29 +63,33 @@ The user receives one concrete action, not a menu of alternatives.
 
 The first format always lasts 7 working days.
 
-The user receives one short action on each working day at the chosen time.
-Exercises are generated in advance according to defined selection rules, so the
-user does not have to choose what to do each day.
+The user receives one short action on each selected working day at the chosen
+time. Exercises are generated in advance according to defined selection rules,
+so the user does not have to choose what to do each day.
 
 ---
 
-## 5. What happens after 7 days
+## 5. What happens after 7 or 14 days
 
-After completion, the user receives a short summary showing how many actions
-were completed during the 7 working days.
+After completion, the system automatically prepares the next 7 or 14 working
+days in the same format, using the same delivery time and selected working
+days. Seven days are followed by another 7 days, and 14 days by another 14. The
+user does not need to choose or confirm the same format again.
 
-Two options are then available:
+The completion message shows how many exercises were completed and confirms
+that the next 7 or 14 days are ready. The next exercise arrives on the next
+selected working day.
 
-- another 7 working days in the same format;
-- 14 working days with two short actions: one during the day and another closer
-  to the end of the working day.
+The user can pause delivery, cancel the current 7 or 14 days, change the
+delivery time, or switch from the 7-day format to the 14-day format or from 14
+days to 7 days.
 
 ---
 
 ## 6. Who can see what
 
 The user can see their own activity and exercise completion pattern in the
-weekly summary.
+summary for the completed 7 or 14 days.
 
 The company can see only anonymized, aggregated data about how the team uses
 Love Yourself as a whole.
@@ -103,8 +108,8 @@ The Coach receives the current conversation and the available system context
 about the current 7 or 14 days so it can respond consistently without starting
 every conversation from zero.
 
-The conversation, the user's mood, and completion of a previous exercise do not
-change an exercise sequence that has already been generated.
+The user's messages, completed exercises, and missed exercises do not rebuild
+an exercise sequence that has already been generated.
 
 ---
 
@@ -118,6 +123,10 @@ taken care of that.
 The rules preserve the logic of the sequence, separate daytime and evening
 purposes, and prevent the same exercise from appearing too often.
 
+Variation keeps exercises from turning into an automatic ritual. A new or
+long-unseen instruction helps the user genuinely shift attention from work to
+one concrete action for a short time.
+
 Once the current 7 or 14 days have been created, the sequence is not rebuilt
 after each message, missed exercise, or completed exercise.
 
@@ -126,8 +135,8 @@ after each message, missed exercise, or completed exercise.
 ## 9. Why this action is shown now
 
 It is the next exercise in the sequence already generated for the current 7 or
-14 days. It appears now because the time selected by the user during setup has
-arrived.
+14 days. It appears now because the user's currently selected delivery time has
+arrived on one of their selected working days.
 
 The user controls delivery time. If the current time no longer works, it can be
 changed and future exercises will arrive at the new time.
@@ -157,9 +166,11 @@ be resumed, but the user can start a new one later. The selected time and other
 settings remain, so onboarding does not need to be repeated. The user does not
 receive a progress summary for the canceled 7 or 14 days.
 
-The format cannot be changed from 7 to 14 days or from 14 to 7 days while the
-current 7 or 14 days are still running. To switch formats before completion,
-the user must cancel the current one and start a new one in the desired format.
+The format can be switched from 7 to 14 days or from 14 to 7 days. The current
+7 or 14 days then end permanently, and new 7 or 14 days in the selected format
+begin as one user-confirmed action. The first time the user switches to the
+14-day format, they also choose the delivery time for the second, evening
+exercise.
 
 **Change time** moves future exercises to a new time selected by the user.
 
@@ -184,6 +195,11 @@ the time or pause delivery.
 
 An exercise is optional. The user can skip it when they do not have the time,
 ability, or desire to do it, or when their surroundings make it impractical.
+
+The exercise message has two buttons: **Done** and **Skip**. They remain
+available until the end of the user's current local day, then disappear. If the
+user presses neither button, the system records that there was no response and
+counts the exercise as not completed.
 
 The next exercise will arrive according to schedule. If the problem repeatedly
 comes from inconvenient timing, the time can be changed. If the user needs a
@@ -210,10 +226,8 @@ and feel less depleted by the end of the day.
 
 The user can write to the Coach at any time.
 
-The bot initiates only one moment per day in the 7-day format or two moments per
-day in the 14-day format. Every bot-initiated message interrupts the user's
-current activity, so these moments are intentionally limited.
+While the current 7 or 14 days are active, the bot initiates only scheduled
+exercises: one on each selected working day in the 7-day format or two in the
+14-day format.
 
-When the user writes first, no additional interruption is created. The Coach
-can answer questions about Love Yourself, exercises, and available actions or
-support the user in the context of their working day.
+After the 7 or 14 days are completed, the bot also sends a completion message.

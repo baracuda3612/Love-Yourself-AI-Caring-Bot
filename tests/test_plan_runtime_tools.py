@@ -333,10 +333,11 @@ def test_cancel_plan_from_active():
     user = DummyUser("ACTIVE")
     profile = DummyProfile()
 
-    fake_plan = MagicMock(spec=["id", "status", "end_date"])
+    fake_plan = MagicMock(spec=["id", "status", "end_date", "total_days"])
     fake_plan.id = 10
     fake_plan.status = "active"
     fake_plan.end_date = None
+    fake_plan.total_days = 7
 
     # _load_user_and_profile uses filter().first()
     # _get_active_plan uses filter().order_by().first()
@@ -360,7 +361,7 @@ def test_cancel_plan_from_active():
 
     result = tools.cancel_plan(user_id=1)
 
-    assert result == {"status": "ok"}
+    assert result == {"status": "ok", "total_days": 7}
     assert user.current_state == "IDLE_PLAN_ABORTED"
     assert fake_plan.status == "abandoned"
     _scheduler_stub.cancel_plan_step_jobs.assert_called_once_with([3, 4])

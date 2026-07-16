@@ -87,8 +87,8 @@ You actively:
   — without exposing internal mechanics.
 
 - Carry out allowed Love Yourself actions:
-  use runtime tools when the action is allowed in the current state
-  and the user has clearly requested and confirmed it.
+  use runtime tools when the action is available
+  and the user's intent and consent are clear.
 
 ---
 
@@ -97,8 +97,8 @@ You actively:
 You do NOT:
 
 - change plan content, exercises, or plan structure,
-- call a runtime action tool when the action is not allowed in the current state
-  or the user has not clearly requested and confirmed it,
+- call a runtime action tool unless the action is available
+  and the user's intent and consent requirements are satisfied,
 - diagnose, psychologically label, treat, prescribe, or give medical instructions.
 
 ---
@@ -125,21 +125,17 @@ Do not describe state transitions to the user as system mechanics.
 
 ### NO ACTIVE PLAN
 
-States: `IDLE_FINISHED`, `IDLE_PLAN_ABORTED`
+State: `IDLE_PLAN_ABORTED`
 
-Coach behavior depends on why there is no active plan:
+No 7 or 14-day sequence is currently running because the previous one
+was cancelled.
 
-- `IDLE_FINISHED`:
-  briefly acknowledge that the 7 or 14 days were completed,
-  treat it as a small win without overpraising,
-  and explain the next available option naturally.
-  Do not restart onboarding or make the user re-evaluate everything from scratch.
+Respond based on the user's request.
+If the user asks to start again, explain the available 7 and 14-day formats
+and follow the tool and consent rules.
 
-- `IDLE_PLAN_ABORTED`:
-  acknowledge that the previous 7 or 14 days were stopped without judgment.
-  Do not ask the user to justify why they stopped.
-  Keep pressure low and present a return option as naturally available —
-  mention it once, do not repeat or push.
+Do not ask the user to justify the cancellation or proactively push them
+to start again.
 
 ---
 
@@ -148,7 +144,7 @@ Coach behavior depends on why there is no active plan:
 State: `ACTIVE`
 
 A 7 or 14-day plan is currently running.
-Exercises may be scheduled for the user.
+Exercise delivery is active.
 
 Coach behavior depends on the user's intent:
 
@@ -157,7 +153,7 @@ Coach behavior depends on the user's intent:
   use the Product Map as the source of truth for how the product works,
   why this exercise is shown now, and what options are available.
   Explain how to perform a specific exercise only from instructions
-  available in the current context or conversation.
+  available in `current_exercise_context`.
   Do not invent missing product facts or exercise steps.
   When the request requires an action, follow the tool and consent rules.
   Do not change plan content, exercises, or structure.
@@ -229,7 +225,7 @@ and consent.
 
 Do not claim that an action succeeded until the runtime confirms success.
 
-Section 2.4 defines how intent and consent are established.
+Section 2.3 defines how intent and consent are established.
 Section 7 defines available tools, state restrictions,
 tool-specific requirements, and result handling.
 
@@ -249,7 +245,8 @@ When the user brings up a serious or potentially harmful situation:
 respond with emotional support, do not minimize the concern,
 and do not redirect it into productivity or plan completion.
 Do not decide the outcome for the user.
-If safety or crisis rules apply, follow the dedicated safety guidance.
+If the Immediate Safety Risk conditions in Section 6.1 apply,
+follow Section 6.1.
 
 ---
 
@@ -323,9 +320,9 @@ and workday emotional context:
 
 ---
 
-## 2.4 User Intent and Consent
+## 2.3 User Intent and Consent
 
-Before calling a runtime tool that changes the user's plan state,
+Before calling a runtime tool that changes the user's product state,
 delivery time, future exercise delivery, or creates a new 7 or 14-day plan:
 
 - identify the specific action the user wants,
@@ -548,7 +545,7 @@ Before calling a runtime tool:
 - the tool must be allowed in the current product state,
 - all required arguments must be available,
 - for any operation that changes product state, delivery time, future delivery,
-  or creates new 7 or 14 days, the consent requirements in Section 2.4
+  or creates new 7 or 14 days, the consent requirements in Section 2.3
   must be satisfied,
 - the Immediate Safety Risk rule in Section 6.1 must not apply.
 
@@ -741,13 +738,13 @@ def _build_idle_finished_context(
 def _context_message(payload: Dict[str, Any]) -> str:
     context = {
         "current_time": payload.get("temporal_context"),
-        "fsm_state": payload.get("current_state"),
+        "current_state": payload.get("current_state"),
     }
     completion_context = payload.get("completion_context")
     if completion_context is not None:
         context["completion_context"] = completion_context
     return (
-        "Context block (treat as remembered facts; do not expose directly):\n"
+        "Current runtime context (use only as provided; do not expose internal field names):\n"
         + json.dumps(context, ensure_ascii=False, indent=2)
     )
 
@@ -797,83 +794,180 @@ def _normalize_content(content: Any) -> str:
     return str(content)
 
 
-# OpenAI tool definitions — registered with every Coach API call.
-# Coach calls one of these when the user clearly intends a runtime action.
-# Execution happens in orchestrator._execute_plan_tool (T5.8B).
-COACH_TOOLS = [
+# OpenAI tool definitions for the target Coach runtime contract.
+# State availability is enforced before tools are sent to the model
+# (see _coach_tools_for_state / _TOOL_NAMES_BY_STATE below).
+# Tool-specific invariants (e.g. evening_slot_collected, pending 14-day
+# flow) must also be enforced by the runtime implementation — this
+# schema layer does not replace those runtime guards.
+
+_EMPTY_PARAMETERS: Dict[str, Any] = {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": False,
+}
+
+_HHMM_PARAMETERS: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "hhmm": {
+            "type": "string",
+            "pattern": r"^(?:[01]\d|2[0-3]):[0-5]\d$",
+            "description": "Resolved local time in 24-hour HH:MM format, e.g. 20:30.",
+        },
+    },
+    "required": ["hhmm"],
+    "additionalProperties": False,
+}
+
+COACH_TOOLS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "name": "create_followup_plan",
-        "description": "Create a follow-up plan after a plan has ended (IDLE_FINISHED, IDLE_DROPPED, IDLE_PLAN_ABORTED). plan_type must be SHORT (7 days) or MEDIUM (14 days, needs evening time).",
+        "description": (
+            "Create a new 7- or 14-working-day sequence after the previous "
+            "sequence was cancelled. Use only in IDLE_PLAN_ABORTED after the "
+            "user requests a new sequence. plan_type is SHORT for 7 working "
+            "days or MEDIUM for 14 working days."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
-                "plan_type": {"type": "string", "enum": ["SHORT", "MEDIUM"], "description": "7 days = SHORT, 14 days = MEDIUM"},
+                "plan_type": {
+                    "type": "string",
+                    "enum": ["SHORT", "MEDIUM"],
+                    "description": (
+                        "SHORT means 7 working days. "
+                        "MEDIUM means 14 working days."
+                    ),
+                },
             },
             "required": ["plan_type"],
+            "additionalProperties": False,
         },
+        "strict": True,
     },
     {
         "type": "function",
         "name": "record_evening_time",
-        "description": "Save the user's evening delivery time for first-time collection only (evening_slot_collected is false). Use only when the user chose a 14-day plan and has just provided a concrete HH:MM. Do NOT use to change an already-configured evening time — use change_evening_time for that.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "hhmm": {"type": "string", "description": "Time in HH:MM format, e.g. 20:30"},
-            },
-            "required": ["hhmm"],
-        },
+        "description": (
+            "Save the first evening delivery time while creation of a 14-day "
+            "sequence is waiting for it. Use only after the user provides an "
+            "unambiguous local time and no evening time is configured. "
+            "Do not use to change an existing evening time."
+        ),
+        "parameters": _HHMM_PARAMETERS,
+        "strict": True,
     },
     {
         "type": "function",
         "name": "change_day_time",
-        "description": "Change the daytime delivery time. Use only when the user clearly wants to change the time and provides a concrete HH:MM.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "hhmm": {"type": "string", "description": "New time in HH:MM format"},
-            },
-            "required": ["hhmm"],
-        },
+        "description": (
+            "Change the saved daytime delivery time after a direct and "
+            "unambiguous user request. Normalize the user's local time to "
+            "a 24-hour HH:MM argument. Do not call if the time is ambiguous."
+        ),
+        "parameters": _HHMM_PARAMETERS,
+        "strict": True,
     },
     {
         "type": "function",
         "name": "change_evening_time",
-        "description": "Change an already-configured evening delivery time. Use only when the user has an existing evening slot and wants to change it. Do NOT use for first-time evening time collection — use record_evening_time for that.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "hhmm": {"type": "string", "description": "New time in HH:MM format"},
-            },
-            "required": ["hhmm"],
-        },
+        "description": (
+            "Change an already configured evening delivery time after a direct "
+            "and unambiguous user request. Normalize the user's local time to "
+            "a 24-hour HH:MM argument. Do not use for first-time collection."
+        ),
+        "parameters": _HHMM_PARAMETERS,
+        "strict": True,
     },
     {
         "type": "function",
         "name": "pause_plan",
-        "description": "Pause an active plan. Delivery stops until resume. Use only when the user confirms they want to pause.",
-        "parameters": {"type": "object", "properties": {}, "required": []},
+        "description": (
+            "Pause exercise delivery for an ACTIVE sequence after a direct "
+            "and unambiguous user request. The remaining sequence is preserved."
+        ),
+        "parameters": _EMPTY_PARAMETERS,
+        "strict": True,
     },
     {
         "type": "function",
         "name": "resume_plan",
-        "description": "Resume a paused plan. Use only when the user confirms they want to resume.",
-        "parameters": {"type": "object", "properties": {}, "required": []},
+        "description": (
+            "Resume exercise delivery for an ACTIVE_PAUSED sequence after a "
+            "direct and unambiguous user request. Delivery continues with the "
+            "next remaining day."
+        ),
+        "parameters": _EMPTY_PARAMETERS,
+        "strict": True,
     },
     {
         "type": "function",
         "name": "cancel_plan",
-        "description": "Cancel an active or paused plan permanently. Requires explicit user confirmation. If the user said 'stop' without 'permanently' or 'forever', first offer pause as a reversible alternative. Explain cancellation is irreversible before calling.",
-        "parameters": {"type": "object", "properties": {}, "required": []},
+        "description": (
+            "Permanently cancel the current ACTIVE or ACTIVE_PAUSED sequence. "
+            "Use only after the user confirms cancellation after its practical "
+            "consequences were explained. If pause versus cancellation is "
+            "ambiguous, clarify neutrally instead of calling this tool."
+        ),
+        "parameters": _EMPTY_PARAMETERS,
+        "strict": True,
     },
     {
         "type": "function",
         "name": "get_plan_status",
-        "description": "Get the user's current plan status, including the current day, days remaining, and completion progress. Use when the user asks questions such as 'what day am I on?', 'how many days are left?', 'how is my progress?', or 'what is my current status?', and the needed information is not already in context.",
-        "parameters": {"type": "object", "properties": {}, "required": []},
+        "description": (
+            "Retrieve factual status and progress for the current sequence "
+            "when the user asks for information not already in context. "
+            "Supported facts are whether a sequence exists, whether it is "
+            "active or paused, current and total days, days remaining, "
+            "completed and total exercise counts, and completion percentage. "
+            "Do not use for exercise content, historical results, "
+            "recommendations, or future sequences. Read-only; no confirmation "
+            "required."
+        ),
+        "parameters": _EMPTY_PARAMETERS,
+        "strict": True,
     },
 ]
+
+
+_TOOL_NAMES_BY_STATE: Dict[str, set] = {
+    "ACTIVE": {
+        "pause_plan",
+        "cancel_plan",
+        "change_day_time",
+        "change_evening_time",
+        "get_plan_status",
+    },
+    "ACTIVE_PAUSED": {
+        "resume_plan",
+        "cancel_plan",
+        "change_day_time",
+        "change_evening_time",
+        "get_plan_status",
+    },
+    "IDLE_PLAN_ABORTED": {
+        "create_followup_plan",
+        "record_evening_time",
+        "change_day_time",
+        "change_evening_time",
+        "get_plan_status",
+    },
+}
+
+
+def _coach_tools_for_state(current_state: Any) -> List[Dict[str, Any]]:
+    """Filter COACH_TOOLS down to what the current product state allows.
+
+    Mirrors the "Tool Availability by State" table in Section 7 of
+    COACH_SYSTEM_PROMPT — that table stops being the only enforcement
+    point once this filter is applied before the API call.
+    """
+    allowed_names = _TOOL_NAMES_BY_STATE.get(str(current_state or ""), set())
+    return [tool for tool in COACH_TOOLS if tool["name"] in allowed_names]
 
 
 async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -891,14 +985,18 @@ async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
         context_payload["completion_context"] = completion_context
 
     messages = _compose_messages(context_payload)
+    available_tools = _coach_tools_for_state(context_payload.get("current_state"))
+
+    request_kwargs: Dict[str, Any] = {
+        "model": settings.COACH_MODEL,
+        "input": messages,
+        "max_output_tokens": settings.MAX_TOKENS,
+    }
+    if available_tools:
+        request_kwargs["tools"] = available_tools
 
     try:
-        response = await async_client.responses.create(
-            model=settings.COACH_MODEL,
-            input=messages,
-            max_output_tokens=settings.MAX_TOKENS,
-            tools=COACH_TOOLS,
-        )
+        response = await async_client.responses.create(**request_kwargs)
     except Exception as exc:
         logger.error("[coach_model_unavailable] %s: %s", exc.__class__.__name__, exc, exc_info=True)
         return {

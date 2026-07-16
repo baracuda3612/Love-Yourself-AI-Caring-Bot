@@ -1,75 +1,74 @@
 # Prompt Review — TODO (відкриті задачі між сесіями)
 
-## НАСТУПНА СЕСІЯ починає тут: integration pass перед merge PR #245 — НЕ МЕРДЖИТИ поки не зроблено
+## Product Map target-contract update (2026-07-16)
+
+Синхронно оновлено українську та англійську Product Map:
+- час доставки доповнено обраними робочими днями;
+- після завершення 7 днів автоматично готуються наступні 7, після 14 —
+  наступні 14, зі збереженням формату, часу та робочих днів;
+- completion message описано окремо від вправ;
+- зміну 7 ↔ 14 зафіксовано як одну підтверджену atomic operation;
+- при першому переході на 14 днів збирається час другої, вечірньої вправи;
+- пояснено користувацьку цінність варіативності вправ без internal selection
+  fields і без клінічних фреймів;
+- `weekly summary` замінено на summary за завершені 7 або 14 днів;
+- прибрано `user's mood` з опису незмінності сформованої послідовності;
+- додано lifecycle кнопок `Виконано` / `Пропустити`;
+- bot-initiated messages звужено до scheduled exercises + completion message.
+
+Product Map тут описує цільовий контракт. Automatic continuation і atomic
+`switch_plan_format` ще мають бути реалізовані в backend до production.
+
+### Exercise response window: runtime audit
+
+Product Map фіксує user-facing контракт: кнопки `Виконано` і `Пропустити`
+доступні до кінця локального календарного дня; без відповіді вправа
+враховується як невиконана.
+
+Поточний runtime майже відповідає цьому контракту, але потребує окремої
+перевірки в MVP-аудиті:
+- `expires_at` правильно розраховується як `23:59:59` у timezone юзера;
+- `expire_overdue_steps()` запускається періодично, тому фактичне зникнення
+  кнопок може відбутися з технічним лагом після опівночі;
+- step отримує статус `expired`, а `task_ignored` зараз створюється окремим
+  `check_ignored_tasks()` через sliding 24-hour window о 08:00 UTC;
+- треба звести expiry, видалення клавіатури та ignored telemetry до одного
+  локально-денного lifecycle і перевірити race біля опівночі.
+
+### Beta idea: progressive exercise discovery
+
+Не додавати в поточний Product Map і не обіцяти в MVP. Перевірити на одній із
+бет retention-гіпотезу: після завершення циклу повідомляти, що в наступній
+послідовності з'явиться одна ще не показана вправа.
+
+Принципи експерименту:
+- discovery відкривається за завершення циклу, не за високий completion rate;
+- без дитячих `levels`, балів чи покарання за пропуски;
+- нова вправа додається до нормальної ротації разом із уже знайомими;
+- потрібна телеметрія показаних `exercise_id`;
+- спочатку перевірити достатність бібліотеки: з 8 активними вправами нову
+  вправу щотижня стабільно обіцяти не можна.
+
+## Integration status — target Coach contract (2026-07-16)
 
 PR [#245](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/245)
-відкритий, **не мерджити**. Незалежний рев'ю (кодекс) перевірив файл
-з диска і remote SHA (`eb3aa82`) — версії локально/на GitHub не
-роз'їхались, файловий scope PR чистий (жодних `.DS_Store`/`.venv`/`R&D`/
-чужих файлів). Проблема інша: **весь prompt cleanup застосовувався до
-`COACH_SYSTEM_PROMPT`, але не синхронізувався з іншими джерелами правди
-в тому самому файлі** — класичний duplicate source of truth drift, не
-git-проблема і не проблема пам'яті чату.
+навмисно закладає цільовий Coach contract, а не тимчасово відновлює
+старі manual fallback-шляхи.
 
-**Не робити повторний повний рефакторинг файлу.** Потрібен вузький
-integration pass по 5 стиках:
-```
-1. COACH_SYSTEM_PROMPT ↔ COACH_TOOLS
-2. Section 4 ↔ _context_message() / _compose_messages()
-3. Product Map ↔ фактичний lifecycle
-4. Section 7 ↔ orchestrator execution/result handling
-5. Tool descriptions ↔ runtime guards і аргументи
-```
+Зафіксовано:
+- `create_first_plan` не повертається в Coach tools;
+- `create_followup_plan` доступний Coach лише в `IDLE_PLAN_ABORTED`;
+- `IDLE_FINISHED` не отримує Coach tools;
+- відсутні deterministic first-plan creation та automatic continuation
+  залишаються backend-задачами MVP-аудиту, а не причиною повертати
+  стару архітектуру в цей PR;
+- `COACH_TOOLS`, state-filtering і runtime-context framing приведені до
+  цільового контракту;
+- релевантну доступну альтернативу після недоступної дії дозволено
+  згадати; це UX recovery, не автоматичний retention push.
 
-**Merge-blocker (обов'язково перед merge):**
-
-1. **`COACH_TOOLS` не синхронізовано з фінальною Section 7.**
-   Файл: `app/workers/coach_agent.py:803` (номер рядка орієнтовний,
-   звірити заново). Конкретно:
-   - `create_followup_plan` tool description досі дозволяє
-     `IDLE_FINISHED` та `IDLE_DROPPED` — Section 7 звузила до тільки
-     `IDLE_PLAN_ABORTED`.
-   - time tools (`change_day_time`/`change_evening_time`/
-     `record_evening_time`) tool descriptions досі вимагають від
-     користувача писати точний `HH:MM` — Section 7 Time Arguments
-     дозволяє natural language з нормалізацією на боці Coach.
-   - `cancel_plan` tool description досі містить старий keyword-парсер
-     `"permanently"/"forever"` і наказ пропонувати pause — Section 7
-     це прибрала (neutral disambiguation, не steering).
-
-   **Чому це особливо погано:** модель бачить `COACH_SYSTEM_PROMPT` і
-   `COACH_TOOLS` разом в одному API-виклику — два суперечливі контракти
-   одночасно, не "стара версія десь забута", а активна суперечність
-   яку модель отримує щоразу.
-
-2. **`_context_message()` досі каже `"treat as remembered facts"`.**
-   Файл: `app/workers/coach_agent.py:750` (орієнтовно). Section 4
-   навмисно прибрала весь "as if you remember" framing (Memory
-   Honesty) — цей рядок у коді нижче промпту досі суперечить.
-
-3. **Section 7 досі містить пропущений `Mention an available
-   alternative...` рядок.** Файл: `app/workers/coach_agent.py:668`
-   (орієнтовно). Фінальне рішення — прибрати retention-offer,
-   тільки пояснювати недоступність дії без пропозиції альтернативи.
-   Проста мікроправка, яку не встигли застосувати.
-
-4. **Product Map (`conceptual_map.md:71`) досі описує старий вибір
-   після завершення 7 днів**, не `FD-01` auto-continuation. Це вже
-   відоме відкладене питання (Product Map lifecycle — Section 2.5
-   TODO записи вище), але оскільки документ **постійно передається
-   Coach-у** (`COACH_PRODUCT_MAP` в кожному API-виклику), конфлікт
-   реальний, не гіпотетичний — Coach бачить дві версії lifecycle
-   одночасно.
-
-**Тести на момент рев'ю:** `25 passed, 2 failed` — обидва fails через
-відсутній `trio` в environment, той самий давній issue, не пов'язаний
-з цією роботою. Python компілюється. У changelog є trailing whitespace
-— косметика, не блокер.
-
-**Статус:** PR лишається відкритим, не мерджити. Наступна сесія починає
-з цих 4 пунктів (COACH_TOOLS sync — найважливіший, потім два
-one-line фікси, потім Product Map lifecycle рядок), не з повного
-перечитування файлу.
+PR не вважати production-ready, доки backend не реалізує відсутні
+lifecycle-механізми та Bounded Tool-Result Loop, зафіксований нижче.
 
 ## Sequencing decision: фінальний прохід Section 1-2 — ПІСЛЯ завершення MVP-аудиту
 
@@ -399,20 +398,21 @@ cleanup audit). Все фіксується коректно (кожен бло�
 Не робити зараз — зупинить темп Section 7. Робити одним окремим проходом
 після завершення всього промпт-рев'ю.
 
-## Product decision: switch_plan_format — новий tool, не MVP цієї сесії
+## Product decision: switch_plan_format — CONFIRMED founder decision, ціль зафіксована в Product Map (2026-07-16)
 
-**Знахідка:** `create_followup_plan` звужено до `IDLE_PLAN_ABORTED` (див.
-запис нижче). Але лишається відкрита продуктова діра: перехід між 7 і
-14-денним форматом **з активного стану** (`ACTIVE`/`ACTIVE_PAUSED`).
+**Знахідка:** `create_followup_plan` звужено до `IDLE_PLAN_ABORTED`. Але
+лишається відкрита продуктова діра: перехід між 7 і 14-денним форматом
+**з активного стану** (`ACTIVE`/`ACTIVE_PAUSED`).
 
-Зараз єдиний шлях — `скасуй → підтверди → почни новий → обери формат`.
-Це зайва фрикція: юзер каже "спробуємо інший формат" і отримує вимогу
-спершу скасувати поточний, хоча його намір — просто замінити один
-формат на інший, не "зупинити назавжди".
+Стара версія: `скасуй → підтверди → почни новий → обери формат` — зайва
+фрикція: юзер каже "спробуємо інший формат" і отримує вимогу спершу
+скасувати поточний, хоча його намір — просто замінити один формат на
+інший, не "зупинити назавжди".
 
-**Рішення:** не перевантажувати цим `create_followup_plan` (це інша
-бізнес-операція — atomic replacement, не creation-after-completion).
-Потрібен окремий deterministic tool `switch_plan_format(plan_type)`:
+**Рішення (CONFIRMED, не рекомендація):** не перевантажувати цим
+`create_followup_plan` (це інша бізнес-операція — atomic replacement,
+не creation-after-completion). Потрібен окремий deterministic tool
+`switch_plan_format(plan_type)`:
 - доступний з `ACTIVE` і `ACTIVE_PAUSED`;
 - користувач один раз підтверджує перехід і наслідки;
 - система атомарно завершує стару послідовність і створює нову;
@@ -422,26 +422,44 @@ cleanup audit). Все фіксується коректно (кожен бло�
 - не два окремі виклики (`cancel_plan` + `create_followup_plan`), а
   один atomic tool.
 
-**Статус:** product decision зафіксовано, **не MVP-задача цієї сесії**.
+**Product Map вже оновлено під цю цільову модель** (2026-07-16,
+`conceptual_map.md`/`conceptual_map_en.md`, розділ 5 і розділ про
+скасування): описує формат-switch як "one user-confirmed action".
+Це навмисно — Product Map описує **цільову архітектуру**, той самий
+принцип що й скрізь у цьому prompt cleanup (target contract зараз,
+backend наздоганяє пізніше).
+
+**Тимчасовий розрив (прийнятний, той самий клас що create_first_plan/
+IDLE_FINISHED — 0 продакшн-юзерів, режим ремонту):** `switch_plan_format`
+tool **ще не реалізований** — немає ні в `plan_runtime/tools.py`, ні в
+`COACH_TOOLS`, ні в orchestrator registry. Якщо юзер зараз попросить
+"перейти на 14 днів" з `ACTIVE`, Coach прочитає в Product Map що це
+"одна дія", але фізично матиме тільки `cancel_plan` +
+`create_followup_plan` (два кроки, другий тільки з `IDLE_PLAN_ABORTED`).
+До реалізації tool-а Coach має пояснювати наявний двокроковий шлях,
+не обіцяти atomic switch якого не може виконати.
+
+**Статус:** founder-рішення прийняте й зафіксоване в обох Product Map.
 Реалізація tool-а — окрема backend-задача (новий tool в
 `plan_runtime/tools.py`, новий entry в `COACH_TOOLS` і orchestrator
-registry, коли буде готовий). До того — Coach просто пояснює наявний
-шлях (скасувати й почати новий) через `2.4 User Intent and Consent`.
+registry). До реалізації — тримати в увазі розрив між Product Map і
+Coach tool-list вище.
 
-## Product decision: default continuation format after completion
+## Product decision: default continuation format after completion — RESOLVED 2026-07-16
 
 **Питання:** коли `FD-01` (auto-continuation) імплементований — після
 завершення 7-денного плану дефолт наступний теж 7-денний. А після
 завершення **14-денного**? Наступний за замовчуванням 14, чи 7?
 
-**Рекомендація (зафіксована, не остаточне рішення):** автоматично
-продовжувати **останній обраний формат**. Відповідає ментальній моделі
-юзера: система продовжує встановлений ритм, доки він сам не попросить
-інший — а не скидає на дефолтний найкоротший формат щоразу.
+**Рішення:** автоматично продовжувати **останній обраний формат**. Після
+7-денного формату система готує наступні 7 робочих днів; після 14-денного —
+наступні 14. Зберігаються поточний формат, час доставки та обрані робочі дні.
 
-**Статус:** рекомендація, потребує founder-підтвердження перед
-імплементацією `FD-01`-логіки в бекенді. Не промпт-задача — фіксується
-тут для видимості при наступному раунді backend-аудиту.
+Це відповідає ментальній моделі юзера: система продовжує встановлений ритм,
+доки він сам не попросить інший, а не скидає його на коротший формат.
+
+**Статус:** founder-рішення прийняте й синхронізоване в обох Product Map.
+Backend-реалізація лишається частиною `FD-01`/MVP-аудиту.
 
 ## НАСТУПНА СЕСІЯ починає тут: Section 7 Tool Calls — стан на 2026-07-11
 

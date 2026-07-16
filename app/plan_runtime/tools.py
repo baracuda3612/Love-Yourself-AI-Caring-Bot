@@ -267,7 +267,11 @@ def cancel_plan(user_id: int) -> dict:
 
         plan = _get_active_plan(db, user_id)
         step_ids: list[int] = []
+        total_days: int | None = None
         if plan:
+            raw_total_days = getattr(plan, "total_days", None)
+            if raw_total_days is not None:
+                total_days = int(raw_total_days)
             rows = (
                 db.query(AIPlanStep.id)
                 .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
@@ -288,7 +292,7 @@ def cancel_plan(user_id: int) -> dict:
         cancel_plan_step_jobs(step_ids)
 
     logger.info("[plan_runtime] cancel_plan: user=%s step_ids_canceled=%d", user_id, len(step_ids))
-    return {"status": "ok"}
+    return {"status": "ok", "total_days": total_days}
 
 
 def get_plan_status(user_id: int) -> dict:

@@ -1231,7 +1231,7 @@ _TOOL_REPLY_TEMPLATES: Dict[str, str] = {
     "get_plan_status":      None,   # returns dynamic data — formatted below
     "pause_plan":           "⏸ План поставлено на паузу. Завдання не надходитимуть до відновлення.",
     "resume_plan":          "▶️ План відновлено. Завдання повернуться за розкладом.",
-    "cancel_plan":          "🛑 План зупинено. Твоя статистика збережена.",
+    "cancel_plan":          "🛑 Поточну серію вправ скасовано.",
 }
 
 
@@ -1316,6 +1316,11 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
                 logger.error("[TOOL] cascade create_followup_plan(MEDIUM) user=%s: %s", user_id, exc, exc_info=True)
                 # pending_action preserved — user can retry
                 return "⚠️ Час збережено, але план не вдалось запустити. Спробуй ще раз."
+
+    if tool_name == "cancel_plan":
+        total_days = result.get("total_days")
+        if total_days in {7, 14}:
+            return f"🛑 Поточні {total_days} днів скасовано."
 
     template = _TOOL_REPLY_TEMPLATES.get(tool_name, "✅ Готово.")
     return template
