@@ -81,17 +81,16 @@ conversation"), перенумеровано `2.4 → 2.3`, точний pointer
 6.1` замість розмитого "dedicated safety guidance". Це виправлення
 конкретних багів/розсинхронів, не audit-informed рерайт.
 
-**Досі відкрито:** повний фінальний прохід Section 2 (System Awareness
-& Boundaries) — з урахуванням Privacy межі (individual vs
-company-facing), Content library (slot not user-facing), Delivery
-renderer P0, Plan generation (SHORT/state_switch) — ці блоки
-`pre_mvp_code_audit_findings.md` **ще не пройдені**. Причина чекати та
-сама: переписати Section 2 під часткові знахідки зараз means редагувати
-той самий текст ще раз коли решта аудиту принесе нові рішення.
+**Досі відкрито:** повний фінальний прохід усього промпту (не тільки
+Section 2) — з урахуванням Privacy межі (individual vs company-facing),
+Content library (slot not user-facing), Delivery renderer P0, Plan
+generation (SHORT/state_switch) — ці блоки `pre_mvp_code_audit_findings.md`
+**ще не пройдені**. Причина чекати та сама: переписати промпт під
+часткові знахідки зараз means редагувати той самий текст ще раз коли
+решта аудиту принесе нові рішення.
 
-**Наслідок:** Section 1 можна вважати стабільним (тон/персона, низька
-залежність від продуктової механіки). Section 2 — точкові баги
-виправлені, але **повний узгоджений прохід все ще чекає** Privacy/
+**Наслідок:** точкові баги в промпті виправлені (Section 1-7), але
+**повний узгоджений прохід усього промпту все ще чекає** Privacy/
 Content Library/Delivery Renderer/Plan Generation з аудиту.
 
 ## Architecture decision: Bounded Tool-Result Loop — P1, до першого зовнішнього MVP-юзера
