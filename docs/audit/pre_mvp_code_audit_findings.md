@@ -13,10 +13,11 @@ The goal is to identify what must be fixed, frozen, removed, or verified before 
 
 ## Source of truth
 
-1. `product contract.txt` — baseline product contract.
+1. `docs/audit/product_contract.md` — baseline product contract.
 2. Founder decisions in this file — override baseline when newer.
-3. Area audit findings — factual code observations, not product decisions.
-4. Audit discussions — context only, already distilled into findings below.
+3. `resource/assets/product/conceptual_map.md` and `conceptual_map_en.md` — synchronized user-facing product facts; lifecycle changes must stay aligned with the founder decisions and contract.
+4. Area audit findings — factual code observations, not product decisions.
+5. Audit discussions — context only, already distilled into findings below.
 
 ---
 
@@ -27,7 +28,7 @@ The goal is to identify what must be fixed, frozen, removed, or verified before 
 - Findings must map to the Product Contract or accepted audit decisions.
 - Each finding must have severity, status, current behavior, expected behavior, and minimal fix.
 - Coach prompt has been rewritten (all 7 sections, integration pass done, PR #246 open) and is now in scope — see "Coach / Orchestrator Integration Findings" below.
-- Old product documents are not source of truth unless explicitly referenced by `product contract.txt`.
+- Old product documents are not source of truth unless explicitly referenced by `docs/audit/product_contract.md`.
 - If a finding is unclear, mark it as `UNCLEAR` and specify what file/function must be inspected next.
 
 ---
@@ -62,7 +63,7 @@ Insufficient evidence. Needs inspection of another file or code path.
 
 # New Founder Decisions
 
-## FD-01 — Default opt-in next 7-day plan after completion
+## FD-01 — Automatic same-format continuation after completion
 
 Status: accepted  
 Priority: P1  
@@ -73,32 +74,34 @@ Area: Completion / Retention / Lifecycle
 Old flow:
 
 ```text
-completion report → user chooses next plan
+completion report → user chooses the next 7- or 14-day format
 ````
 
 New flow:
 
 ```text
-completion report → next 7-day plan is already prepared by default
+completed 7 days → next 7 days are already prepared
+completed 14 days → next 14 days are already prepared
 ```
 
 ### Decision
 
-After a user completes a 7-working-day plan, the system automatically creates the next 7-working-day plan with the same DAY time and the same work_days.
+After a user completes a 7- or 14-working-day plan, the system automatically creates the next period in the same format with the same delivery time or times and the same `work_days`.
 
 The completion report is not the end of the relationship. It is a bridge between two plans.
 
-The default next plan is always the same 7-day rhythm.
+The default is same-format continuation: 7→7 and 14→14.
 
 ### Default behavior
 
-* create the next SHORT / 7-working-day plan automatically;
-* reuse the same DAY delivery time;
+* create the next plan automatically from the completed plan's canonical format: `SHORT`→`SHORT`, `MEDIUM`→`MEDIUM`;
+* reuse the same DAY delivery time and, for 14 days, the configured EVENING time;
 * reuse the same work_days;
-* do not ask the user to choose another 7-day plan;
-* do not ask for evening time;
+* start on the next selected working day;
+* do not ask the user to reconfirm the same format;
+* do not ask for evening time again when it is already configured;
 * do not collect new onboarding data;
-* do not push the user toward 14-day format by default.
+* do not push the user toward a different format by default.
 
 ### User control
 
@@ -107,7 +110,7 @@ User can still:
 * stop / cancel;
 * pause;
 * change time;
-* choose 14-day format;
+* explicitly switch 7↔14 through the dedicated format-switch flow;
 * write Coach.
 
 ### User-facing framing
@@ -115,17 +118,17 @@ User can still:
 Example:
 
 ```text
-Я підготував наступний тиждень у тому ж ритмі.
+Наступні 7 або 14 робочих днів уже готові в тому самому ритмі.
 Перший таск прийде [date] о [HH:MM].
 
-Якщо хочеш змінити час або зупинитись — просто скажи.
+Якщо хочеш змінити формат, час або зупинитись — просто скажи.
 ```
 
 ### Rationale
 
 The gap after completion is a high-risk churn point.
 
-Default continuation reduces friction while preserving user agency.
+Same-format continuation reduces friction while preserving user agency.
 
 The user does not need to recommit to the same behavior they already accepted.
 
@@ -133,15 +136,15 @@ This is not coercion because opt-out, pause, cancel, change time, and switch-to-
 
 ### Code implications
 
-* completion handler creates next SHORT plan automatically;
+* completion handler derives the canonical format from the completed plan and creates the same format automatically;
 * next plan starts on the next valid workday;
-* next plan uses the existing DAY time and existing work_days;
+* next plan uses the existing DAY time, existing work_days, and the existing EVENING time for `MEDIUM`;
 * no new onboarding;
 * no duration choice;
-* no evening time;
-* report copy changes from “choose next plan” to “next week is ready”;
-* 14-day becomes an optional switch, not the default CTA;
-* no mini-onboarding is needed for default 7-day continuation.
+* no repeated evening-time collection for an existing 14-day format;
+* report copy changes from “choose next plan” to “the next period is ready”;
+* switching 7↔14 remains an optional explicit action, not the default CTA;
+* no mini-onboarding is needed for same-format continuation.
 
 ---
 
@@ -166,7 +169,8 @@ user completes/skips the last task before expiry
 user does not press completed/skipped
 → task expires at the end of its window
 → completion buttons are removed
-→ next-day cron finalizes the plan and sends the completion report
+→ normal path finalizes and reports on the next selected work day at the saved DAY time
+→ fixed UTC cron remains a recovery safety net only
 ```
 
 Do not use a two-hour delay as lifecycle logic. At that point the task window is still open, the user may still act, and the report metrics may change afterward.
@@ -176,7 +180,8 @@ Do not use a two-hour delay as lifecycle logic. At that point the task window is
 * remove `_maybe_schedule_plan_completion` as a two-hour report trigger;
 * `task_complete` / `task_skip` handle the fast active-action path;
 * expiry closes unanswered task buttons;
-* `check_plan_completions` remains the no-action safety path;
+* the normal no-action path resolves the user's timezone, next selected work day, and saved DAY time;
+* `check_plan_completions` remains a fixed-UTC recovery safety net;
 * the current plan must be finalized before its completion report is sent.
 
 ---
@@ -461,7 +466,7 @@ Active user path:
 user presses completed/skipped on last task
 → system closes plan loop quickly
 → completion report arrives in 1–2 minutes
-→ next 7-day plan is prepared by default
+→ next period in the same 7- or 14-day format is prepared by default
 ```
 
 Fallback path:
@@ -470,7 +475,8 @@ Fallback path:
 user does not press anything
 → task window closes / task expires
 → completion buttons are removed
-→ next-day cron finalizes the plan and sends the report
+→ next selected work day at the saved DAY time finalizes and sends the report
+→ fixed UTC cron is recovery only
 ```
 
 ### Why it matters
@@ -488,9 +494,9 @@ In `task_complete` and `task_skip` handler:
 1. update step status;
 2. check if this is the last step of the current plan;
 3. if yes, trigger completion report with short delay;
-4. continue into the default next 7-day plan according to FD-01.
+4. continue into the same 7- or 14-day format according to FD-01.
 
-Remove the 2-hour delivery-based completion trigger. Use expiry + next-day cron for the no-action path.
+Remove the 2-hour delivery-based completion trigger. Use expiry + the user's next selected work day and DAY time for the normal no-action path; keep the fixed UTC cron as recovery only.
 
 ### Founder decision needed
 
@@ -610,9 +616,9 @@ C7 is already accepted: adaptation does not trigger at all on MVP.
 
 # Lifecycle Completion Findings
 
-## Lifecycle Completion Area — Audit Round 2026-07-03
+## Lifecycle Completion Area — Audit Round 2026-07-03, revalidated 2026-07-16
 
-Status: completed and accepted
+Status: completed, revalidated against the current Product Map and MVP contract
 
 ### Files inspected
 
@@ -623,11 +629,16 @@ Status: completed and accepted
 * `app/plan_finalization.py`
 * `app/plan_completion/report.py`
 * `app/plan_completion/cta.py`
+* `app/plan_completion/metrics.py`
+* `app/plan_completion/timeline.py`
+* `app/plan_completion/tokens.py`
 * `app/api.py`
+* `app/templates/completion_report.html`
+* completion-related tests in `tests/`
 
 ### Summary
 
-Task status writes work, but lifecycle completion is not wired correctly. The two-hour trigger can send a report while the old plan is still active. Fast completion from the task callbacks is missing, automatic default continuation is not connected, and the report/CTA still implement the old plan-choice flow.
+Task status writes and local-day plan scheduling work, but the completion lifecycle is not wired correctly. The two-hour trigger can send a report while the old plan is still active. Fast completion from task callbacks is missing, the no-action path ignores the user's DAY time and selected work days, automatic same-format continuation is not connected, and the report/CTA still implement the old duration/load/focus lifecycle. Report delivery is also not durable enough to guarantee the Product Map promise that every completed period receives a summary.
 
 ### Accepted findings
 
@@ -640,10 +651,12 @@ Status: confirmed
 
 #### LIF-02 — Last-task detection and fast completion trigger are missing
 
-Severity: P1  
+Severity: P1
 Status: confirmed
 
 The callbacks do not detect the final task and do not trigger completion within 1–2 minutes. They only update the step and send a task-level acknowledgement.
+
+For a 14-day period, “last task” must mean that no other non-terminal step remains in the plan, not merely that the clicked exercise is last by time or order. Completion must not fire while the second exercise for that working day is still actionable.
 
 #### LIF-03 — Completion report is sent before plan finalization
 
@@ -664,37 +677,37 @@ The user can receive a completed-plan report while the plan and user are still `
 
 Minimal fix: remove the two-hour trigger and ensure the old plan is actually finalized before its completion report is sent.
 
-#### LIF-04 — Existing follow-up SHORT functionality is not connected
+#### LIF-04 — Automatic same-format continuation is not connected
 
 Severity: P1  
 Status: confirmed
 
-`create_followup_plan(user_id, "SHORT")` already supports a 7-working-day continuation with the stored DAY time, existing work_days, no new onboarding, and no evening time. The completion flow never calls it.
+`create_followup_plan` already supports both canonical formats and reuses stored schedule data, but the completion flow never calls it. The target contract is now same-format continuation: `SHORT`→`SHORT` and `MEDIUM`→`MEDIUM`, with the same `work_days`, DAY time, and configured EVENING time for 14 days.
 
-Minimal fix: make the orchestrator invoke the existing default continuation functionality as part of the completed-plan lifecycle defined by FD-01.
+Minimal fix: after finalizing the explicit completed plan, derive its canonical format and atomically create the same-format successor before confirming that the next period is ready.
 
 #### LIF-05 — Telegram completion CTA is dead
 
 Severity: BLOCKER  
 Status: confirmed
 
-The Telegram completion report creates `start_plan:` callback data, but no matching Telegram callback handler exists. A user can press the main continuation button and get no deterministic action.
+The Telegram completion report creates `start_plan:` callback data, but no matching Telegram callback handler exists. A user can press a visible button and get no deterministic action. Under FD-01 these legacy next-plan buttons should be removed rather than repaired as the continuation mechanism; format switching is a separate explicit flow.
 
 #### LIF-06 — Completion report copy and CTA use the old lifecycle
 
 Severity: P1  
 Status: confirmed
 
-The current report asks the user to choose/repeat/change a plan and can expose legacy duration logic. It does not reflect FD-01 default continuation.
+The current report asks the user to choose/repeat/change a plan and exposes legacy 21/30-day, load, focus, adaptation, persona, and internal slot logic. It also contains unsupported interpretations such as `Ранок виявився твоїм часом`, `Ти тримав ритм навіть коли було складно`, and `Це більше ніж більшість`.
 
-Minimal fix: rewrite the report and CTA around automatic 7-day continuation, while preserving pause, cancel, time change, and optional switch to 14 days.
+Minimal fix: replace the legacy recommendation engine with a factual 7/14-day summary and confirmation of automatic same-format continuation. Preserve pause, cancel, time change, and explicit 7↔14 switching as separate controls.
 
 #### LIF-07 — No-action completion belongs to expiry + cron
 
 Severity: P1  
 Status: confirmed
 
-If the user does not press completed/skipped, the task must remain actionable until its expiry window closes. Expiry removes the buttons. The next-day cron then finalizes the plan and sends the report. A two-hour delivery timer must not produce the report while the task is still actionable.
+If the user does not press completed/skipped, the task must remain actionable until its expiry window closes. Expiry removes the buttons. The normal path then finalizes and reports on the next selected work day at the saved DAY time; the fixed UTC cron is recovery only. A two-hour delivery timer must not produce the report while the task is still actionable.
 
 #### LIF-08 — Completion report is not gated by completion rate
 
@@ -705,7 +718,7 @@ Completion rate changes report metrics/copy but does not prevent low-completion 
 
 #### LIF-09 — Completion may finalize the wrong plan
 
-Severity: P1  
+Severity: P1
 Status: confirmed
 
 `_trigger_plan_completion(user_id, plan_id)` does receive an explicit `plan_id`, but `_auto_complete_plan_if_needed` finalizes the latest active plan by `created_at` (`active_plans[0]`), not that `plan_id`, while the report is built for the passed `plan_id`. If they differ, it finalizes plan A and reports on plan B. Narrow trigger (multiple active plans) — the same code already logs `"Multiple active plans found"`.
@@ -717,16 +730,81 @@ Minimal fix: finalize by explicit `plan_id`, not latest-by-`created_at`.
 Severity: P1  
 Status: confirmed
 
-`create_followup_plan` raises unless `current_state` is in `_FOLLOWUP_STATES` (IDLE_FINISHED, IDLE_DROPPED, IDLE_PLAN_ABORTED). Per LIF-03 the state is still `ACTIVE` at report time, so calling it directly from the completion path raises — the ordering (finalize → IDLE_FINISHED → create) must be fixed first. Two more facts on the same helper: it returns `{"status", "plan_type"}` with no `plan_id` and no first-task date (so the report cannot state the next task's date without a follow-up query), and its `day_time` falls back to `"14:00"` when the DAY slot is missing, unlike `create_first_plan`, which raises.
+`create_followup_plan` raises unless `current_state` is in `_FOLLOWUP_STATES` (IDLE_FINISHED, IDLE_DROPPED, IDLE_PLAN_ABORTED). Per LIF-03 the state may still be `ACTIVE` at report time, so calling it directly from the current path raises. It also returns no `plan_id` or first-task date, and silently falls back to `14:00` when DAY time is missing. The target operation therefore needs explicit ordering and a completion-specific result: finalize old plan → create same-format successor → obtain its first delivery → send factual confirmation.
 
 #### LIF-11 — No idempotency key on automatic next-plan creation
 
 Severity: P1  
 Status: confirmed
 
-The report has an idempotency guard (`plan_completion_sent` event). Next-plan creation has no equivalent. Once FD-01 is wired, the +2h delivery timer and the 10:30 UTC cron (or a future button) can each call `create_followup_plan`, producing a duplicate SHORT plan or `ActivePlanExistsError`.
+The report has an idempotency guard (`plan_completion_sent` event). Next-plan creation has no equivalent. Once FD-01 is wired, concurrent action, cron, retry, or message-entry paths could each attempt same-format continuation, producing duplicate plans or `ActivePlanExistsError`.
 
-Minimal fix: guard creation with a plan-scoped key, e.g. a `next_plan_created_for:{plan_id}` event.
+Minimal fix: guard creation with a plan-scoped key or unique parent-plan relationship, e.g. `next_plan_created_for:{completed_plan_id}`.
+
+#### LIF-12 — No-action completion does not use the user's DAY time or work_days
+
+Severity: P1
+Status: confirmed
+
+`check_plan_completions` runs once at 10:30 UTC and immediately finalizes every expired active plan it finds. It does not schedule the user-facing report for the user's saved DAY time and does not move delivery to the next selected working day. A Friday completion can therefore surface on Saturday, and users in different timezones receive it at unrelated local times.
+
+Minimal fix: treat the fixed UTC cron as detection/recovery only. Resolve the next selected work day and saved DAY time in the user's timezone for the normal no-action path.
+
+#### LIF-13 — Completion report delivery is not durable or atomic
+
+Severity: BLOCKER
+Status: confirmed
+
+`_auto_complete_plan_if_needed` may create a fire-and-forget send task before the caller commits completion. If no event loop exists, it skips the send. After the plan is committed as completed, the cron no longer selects it because the cron queries only active plans. Metrics failure returns without a fallback report or retry. The `plan_completion_sent` check is also a non-atomic read-before-send guard, so concurrent paths can duplicate the message; success is recorded only after Telegram delivery. Normal Telegram send failures reschedule themselves every 30 minutes with no attempt cap, while the failure notice runs only when the submitted coroutine raises rather than when the send returns `None`.
+
+Minimal fix: persist a plan-scoped completion workflow/outbox state in the same transaction as finalization, then process it idempotently through explicit `pending → sent` states. A report-generation failure must retain a retryable pending record rather than silently return.
+
+#### LIF-14 — Web report misstates completed days for 14-day plans
+
+Severity: P1
+Status: confirmed
+
+The web report calculates `completed_days = round(completion_rate * total_days)`, but a 14-day plan can contain two exercises per day. Exercise completion rate is not the same as completed-day count. Completing one of two exercises on every day displays `7 з 14 днів`, even though the user interacted on all 14 days.
+
+Minimal fix: derive day-level counts from the existing timeline or label the metric honestly as completed exercises instead of completed days.
+
+#### LIF-15 — Completion tests are stale and currently broken
+
+Severity: P1
+Status: confirmed
+
+Scheduler tests explicitly assert the deprecated +2-hour behavior. Report and CTA tests still use 21/30-day, load/focus/adaptation contracts and currently fail because their `CompletionMetrics` fixtures omit newer required fields. No test covers the target end-to-end invariants: explicit-plan finalization before report, fast completed/skipped path, local expiry path, same-format continuation, or plan-scoped idempotency.
+
+Minimal fix: replace legacy assertions with 7-day and 14-day lifecycle tests derived from FD-01/FD-02 and the Product Map. Do not merely repair the old fixtures to keep testing obsolete behavior.
+
+#### LIF-16 — Plan end boundary respects timezone and selected work days
+
+Severity: OK
+Status: confirmed
+
+`finalize_plan` maps logical plan days onto real dates from the user's selected `work_days`, schedules each step in the user's timezone, sets each `expires_at` to local `23:59:59`, and derives `plan_end_date` from the last actually scheduled step rather than by adding calendar days. This calculation is correct. LIF-12 concerns the later report-delivery path, not this boundary.
+
+#### LIF-17 — Expiry, keyboard removal, and ignored telemetry are not one lifecycle event
+
+Severity: P1
+Status: confirmed
+
+`expire_overdue_steps` checks hourly at minute `:05`, marks steps `expired`, and then removes Telegram keyboards. Depending on timezone offset, a dead keyboard can remain visible for up to roughly one hour after local expiry even though `validate_step_action` rejects the click. Separately, `check_ignored_tasks` logs `task_ignored` at 08:00 UTC using a sliding 24-hour window rather than the step's local expiry. User-facing closure, canonical step state, and ignored telemetry can therefore happen at different times.
+
+Minimal fix: make local expiry the single source event for terminal state and ignored telemetry, and remove the keyboard within the accepted post-midnight UX window. Final telemetry schema details belong to the later telemetry audit.
+
+#### LIF-18 — Report sending is an ambient side effect of `_auto_complete_plan_if_needed`
+
+Severity: P1
+Status: confirmed
+
+`_auto_complete_plan_if_needed` decides whether to send the completion report based on whether a running event loop happens to exist in the caller's context: it calls `asyncio.get_running_loop()` and, on success, fires `asyncio.create_task(send_plan_completion_message(...))`; on `RuntimeError` it logs and skips. Its three callers rely on opposite behavior. `handle_incoming_message` is `async`, so the loop exists and the hidden task sends the report. `_trigger_plan_completion` and `check_plan_completions` assume the function does not send and submit `send_plan_completion_message` themselves via `_submit_coroutine`.
+
+Today this does not double-send for one incidental reason: `scheduler` is a `BackgroundScheduler`, so its jobs run in worker threads with no running loop and the hidden `create_task` is skipped. Completion correctness therefore depends on the APScheduler executor type, not on the completion logic. Switching to `AsyncIOScheduler` — an otherwise innocuous cleanup — gives both scheduler paths a running loop and produces two completion reports per completed plan, guarded only by the non-atomic `plan_completion_sent` read-before-send described in LIF-13.
+
+The plan id also differs between the two senders: the hidden task uses `plan.id` from `active_plans[0]`, while the explicit senders pass the caller's `plan_id` (see LIF-09).
+
+Minimal fix: remove sending from `_auto_complete_plan_if_needed` entirely. Finalization must only finalize and record durable outbox state (LIF-13); delivery must be an explicit, separately invoked step for every caller.
 
 ### Required MVP work
 
@@ -734,18 +812,29 @@ Minimal fix: guard creation with a plan-scoped key, e.g. a `next_plan_created_fo
 * add last-task detection to completed/skipped callbacks;
 * trigger the report quickly after active completion/skip;
 * keep unanswered buttons active only until expiry, then remove them;
-* use next-day cron for the no-action path;
+* use the user's timezone, next selected work day, and DAY time for the normal no-action path; keep the fixed UTC cron as a safety net only;
 * finalize the old plan before sending its report;
-* connect the existing automatic SHORT continuation in the orchestrator;
+* create the next same-format plan atomically (`SHORT`→`SHORT`, `MEDIUM`→`MEDIUM`);
 * rewrite completion report copy and CTA for FD-01;
-* replace the dead `start_plan:` callbacks;
+* remove the dead legacy `start_plan:` continuation buttons;
 * finalize the completing plan by explicit `plan_id`, not latest-by-`created_at`;
 * add an idempotency key for automatic continuation to prevent duplicate plans;
-* add tests for completed, skipped, expiry, cron, report ordering, and automatic continuation.
+* make report delivery durable and retryable after plan finalization;
+* remove the event-loop-dependent hidden send from `_auto_complete_plan_if_needed` so finalization never delivers;
+* fix day-level report metrics for 14-day plans;
+* unify local expiry, keyboard removal, and ignored telemetry timing;
+* replace stale tests with completed, skipped, expiry, timezone/work_days, report ordering, same-format continuation, and idempotency coverage.
+
+### Verification on 2026-07-16
+
+* `pytest -q tests/test_plan_completion_scheduler.py tests/test_plan_completion_metrics.py tests/test_orchestrator.py -k 'not trio'` → `27 passed, 2 deselected`;
+* those green scheduler tests still assert the deprecated +2-hour path and therefore do not validate the target contract;
+* isolated report/CTA run with test environment variables → `18 failed`, all from stale `CompletionMetrics` fixtures missing `engagement_rate`, `silent_miss_rate`, and `current_streak`;
+* `tests/test_dashboard.py` could not be collected with the system interpreter because `fastapi` is unavailable there; the local `.venv` has `fastapi` but does not have `pytest`.
 
 ### Scope boundary
 
-This audit records required behavior and confirmed code gaps. Exact transaction ordering, function signatures, and implementation architecture belong to a separate implementation plan.
+This audit records required behavior and confirmed code gaps. Exact transaction ordering, function signatures, and implementation architecture belong to a separate implementation plan. Report-token lifetime and company/individual access boundaries are intentionally deferred to the dedicated privacy audit.
 
 ---
 
@@ -1223,6 +1312,547 @@ with `switch_plan_format`.
 * implement `switch_plan_format` (COACH-11/COACH-12) as part of closing
   FD-01 lifecycle work;
 * merge PR #246 after review.
+
+---
+
+# Plan Generation Findings
+
+## Plan Generation Area — Audit Round 2026-07-18
+
+Status: completed
+
+### Files inspected
+
+* `app/plan_drafts/plan_builder_v5.py`
+* `app/plan_drafts/service.py`
+* `app/plan_drafts/plan_types.py`
+* `resource/assets/plan/plan_context_template.yaml`
+* `resource/assets/content_library/tasks/burnout_combined_content_library.json`
+* `app/telegram.py` (consequence of completed/skipped, for the operant frame)
+
+### Method
+
+Findings below are not read-only inference. The builder was executed
+directly against the real library and recipe for 500 synthetic users and
+for repeated regenerations of the same user, and the resulting series
+were measured. Simulation commands and counts are reproducible from
+`get_default_builder()`.
+
+### Summary
+
+The builder is clean, deterministic, and correctly enforces its stated
+invariants. The problem is not correctness — it is that the generated
+series is **frozen per user and blind to behavior**. The same user
+receives a byte-identical exercise sequence on every plan, forever, and
+nothing in generation reacts to whether the user did anything. Combined
+with an 8-exercise library, this makes the product's core artifact
+repetitive by construction.
+
+### Findings
+
+#### PLAN-01 — Every regenerated plan is byte-identical for the same user
+
+Severity: BLOCKER
+Status: confirmed by execution
+
+`_weighted_choice` seeds `random.Random(seed_key)` with
+`f"{user_id}:{day}:{slot}"`. `day` is the plan-local day number, which
+restarts at 1 for every new plan, and `last_used` starts empty on every
+build. The seed therefore contains nothing that distinguishes plan N from
+plan N+1.
+
+Measured: building SHORT three times for the same `user_id` returns the
+identical sequence every time.
+
+```text
+user 101, SHORT, runs 1/2/3 — all three:
+somatic_001, somatic_006, somatic_005, somatic_006,
+somatic_005, somatic_001, somatic_006
+```
+
+Under FD-01 (automatic same-format continuation) this is not a cosmetic
+issue: the user completes 7 days, receives "наступні 7 днів готові", and
+gets exactly the same seven exercises in exactly the same order. Every
+period. Indefinitely.
+
+Minimal fix: include a per-plan discriminator in the seed (plan id,
+sequence number, or creation timestamp) so successive plans differ, and
+carry `last_used` across the plan boundary so the first days of a new
+plan do not repeat the final days of the previous one.
+
+#### PLAN-02 — Switching SHORT→MEDIUM replays the first 7 days
+
+Severity: P1
+Status: confirmed by execution
+
+Because the seed depends only on `user_id:day:slot`, the DAY slots of a
+MEDIUM plan reproduce the SHORT plan exactly for days 1–7; only days
+8–14 are new. Measured for user 101 and user 202: `MEDIUM.DAY[0:7] ==
+SHORT.DAY` is `True`.
+
+A user who explicitly upgrades to the longer format is shown a full week
+of repeats before reaching anything unseen — the opposite of what an
+explicit upgrade should feel like. Same fix as PLAN-01.
+
+#### PLAN-03 — Content library is too small to support the format
+
+Severity: BLOCKER
+Status: confirmed by execution
+
+The library holds 8 active exercises: 5 `switch`, 3 `unload`.
+
+Measured across 500 users, SHORT (7 days, DAY slot only):
+
+| distinct exercises in a 7-day plan | users |
+|---|---|
+| 5 | 177 |
+| 4 | 268 |
+| 3 | 54 |
+| 2 | 1 |
+
+| max repeats of a single exercise | users |
+|---|---|
+| 2× | 261 |
+| 3× | 226 |
+| 4× | 13 |
+
+So the median user sees 4 distinct exercises across a 7-day period, and
+nearly half see one exercise three or more times. For MEDIUM the EVENING
+slot draws from 3 `unload` exercises across 14 evenings — measured
+distinct count is 3, i.e. a forced rotation of the same three items.
+
+This is a content problem, not a code problem, but it is load-bearing:
+no seeding fix improves variety that the library does not contain.
+
+Founder decision needed: minimum library size before beta. As a
+reference point, keeping "no exercise repeats inside one 7-day period"
+requires ≥7 `switch` exercises; keeping it across two consecutive periods
+requires ≥14.
+
+#### PLAN-04 — `cooldown_days: 1` permits every-other-day repetition
+
+Severity: P1
+Status: confirmed
+
+`_is_in_cooldown` returns `(current_day - last_used[id]) <= cooldown_days`.
+With `cooldown_days: 1` — the value on all 8 library items — an exercise
+used on day N is blocked on day N+1 and available again on day N+2.
+
+Combined with PLAN-03 this is what produces the 3× and 4× repeat counts
+above. The cooldown mechanism works as written; the configured value is
+simply too permissive for a library this size.
+
+Note the mechanism is shared across slots: `last_used` is one dict for
+both DAY and EVENING, which correctly prevents the same exercise
+appearing twice on the same day.
+
+#### PLAN-05 — Generation is blind to user behavior (operant frame)
+
+Severity: P1 — product-level, requires founder decision
+Status: confirmed
+
+Requested analysis: what reinforcement schedule does plan generation
+implement? Answer: **none**. Verified structurally — `plan_builder_v5.py`
+contains no reference to step status, completion, skip, streak, or any
+history. Its only inputs are `plan_type`, `user_id`, the two time
+strings, the recipe, and the library. `ADAPTATIONS_ENABLED` is named in
+the invariant header but does not exist as a config flag anywhere in
+`app/` (only in comments), so there is not even a disabled feedback path.
+
+In operant terms:
+
+* delivery is a **fixed-time schedule** — the stimulus arrives at a
+  clock time regardless of what the user does. Non-contingent stimulus
+  presentation is not a reinforcement schedule for the target behavior;
+* the consequence of the target response is a Telegram toast:
+  `"✅ Чудово! Завдання виконано."` vs `"⏭️ Завдання пропущено"`
+  (`telegram.py:480` / `telegram.py:595`). Both paths then remove the
+  keyboard. Structurally the two outcomes are identical — an ephemeral
+  toast and the disappearance of the button;
+* therefore doing the exercise and not doing it produce the same
+  observable future: same next exercise, same next time, same plan. There
+  is no differential consequence anywhere in the loop;
+* the one genuinely contingent element in the system — the completion
+  report — is explicitly not gated on completion rate (LIF-08), so it
+  arrives identically for a user who did 14 of 14 and one who did 1 of 14.
+
+This is a coherent design choice for a low-pressure wellness product and
+is not automatically wrong — non-contingent care is a defensible stance.
+But it should be an explicit founder decision, not an emergent property
+of an unfinished adaptation layer. The current state is the *weakest*
+version of both options: no contingency, and no deliberate rationale for
+its absence.
+
+Founder decision needed: is the absence of behavioral contingency
+intentional for MVP? If yes, record it as a decision and stop describing
+adaptation as pending. If no, the smallest honest contingency is
+differential consequence at the response — not a rewritten plan.
+
+#### PLAN-06 — `weight` is effectively decorative
+
+Severity: P2
+Status: confirmed
+
+Active weights span 1.2–1.5 (`1.5`×1, `1.4`×2, `1.3`×3, `1.2`×2). Across
+a candidate pool of 2–5 items this is close to uniform selection; the
+field implies editorial control over exercise frequency that it does not
+meaningfully exert.
+
+Minimal fix: either widen the range so it expresses a real editorial
+prior, or drop the field and document selection as uniform.
+
+#### PLAN-07 — `source_exercises` records the whole library, not the plan
+
+Severity: P2
+Status: confirmed
+
+`source_exercises=[e.id for e in active]` stores every active exercise,
+not the ones actually scheduled. It is persisted into `draft_data`
+(`service.py:127`) and typed as "Which content library exercises were
+used" (`plan_types.py:193`). Any later provenance or content-performance
+analysis reading this field will be wrong.
+
+Minimal fix: store the distinct `exercise_id` values actually placed in
+`steps`.
+
+#### PLAN-08 — Library `variations` is unused
+
+Severity: P2
+Status: confirmed
+
+Every inventory item carries a `variations` array (empty in all 8 current
+items). `ExerciseV5.from_library_item` does not read it and no code in
+`app/` consumes it. Either it is the intended variety mechanism that was
+never wired — which would directly mitigate PLAN-03 — or it is dead
+schema. Worth resolving before adding content, since it changes how new
+exercises should be authored.
+
+#### PLAN-09 — Builder invariants that hold
+
+Severity: OK
+Status: confirmed
+
+Verified correct and worth protecting with tests:
+
+* first plan is forced to SHORT (`service.py:51`), independent of caller;
+* MEDIUM refuses to fall back to the default `21:00` EVENING value unless
+  `evening_slot_collected` is True — the silent-default trap is
+  explicitly closed (`service.py:65-78`);
+* `mechanic` is snapshotted onto the step at build time and never
+  recomputed (invariant 6);
+* an empty candidate pool raises `NoCandidatesError` rather than silently
+  producing a short plan;
+* no Focus / Load / StepType / SlotType / DifficultyLevel anywhere in the
+  builder — the v5 cleanup is genuinely complete on this path.
+
+### Required MVP work
+
+* add a per-plan discriminator to the selection seed and carry cooldown
+  state across plan boundaries (PLAN-01, PLAN-02);
+* decide and reach a minimum library size; re-tune `cooldown_days` to
+  that size (PLAN-03, PLAN-04);
+* record an explicit founder decision on behavioral contingency (PLAN-05);
+* fix `source_exercises` to record what was actually scheduled (PLAN-07);
+* resolve `variations` — wire it or remove it (PLAN-08);
+* add regression tests: two consecutive plans for one user must differ;
+  SHORT→MEDIUM must not replay days 1–7; no exercise repeats within a
+  configured window.
+
+### Scope boundary
+
+This round covers exercise selection and series construction only.
+Rendering of `display.*` belongs to the Delivery renderer round (assigned
+in parallel). Scheduling of logical days onto real dates was already
+confirmed correct in LIF-16 and is not re-audited here. Whether the
+library's editorial content is clinically appropriate is out of scope.
+
+---
+
+# Delivery Renderer Findings
+
+## Delivery Renderer Area — Audit Round 2026-07-18
+
+Status: completed; findings recorded only, no runtime fixes applied
+
+### Files inspected
+
+* `app/content_library.py`
+* `app/plan_finalization.py`
+* `app/ux/task_notification.py`
+* `app/scheduler.py`
+* `app/telegram.py`
+* `app/plan_guards.py`
+* `app/plan_runtime/tools.py`
+* `app/plan_pause.py`
+* `app/ux/catalog.py`
+* `resource/assets/content_library/tasks/burnout_combined_content_library.json`
+* `resource/assets/ux/trigger_messages.json`
+* `resource/assets/product/conceptual_map.md`
+* `resource/assets/product/conceptual_map_en.md`
+* delivery/task-related tests in `tests/`
+
+### Method
+
+The audit traced the complete user-facing path:
+
+```text
+v5 content JSON
+→ ContentLibrary.content_payload
+→ plan finalization / AIPlanStep snapshot
+→ scheduler job payload
+→ Telegram exercise message + buttons
+→ complete/skip callback
+→ post-click acknowledgement
+→ expiry / keyboard removal
+```
+
+The current renderer was also executed directly against a real v5
+library item to verify the output rather than relying only on static code
+inspection.
+
+### Summary
+
+The core exercise message is deterministically broken for the current v5
+library. All 8 active items store their user-facing fields under
+`display`, while finalization and rendering still read the legacy root
+schema. The resulting Telegram message can contain an internal exercise
+ID, no instructions, and an unlabeled numeric duration. Buttons are
+attached correctly, but their pause/cancel lifecycle is inconsistent with
+the Product Map. The post-click path also activates legacy randomized
+engagement/adaptation copy that is outside the accepted MVP contract.
+
+### Findings
+
+#### DEL-01 — V5 `display.*` is not rendered in the exercise message
+
+Severity: BLOCKER / P0
+Status: confirmed and reproduced
+
+`load_content_library()` preserves the nested v5 payload; it does not
+flatten `display`. Every current inventory item has
+`display.title`, `display.steps`, and `display.duration_label`, and none
+has root-level `title` or `instructions`.
+
+The live path still reads the legacy shape in two places:
+
+* `plan_finalization._build_step_title()` reads root `title`, then falls
+  back to `ContentLibrary.internal_name`; the loader defaults that field
+  to the exercise ID;
+* `format_task_notification()` reads root `title`, `instructions`, and
+  numeric `duration_minutes`/`duration_estimate` instead of the nested
+  display object.
+
+Direct reproduction with `somatic_004_v2` produced:
+
+```text
+━━━━━━━━━━━━━━━━━━
+☀️ <b>somatic_004_v2</b>
+День 1 · День · 1 з 1
+
+⏱ 1
+━━━━━━━━━━━━━━━━━━
+```
+
+The actual title `Дихання`, its four instructions, and the duration label
+`30–60 сек` are all absent. This breaks the primary daily product loop.
+
+Expected behavior: one canonical v5 display reader produces the trusted
+`title`, ordered `steps`, and `duration_label` for both finalization and
+Telegram rendering. Missing/invalid display content must fail visibly in
+logs and tests rather than silently degrade to `Завдання` or an internal
+ID. The same display data must later feed `current_exercise_context`
+(cross-reference: COACH-08).
+
+Minimal fix: introduce one structured display extractor/validator and use
+it in finalization and delivery. Render the step array as concrete ordered
+instructions; do not convert it into an opaque legacy `instructions`
+field.
+
+#### DEL-02 — Delivery exposes internal scheduling metadata and has a dormant pre-action rationale path
+
+Severity: P1
+Status: confirmed
+
+The target contract is `title → steps → duration → buttons`. The current
+message also renders:
+
+```text
+День {plan_day_number} · {DAY/EVENING label} · {task_index} з {task_total}
+```
+
+`DAY`/`EVENING` are internal scheduling tags under FD-03/C8, not exercise
+content. The day/task counter is likewise outside the accepted delivery
+shape and adds implementation framing to a deliberately small action.
+
+`format_task_notification()` also contains a `Чому це працює` block before
+the instructions. The current v5 inventory has no rationale field, so the
+path is dormant today, but adding one later would silently violate the
+contract that rationale belongs only in optional post-action closure.
+
+Minimal fix: render only trusted display content in the exercise body and
+keep internal slot, mechanic, task index, and rationale out of the
+pre-action message.
+
+#### DEL-03 — Legacy randomized engagement/adaptation runs after complete and skip
+
+Severity: P1
+Status: confirmed
+
+After the callback toast, both handlers send an additional chat message
+from `trigger_messages.json`. The catalog is old friend-bot/plan logic and
+contains unsupported or false claims, including:
+
+* the same exercise returning tomorrow even though the sequence rotates;
+* changing difficulty or redesigning/reviewing the plan after two skips;
+* internal `focus` framing and old `plan` terminology;
+* pressure and judgment such as `головне не два підряд`, `не зупиняйся`,
+  and personality conclusions from a streak.
+
+After two explicit skips, the runtime also adds a `Переглянути план`
+button and routes `adapt_suggest` into Coach. This is an automatic
+adaptation/engagement prompt even though C7 says adaptation does not
+trigger at all in MVP and C3 keeps expanded closure/reflection at P2.
+
+Expected MVP behavior: persist the canonical result, remove the buttons,
+and return one short deterministic acknowledgement. Do not activate the
+random engagement catalog or an adaptation CTA. The exact acknowledgement
+copy can be polished later; disabling unsupported behavior does not need a
+new product decision.
+
+#### DEL-04 — Delivered buttons conflict with pause and cancellation semantics
+
+Severity: P1
+Status: confirmed
+
+The Product Map says exercise buttons remain available until the end of
+the user's local day. `validate_step_action()` instead requires both an
+active plan and `user.current_state == ACTIVE`.
+
+Consequences:
+
+* if the user pauses after receiving an exercise, the already-delivered
+  Done/Skip buttons immediately stop working and answer `План зараз не
+  активний`, although pause is defined as stopping future delivery;
+* `cancel_plan()` removes scheduler jobs but does not mark delivered steps
+  canceled and does not remove their Telegram keyboards. Stale buttons
+  remain visible until expiry and answer the same error when pressed.
+
+Minimal fix: make already-delivered current-day actions remain actionable
+through their existing expiry when delivery is paused, unless the product
+contract is explicitly changed. On cancellation, close pending/delivered
+steps and remove visible keyboards immediately.
+
+Cross-references: COACH-04 covers future deliveries lost during a pause;
+LIF-17 covers the separate expiry/keyboard/ignored timing drift. This
+finding covers only the delivered-message interaction surface.
+
+#### DEL-05 — A transient Telegram send failure permanently loses the exercise
+
+Severity: P1
+Status: confirmed
+
+`_send_message_async()` catches a Telegram exception and returns `None`.
+`send_scheduled_message()` logs `task_delivery_failed`, but the APScheduler
+date job has already fired. The step remains pending with a
+`scheduled_for` timestamp in the past, while startup restoration selects
+only future pending steps. There is no retry or recovery path inside the
+two-hour late-delivery window.
+
+Expected behavior: a bounded, idempotent retry/recovery path may re-attempt
+the same step within the allowed delivery grace period, records each
+failure, and never creates duplicate delivered events/messages.
+
+#### DEL-06 — Renderer coverage is absent and callback tests are stale
+
+Severity: P1
+Status: confirmed
+
+There is no direct regression test for `format_task_notification()` and no
+test that renders the actual v5 `display.*` payload. Existing lifecycle
+tests cover local expiry calculations, but not the final message body or
+keyboard cleanup behavior.
+
+The callback suite is also not executable as a reliable guard:
+
+* its default `test-token` is rejected by the current aiogram token
+  validator during collection;
+* with a syntactically valid fake token, the targeted run produced
+  `35 passed, 17 failed`;
+* 8 asyncio failures come from stale `DummyStep` objects that do not have
+  canonical `step_status`; 9 more are the unconfigured/missing `trio`
+  backend.
+
+Minimum tests before beta:
+
+* render every active v5 item from `display.title`, ordered
+  `display.steps`, and `display.duration_label`;
+* assert that internal IDs/slots/mechanics and pre-action rationale are
+  absent;
+* assert the two callback IDs and ownership/idempotency behavior;
+* cover active, paused, canceled, completed, skipped, and expired button
+  states;
+* cover successful delivery, bounded retry, and duplicate prevention;
+* cover keyboard removal at expiry and cancellation.
+
+#### DEL-07 — Dynamic HTML content is not escaped
+
+Severity: P2 hardening
+Status: confirmed; no current content failure
+
+Telegram delivery uses `parse_mode="HTML"`, but title, instructions, and
+duration are inserted without HTML escaping. A future content edit with
+`<`, `>`, or `&` can turn a valid exercise into a Telegram parse failure,
+which currently becomes the permanent loss described in DEL-05.
+
+The 8 current display payloads contain no HTML-sensitive characters and
+their core rendered content is small (the largest title/steps/duration
+combination is 165 characters), so this is not the cause of the current
+P0. Escape every dynamic display field and add a message-size assertion as
+part of the renderer rewrite.
+
+#### DEL-08 — Delivery mechanics that already match the contract
+
+Severity: OK
+Status: confirmed, with the limitations above
+
+* the scheduled exercise is sent as one Telegram message with `Виконано`
+  and `Пропустити` buttons attached immediately;
+* callback data identifies the exact plan step;
+* ownership is checked before a step is changed;
+* canonical terminal states make repeated complete/skip actions
+  idempotent in the runtime guard;
+* `expires_at` is calculated from the user's local day;
+* the expiry job marks unanswered steps expired and attempts to remove the
+  keyboard.
+
+These pieces should be preserved while fixing the content and lifecycle
+gaps rather than replacing the whole delivery path.
+
+### Required MVP work
+
+* fix the v5 schema mismatch and use one canonical display reader
+  (DEL-01);
+* remove internal metadata and the pre-action rationale path from the
+  message (DEL-02);
+* freeze the legacy post-click engagement/adaptation layer and keep one
+  deterministic acknowledgement (DEL-03);
+* align pause/cancel keyboard behavior with the Product Map (DEL-04);
+* add bounded delivery retry/idempotency (DEL-05);
+* replace stale callback tests and add end-to-end renderer coverage
+  (DEL-06).
+
+HTML escaping and a size guard (DEL-07) are low-cost hardening and should
+be included in the renderer change if possible, but they are not the
+source of the current deterministic P0.
+
+### Scope boundary
+
+This round covers conversion of trusted exercise data into the Telegram
+message and the immediate Done/Skip interaction lifecycle. Exercise
+selection belongs to Plan Generation; editorial adequacy and the number
+of steps per exercise belong to the later Content Library audit. General
+pause rescheduling, completion reports, and Coach context are tracked in
+COACH-04, Lifecycle Completion, and COACH-08 respectively.
 
 ---
 

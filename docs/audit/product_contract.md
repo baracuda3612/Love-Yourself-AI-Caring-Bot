@@ -77,9 +77,9 @@ Telegram-бот, що раз на робочий день у обраний юз
 |**Scheduled доставка**              |У обраний час приходить: назва → 2-3 кроки → скільки займе → кнопки  |Scheduler доставляє тільки у work_days, тільки якщо ACTIVE                                                                                                  |(в межах ACTIVE)                               |Must                 |Немає продукту                                          |
 |**Виконав / пропустив / зігнорував**|Кнопки [Виконано]/[Пропустити]; або тиша                             |Пише completed/skipped; ignored = відсутність реакції                                                                                                       |(в межах ACTIVE)                               |Must (базово)        |Немає сигналу для C3                                    |
 |**Наступний робочий день**          |Наступна дія за розкладом у той самий час                            |Scheduler бере наступний таск; пропуск попереднього не блокує                                                                                               |(в межах ACTIVE)                               |Must                 |Цикл не тримається                                      |
-|**Завершення плану**                |(тригериться)                                                        |Тригер A: completion≥50% + всі активні дні пройшли → того ж дня. Тригер B: plan_end_date < now → наступний робочий день о слоті. Safety net cron о 10:30 UTC|`ACTIVE → IDLE_FINISHED`                       |Must                 |Юзер висить в ACTIVE без фідбеку (gap M2)               |
-|**Completion message/report**       |Дзеркало поведінки + лінк /report + вибір наступного плану           |send_plan_completion_message                                                                                                                                |(в IDLE_FINISHED)                              |Must (базова версія) |Немає закриття циклу, немає CTA                         |
-|**Вибір наступного плану**          |Міні-онбординг: 7 або 14 днів                                        |FSM-стан після completion; evening_time питається тільки якщо вперше обирає 14                                                                              |`IDLE_FINISHED → ACTIVE` (новий план)          |Must                 |Немає retention-петлі                                   |
+|**Завершення плану**                |Після дії на останній вправі — швидкий підсумок; без дії — після expiry|Тригер A: completed/skipped останньої вправи → finalize + report за 1–2 хв. Тригер B: expiry → наступний обраний робочий день о DAY-часі. Cron о 10:30 UTC — лише safety net|`ACTIVE → IDLE_FINISHED` (технічний проміжний стан)|Must              |Юзер висить в ACTIVE або отримує передчасний звіт       |
+|**Completion message/report**       |Фактичний підсумок + лінк /report + підтвердження наступного періоду |Після finalization система створює наступний період того самого формату; звіт отримують усі                                                                  |`IDLE_FINISHED → ACTIVE`                       |Must (базова версія) |Немає закриття циклу або continuation-петлі             |
+|**Автоматичне продовження**         |Наступні 7 або 14 робочих днів уже готові                            |7→7, 14→14; той самий час і work_days; без повторного онбордингу чи підтвердження. Зміна формату лишається окремою дією користувача                            |новий план → `ACTIVE`                          |Must                 |Зайве тертя на межі циклів                              |
 
 **Примітка по стану `IDLE_ONBOARDED`:** у behavior_loop_audit macro-loop він присутній, у архітектурі позначений на видалення. Це конфлікт C_state (див. нижче) — для lifecycle я НЕ покладаюсь на нього як обов’язковий; онбординг веде прямо в ACTIVE через створення плану.
 
@@ -103,7 +103,7 @@ Telegram-бот, що раз на робочий день у обраний юз
 
 **Тривалість першого плану:** автоматична (SHORT=7), не вибір юзера. *(t23_t24, §1)*
 
-**Evening time:** НЕ в першому онбордингу. Тільки в міні-онбордингу після 1-го плану, якщо юзер вперше обирає 14-day. *(priorities and freeze P1; Product spirit заборони)*
+**Evening time:** НЕ в першому онбордингу. Збирається тільки коли користувач уперше сам переходить на 14-day. *(priorities and freeze P1; Product spirit заборони)*
 
 **Робочі дні:** збираються в онбордингу; scheduler доставляє і рахує completion_rate тільки відносно активних днів. *(priorities and freeze P1 “Scheduler + work_days”)*
 
@@ -151,13 +151,12 @@ Telegram-бот, що раз на робочий день у обраний юз
 
 ## 2.7 Completion contract
 
-- **Коли план завершено:** Тригер A — completion≥50% + всі активні дні пройшли → того ж дня +2-5 хв / safety net. Тригер B — plan_end_date < now → наступний робочий день о слоті DAY. *(priorities and freeze P1; behavior_loop_audit §6.3)*
-- **Чи всі отримують report:** так. 50%-трешхолд визначає **коли**, не **чи**. Report отримують усі після plan_end_date. *(behavior_loop_audit §6.3)*
-- **Timing після останнього таску:** якщо всі виконані + [Виконано] останнього → той самий день +15-30 хв, навіть після 21:00 (не переносити). *(behavior_loop_audit §6.3)*
-- **Safety net:** check_plan_completions cron добиває прострочені плани. *(t23_t24 §3)*
-- **Структура completion message:** дзеркало поведінки (без оцінки) + CTA на /report + вибір наступного плану. Базова версія — достатньо. *(priorities and freeze P1; behavior_loop_audit)*
-- **Next-plan CTA:** 7 або 14 днів. *(priorities and freeze; t23_t24)*
-- **7-day vs 14-day follow-up:** SHORT не отримує pulse snapshot (completion report = єдина точка). 14-day отримує snapshot день 7 + completion report. *(t23_t24 §2,§3)*
+- **Коли план завершено:** Тригер A — користувач натиснув completed/skipped на останній доступній вправі → finalize + report швидко, орієнтир 1–2 хв. Тригер B — остання вправа лишилась без відповіді → local end-of-day expiry → finalize + report наступного обраного робочого дня о DAY-часі. Двогодинного тригера немає. *(FD-02)*
+- **Чи всі отримують report:** так. Completion rate впливає лише на фактичні метрики, а не на право отримати підсумок. *(C10; FD-02)*
+- **Safety net:** `check_plan_completions` cron о 10:30 UTC добиває пропущені completion-події, але не визначає основний user-facing час. *(t23_t24 §3; FD-02)*
+- **Структура completion message:** фактичне дзеркало поведінки без діагнозів, оцінок і прихованих причин + лінк `/report` + повідомлення, що наступні 7 або 14 днів того самого формату вже готові. *(FD-01; Product Map §5)*
+- **Автоматичне продовження:** 7→7 і 14→14 з тим самим часом та `work_days`; повторний вибір чи онбординг не потрібні. Перехід 7↔14 — окрема явна дія користувача. *(FD-01; Product Map §5)*
+- **7-day vs 14-day closure:** обидва формати отримують completion report наприкінці періоду. Mid-period pulse/snapshot повідомлення вимкнені на MVP. *(C12; freeze)*
 
 ## 2.8 Coach contract
 
@@ -292,10 +291,10 @@ Telegram-бот, що раз на робочий день у обраний юз
 
 ### C10 — Report для всіх vs threshold-based
 
-- **Документи:** behavior_loop_audit §6.3 (“50% трешхолд визначає коли, не чи. Report отримують всі”).
-- **Конфлікт:** потенційне непорозуміння, що 50% = умова отримання report.
+- **Документи:** старий behavior_loop_audit §6.3 прив'язував timing до 50%; новіше рішення C10 прибрало threshold-логіку з MVP.
+- **Конфлікт:** старий опис міг бути прочитаний як гейт або окремий timing-path за completion rate.
 - **Чому важливо:** якщо код гейтить report за 50% completion — юзери з низьким completion (найважливіші для діагностики C3!) не отримають закриття циклу.
-- **Рекомендована MVP-істина:** **report отримують ВСІ** після plan_end_date. 50% впливає лише на timing (той самий день vs наступний).
+- **Рекомендована MVP-істина:** **report отримують ВСІ**. Completion rate не визначає ані eligibility, ані timing: timing задається FD-02 (active last action або no-action expiry path).
 - **Code implication:** перевірити що немає гейта “if completion < 50% → no report”.
 - **Founder decision?** Ні.
 
@@ -424,8 +423,8 @@ Telegram-бот, що раз на робочий день у обраний юз
 |**Delivery message**          |Назва → 2-3 кроки → тривалість → кнопки                                                                                |Одне повідомлення, одна вправа                               |“Чому працює” → в closure, не перед              |**Так**                          |behavior_loop m1                |Кнопка одразу в повідомленні                         |
 |**Complete/skip/ignore**      |Кнопки [Виконано]/[Пропустити]; ignore=тиша                                                                            |2 кнопки                                                     |Пише подію                                       |**Так** (базово)                 |behavior_loop; Product spirit §5|Reflection “Як зараз?” — P2                          |
 |**Pause/resume/cancel/change**|Детерміновані tools                                                                                                    |Pause спиняє; resume з місця; cancel→день 1; change будь-коли|plan_runtime/tools.py                            |**Так**                          |Conceptual §10; архітектура     |SCHEDULE_ADJUSTMENT замінено tools                   |
-|**Completion report**         |Для всіх, о DAY-слоті timezone                                                                                         |Дзеркало + /report + CTA                                     |Тригер A/B + safety net                          |**Так** (базово)                 |behavior_loop §6.3; C9/C10      |plan_completion_v5 deprecated                        |
-|**Next plan choice**          |Міні-онбординг: 7 або 14                                                                                               |Вибір після 1-го плану                                       |FSM після completion                             |**Так**                          |priorities P1; t23_t24          |Evening тільки якщо вперше 14                        |
+|**Completion report**         |Для всіх: швидко після дії на останній вправі або після expiry за no-action шляхом                                      |Фактичний підсумок + /report + підтвердження continuation    |Finalize → same-format continuation → report     |**Так** (базово)                 |FD-01; FD-02; C10; Product Map §5|Двогодинний trigger і plan_completion_v5 deprecated  |
+|**Automatic continuation**    |7→7, 14→14; без повторного вибору                                                                                       |Наступний період уже готовий                                 |Той самий час + work_days; format switch окремо  |**Так**                          |FD-01; Product Map §5            |Evening збирається лише при першому переході на 14    |
 |**14-day plan**               |DAY(state_switch)+EVENING(unload)                                                                                      |Пропонується після 1-го                                      |2 push/день                                      |Ні (після 7-day)                 |t23_t24                         |Evening бібліотека 3→5+ = P2                         |
 |**Coach**                     |Реактивний AI-канал; tools+consent                                                                                     |Жива реакція на текст                                        |Повертає tool_call; Orchestrator виконує         |**Так для бети** (промпт готовий, backend gap лишається)|ai_coach_summary; PR #246   |Промпт написаний; хмара досі стара до merge; ONB-01/LIF-04/switch_plan_format відкриті|
 |**Telemetry**                 |activation, 1st completed, D3/D7, completion, skip/ignore, reactive, pause/cancel/change, continuation, Telegram-deploy|—                                                            |Product-internal                                 |**Так**                          |t0_3; HR C5/D1                  |Reflection/NPC/blacklist = P2                        |
@@ -447,9 +446,9 @@ Telegram-бот, що раз на робочий день у обраний юз
 |Rules генерації плану (overhaul)       |Перший план SHORT+1+state_switch+DAY; 14-day DAY+EVENING; тільки work_days. Найскладніший P1.|priorities P1                    |
 |Scheduler + work_days                  |Доставка тільки в активні дні; completion_rate по активних.                                  |priorities P1                    |
 |Онбординг мінімальний                  |1 час + work_days + confirm.                                                                 |priorities P1; t23_t24           |
-|Completion logic (A+B)                 |Тригер A (50%+всі дні) / B (plan_end<now).                                                   |priorities P1; behavior_loop §6.3|
-|Completion message (базова)            |Дзеркало + /report + вибір наступного. Не ідеальна.                                          |priorities P1                    |
-|Міні-онбординг між планами             |FSM після completion; 7/14; evening тільки якщо вперше 14.                                   |priorities P1                    |
+|Completion logic (A+B)                 |A: action на останній вправі → 1–2 хв; B: expiry → наступний work_day о DAY-часі; UTC cron лише safety net.|FD-02                  |
+|Completion message (базова)            |Фактичне дзеркало + /report + підтвердження готового наступного same-format періоду.          |FD-01; Product Map §5            |
+|Automatic same-format continuation     |7→7, 14→14; той самий час/work_days; format switch окремою дією.                              |FD-01; Product Map §5            |
 |Confirm після онбордингу (gap M1)      |“Чекай мене [сьогодні/завтра] о [HH:MM]”. Без цього — плутанина day 0.                       |behavior_loop §5,6.4             |
 |Confirm після останнього таску (gap M2)|“Це був останній таск. Підсумок [коли].”                                                     |behavior_loop §5                 |
 |Delivery message structure (m1)        |Назва→кроки→тривалість→кнопки. “Чому” в closure.                                             |behavior_loop m1                 |
@@ -582,7 +581,7 @@ Telegram-бот, що раз на робочий день у обраний юз
 
 - **Має підтримувати:** Тригер A/B; report для всіх; о DAY-слоті timezone; safety net 10:30 UTC як добивач.
 - **Legacy шукати:** plan_completion_v5 UTC-10:30 як основна логіка; гейт report за 50%.
-- **Блокер:** report гейтиться completion<50% (C10); timing по UTC замість timezone (C9).
+- **Блокер:** report може бути відправлений до finalization або втрачений після неї; normal no-action timing працює по fixed UTC cron замість timezone/work_days (C9, LIF-03, LIF-12, LIF-13).
 - **Evidence:** behavior_loop §6.3; C9/C10.
 
 ### content library
@@ -655,7 +654,7 @@ Telegram-бот, що раз на робочий день у обраний юз
 |**Low activation (<10%)**              |Мало хто дійшов до 1-го таску                          |cold deploy; friction онбордингу; stigma                                   |Activation %                                               |Warm intro/champion; мінімальний онбординг                      |Блокер для C1, але 10-30% = launch-ітерація    |
 |**Low D3/D7**                          |Не повертаються                                        |вправи не заходять; немає craving/closure                                  |D3/D7; completion                                          |Мінімум: чиста доставка. Closure — P2                           |<15% D7 = продуктовий блокер; 15-30% = ітерація|
 |**Вправи здаються пустими/незручними** |Skip росте, completion<20%                             |office-контекст (мікроходьба); “не відчув ефекту”                          |Completion per exercise; skip-патерн                       |v0.1 бібліотека вже фільтрована; office-варіанти є              |<20% completion = переосмислити вправи         |
-|**Completion report не landing**       |Юзер не розуміє що цикл завершено                      |timing по UTC; report гейтнутий 50%                                        |Скільки дійшли до report; continuation rate                |C9/C10: report для всіх, timezone-timing                        |Блокер для retention-петлі                     |
+|**Completion report не landing**       |Юзер не розуміє що цикл завершено                      |передчасний/втрачений report; fixed-UTC timing; stale CTA                   |Скільки дійшли до report; continuation rate                |LIF-03/LIF-12/LIF-13: atomic finalization, durable report, timezone/work_days|Блокер для retention-петлі          |
 |**HR launch механіка не працює**       |Лінк розісланий, ніхто не відкрив                      |cold deploy без champion/leadership buy-in                                 |Activation per company; час до відкриття                   |Champion + leadership buy-in до старту (HR discovery)           |Блокер для D1, але = launch-ітерація не продукт|
 
 **Inversion-висновок:** більшість блокерів — не про брак фіч, а про **вже наявні/сирі частини**: сирий Coach, можливо-активна adaptation, UTC-timing, renderer P0, dead states, відсутні confirm-повідомлення (gap M1/M2). Це підтверджує: критичний шлях = **прибрати/добудувати наявне** (Coach-промпт, P0 renderer, gap M1/M2, timezone, freeze-перевірки), не додавати нове.
@@ -674,7 +673,7 @@ Telegram-бот, що раз на робочий день у обраний юз
 1. Push слідує за UX-контрактом: 7-day=1/день, 14-day=2/день. Ніякого спаму понад домовлене.
 1. Scheduler: тільки work_days + обраний час + ACTIVE, у timezone юзера. Не у вихідні.
 1. Pause(resume з місця)/cancel(→день1)/change_time — детерміновані tools, не AI.
-1. Completion report для ВСІХ, о DAY-слоті timezone. 50% = коли, не чи. plan_completion_v5 deprecated.
+1. Completion report для ВСІХ: 1–2 хв після дії на останній вправі або no-action шлях після expiry; UTC cron лише safety net. Same-format continuation автоматичне. plan_completion_v5 deprecated.
 1. Приватність: компанія не бачить individual нічого. Базовий принцип, не toggle.
 1. Coach = реактивний AI-канал, retention-диференціатор (не sales). Не змінює план без tools+consent.
 1. Re-engagement OFF. Тільки scheduled(домовлений) + reactive(юзер сам).
