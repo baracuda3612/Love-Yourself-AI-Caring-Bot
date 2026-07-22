@@ -2152,6 +2152,154 @@ COACH-04, Lifecycle Completion, and COACH-08 respectively.
 
 ---
 
+# Runtime Tools Findings
+
+## Runtime Tools Area — Audit Round 2026-07-22
+
+Status: completed (backend pass). The Coach *prompt* side was already
+touched in the Coach round; this round covers the actual code paths, not
+the prompt.
+
+Focus: "evening time is a 14-day-only concept" — is that enforced in code,
+or only in the prompt?
+
+### Files inspected
+
+* `app/plan_runtime/tools.py` — `record_evening_time`, `change_evening_time`, `change_day_time`
+* `app/orchestrator.py` — tool registry, `_execute_plan_tool`, context builder, evening cascade
+* `app/workers/coach_agent.py` — state→tools matrix, `_coach_tools_for_state`, context message
+* `app/time_slots.py` — `update_user_time_slots`
+* `app/plan_drafts/service.py` — evening slot handling at plan creation
+
+### Summary — the root problem
+
+Evening delivery time is meaningful **only for MEDIUM (14-day)** plans:
+SHORT (7-day) plans have a DAY slot only (recipe in
+`plan_context_template.yaml`). But **plan type is not encoded in the FSM
+`current_state`, and is not in the context the Coach receives.** Tool
+gating is therefore purely state-based, and the "evening is 14-day-only"
+rule lives only in prompt prose — with **no backend guard**. A 7-day user
+can be offered, and can trigger, evening-time operations that do nothing
+but return a success message.
+
+### Findings
+
+#### RT-01 — `change_evening_time` gives a false success for 7-day users
+
+Severity: P1
+Status: confirmed
+
+`change_evening_time` (`tools.py:222-247`) calls `update_user_time_slots`
+with `{"EVENING": hhmm}` and reschedules future steps. It never checks
+`evening_slot_collected` or whether the active plan is MEDIUM. For a SHORT
+plan there are no evening steps, so `update_user_time_slots`
+(`time_slots.py:247`, merge semantics) simply stores an EVENING value the
+plan never uses and `reschedule_plan_steps` gets an empty list →
+`rescheduled=0` — yet the function returns `{"status": "ok"}` and the
+orchestrator replies **"✅ Вечірній час змінено"** (`orchestrator.py:1230`).
+The user is told a time changed that affects nothing in their plan.
+
+Fix (`tools.py`): guard at the top — load profile + active plan; if
+`evening_slot_collected` is False, or the active plan is SHORT / has no
+EVENING slot, return a soft `{"status": "no_evening_slot"}` and persist
+nothing. Do not claim success.
+
+#### RT-02 — `record_evening_time` sets the 14-day flag with no context guard
+
+Severity: P2
+Status: confirmed
+
+`record_evening_time` (`tools.py:167-191`) persists EVENING and sets
+`evening_slot_collected=True` for any caller in the gated state. The MEDIUM
+auto-create only fires when `pending_action == collect_evening_time_for_medium`
+(`orchestrator.py:1316`), but the persistence + flag set happen
+unconditionally. If the tool mis-fires (LLM error) outside that flow, a
+14-day-only flag is set for a user with no pending 14-day creation.
+
+Fix: gate persistence to the pending-MEDIUM context — either the
+orchestrator only routes `record_evening_time` when
+`pending_action == collect_evening_time_for_medium`, or the tool no-ops
+outside it. Lower severity than RT-01 (it stores a real user-provided
+value), but it is a 14-day flag set outside the 14-day flow.
+
+#### RT-03 — Tool gating is state-based; evening relevance is plan-type-based; only prompt prose bridges them
+
+Severity: P1
+Status: confirmed
+
+The state→tools matrix (`coach_agent.py:652-654`) lists
+`change_evening_time` under `ACTIVE` and `ACTIVE_PAUSED` unconditionally. A
+user in `ACTIVE` may hold a SHORT **or** MEDIUM plan — the state does not
+distinguish. The prompt notes (`coach_agent.py:658-660`) say
+`change_evening_time` is "available only when an evening time is already
+configured" and `record_evening_time` "only while a 14-day is pending" —
+but `_coach_tools_for_state` (`coach_agent.py:962-970`) filters purely by
+`current_state` and enforces neither. So the only thing stopping a 7-day
+user from getting the evening tool is the LLM obeying a prompt note. Per
+this audit's standing discipline, the prompt is not a guarantee.
+
+Fix: make tool filtering plan-type-aware (needs RT-04). Drop
+`change_evening_time` when the active plan is SHORT / no evening configured;
+expose `record_evening_time` only when a MEDIUM creation is pending.
+
+#### RT-04 — Coach context omits plan type, so the filter cannot be plan-type-aware
+
+Severity: P1 (enabler for RT-03)
+Status: confirmed
+
+The context payload built in `orchestrator.py:1124-1130` carries
+`current_state` but no `plan_type` / `total_days`. `_context_message`
+(`coach_agent.py:738-748`) forwards only `current_time`, `current_state`,
+`completion_context`. So neither the LLM nor `_coach_tools_for_state` has
+the information needed to distinguish 7-day from 14-day.
+
+Fix: add the active plan's `plan_type` (or `total_days`) and
+`evening_slot_collected` to the payload at `orchestrator.py:1124`, thread
+them through to `_coach_tools_for_state`, and use them in the filter (RT-03).
+
+### Recommended fix shape — belt and suspenders
+
+* **Backend guard (must-have):** RT-01/RT-02 — the evening tools refuse to
+  act outside a real 14-day context, returning soft results, never false
+  success. This is authoritative and independent of the LLM.
+* **Plan-type-aware filtering (polish):** RT-03/RT-04 — the Coach is never
+  even offered `change_evening_time` for a 7-day user. Reduces LLM misfires.
+
+The backend guard is the priority; the filter is defense-in-depth,
+consistent with "do not rely on the prompt for guarantees."
+
+### Per-file work list
+
+* `app/plan_runtime/tools.py`
+  * `change_evening_time`: add the no-evening-slot guard (RT-01);
+  * `record_evening_time`: gate persistence to the pending-MEDIUM flow (RT-02).
+* `app/orchestrator.py`
+  * `_execute_plan_tool` / cascade: handle the new `no_evening_slot` soft
+    result with a friendly message; optionally refuse `record_evening_time`
+    unless `pending_action == collect_evening_time_for_medium` (RT-02);
+  * context builder (`:1124-1130`): add `plan_type`/`total_days` +
+    `evening_slot_collected` (RT-04);
+  * `_humanize_tool_error`: map the new evening-guard error to friendly copy.
+* `app/workers/coach_agent.py`
+  * `_context_message`: forward `plan_type` / evening-configured (RT-04);
+  * `_coach_tools_for_state`: filter `change_evening_time` /
+    `record_evening_time` by plan type + pending state (RT-03);
+  * state→tools matrix + notes (`:652-660`): align the doc with the
+    enforced filter once RT-03/RT-04 land.
+* tests: 7-day user cannot change evening time (soft refusal, no false
+  success); `record_evening_time` outside the pending-MEDIUM flow does not
+  set the flag; the Coach is not offered evening tools for a SHORT plan.
+
+### Scope boundary
+
+This round covers the evening-time runtime tools and their gating. It does
+not re-audit pause/resume/cancel/get_plan_status (touched in the Coach
+round) beyond noting they share the same state-only gating. The FSM state
+model itself (whether plan type *should* be part of state) belongs to the
+States/guards round assigned in parallel.
+
+---
+
 # Miscellaneous Findings
 
 > Standalone findings that don't yet belong to an audited area above.
