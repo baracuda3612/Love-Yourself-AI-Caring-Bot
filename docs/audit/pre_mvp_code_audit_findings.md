@@ -1217,8 +1217,10 @@ Minimal fix: build the confirmation copy from the actual first step's `scheduled
 * implement onboarding for exactly one concrete HH:MM time and work_days;
 * do not ask for duration, MORNING, or evening time;
 * remove user-facing MORNING / DAY / EVENING terminology;
-* obtain founder decision on recommended and allowed DAY time range;
-* apply the decided range through one shared validator;
+* reconcile the contradictory legacy time-range claims (`12:00–17:59` UI vs
+  `06:00–23:59` text vs `<12:00` rejection) into **one shared validator**
+  that enforces the ONB-04 founder decision: any valid time up to `23:59`,
+  no artificial hard range (soft steer via the onboarding question only);
 * create the first SHORT plan automatically after onboarding data is saved;
 * confirm the actual first-task date and time;
 * build the confirmation from the finalized first step's `scheduled_for`, not the activation anchor (ONB-08);
@@ -1229,7 +1231,7 @@ Minimal fix: build the confirmation copy from the actual first step's `scheduled
 * handle arbitrary onboarding text deterministically without losing the current step, with approved FAQ matching and the separate crisis guard;
 * test back/edit/restart/stop paths and ensure retries cannot create duplicate plans;
 * instrument the full activation chain: onboarding start, setup saved, plan created, first task delivered at the confirmed moment, and first response;
-* add onboarding tests for state transition, persistence, forbidden questions, range validation, first-plan creation, and confirmation copy.
+* add onboarding tests for state transition, persistence, forbidden questions, time validation (any time up to `23:59` accepted; one shared validator), first-plan creation, and confirmation copy.
 
 ---
 
