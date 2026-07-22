@@ -128,9 +128,10 @@ which is the wrong target. This product inserts a quality recovery break
 *into* a demanding workday for A-players. So: first explain the product's
 purpose (recovery during the grind, not rest after it), then ask
 specifically — **"у другій половині робочого дня, коли найкраще отримувати
-сповіщення?"** Tying the moment to the goal is Fogg's *Impact* criterion:
-it yields a meaningful proto-anchor, not an arbitrary time. (Afternoon is a
-reasonable, testable prior — fatigue accumulates through the day.) The
+сповіщення?"** Tying the moment to the goal is deliberate behavioral
+framing: it yields a meaningful proto-anchor, not an arbitrary time.
+(Afternoon is a reasonable, testable prior — fatigue accumulates through
+the day.) The
 user then picks a concrete `HH:MM`: technically unchanged, behaviorally
 far better framed. This makes the anchor *better, not perfect* — it is
 still self-reported, and the day can still block it; the window and

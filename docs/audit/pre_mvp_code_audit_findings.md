@@ -15,9 +15,10 @@ The goal is to identify what must be fixed, frozen, removed, or verified before 
 
 1. `docs/audit/product_contract.md` — baseline product contract.
 2. Founder decisions in this file — override baseline when newer.
-3. `resource/assets/product/conceptual_map.md` and `conceptual_map_en.md` — synchronized user-facing product facts; lifecycle changes must stay aligned with the founder decisions and contract.
-4. Area audit findings — factual code observations, not product decisions.
-5. Audit discussions — context only, already distilled into findings below.
+3. `docs/audit/delivery_contract.md` — accepted product contract for the daily exercise touchpoint (adopted by FD-06).
+4. `resource/assets/product/conceptual_map.md` and `conceptual_map_en.md` — synchronized user-facing product facts; lifecycle changes must stay aligned with the founder decisions and contract.
+5. Area audit findings — factual code observations, not product decisions.
+6. Audit discussions — context only, already distilled into findings below.
 
 ---
 
@@ -452,6 +453,37 @@ per-user profiling, and is the intended path.
 * build the optional feedback capture; wire it to storage only;
 * drop the `weight` field for now (PLAN-06) — difficulty grading is a
   post-data hypothesis, not an MVP dial.
+
+---
+
+## FD-06 — Exercise Delivery Contract adopted
+
+Status: accepted (2026-07-22)
+Priority: P1
+Area: Delivery / product touchpoint
+
+The daily exercise notification is the single primary product touchpoint.
+Its product contract is `docs/audit/delivery_contract.md`, adopted here as
+an authoritative source of truth (see Source of truth #3). The delivery
+findings (DEL-01…DEL-08) check the code against it.
+
+Key accepted points (full text in the contract):
+
+* channel-neutral shape `title · duration · ordered steps · Done/Skip`;
+  first line self-sufficient for the push preview;
+* no rationale in the message — **not before and not after** (removed
+  100%); no counters, mechanic/slot/internal IDs, persona copy, or a Coach
+  message right after delivery;
+* on tap, **edit the same message** (not a new one); buttons change with
+  state; after `Виконано` show the optional completed-only feedback tap;
+  after `Пропустити` show no feedback;
+* Mini App / rich cards deferred (post-beta, selective, only where
+  interaction makes the action *easier*);
+* delivery timing / anchor is a reasoned MVP stance + open beta learning
+  goal — the onboarding time question is purpose-framed and scoped to the
+  workday, the time is a likely-good moment not a deadline, company anchor
+  is recommended-only, and no delivery time/content adapts automatically
+  in MVP.
 
 ---
 
@@ -1088,6 +1120,10 @@ collect one concrete delivery time
 → save both
 ```
 
+Collect the one user-confirmed delivery time using the purpose-framed,
+workday-scoped onboarding question defined in `delivery_contract.md`
+(FD-06) — not a generic "when are you free" prompt.
+
 #### ONB-03 — Internal slot tags leak into user-facing surfaces
 
 Severity: P1  
@@ -1106,8 +1142,8 @@ Internal slot tags remain available for storage, generation, and scheduling only
 
 #### ONB-04 — Recommended and allowed onboarding time range is not defined consistently
 
-Severity: UNCLEAR  
-Status: needs verification
+Severity: P2 (consistency cleanup)
+Status: founder decision made (2026-07-22) — no hard range; reconcile legacy claims
 
 Current code contains conflicting behavior:
 
@@ -1121,16 +1157,22 @@ The current product contract requires one daytime time but does not define one a
 
 Minimal fix:
 
-Do not implement a range by inference. First record a founder decision, then use one shared validator for onboarding, change-time tools, API, and scheduling.
+Do not implement a range by inference. Use one shared validator for onboarding, change-time tools, API, and scheduling — but the founder decision below sets what that validator enforces.
 
-Founder decision needed:
+Founder decision (2026-07-22):
 
-Yes. Define:
-
-1. the recommended time or recommended options shown during onboarding;
-2. the earliest and latest allowed DAY time;
-3. whether a user may override the recommendation inside a broader safe range;
-4. whether the same range applies when changing time later.
+**No artificial hard range for MVP.** Allowed DAY time = any valid clock
+time up to `23:59`; the end-of-local-day expiry window already exists and
+handles late choices. Rationale: with 0 users this is a hypothesis, not a
+constraint to guess — give people freedom and let aggregate data reveal
+which hours actually work (good times survive, bad timing fades). Steering
+toward the productive window is done **softly**, by the purpose-framed
+onboarding question (FD-06 / `delivery_contract.md`), not by a hard numeric
+gate — the two would be redundant, and the soft version preserves freedom
+while still keeping most users out of the leisure-time slot. Remaining
+cleanup is consistency only: remove the contradictory legacy range claims
+(`12:00–17:59` UI vs `06:00–23:59` text vs `<12:00` rejection) so one
+shared validator agrees with "any time, end-of-day window."
 
 #### ONB-05 — First-plan backend already avoids duration and evening collection
 
@@ -1916,12 +1958,12 @@ shape and adds implementation framing to a deliberately small action.
 
 `format_task_notification()` also contains a `Чому це працює` block before
 the instructions. The current v5 inventory has no rationale field, so the
-path is dormant today, but adding one later would silently violate the
-contract that rationale belongs only in optional post-action closure.
+path is dormant today, but adding one later would violate FD-06: **rationale
+is not rendered before or after the exercise in MVP** (removed 100%).
 
 Minimal fix: render only trusted display content in the exercise body and
-keep internal slot, mechanic, task index, and rationale out of the
-pre-action message.
+keep internal slot, mechanic, task index, and rationale out of the message
+entirely (per FD-06 / `delivery_contract.md`).
 
 #### DEL-03 — Legacy randomized engagement/adaptation runs after complete and skip
 
@@ -1943,11 +1985,20 @@ button and routes `adapt_suggest` into Coach. This is an automatic
 adaptation/engagement prompt even though C7 says adaptation does not
 trigger at all in MVP and C3 keeps expanded closure/reflection at P2.
 
-Expected MVP behavior: persist the canonical result, remove the buttons,
-and return one short deterministic acknowledgement. Do not activate the
-random engagement catalog or an adaptation CTA. The exact acknowledgement
-copy can be polished later; disabling unsupported behavior does not need a
-new product decision.
+Expected MVP behavior (per FD-06 / `delivery_contract.md`): persist the
+canonical result, then **edit the same delivered message** — do not send a
+new one. Specifically:
+
+* remove the Done/Skip buttons;
+* show a durable in-message status `Виконано` / `Пропущено`;
+* after `Виконано`, show the optional completed-only feedback tap
+  (`Допомогло?`);
+* after `Пропустити`, show **no** feedback control;
+* do **not** send any additional engagement/adaptation message, and do not
+  activate the random catalog or an adaptation CTA.
+
+The exact acknowledgement copy can be polished later; disabling unsupported
+behavior does not need a new product decision.
 
 #### DEL-04 — Delivered buttons conflict with pause and cancellation semantics
 
@@ -2016,11 +2067,16 @@ Minimum tests before beta:
 
 * render every active v5 item from `display.title`, ordered
   `display.steps`, and `display.duration_label`;
-* assert that internal IDs/slots/mechanics and pre-action rationale are
-  absent;
+* assert that internal IDs/slots/mechanics and rationale are absent
+  (before AND after the action, per FD-06);
 * assert the two callback IDs and ownership/idempotency behavior;
+* assert on-tap **edit-in-place** of the same message (no new message) with
+  the correct keyboard replacement and durable status;
+* assert the feedback tap appears **only** after `Виконано`, never after
+  `Пропустити`;
 * cover active, paused, canceled, completed, skipped, and expired button
-  states;
+  states, including that `expired`/`canceled` remove the keyboard and
+  `paused` leaves an already-delivered exercise actionable;
 * cover successful delivery, bounded retry, and duplicate prevention;
 * cover keyboard removal at expiry and cancellation.
 
@@ -2066,10 +2122,18 @@ gaps rather than replacing the whole delivery path.
   message (DEL-02);
 * freeze the legacy post-click engagement/adaptation layer and keep one
   deterministic acknowledgement (DEL-03);
+* implement on-tap **same-message state transition** (edit, not new
+  message) with changing buttons and durable status (DEL-03, FD-06);
+* implement the **completed-only feedback callback** and persist its result
+  (`exercise_id`, answer, timestamp); wired to storage only (FD-05/FD-06);
 * align pause/cancel keyboard behavior with the Product Map (DEL-04);
 * add bounded delivery retry/idempotency (DEL-05);
 * replace stale callback tests and add end-to-end renderer coverage
   (DEL-06).
+
+The full delivery shape and copy rules are defined in
+`docs/audit/delivery_contract.md` (FD-06); this list is the code work to
+satisfy it.
 
 HTML escaping and a size guard (DEL-07) are low-cost hardening and should
 be included in the renderer change if possible, but they are not the
