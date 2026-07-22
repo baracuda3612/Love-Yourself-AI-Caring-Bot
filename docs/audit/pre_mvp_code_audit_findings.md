@@ -325,6 +325,136 @@ state transition, and first real delivery form one activation system.
 
 ---
 
+## FD-05 — No behavioral contingency in MVP; variety by randomness, feedback by explicit ask
+
+Status: accepted (2026-07-22)
+Priority: P1
+Area: Plan Generation / Delivery / Retention
+Resolves: PLAN-05 (from "P1 defect" to "OK by design")
+
+### Decision
+
+Two separate levers, set independently:
+
+* **Content variety (stimulus unpredictability): MAX.** The exercise
+  sequence is randomized so the user cannot predict tomorrow's exercise.
+  This is a deliberate design property, not a bug. Its randomness derives
+  only from **shown-history** (which exercises were already delivered),
+  never from completion-history.
+* **Behavioral contingency: ZERO.** The generated sequence does not
+  change based on `completed`, `skipped`, or `ignored`. The system never
+  infers *why* a user skipped and never rewards or punishes behavior with
+  future content. Delivery follows the user-selected schedule.
+
+**Terminology (corrected 2026-07-22).** Do *not* call this "variable
+reward." In operant terms a variable reward is a variable *consequence of
+behavior*; a random exercise sequence is not a consequence of anything the
+user did, so the label is wrong and, worse, it imports the exact
+TikTok/slot-machine connotation this product avoids. The accurate framing:
+**content variety is intentionally non-contingent — each cycle receives a
+different valid sequence, independent of completion, skip, or ignore.**
+The unpredictability may still drive anticipation/engagement (real
+psychology), but through novelty of a non-contingent stimulus, not through
+reinforcement of behavior. These two levers are compatible precisely
+because the variety is never earned or lost through the user's actions.
+
+### Three levels of "learning" — only level 3 is excluded
+
+"Personalization" and "learning" are not one thing. There are three
+distinct levels, and the ZERO-contingency decision applies **only to
+level 3**. Conflating them would wrongly forbid work that is actually
+allowed.
+
+1. **Global product learning (for everyone, equally).** Aggregate metrics
+   and feedback rewrite weak exercises, retune timing, adjust the library
+   or recipe. The builder gets smarter, but produces the same output for
+   all users. Intended. This is the primary improvement path.
+2. **Context personalization by explicit ask.** The product asks the user
+   about their anchor/context (where they work, when they take breaks —
+   Fogg Model 5, Anchoring) and the builder fits the exercise and time to
+   that stated context. Personal, but collected by **asking, not
+   inferring** — same rule as the feedback button. Ethically clean.
+   Also the real answer to the fixed-14:00 prompt problem: one onboarding
+   question about the user's routine lets both time and exercise fit their
+   actual day, with no tracking. Deferred **only** for onboarding
+   simplicity (funnel-length risk, FD-04), not for any ethical reason. A
+   clean v2, not a forbidden zone.
+3. **Behavioral-inference personalization.** The system guesses from
+   completed/skipped/ignored what suits a user and diverges their content.
+   This is the excluded lever. Deferred until real usage data, a direct
+   effect signal, and critical mass exist — "not before critical mass,"
+   not "not before v2." This is where the surveillance and adverse-
+   selection risks live.
+
+The dividing line for exclusion is **inference vs asking**, not
+"personal vs not." Level 2 is personal and allowed because the user
+states it; level 3 is forbidden because the system infers it.
+
+### Why contingency is excluded (not deferred by accident)
+
+* **Map ≠ territory.** `task_completed` does not prove the exercise was
+  done or helped; `skip` does not prove the exercise is bad (the user may
+  have been on a call). Personalizing on clicks is pseudo-precision.
+* **Incentive corruption.** If `completed` unlocked "better" exercises or
+  `skip` degraded the future, the system would train button-pressing and
+  punish honest answers. In a B2B context this risks the product being
+  perceived as employee monitoring — a fat-tail trust failure that can
+  break the corporate sale even without any individual data reaching HR.
+* **Adverse selection.** If future delivery depended on compliance, the
+  most exhausted users would receive least support exactly when they need
+  it most. Fixed-time delivery requires nothing to be "earned."
+* **No statistical base.** At 10–15 users there is no basis for
+  per-user personalization — only the risk of building complexity around
+  noise.
+* **History.** Behavioral adaptation was built in v3 (65 exercises) and
+  deliberately cut as speculative. v1 ships with none by decision. The
+  `ADAPTATIONS_ENABLED` mentions in code are deletion residue, not a
+  pending feature.
+
+### What MVP does keep
+
+* **Different but neutral, non-evaluative response handling.** `completed`,
+  `skipped`, and `ignored` record distinct states and telemetry (counters,
+  time-to-response), and completion summaries are factual. None of this
+  gates or shapes future content.
+* **Optional explicit feedback ("did it help?") — after `completed` ONLY.**
+  This is the *direct effect signal* that click data alone cannot provide.
+  Critical constraint: the question is asked **only after `completed`**.
+  After `skipped` the user did not do the exercise and cannot rate its
+  effect — bolting an "оцініть вправу" prompt onto a skip is nonsensical
+  and embarrassing. A skip needs a *different* question (why skipped), and
+  that is a separate feature, deferred. For completed only: one optional
+  tap; store `exercise_id`, answer, timestamp; change nothing in the
+  current or next cycle; never send an individual answer to the company;
+  use only for aggregated exercise review.
+
+  This is a deliberate, scoped **exception to the "no new features" audit
+  rule** — justified because it is architecturally trivial (no plan/state
+  changes) and high-EV for product-level learning. Effort is realistically
+  a few hours, not 15–20 minutes: `UserEvent.context` is already JSONB so
+  likely no migration, but callback, idempotency, keyboard state, storage,
+  and tests remain. It belongs to the **Delivery / Telemetry** area as a
+  small standalone experiment, not to Plan Generation.
+
+### Boundary for future work
+
+User-level adaptation may be reconsidered only after real usage data and
+the accumulated effect signal exist. Completion clicks alone are
+insufficient. Product-level learning (rewriting weak exercises,
+re-tuning timing globally) is Bayesian updating of the product, not
+per-user profiling, and is the intended path.
+
+### Code implications
+
+* remove `ADAPTATIONS_ENABLED` mentions and any "pending adaptation" copy;
+* disable legacy adaptation/engagement CTAs (see DEL-03);
+* selection reads shown-history for variety, never completion-history;
+* build the optional feedback capture; wire it to storage only;
+* drop the `weight` field for now (PLAN-06) — difficulty grading is a
+  post-data hypothesis, not an MVP dial.
+
+---
+
 # Scheduler Findings
 
 ## SCH-01 — Re-engagement job active
@@ -1353,7 +1483,15 @@ repetitive by construction.
 #### PLAN-01 — Every regenerated plan is byte-identical for the same user
 
 Severity: BLOCKER
-Status: confirmed by execution
+Status: confirmed by execution; fix blessed as the variety mechanism (FD-05, 2026-07-22)
+
+> **Decision note (2026-07-22).** The fix below is not just bug-removal —
+> it *is* the variety mechanism of FD-05 (level "variety by randomness").
+> Unfreezing the seed turns the current single frozen combination into a
+> fresh random draw from ~20,480 valid sequences per plan. Full random is
+> deliberately blessed. Today the system does not have "one chosen
+> combination" — it has one *accidental* frozen draw nobody selected,
+> which is the worst of both worlds.
 
 `_weighted_choice` seeds `random.Random(seed_key)` with
 `f"{user_id}:{day}:{slot}"`. `day` is the plan-local day number, which
@@ -1375,10 +1513,13 @@ issue: the user completes 7 days, receives "наступні 7 днів гото
 gets exactly the same seven exercises in exactly the same order. Every
 period. Indefinitely.
 
-Minimal fix: include a per-plan discriminator in the seed (plan id,
-sequence number, or creation timestamp) so successive plans differ, and
-carry `last_used` across the plan boundary so the first days of a new
-plan do not repeat the final days of the previous one.
+Minimal fix: include a stable **per-cycle discriminator** in the seed —
+`plan_instance_id` or a cycle number, **not** a creation timestamp. The
+contract is: **deterministic within one cycle** (re-generating the same
+cycle yields the same sequence) but **different across cycles**. A
+timestamp breaks the first half. Also carry `last_used` across the plan
+boundary so the first days of a new cycle do not repeat the final days of
+the previous one.
 
 #### PLAN-02 — Switching SHORT→MEDIUM replays the first 7 days
 
@@ -1394,10 +1535,26 @@ A user who explicitly upgrades to the longer format is shown a full week
 of repeats before reaching anything unseen — the opposite of what an
 explicit upgrade should feel like. Same fix as PLAN-01.
 
-#### PLAN-03 — Content library is too small to support the format
+#### PLAN-03 — Small library: repetition within a week is accepted, not fixed by growth
 
-Severity: BLOCKER
-Status: confirmed by execution
+Severity: was BLOCKER → **decision recorded** (2026-07-22): library not expanded for MVP
+
+> **Decision note (2026-07-22).** Original framing ("library too small,
+> grow it") is rejected by the founder. The 5 `switch` exercises are the
+> deliberately approved core — the previous 65 were mostly fillers and
+> were cut. The product is state-change + rest, not exercise count. Adding
+> exercises is itself an untested hypothesis and reintroduces fillers, so
+> the library is **not expanded for MVP**.
+>
+> Consequence, stated honestly so it is not a hidden assumption: with 5
+> exercises over 7 day-slots, within-week repetition is mathematically
+> forced (pigeonhole — at least two exercises must repeat). This is
+> accepted. Variety comes from **cross-plan** sequence randomness (PLAN-01
+> fix), not from library size: each new period is a different random draw
+> of order/frequency over the same 5 exercises. Day-to-day unpredictability
+> ("never know tomorrow's exercise") holds; the content *pool* stays at 5.
+> Whether a 5-exercise pool avoids week-3 habituation is a real open
+> question answerable only in beta — recorded, not pre-answered.
 
 The library holds 8 active exercises: 5 `switch`, 3 `unload`.
 
@@ -1421,17 +1578,17 @@ nearly half see one exercise three or more times. For MEDIUM the EVENING
 slot draws from 3 `unload` exercises across 14 evenings — measured
 distinct count is 3, i.e. a forced rotation of the same three items.
 
-This is a content problem, not a code problem, but it is load-bearing:
-no seeding fix improves variety that the library does not contain.
-
-Founder decision needed: minimum library size before beta. As a
-reference point, keeping "no exercise repeats inside one 7-day period"
-requires ≥7 `switch` exercises; keeping it across two consecutive periods
-requires ≥14.
+Measurement note: with 5 `switch` exercises over 7 day-slots, some
+within-week repetition is mathematically forced (pigeonhole). The seeding
+fix (PLAN-01) does not add exercises the library lacks — it only varies
+order/frequency **across** cycles. Per the decision note above, this is
+accepted; library size is not increased for MVP. (Earlier reference
+points about ≥7 / ≥14 exercises assumed the rejected "grow the library"
+path and no longer apply.)
 
 #### PLAN-04 — `cooldown_days: 1` permits every-other-day repetition
 
-Severity: P1
+Severity: not a bug — tuning knob, accepted as beta hypothesis (2026-07-22)
 Status: confirmed
 
 `_is_in_cooldown` returns `(current_day - last_used[id]) <= cooldown_days`.
@@ -1439,8 +1596,11 @@ With `cooldown_days: 1` — the value on all 8 library items — an exercise
 used on day N is blocked on day N+1 and available again on day N+2.
 
 Combined with PLAN-03 this is what produces the 3× and 4× repeat counts
-above. The cooldown mechanism works as written; the configured value is
-simply too permissive for a library this size.
+above. The cooldown mechanism works as written; the value is a **content
+pacing dial**, not a defect. Given the accepted 5-exercise library
+(PLAN-03), raising it too far starves the pool (`NoCandidatesError`).
+Decision: keep `1` as the beta hypothesis; revisit only if usage shows
+the repetition texture actually hurts.
 
 Note the mechanism is shared across slots: `last_used` is one dict for
 both DAY and EVENING, which correctly prevents the same exercise
@@ -1448,58 +1608,47 @@ appearing twice on the same day.
 
 #### PLAN-05 — Generation is blind to user behavior (operant frame)
 
-Severity: P1 — product-level, requires founder decision
-Status: confirmed
+Severity: OK by design — resolved by FD-05 (2026-07-22)
+Status: confirmed; product decision recorded
 
-Requested analysis: what reinforcement schedule does plan generation
-implement? Answer: **none**. Verified structurally — `plan_builder_v5.py`
-contains no reference to step status, completion, skip, streak, or any
-history. Its only inputs are `plan_type`, `user_id`, the two time
-strings, the recipe, and the library. `ADAPTATIONS_ENABLED` is named in
-the invariant header but does not exist as a config flag anywhere in
-`app/` (only in comments), so there is not even a disabled feedback path.
+Requested analysis: does plan generation react to user behavior? **No,
+verified structurally.** `plan_builder_v5.py` contains no reference to
+step status, completion, skip, streak, or any history. Its only inputs
+are `plan_type`, `user_id`, the two time strings, the recipe, and the
+library. `ADAPTATIONS_ENABLED` is named in the invariant header but does
+not exist as a config flag anywhere in `app/` (only in comments) — it is
+deletion residue, not a disabled feedback path.
 
-In operant terms:
+Locus note: reinforcement (in the operant sense) lives in the
+response→consequence path, not in sequence generation, so the operant
+question is really about the callback layer, not the builder. This finding
+is filed under Plan Generation only because the question was asked about
+generation. Two facts about that callback layer, recorded for accuracy:
+`completed` and `skipped` record **distinct** states and telemetry (they
+are not identical — they only lead to the same future next exercise); and
+the completion report **arrives** for everyone regardless of completion
+rate (LIF-08) but its **content** reflects actual completion (14/14 and
+1/14 get different text, not identical text).
 
-* delivery is a **fixed-time schedule** — the stimulus arrives at a
-  clock time regardless of what the user does. Non-contingent stimulus
-  presentation is not a reinforcement schedule for the target behavior;
-* the consequence of the target response is a Telegram toast:
-  `"✅ Чудово! Завдання виконано."` vs `"⏭️ Завдання пропущено"`
-  (`telegram.py:480` / `telegram.py:595`). Both paths then remove the
-  keyboard. Structurally the two outcomes are identical — an ephemeral
-  toast and the disappearance of the button;
-* therefore doing the exercise and not doing it produce the same
-  observable future: same next exercise, same next time, same plan. There
-  is no differential consequence anywhere in the loop;
-* the one genuinely contingent element in the system — the completion
-  report — is explicitly not gated on completion rate (LIF-08), so it
-  arrives identically for a user who did 14 of 14 and one who did 1 of 14.
-
-This is a coherent design choice for a low-pressure wellness product and
-is not automatically wrong — non-contingent care is a defensible stance.
-But it should be an explicit founder decision, not an emergent property
-of an unfinished adaptation layer. The current state is the *weakest*
-version of both options: no contingency, and no deliberate rationale for
-its absence.
-
-Founder decision needed: is the absence of behavioral contingency
-intentional for MVP? If yes, record it as a decision and stop describing
-adaptation as pending. If no, the smallest honest contingency is
-differential consequence at the response — not a rewritten plan.
+Resolution: this is not a defect. FD-05 records behavioral contingency as
+intentionally excluded from MVP. Residual work is cleanup (remove
+adaptation residue, disable legacy engagement CTAs), tracked under FD-05
+code implications — not a new adaptation system.
 
 #### PLAN-06 — `weight` is effectively decorative
 
 Severity: P2
-Status: confirmed
+Status: confirmed; founder decision — drop for now (2026-07-22, FD-05)
 
 Active weights span 1.2–1.5 (`1.5`×1, `1.4`×2, `1.3`×3, `1.2`×2). Across
 a candidate pool of 2–5 items this is close to uniform selection; the
 field implies editorial control over exercise frequency that it does not
 meaningfully exert.
 
-Minimal fix: either widen the range so it expresses a real editorial
-prior, or drop the field and document selection as uniform.
+Founder decision: **drop the field** for MVP; selection is uniform (within
+cooldown). Weighting exercise frequency by difficulty or editorial prior
+is a post-data hypothesis, not an MVP dial — it should be driven by
+behavioral data later, not guessed now.
 
 #### PLAN-07 — `source_exercises` records the whole library, not the plan
 
@@ -1518,14 +1667,20 @@ Minimal fix: store the distinct `exercise_id` values actually placed in
 #### PLAN-08 — Library `variations` is unused
 
 Severity: P2
-Status: confirmed
+Status: confirmed; parked as deferred new feature (2026-07-22)
 
 Every inventory item carries a `variations` array (empty in all 8 current
 items). `ExerciseV5.from_library_item` does not read it and no code in
-`app/` consumes it. Either it is the intended variety mechanism that was
-never wired — which would directly mitigate PLAN-03 — or it is dead
-schema. Worth resolving before adding content, since it changes how new
-exercises should be authored.
+`app/` consumes it.
+
+> **Decision note (2026-07-22).** Not dead schema — this is the founder's
+> own **unfinished** variations feature (e.g. a longer second exercise on
+> the same theme for reactively-engaged users). It is a new feature, still
+> at the "not yet thought through" stage, and the audit rule is "no new
+> features in MVP." So it is **parked**: leave the field in place but
+> unwired, no authoring guidance yet. Revisit only when the variations
+> feature is actually designed. It is one candidate mechanism for level-2
+> content variety later (FD-05), but not MVP.
 
 #### PLAN-09 — Builder invariants that hold
 
@@ -1547,16 +1702,30 @@ Verified correct and worth protecting with tests:
 
 ### Required MVP work
 
-* add a per-plan discriminator to the selection seed and carry cooldown
-  state across plan boundaries (PLAN-01, PLAN-02);
-* decide and reach a minimum library size; re-tune `cooldown_days` to
-  that size (PLAN-03, PLAN-04);
-* record an explicit founder decision on behavioral contingency (PLAN-05);
+Mandatory:
+
+* add a stable per-cycle discriminator to the selection seed and carry
+  cooldown state across cycle boundaries (PLAN-01, PLAN-02);
 * fix `source_exercises` to record what was actually scheduled (PLAN-07);
-* resolve `variations` — wire it or remove it (PLAN-08);
-* add regression tests: two consecutive plans for one user must differ;
-  SHORT→MEDIUM must not replay days 1–7; no exercise repeats within a
-  configured window.
+* drop the `weight` field (PLAN-06);
+* remove adaptation residue / `ADAPTATIONS_ENABLED` mentions and disable
+  legacy engagement CTAs (FD-05, PLAN-05);
+* add regression tests: same cycle re-generates identically; the next
+  cycle differs; SHORT→MEDIUM does not replay days 1–7.
+
+Consciously accepted (no work — recorded decisions, FD-05 / PLAN-03):
+
+* five DAY exercises; within-week repetition; no behavioral adaptation;
+  current `cooldown_days: 1` kept as a beta hypothesis (PLAN-04 is a tuning
+  knob, not a bug — revisit only if beta shows repetition hurts).
+
+Deferred (not MVP):
+
+* `variations` (PLAN-08); exercise levels/unlocks; personalization;
+  automatic future-cycle changes from feedback.
+
+The optional post-`completed` feedback tap (FD-05) is a small standalone
+experiment owned by the Delivery / Telemetry area, not Plan Generation.
 
 ### Scope boundary
 
