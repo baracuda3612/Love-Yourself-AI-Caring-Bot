@@ -936,6 +936,64 @@ The plan id also differs between the two senders: the hidden task uses `plan.id`
 
 Minimal fix: remove sending from `_auto_complete_plan_if_needed` entirely. Finalization must only finalize and record durable outbox state (LIF-13); delivery must be an explicit, separately invoked step for every caller.
 
+#### LIF-19 — The plan-to-plan seam is undefined and mechanically biased toward same-day collision
+
+Severity: P1 (target-behavior design gap)
+Status: confirmed; founder-flagged 2026-07-22
+
+Context: this is the seam where one plan ends and the FD-01 same-format
+successor begins — specifically the timing of the completion report
+relative to the new plan's first exercise. Automatic continuation is not
+wired yet (LIF-04: `create_followup_plan` is only reachable as a Coach
+tool, never from the completion path), so the seam does not exist in code
+today. But the mechanical pieces already in place bias the *target* seam
+toward exactly the "дибілізм" to avoid. Recorded now so the continuation
+is built with a defined seam, not an emergent one.
+
+**Mechanical facts (verified):**
+
+* `create_plan`/`finalize_plan` anchor a new plan at `activation_time_utc
+  = now` (`service.py`), and map logical day 1 via
+  `next_active_date(anchor_date)`, which is **inclusive** (`>= from_date`,
+  `active_days.py:72`). So a successor created on a working day gets
+  **day 1 = the same day**.
+* Consequence by path:
+  * **Active completion** (target fast path, LIF-02): user presses
+    completed on the last task at, say, 14:30 while DAY time is 14:00.
+    Successor day 1 = today, scheduled_for = today 14:00 — **already in
+    the past**. The first new exercise either fires immediately (user gets
+    a fresh task seconds after the "план завершено" report) or is silently
+    missed. Either is broken.
+  * **No-action / ignored**: last task expires 23:59 local; the cron
+    finalizes on a later day; a successor created then still anchors day 1
+    to that same day, and the report timing is already wrong per LIF-12.
+* The report is supposed to state the first task's date/time (FD-01 copy:
+  "Перший таск прийде [date] о [HH:MM]"), but `create_followup_plan`
+  returns no `plan_id` and no first-step datetime (LIF-10), so the report
+  cannot currently state a true, consistent next-task moment.
+
+**Required target seam (no-дибілізм contract):**
+
+* successor **day 1 = next active day strictly AFTER** the completion/
+  report day — never the same day. Offset the anchor by one day before
+  day-mapping, or make the day-1 resolution exclusive of the completion
+  date. This removes past-time day 1 and same-day double-exercise at once.
+* exactly **one** seam message on the closing day: the report. It is
+  delivered **first**, states the exact next-task date and time, and the
+  first new task then arrives at precisely that stated moment — never
+  before the report, never in the same instant.
+* the report reads the successor's real first-step datetime (fix LIF-10 so
+  the helper returns it), so stated and scheduled moments cannot diverge.
+* both report and successor creation are guarded by plan-scoped
+  idempotency (LIF-11) so cron + fast-path + any Coach path cannot
+  double-create the plan or double-send the report.
+* no-action path delivers the report at the user's DAY time on the next
+  active day (LIF-12), consistent with the successor's first task.
+
+Minimal framing: the seam is "close old → report with a concrete future
+moment → new plan's first task lands exactly at that moment on the next
+active day." One message now, one task later, never both at once.
+
 ### Required MVP work
 
 * remove the two-hour completion trigger;
@@ -1669,9 +1727,12 @@ Minimal fix: store the distinct `exercise_id` values actually placed in
 Severity: P2
 Status: confirmed; parked as deferred new feature (2026-07-22)
 
-Every inventory item carries a `variations` array (empty in all 8 current
-items). `ExerciseV5.from_library_item` does not read it and no code in
-`app/` consumes it.
+Every inventory item carries a `variations` array. **Correction
+(2026-07-22):** it is no longer empty everywhere — 3 of 8 items now carry
+variations (`somatic_006_v2`=3, `somatic_001_combined`=2,
+`somatic_003_v2`=5), the other 5 are still empty. Regardless of fill
+state, `ExerciseV5.from_library_item` does not read the field and no code
+in `app/` consumes it — it remains **authored but unwired**.
 
 > **Decision note (2026-07-22).** Not dead schema — this is the founder's
 > own **unfinished** variations feature (e.g. a longer second exercise on
