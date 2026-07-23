@@ -2361,6 +2361,70 @@ Fix: add the active plan's `plan_type` (or `total_days`) and
 `evening_slot_collected` to the payload at `orchestrator.py:1124`, thread
 them through to `_coach_tools_for_state`, and use them in the filter (RT-03).
 
+#### RT-05 — Dead / removed-from-Coach code inventory (delete, do not patch)
+
+Severity: P1 (correctness of the removal plan)
+Status: confirmed by grep + cross-referenced
+
+Consolidated index of code that is **dead or already stripped from the
+Coach, but still present** in the backend. Founder directive: these are to
+be **removed**, not guarded/patched. Several existing findings advise
+patching guards on code that is actually being deleted — that framing is
+wrong and is corrected here.
+
+**1. `create_first_plan` — dead wrapper, no callers.**
+`grep` confirms zero callers anywhere (`app/plan_runtime/tools.py`): the
+only references are inside its own body (error string + log). It is not a
+Coach tool. ONB-07, COACH-07, and FSM-01 all describe it as "update the
+`IDLE_ONBOARDED` entry guard when that state is removed" — **wrong
+disposition.** You do not patch the guard of a function you are deleting.
+Correct disposition: **delete `create_first_plan`**. First-plan creation
+(when the real onboarding, ONB-01, is built) calls `create_plan()` in
+`plan_drafts/service.py` directly — it already enforces "first plan must be
+SHORT" (`service.py:51`) and `fsm/guards.py:7` already names `create_plan()`
+as the transition mechanism. No wrapper needed.
+
+**2. `IDLE_ONBOARDED` — dead state.** Never assigned in production (grep
+for assignment finds none; only comparisons in the dead `create_first_plan`
+guard and the FSM transition table). Its only "consumer" is the dead
+wrapper above. Remove from state definitions, guards, `ONBOARDABLE_STATES`,
+`IDLE_STATES`, and transition tables. Tracked as FSM-01 / ONB-07.
+
+**3. `IDLE_DROPPED` — dead state, orphan writer.** The only writer
+(`orchestrator.py:767`) has no live production caller (FSM-02); explicit
+abandonment uses `IDLE_PLAN_ABORTED`. Remove the orphan writer and all
+`IDLE_DROPPED` allowances; migrate any existing rows. Tracked as FSM-02.
+(This corrects RT-06's earlier "add IDLE_DROPPED to the Coach matrix"
+direction — the state is removed, not wired.)
+
+**4. `SCHEDULE_ADJUSTMENT` — zombie subsystem.** The state is **never
+entered** (grep for assignment finds none), yet a full machinery references
+it across 8 files: a `stuck_schedule_adj_check` cron job that scans for
+users in it (`scheduler.py:829`), Telegram `sched_adj_timeout` callbacks,
+session-memory `schedule_adjustment_context`, orchestrator routing
+(`:1381`), FSM transitions, and constants. Remove the whole subsystem, not
+just the constant. Tracked as FSM-03 (and SCH-02).
+
+**5. `MORNING` slot — frozen, unused, still carried.** Not produced by any
+P1 plan (recipe is DAY/EVENING only; `schemas/planner.py:51` marks it
+"frozen"), yet it persists as defaults and branches across ~7 files
+(`db.py:157`, `plan_finalization.py:92`, `api.py:57/83/89`, `time_slots.py`,
+`task_notification.py:9`). **Not in Codex's inventory — added here.** Lower
+priority than 1–4 (it is inert, not wired to a live job), but it is a latent
+user-facing leak risk (a `MORNING`/`Ранок` label could surface) and dead
+weight. Decide: remove, or keep explicitly frozen with a single guarded
+definition rather than scattered branches.
+
+Distinction to keep: items 1–5 are **dead** (remove). This is different
+from *orphaned-but-reachable* gaps (e.g. a live state with no Coach path) —
+those are behavior gaps, not dead code, and are tracked in their own
+findings.
+
+Fix: one removal pass that deletes 1–5 together with a forward migration
+for any persisted `IDLE_DROPPED` / `SCHEDULE_ADJUSTMENT` rows, and updates
+ONB-07 / COACH-07 / FSM-01 wording from "patch the guard" to "remove the
+wrapper."
+
 #### RT-06 — `create_followup_plan` has stale states and fail-open defaults
 
 Severity: P1
@@ -2523,6 +2587,14 @@ return/raise a structured activation result and never claim full success when
 job activation failed. The durable target should use an outbox/reconciliation
 record so a committed plan can retry job activation without duplicate jobs.
 Do not attempt to make a DB transaction roll back external scheduler changes.
+
+Founder directive (2026-07-23): the silent fail-open is **not acceptable** —
+this is deterministic backend code, it must not swallow a failure and report
+success. Required: either (a) a bounded retry/reconciliation policy that
+guarantees the jobs eventually exist, or (b) fail **closed** — surface the
+failure so the plan is not reported as launched. Do not ship the current
+"looks OK everywhere, user gets nothing" path. Success must mean the delivery
+jobs actually exist.
 
 #### RT-12 — time changes commit before scheduler reconciliation and fail while paused
 
