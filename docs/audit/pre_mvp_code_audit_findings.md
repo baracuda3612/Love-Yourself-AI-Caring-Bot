@@ -607,6 +607,93 @@ can be added without changing the capture contract.
 
 ---
 
+## FD-08 — Plan-centric lifecycle: one authoritative source, one derived mode
+
+Status: accepted (2026-07-23)
+Priority: P1 before beta (not a "fix today" — see sequencing)
+Area: FSM / State / Lifecycle
+Resolves the open architectural decision in the FSM round (FSM-04 / FSM-08).
+
+### Decision
+
+The user lifecycle has **one authoritative representation, and one derived
+one** — not three parallel sources that can diverge. Today `users.current_state`,
+`UserProfile.is_paused`, and `AIPlan.status` each independently describe the
+same lifecycle; the FSM round proved they drift (FSM-06/08/09). This is
+deliberately collapsed:
+
+* **Authoritative (owns lifecycle truth):**
+  * onboarding progress — owns setup state before a plan exists;
+  * `AIPlan.status` (`active` / `paused` / `completed` / `abandoned`) — owns
+    plan lifecycle. **`paused` is wired** (the enum already has it; pause sets
+    `plan.status = paused`, resume sets `active`);
+  * step statuses — own exercise execution;
+  * one plan completion date **derived from the actual last step**, not a
+    separate stored authority.
+* **Derived (never stored as a second source of truth):**
+  * `current_mode` (`ONBOARDING` / `ACTIVE` / `ACTIVE_PAUSED` /
+    `NO_ACTIVE_PLAN`) — computed at runtime by **one** function and handed to
+    Coach / UI / tool-filtering. It is a view, not a column.
+
+### Removed as duplicate lifecycle authorities
+
+* `users.current_state` — removed as a stored lifecycle source (derive
+  `current_mode` instead);
+* `UserProfile.is_paused` — removed; pause lives in `plan.status`;
+* `User.plan_end_date` — removed as a separate authority; derive from steps.
+
+`pause_count` survives as **pure telemetry**, not a lifecycle signal.
+
+### Why (the founder rationale)
+
+Keeping three sources means maintaining **two systems that can disagree** — a
+"plan signal" system and a "user state" system — and every new lifecycle
+feature must keep both in sync. The correct move is to name the authoritative
+one (the plan) and make the rest derived. Not doing this compounds: each new
+consumer multiplies invalid combinations, developers pick the convenient field
+(architectural Gresham's law), tests green-light a broken whole, races produce
+duplicate plans / wrong reports, telemetry becomes untrustworthy (risking a
+false "the exercises don't work" conclusion when the real fault is lifecycle
+data), and the migration only gets more expensive once real user data exists.
+At 0 users this is the cheapest possible moment to collapse it.
+
+### Hard dependencies (this is a refactor + migration, not a column drop)
+
+* **One derivation authority:** `current_mode` must be computed by a single
+  shared function used everywhere, or drift is merely relocated.
+* **One current plan per user:** a partial unique constraint allowing at most
+  one `AIPlan` in `active`/`paused` per user is **mandatory** (plan-centric is
+  ambiguous with two active plans), plus a dedup of any existing multiples —
+  see FSM-12.
+* **Reader refactor:** scheduler, Coach tool-filtering, task callbacks, and
+  runtime tools currently read `current_state`; they move to the current plan /
+  derived mode. Incremental, behind one migration.
+* **Recovery is outbox, not a state:** unfinished automatic continuation is an
+  idempotent outbox/reconciliation record, never a lingering `IDLE_FINISHED`
+  used as an improvised recovery queue.
+
+### Sequencing (do not big-bang; do not patch the hybrid further)
+
+1. finish the audit;
+2. this decision (done);
+3. one refactor moving lifecycle onto `AIPlan.status` + derived `current_mode`;
+4. add the one-current-plan constraint (FSM-12) and dedup;
+5. one forward migration + operation-level integration tests;
+6. remove `current_state` / `is_paused` / `plan_end_date` last.
+
+Until then the hybrid may stand for the remaining audit days, but **do not**
+build format switch (RT-07), wire automatic continuation (LIF-04), extend
+pause/resume, or start beta on top of it — each new patch grows the future
+operation.
+
+### Note
+
+FSM survives as a **concept and a derived view**, not as a duplicated stored
+column. `app/fsm/states.py` (the value/mode vocabulary) stays as the canonical
+mode enum; `app/fsm/guards.py` (the transition matrix) is removed per FSM-04.
+
+---
+
 # Scheduler Findings
 
 ## SCH-01 — Re-engagement job active
@@ -3198,7 +3285,14 @@ with `app/fsm/guards.py`. This does not apply to `app/plan_guards.py`.
 #### FSM-08 — lifecycle truth is duplicated across unsynchronized fields
 
 Severity: P1
-Status: confirmed
+Status: confirmed; **resolved by FD-08** (2026-07-23) — plan-centric ownership
+
+> This finding diagnoses the problem (three parallel lifecycle sources).
+> **FD-08** is the accepted decision that fixes it: `AIPlan.status` +
+> onboarding progress own lifecycle truth; `current_mode` is derived by one
+> function; `users.current_state`, `UserProfile.is_paused`, and
+> `User.plan_end_date` are removed as duplicate authorities. See FD-08 for the
+> hard dependencies and sequencing.
 
 The same lifecycle is represented independently in several places:
 
