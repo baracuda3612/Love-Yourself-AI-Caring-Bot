@@ -3105,6 +3105,12 @@ the target deterministic `ONBOARDING:* -> ACTIVE` transition. Add one
 integration test for the real onboarding completion path plus invalid/NULL
 source-state tests; unit-testing only `is_valid_fsm_state()` is insufficient.
 
+Founder note (2026-07-23): scheduled to be fixed **when onboarding is built**
+(ONB-01), not before. Onboarding has not been reached yet — the product is
+still being built up — so the `ONBOARDING:*` validation path was never
+hardened. This finding is the checklist item for that time; it is not a
+standalone task to do now.
+
 #### FSM-06 — a paused sequence can reach natural completion while still paused
 
 Severity: P1
@@ -3126,7 +3132,14 @@ date. Remove ordinary `ACTIVE_PAUSED -> IDLE_FINISHED` from the target guard
 matrix. If a special last-step edge case is desired later, encode it as an
 explicit lifecycle condition rather than a blanket transition.
 
-#### FSM-07 — current tests preserve and partially fail the obsolete architecture
+Mechanism note: removing `ACTIVE_PAUSED -> IDLE_FINISHED` is not a set edit.
+The guard at `guards.py:45` is blanket — `{ACTIVE, ACTIVE_PAUSED} -> any
+_PLAN_END_STATE`. It must be **split**: `ACTIVE` may go to `IDLE_FINISHED` or
+`IDLE_PLAN_ABORTED`; `ACTIVE_PAUSED` may go to `IDLE_PLAN_ABORTED` only (cancel
+from pause must still work), never `IDLE_FINISHED`. Deleting the state from a
+shared set would either leave the bug or break cancel-from-pause.
+
+#### FSM-07 — current tests and module docstrings preserve the obsolete architecture
 
 Severity: P1 test replacement
 Status: confirmed
@@ -3135,6 +3148,15 @@ Status: confirmed
 explicitly assert the legacy `IDLE_ONBOARDED`, `IDLE_DROPPED`, and
 `SCHEDULE_ADJUSTMENT` transitions. The green suite therefore protects the old
 FSM rather than the accepted one.
+
+The **module docstrings do the same** and must be corrected alongside the
+tests: `states.py`'s header declares "Active FSM (9 state groups)" and lists
+`IDLE_ONBOARDED`, `IDLE_DROPPED`, and `SCHEDULE_ADJUSTMENT` as live, and
+`guards.py`'s header lists `SCHEDULE_ADJUSTMENT` as a live "time slot change"
+transition and `IDLE_DROPPED` as "background expiry." Anyone reading the
+module to learn the FSM is taught the dead model — a field-debugging trap.
+Rewrite both headers to the target 6-state FSM when the legacy states are
+removed.
 
 The dedicated schedule-adjustment tests are already stale against other
 accepted changes. With a syntactically valid test bot token and the unavailable
