@@ -3075,6 +3075,22 @@ incrementally. Do not build a new agent or a generic workflow engine. Keep
 tool-specific business preconditions in the tools; centralize only state
 validation, persistence semantics, and transition telemetry.
 
+Reframe (2026-07-23, founder challenge): the value here is **not** the
+`from→to` matrix. With the tunnels removed, `can_transition()` guards only
+dead paths — it is enforced solely in `_commit_fsm_transition()`, reached only
+by the `transition_signal` path (which the Coach does not emit, FSM-10) and the
+dead schedule-adjustment tunnel (FSM-03). Every live state change bypasses it,
+so its current enforcement value on any reachable path is zero. And the
+`from→to` check catches none of the real risks (FSM-06/08/09/13), which are
+inconsistent-aggregate, concurrency, and field-desync problems, not illegal
+state pairs. So do **not** preserve `guards.py`/the matrix because "an FSM
+should have guards." What earns its place is a single **state-write
+chokepoint** that locks the user + current plan, validates the whole aggregate
+(state + plan + profile consistent), persists atomically, and logs the change.
+The legal-pairs matrix is at most a cheap sanity sub-check inside that
+chokepoint, or dropped entirely — it is not the point, and it is near-useless
+alone.
+
 #### FSM-05 — prefixed onboarding states are valid in one validator and invalid in another
 
 Severity: P1 (must be resolved with onboarding)
@@ -3131,6 +3147,16 @@ pause/resume fix in COACH-04 must re-anchor remaining steps and the plan end
 date. Remove ordinary `ACTIVE_PAUSED -> IDLE_FINISHED` from the target guard
 matrix. If a special last-step edge case is desired later, encode it as an
 explicit lifecycle condition rather than a blanket transition.
+
+Date mechanism (2026-07-23, founder correction): do **not** shift
+`plan_end_date` on pause — pause duration is unbounded (a user may pause
+indefinitely), so there is no offset to apply. Instead, **clear
+`plan_end_date` (null) on pause** and **recompute it on user-activated
+resume** from "now + remaining working days." This also fixes the background
+completion at the data level: with no end date, a paused plan is not a
+completion candidate at all, so the cron cannot finish it. The explicit
+"exclude paused users" cron filter stays as defense-in-depth, but the root fix
+is null-on-pause / recompute-on-resume.
 
 Mechanism note: removing `ACTIVE_PAUSED -> IDLE_FINISHED` is not a set edit.
 The guard at `guards.py:45` is blanket — `{ACTIVE, ACTIVE_PAUSED} -> any
