@@ -163,7 +163,12 @@ Telegram-бот, що раз на робочий день у обраний юз
 - **Навіщо існує:** emotional layer — жива реакція на вільний текст (“мені погано”, питання про сенс вправи), там де кнопкове меню = “хрінь бездушна”. *(ai_coach_decision_summary §2)*
 - **Роль на MVP:** реактивний канал (юзер пише сам). Онбординг — заглушка без AI; Coach підключається одразу після. *(ai_coach_decision_summary §1; архітектура)*
 - **Що НЕ робить:** не змінює план без tools + consent; не вигадує відповіді поза source-документом (ескалує в support); не проактивно пише (крім вузьких background-тригерів, які самі — гіпотеза, див. C11). *(архітектура tool calls; Чатджипіті аналіз core §8)*
-- **Coach ↔ кнопки ↔ FSM ↔ tools:** Coach повертає `{tool_call}`, Orchestrator виконує; FSM-guard визначає що дозволено; детерміновані tools (create_first_plan, pause/resume/cancel, change_day_time тощо) роблять дію. Кнопки покривають структурний flow (complete/skip). *(архітектура)*
+- **Coach ↔ кнопки ↔ lifecycle tools:** Coach повертає `{tool_call}`,
+  Orchestrator виконує; детерміновані services/tools перевіряють фактичний
+  onboarding/plan context і роблять дію. First-plan creation належить
+  deterministic onboarding через `create_plan()`, не Coach tool. Кнопки
+  покривають структурний flow (complete/skip). Старий `app/fsm/guards.py` не є
+  runtime-authority і видаляється з legacy paths. *(архітектура)*
 - **Reactive vs scheduled:** scheduled = proactive push з готовою дією (Signal); reactive = юзер пише будь-коли, Coach валідує стан → опціонально вправа під контекст. *(touchpoint map; Conceptual map §14)*
 - **Sales чи retention диференціатор:** **retention/emotional-layer**, не sales. Жоден з 9 HR не питав про AI. *(ai_coach_decision_summary §4)*
 
@@ -303,8 +308,12 @@ Telegram-бот, що раз на робочий день у обраний юз
 - **Документи:** ai_coach_decision_summary (доробити Coach, A/B після; технічно можливо без AI, але втрачається emotional layer) vs гіпотетичний імпульс “запуститись без AI”.
 - **Конфлікт:** вже вирішений у найсвіжішому документі, але варто зафіксувати проти рецидиву.
 - **Чому важливо:** рішення “викинути AI заради швидкості” було FOMO в стані втоми, не розрахунок.
-- **Рекомендована MVP-істина:** Coach доробляється; на першу бету йде **A/B: одна компанія з Coach, інша — кнопки/FSM, ідентичний функціонал**. AI = retention-диференціатор.
-- **Code implication:** архітектура має підтримати обидва режими взаємодії на одному функціональному ядрі (tools/FSM спільні, канал взаємодії — змінна).
+- **Рекомендована MVP-істина:** Coach доробляється; на першу бету йде **A/B:
+  одна компанія з Coach, інша — кнопки/deterministic flows, ідентичний
+  функціонал**. AI = retention-диференціатор.
+- **Code implication:** архітектура має підтримати обидва режими взаємодії на
+  одному функціональному ядрі (plan lifecycle/tools/scheduler спільні, канал
+  взаємодії — змінна).
 - **Founder decision?** **Так — стратегічне, вже прийняте.** Підтвердити що A/B у силі і код будується під два режими на спільному ядрі.
 
 ### C12 — Proactive re-engagement vs “тільки коли домовились”
@@ -329,10 +338,17 @@ Telegram-бот, що раз на робочий день у обраний юз
 
 - **Документи:** behavior_loop_audit macro-loop (IDLE_ONBOARDED присутній) + архітектура (9 станів, SCHEDULE_ADJUSTMENT ще в списку) vs пам’ять проєкту (IDLE_ONBOARDED/IDLE_DROPPED на видалення; SCHEDULE_ADJUSTMENT замінено tool-calls).
 - **Конфлікт:** документи показують стани, які за пізнішими рішеннями мертві.
-- **Чому важливо:** мертві стани = плутанина стану плану, dead transitions, важче аудитувати guard.
+- **Чому важливо:** мертві стани = плутанина стану плану, dead transitions і
+  кілька конкуруючих джерел lifecycle-правди.
 - **Рекомендована MVP-істина:** цільовий FSM без IDLE_ONBOARDED, IDLE_DROPPED, SCHEDULE_ADJUSTMENT (останній замінено determіністичними tools change_day_time/change_evening_time). Онбординг → ACTIVE напряму.
-- **Code implication:** на код-аудиті перевірити чи ці стани ще досяжні; чи є переходи в них; чи guard їх обробляє.
-- **Founder decision?** Ні — інженерне прибирання, але підтвердити що SCHEDULE_ADJUSTMENT повністю покритий tools.
+- **Code implication:** на код-аудиті перевірити, чи ці стани ще досяжні, хто
+  їх читає/пише, і які legacy paths мають бути видалені. Окремо вирішити,
+  чи post-onboarding mode зберігається в `users.current_state`, чи
+  обчислюється з canonical plan lifecycle (FSM-08).
+- **Founder decision?** Видалення dead states і `SCHEDULE_ADJUSTMENT` — інженерне
+  прибирання. Окреме архітектурне рішення лишається відкритим: зберігати
+  post-onboarding mode у `users.current_state` чи обчислювати його з canonical
+  plan lifecycle (FSM-08).
 
 -----
 
@@ -346,7 +362,12 @@ Telegram-бот, що раз на робочий день у обраний юз
 1. **C11** — A/B (Coach vs кнопки) у силі, код під два режими на спільному ядрі. Підтвердити.
 1. **C12** — proactive re-engagement **OFF** на беті. Підтвердити.
 
-Решта конфліктів (C1, C4, C5, C6, C8, C9, C10, C13, C_state) я вважаю вже вирішеними наявними документами — вони йдуть у Раунд 2 як прийнята істина без твого втручання, тільки з позначкою “перевірити на код-аудиті”. Якщо з якимось не згоден — скажи, підніму в founder-decision.
+Решта конфліктів (C1, C4, C5, C6, C8, C9, C10, C13 і dead-state
+частина C_state) вже вирішені наявними документами — вони йдуть у Раунд 2
+як прийнята істина, тільки з позначкою “перевірити на код-аудиті”.
+Подальший state-аудит окремо відкрив FSM-08: чи зберігати
+post-onboarding mode у `users.current_state`, чи обчислювати його з canonical
+plan lifecycle.
 
 -----
 
@@ -370,7 +391,7 @@ Telegram-бот, що раз на робочий день у обраний юз
 |**C11**    |A/B у силі, але Coach здоровенний, переписування обісралось. 2 розділи готові локально, 5 чекають ноутбука.                                                   |Уточнено стан.                                                                  |Див. окреме уточнення нижче — стан ще сиріший.                                                                                   |
 |**C12**    |Re-engagement OFF. Агрегат по активних — не на початку.                                                                                                       |Закрито.                                                                        |silent_2/5_days OFF. Немає proactive job.                                                                                        |
 |**C13**    |Не конфлікт — **TODO з межею**: individual телеметрія збирається (для нас), b2b dashboard = тільки агрегат.                                                   |Перекваліфіковано: Conflict → контрактний факт + код-чек межі доступу.          |Секція 4: контрактний факт. Секція 7: чек що HR-endpoint віддає лише агрегат.                                                    |
-|**C_state**|FSM-рішення (IDLE_ONBOARDED/IDLE_DROPPED на видалення, SCHEDULE_ADJUSTMENT→tools) — **останні зміни під час переписування Coach-промпту, ще не в документах**.|Перекваліфіковано: Conflict → **doc-lag** (код попереду доків, не суперечність).|Цільовий FSM новіший за будь-який доступний доку. Аудитувати код як джерело істини по станах.                                    |
+|**C_state**|IDLE_ONBOARDED/IDLE_DROPPED видаляються; SCHEDULE_ADJUSTMENT замінюється tools. Це цільове рішення, а не опис поточного коду.|Перекваліфіковано: Conflict → **implementation lag**. Код досі містить legacy states, tunnel, constraints і тести.|Використовувати контракт як target, а код-аудит — для повного removal inventory. Окремий FSM-08 вирішує persisted state vs derived mode.|
 
 ## Уточнення C11 — реальний стан Coach (оновлено 2026-07-16, після завершення переписування)
 
@@ -385,7 +406,10 @@ Telegram-бот, що раз на робочий день у обраний юз
 - A/B (Coach vs кнопки) = **окремий пізніший експеримент**, НЕ в скоупі цього аудиту/бети.
 - **Знімається** failure-mode “дві паралельні версії зʼїли ресурс” — його нема на першій беті.
 - **Зʼявляється** failure-mode “вся бета залежить від Coach, а Coach ще не існує як готове ціле”.
-- **Архітектурний актив (зафіксувати):** ядро (tools/FSM/scheduler/PlanBuilderV5) НЕ залежить від Coach. Coach сидить зверху як канал. Тому “викинути AI — не капітальна проблема”. AI не на critical-path механіки. Це і робить майбутній A/B можливим.
+- **Архітектурний актив (зафіксувати):** ядро
+  (plan lifecycle/tools/scheduler/PlanBuilderV5) НЕ залежить від Coach. Coach
+  сидить зверху як канал. Тому “викинути AI — не капітальна проблема”. AI не
+  на critical-path механіки. Це і робить майбутній A/B можливим.
 - **Критичний шлях до бети = не код-аудит, а завершення Coach-промпту.** Код-аудит ядра можна робити паралельно; бета не стартує поки Coach сирий.
 
 -----
@@ -516,13 +540,19 @@ Telegram-бот, що раз на робочий день у обраний юз
 
 > Використовувати при інспекції коду. Coach винесений в кінець зі статусом “рано”.
 
-### states / guards
+### lifecycle modes / persistence
 
-- **Має підтримувати:** IDLE_NEW → ONBOARDING → ACTIVE → IDLE_FINISHED → ACTIVE(новий). ACTIVE↔ACTIVE_PAUSED.
-- **Legacy шукати:** IDLE_ONBOARDED, IDLE_DROPPED, SCHEDULE_ADJUSTMENT — досяжні? переходи в них? guard їх обробляє?
+- **Має підтримувати як product modes:** IDLE_NEW → ONBOARDING → ACTIVE →
+  IDLE_FINISHED → ACTIVE(новий). ACTIVE↔ACTIVE_PAUSED. Це не є автоматичним
+  рішенням зберігати кожен mode у `users.current_state`.
+- **Legacy шукати:** IDLE_ONBOARDED, IDLE_DROPPED, SCHEDULE_ADJUSTMENT —
+  досяжні? хто їх читає/пише? які callbacks/jobs/session keys залежать від них?
+  `app/fsm/guards.py` видаляється після schedule-adjustment і `transition_signal`
+  cleanup.
 - **Блокер:** досяжний dead-state, що застрягає юзера.
 - **Frozen:** —
-- **Evidence:** архітектура (9 станів); C_state (doc-lag, код попереду).
+- **Evidence:** архітектура (9 legacy станів); C_state (target decision,
+  implementation lag).
 
 ### database schema
 
@@ -572,7 +602,7 @@ Telegram-бот, що раз на робочий день у обраний юз
 
 ### runtime tools
 
-- **Має підтримувати:** create_first_plan, create_followup_plan, pause/resume/cancel, change_day_time, change_evening_time, record_evening_time, get_plan_status.
+- **Має підтримувати:** create_followup_plan, pause/resume/cancel, change_day_time, change_evening_time, record_evening_time, get_plan_status; перший SHORT-план створюється детермінованим onboarding-сервісом через canonical `create_plan`, а не Coach runtime tool.
 - **Legacy шукати:** SCHEDULE_ADJUSTMENT-логіка поза tools; AI router.
 - **Блокер:** record_evening_time викликається у first onboarding (C5).
 - **Evidence:** архітектура; C5/C_state.
@@ -612,7 +642,7 @@ Telegram-бот, що раз на робочий день у обраний юз
 
 - **Стан:** усі 7 секцій промпту переписані, integration pass (COACH_TOOLS/context builder/orchestrator/Product Map) завершено. PR #246 відкритий, не змерджений.
 - **Рекомендація:** аудитувати як цілісний документ проти цільової архітектури, з урахуванням задокументованих backend-gap'ів (не блокери самі по собі — прийнятні при 0 продакшн-юзерах, але мають закритись до бети).
-- **Перевірити:** Coach повертає {tool_call}, Orchestrator виконує; Coach не змінює план без tools+consent; не вигадує поза source-доком (ескалує); TODO-Coach-1 (метадана вправ) закритий; `create_first_plan`/`create_followup_plan(IDLE_FINISHED)` мають backend-заміну перед бетою (`ONB-01`/`LIF-04`); `switch_plan_format` реалізований перед тим як Product Map заявляє atomic format-switch.
+- **Перевірити:** Coach повертає {tool_call}, Orchestrator виконує; Coach не змінює план без tools+consent; не вигадує поза source-доком (ескалує); TODO-Coach-1 (метадана вправ) закритий; deterministic first-plan creation і automatic same-format continuation мають бути реалізовані до бети (`ONB-01`/`LIF-04`), без повернення dead runtime wrappers; `switch_plan_format` реалізований перед тим як Product Map заявляє atomic format-switch.
 - **Evidence:** `docs/changelog/prompt_review_todo.md`; PR #246.
 
 -----
@@ -700,11 +730,11 @@ Telegram-бот, що раз на робочий день у обраний юз
 
 ## Top 10 код-областей для інспекції (першими)
 
-1. scheduler (timezone, work_days, re-engagement/pulse OFF). 2. plan generation (SHORT/state_switch, adaptation не впливає). 3. onboarding (1 час, без evening/тривалості). 4. completion logic (timezone, report для всіх). 5. delivery renderer (P0 schema display.*). 6. states/guards (dead states). 7. runtime tools (record_evening_time тільки 14-day). 8. privacy межа (individual vs company-facing). 9. content library (slot не user-facing). 10. telemetry (activation/D7 присутні). 11. Coach/orchestrator integration (промпт готовий — PR #246; перевірити tool contract і target-vs-backend gaps проти реальних runtime guards).
+1. scheduler (timezone, work_days, re-engagement/pulse OFF). 2. plan generation (SHORT/state_switch, adaptation не впливає). 3. onboarding (1 час, без evening/тривалості). 4. completion logic (timezone, report для всіх). 5. delivery renderer (P0 schema display.*). 6. lifecycle modes/persistence (dead states, plan-centric vs persisted user state). 7. runtime tools (record_evening_time тільки 14-day). 8. privacy межа (individual vs company-facing). 9. content library (slot не user-facing). 10. telemetry (activation/D7 присутні). 11. Coach/orchestrator integration (промпт готовий — PR #246; перевірити tool contract і target-vs-backend gaps проти реальних runtime preconditions).
 
 ## Founder decisions, які ще потрібні
 
-- **Закриті цією сесією:** C1, C2, C4, C5, C6, C7, C9, C10, C11(скоуп), C12, C13, C_state.
-- **Лишається одне напіввідкрите:** C3 (reflection) — рішення “в список тасків, розʼясниться на код-аудиті”. Не блокер, але фінально закриється під час аудиту.
+- **Закриті цією сесією:** C1, C2, C4, C5, C6, C7, C9, C10, C11(скоуп), C12, C13 і dead-state частина C_state.
+- **Лишаються відкритими:** C3 (reflection; не блокер) і FSM-08 — persisted `users.current_state` чи plan-centric lifecycle з derived `current_mode`.
 - **Оновлено 2026-07-16:** Coach-промпт завершено (усі 7 секцій, integration pass, PR #246 відкритий). Критичний шлях до бети тепер: (1) review/merge PR #246, (2) закрити backend-залежності які цільовий контракт передбачає (`ONB-01`, `LIF-04`, `switch_plan_format`, Bounded Tool-Result Loop), (3) deploy на прод.
 - **Питання для тебе на потім (не зараз):** коли саме A/B (Coach vs кнопки) — після якого сигналу першої бети? Не блокує поточний аудит.
