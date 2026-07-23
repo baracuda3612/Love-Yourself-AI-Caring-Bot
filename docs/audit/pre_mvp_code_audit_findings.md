@@ -2897,9 +2897,9 @@ COACH-09; RT-09 only confirms the runtime tools depend on it.
 
 # FSM State & Guard Findings
 
-## FSM State & Guard Area — Audit Round 2026-07-22
+## FSM State & Guard Area — Audit Round 2026-07-22, consistency pass 2026-07-23
 
-Status: completed; findings recorded only, no runtime fixes applied
+Status: completed and revalidated; findings recorded only, no runtime fixes applied
 
 ### Files and paths inspected
 
@@ -2951,8 +2951,11 @@ dead:
   and an active scheduler job remain.
 
 The guard layer is also only partially authoritative: several core services
-write `user.current_state` directly after local checks. This has already
-allowed the pause and completion contracts to drift apart.
+write `user.current_state` directly after local checks. More importantly, the
+runtime does not have one enforced lifecycle aggregate. `User.current_state`,
+`UserProfile.is_paused`, `AIPlan.status`, and duplicated end-date fields can
+describe different realities for the same user. This has already allowed the
+pause, delivery, cancellation, and completion contracts to drift apart.
 
 ### Findings
 
@@ -3080,14 +3083,27 @@ Status: confirmed
 `is_valid_fsm_state("ONBOARDING:START")` returns `True`, and the DB constraint
 accepts `ONBOARDING:%`. `_normalize_fsm_state()` instead checks exact membership
 in `FSM_ALLOWED_STATES`, so every `ONBOARDING:*` value normalizes to `None`.
-The generic transition-signal path therefore cannot consistently validate the
-same state family that `states.py`, guards, tests, and the DB call valid.
 
-Minimal fix: make normalization use the canonical state validator, or remove
-generic agent-driven onboarding transitions entirely when deterministic
-onboarding lands. Add one integration test for the real
-`ONBOARDING:* -> ACTIVE` completion path; unit-testing only
-`is_valid_fsm_state()` is insufficient.
+The downstream guard then fails open: `_guard_fsm_transition()` treats a
+missing or unrecognized normalized current state as permission to accept any
+valid target. Direct reproduction produced all of:
+
+```text
+None -> ACTIVE
+CORRUPT -> ACTIVE
+ONBOARDING:START -> ACTIVE
+```
+
+The onboarding transition therefore appears to work only because its current
+state was discarded, not because the transition matrix authorized it. The
+current Coach response contract does not emit `transition_signal`, which
+reduces immediate reachability but does not make the guard correct.
+
+Minimal fix: fail closed when an existing current state is absent or invalid,
+make normalization use the canonical state validator, and explicitly encode
+the target deterministic `ONBOARDING:* -> ACTIVE` transition. Add one
+integration test for the real onboarding completion path plus invalid/NULL
+source-state tests; unit-testing only `is_valid_fsm_state()` is insufficient.
 
 #### FSM-06 — a paused sequence can reach natural completion while still paused
 
@@ -3132,6 +3148,188 @@ direct-tool tests for time changes, onboarding-to-first-plan integration,
 paused-completion prevention, and a DB-constraint migration test. Remove the
 schedule-adjustment test modules together with their runtime subsystem.
 
+#### FSM-08 — lifecycle truth is duplicated across unsynchronized fields
+
+Severity: P1
+Status: confirmed
+
+The same lifecycle is represented independently in several places:
+
+* `User.current_state` gates Coach tools, scheduler delivery, and step actions;
+* `UserProfile.is_paused` is described in code and migration comments as the
+  authoritative persistent pause flag, but the scheduler does not read it;
+* `AIPlan.status` permits `active`, `completed`, `paused`, and `abandoned`;
+  helpers accept `paused`, but no production writer sets a plan to `paused`;
+* `User.plan_end_date` and `AIPlan.end_date` duplicate completion timing, and
+  cancellation updates only the plan field, leaving the user field stale until
+  a later completion check clears it.
+
+The status vocabulary is also internally inconsistent: the unused Python
+`PlanStatus` enum defines `CANCELED`, while the ORM enum and runtime use
+`abandoned`. No cross-table constraint or startup reconciliation verifies that
+these values form one valid aggregate.
+
+Expected target ownership:
+
+* `User.current_state` owns the interaction/delivery mode;
+* `AIPlan.status` owns plan-record lifecycle (`active`, `completed`,
+  `abandoned`);
+* pause remains a delivery state, not a second plan status;
+* completion timing has one authoritative source or an explicitly maintained
+  projection.
+
+Minimal fix: remove the unused `paused`/`canceled` vocabulary and preferably
+the duplicate `is_paused` boolean. If compatibility requires keeping a mirror,
+mark it non-authoritative and update/check it inside the same locked
+transaction. Add an invariant checker that logs and blocks impossible
+combinations before user-facing side effects.
+
+#### FSM-09 — state-only checks can manufacture valid-looking states without a plan
+
+Severity: P1
+Status: confirmed; expands RT-13
+
+Pause, resume, and cancellation validate fragments of state rather than the
+whole lifecycle aggregate:
+
+* `pause_plan` accepts `User.current_state == ACTIVE` without requiring an
+  active plan;
+* `resume_plan` accepts `ACTIVE_PAUSED` plus `profile.is_paused=True` without
+  requiring a plan;
+* `cancel_plan` accepts `ACTIVE`/`ACTIVE_PAUSED`, and if no plan is found still
+  commits `IDLE_PLAN_ABORTED` and returns success.
+
+The inverse inconsistency is also possible: an active plan paired with an idle
+or paused-mirror mismatch is stranded because scheduler and Coach gating trust
+`current_state`. There is no repair or explicit failure mode for either
+direction.
+
+Minimal fix: lifecycle operations must lock and load the user, profile, and
+exactly one current plan, validate the combination, then apply the transition
+atomically. On mismatch, fail honestly and emit reconciliation telemetry;
+never report a successful pause/resume/cancel for a plan that does not exist.
+
+#### FSM-10 — the orchestrator retains an unreachable second mutation architecture
+
+Severity: P1 cleanup before beta
+Status: confirmed
+
+The current `coach_agent()` can return only text or a function tool call.
+Nevertheless, `handle_incoming_message()` still processes legacy
+`generated_plan_object`, `plan_updates`, and `transition_signal` fields that
+the Coach cannot emit. Those branches can:
+
+* abandon and replace an active plan using the old load/focus plan schema;
+* apply plan adaptations that are disabled for MVP;
+* directly rewrite `user.plan_end_date`;
+* commit generic FSM transitions outside runtime tools.
+
+Related preview/deep-link/action handlers remain in Telegram and orchestrator
+code even though the v5 plan service creates plans deterministically and
+`build_plan_draft_preview()` is frozen to return an empty string.
+
+This is dead code today, but it preserves a conflicting lifecycle model and
+creates a dangerous accidental re-entry point if a future worker begins
+returning similarly named fields.
+
+Minimal fix: remove the legacy envelope branches, persistence helpers, draft
+preview/deep-link/action flow, and their tests after confirming no external
+caller. The orchestrator's plan-changing surface should be deterministic
+onboarding, completion/continuation, and the allowlisted runtime tools only.
+
+#### FSM-11 — database schema history has no authoritative FSM migration
+
+Severity: P1 before beta deployment
+Status: confirmed
+
+The ORM, SQL files, and deployed-schema bootstrap do not define one FSM:
+
+* current SQL files variously permit `PLAN_FLOW:*`, `ADAPTATION_FLOW`,
+  adaptation substates, and confirmation states;
+* the ORM permits a different set and adds `SCHEDULE_ADJUSTMENT`;
+* no checked migration installs the ORM's current constraint;
+* startup uses `Base.metadata.create_all()`, which does not replace constraints
+  on an existing database;
+* `audit_startup_schema()` checks only three columns on `plan_instances`, not
+  FSM constraints or lifecycle enums;
+* both `users.current_state` and `ai_plans.status` are nullable, so their CHECK
+  or enum declarations do not enforce a complete lifecycle value.
+
+Consequently, behavior depends on whether a database was created from current
+ORM metadata or evolved through an undocumented subset/order of raw SQL files.
+
+Minimal fix: ship one explicit forward migration that remaps legacy rows,
+installs the accepted state constraint, makes lifecycle columns non-null, and
+normalizes plan-status values. Record applied migration/version state and add a
+startup assertion for the expected FSM contract. Do not rely on `create_all()`
+to upgrade an existing database.
+
+#### FSM-12 — the database does not enforce one active plan per user
+
+Severity: P1
+Status: confirmed; cross-reference LIF-09 / LIF-11
+
+`finalize_plan()` locks the user and checks for an active plan, which protects
+the canonical creation path. The database itself has no partial unique
+constraint for one `AIPlan(status='active')` per user, however, and legacy
+writers or race paths can still leave multiple active rows.
+
+The runtime already anticipates this invalid state: completion logs a warning
+and completes only the newest active plan. Scheduler queries can meanwhile
+restore or deliver steps for every active plan belonging to the same `ACTIVE`
+user. One user-level FSM state cannot identify which plan is authoritative.
+
+Minimal fix: clean any existing duplicates, add a PostgreSQL partial unique
+index on active plan ownership, and retain the plan-scoped idempotency key
+required by LIF-11 for automatic continuation. Treat duplicate detection as an
+invariant breach, not a normal "choose latest" condition.
+
+#### FSM-13 — lifecycle mutations are not serialized against each other
+
+Severity: P1
+Status: confirmed
+
+Plan finalization uses row locks, but pause, resume, cancellation, and
+completion do not lock the user/current plan before reading and writing their
+state. Telegram messages, completion cron, and message-entry completion checks
+can run concurrently.
+
+For example, cancellation and completion can both observe `ACTIVE`; one writes
+`abandoned`/`IDLE_PLAN_ABORTED`, while the other writes
+`completed`/`IDLE_FINISHED` and may initiate a report. Under ordinary
+read-committed transactions, the last commit wins individual fields without
+preserving the intended operation-level outcome.
+
+Minimal fix: serialize lifecycle mutations by locking the user and current plan
+inside one short DB transaction, validate through the shared transition
+boundary, and commit state plus plan metadata together. External Telegram and
+scheduler side effects must remain outside the lock and use idempotent
+outbox/reconciliation records rather than extending the DB transaction.
+
+### Cross-domain FSM consequences already owned elsewhere
+
+Do not create duplicate fixes for these; the consistency pass confirmed them:
+
+* DEL-04 owns the rule that an already-delivered current-day exercise remains
+  actionable through expiry while future delivery is paused;
+* COACH-04 / RT-12 / RT-13 own pause/resume re-anchoring and scheduler
+  reconciliation;
+* LIF-03 / LIF-04 / LIF-09 / LIF-11 own factual completion, same-format
+  continuation, explicit plan identity, and continuation idempotency;
+* DEL-04 owns cancellation of open steps and visible Telegram keyboards.
+
+### Verification evidence
+
+* Current core state/tool/guard tests: `67 passed`.
+* The green tests assert the current architecture, including obsolete states;
+  they are not evidence of target-FSM correctness.
+* Callback plus legacy schedule-adjustment revalidation:
+  `14 passed, 15 failed, 23 deselected`. Failures are stale step doubles and
+  removed `MORNING`/legacy tunnel assumptions, consistent with DEL-06 and
+  FSM-03/FSM-07.
+* Direct guard reproduction confirmed that NULL, corrupt, and prefixed
+  onboarding source states all currently pass through to `ACTIVE`.
+
 ### Required MVP work and order
 
 1. implement deterministic onboarding completion and first-plan creation
@@ -3142,11 +3340,15 @@ schedule-adjustment test modules together with their runtime subsystem.
    then remove the full tunnel (SCH-02 / FSM-03);
 4. remove `IDLE_DROPPED` and merge any rows into `IDLE_PLAN_ABORTED` (FSM-02);
 5. ship one forward migration that remaps legacy rows and replaces
-   `ck_users_current_state` with the target set;
+   `ck_users_current_state` with the target set, makes lifecycle fields
+   non-null, and normalizes plan-status vocabulary;
 6. align `states.py`, `guards.py`, runtime tools/services, Coach state-tool
    filtering, and tests to that same matrix;
 7. centralize state persistence behind a small shared transition boundary
-   without introducing a new workflow framework (FSM-04).
+   without introducing a new workflow framework (FSM-04);
+8. enforce aggregate existence, one active plan per user, and locked lifecycle
+   mutations (FSM-08 / FSM-09 / FSM-12 / FSM-13);
+9. remove the unreachable legacy Coach mutation/draft path (FSM-10).
 
 ### What is not a finding
 
