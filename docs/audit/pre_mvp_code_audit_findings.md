@@ -3091,6 +3091,19 @@ The legal-pairs matrix is at most a cheap sanity sub-check inside that
 chokepoint, or dropped entirely — it is not the point, and it is near-useless
 alone.
 
+Deletion conclusion (2026-07-23): `guards.py` / `can_transition` is slated for
+**removal**, but as a *consequence*, not a standalone `rm`. Verified call
+graph: `can_transition` is imported only by `orchestrator.py` and reached only
+through (a) the schedule-adjustment handlers (`_commit_fsm_transition`, FSM-03)
+and (b) `_guard_fsm_transition` on the `transition_signal` path in
+`handle_incoming_message` (FSM-10) — a field the Coach never emits. Once FSM-03
+and FSM-10 are removed, `can_transition`, `_commit_fsm_transition`, and
+`_guard_fsm_transition` have no callers → `guards.py` is dead → delete it (add
+to the RT-05 dead-code inventory at that point). Deleting it does **not** remove
+the need for state validation: the aggregate-consistency chokepoint (this
+finding + FSM-08/09/13) is a new, separate thing that replaces the matrix's
+intent, not the file itself.
+
 #### FSM-05 — prefixed onboarding states are valid in one validator and invalid in another
 
 Severity: P1 (must be resolved with onboarding)
