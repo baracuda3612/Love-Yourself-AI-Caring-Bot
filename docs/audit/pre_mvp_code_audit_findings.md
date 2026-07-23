@@ -2154,14 +2154,17 @@ COACH-04, Lifecycle Completion, and COACH-08 respectively.
 
 # Runtime Tools Findings
 
-## Runtime Tools Area — Audit Round 2026-07-22
+## Runtime Tools Area — Audit Round 2026-07-22 (revised same day: full matrix)
 
-Status: completed (backend pass). The Coach *prompt* side was already
-touched in the Coach round; this round covers the actual code paths, not
-the prompt.
+Status: completed. **First pass was too narrow** — it only compliance-checked
+the evening-time rule the founder flagged, not the area. Revised into a
+full audit: take the whole tool matrix (Coach state→tools + prompt rules)
+and check **every** tool against its backend implementation. The Coach
+*prompt* side was already handled in the Coach round; this round is the
+code.
 
-Focus: "evening time is a 14-day-only concept" — is that enforced in code,
-or only in the prompt?
+Method: for each of the 9 runtime tools — what states/rules does the Coach
+side declare, what does the backend actually enforce, and do they align?
 
 ### Files inspected
 
@@ -2173,14 +2176,30 @@ or only in the prompt?
 
 ### Summary — the root problem
 
-Evening delivery time is meaningful **only for MEDIUM (14-day)** plans:
-SHORT (7-day) plans have a DAY slot only (recipe in
-`plan_context_template.yaml`). But **plan type is not encoded in the FSM
-`current_state`, and is not in the context the Coach receives.** Tool
-gating is therefore purely state-based, and the "evening is 14-day-only"
-rule lives only in prompt prose — with **no backend guard**. A 7-day user
-can be offered, and can trigger, evening-time operations that do nothing
-but return a success message.
+The evening-time problem (below) is one instance of a broader pattern:
+tool gating is **state-based**, but several tool preconditions are
+**plan-type-based** or **backend-state-based**, and the two are only
+bridged by prompt prose. Plus the backend `_FOLLOWUP_STATES` and the Coach
+`_TOOL_NAMES_BY_STATE` matrix disagree, and one contractually-referenced
+capability (7↔14 switch) has no implementation at all.
+
+### Per-tool matrix (Coach declaration vs backend)
+
+| Tool | Coach offers in states | Backend guard | Aligned? |
+|---|---|---|---|
+| `create_first_plan` | not a Coach tool (onboarding-internal) | `IDLE_ONBOARDED` | state is being deleted → RT-05 |
+| `create_followup_plan` | `IDLE_PLAN_ABORTED` only | `_FOLLOWUP_STATES` = {FINISHED, DROPPED, ABORTED} | **mismatch** → RT-06 |
+| `record_evening_time` | `IDLE_PLAN_ABORTED` | none | no context guard → RT-02 |
+| `change_day_time` | ACTIVE, ACTIVE_PAUSED, ABORTED | none | no backend guard → RT-08 |
+| `change_evening_time` | ACTIVE, ACTIVE_PAUSED, ABORTED | none | false success for 7-day → RT-01 |
+| `pause_plan` | ACTIVE | `ACTIVE` | ✅ aligned |
+| `resume_plan` | ACTIVE_PAUSED | `ACTIVE_PAUSED` | ✅ aligned |
+| `cancel_plan` | ACTIVE, ACTIVE_PAUSED | `ACTIVE`/`ACTIVE_PAUSED` | ✅ aligned |
+| `get_plan_status` | ACTIVE, ACTIVE_PAUSED, ABORTED | none (read-only) | ✅ aligned |
+| plan switch 7↔14 | — | — | **does not exist** → RT-07 |
+
+The four ✅ tools (pause/resume/cancel/get_plan_status) are correctly
+guarded on both sides and need no work. Everything else has a gap.
 
 ### Findings
 
@@ -2257,46 +2276,431 @@ Fix: add the active plan's `plan_type` (or `total_days`) and
 `evening_slot_collected` to the payload at `orchestrator.py:1124`, thread
 them through to `_coach_tools_for_state`, and use them in the filter (RT-03).
 
-### Recommended fix shape — belt and suspenders
+#### RT-05 — `create_first_plan` requires `IDLE_ONBOARDED`, a state being deleted
 
-* **Backend guard (must-have):** RT-01/RT-02 — the evening tools refuse to
-  act outside a real 14-day context, returning soft results, never false
-  success. This is authoritative and independent of the LLM.
-* **Plan-type-aware filtering (polish):** RT-03/RT-04 — the Coach is never
-  even offered `change_evening_time` for a 7-day user. Reduces LLM misfires.
+Severity: P1
+Status: confirmed (cross-ref ONB-07)
 
-The backend guard is the priority; the filter is defense-in-depth,
-consistent with "do not rely on the prompt for guarantees."
+`create_first_plan` (`tools.py:63-79`) raises unless
+`user.current_state == "IDLE_ONBOARDED"`. ONB-07 records that
+`IDLE_ONBOARDED` is being removed. When it goes, this guard breaks
+first-plan creation unless the entry-state check is updated in lockstep.
+This was already flagged in the Onboarding round; it belongs here too
+because a tool-matrix audit must catch it — the first-pass evening-only
+audit missed it entirely, which is exactly why this round was widened.
+
+Fix: when `IDLE_ONBOARDED` is removed, update the `create_first_plan`
+entry guard to the replacement onboarding-complete state (ONB-07).
+
+#### RT-06 — `create_followup_plan`: backend allows 3 states, Coach offers 1
+
+Severity: P1
+Status: confirmed
+
+Backend `_FOLLOWUP_STATES` = {`IDLE_FINISHED`, `IDLE_DROPPED`,
+`IDLE_PLAN_ABORTED`} (`tools.py:25`). But `_TOOL_NAMES_BY_STATE`
+(`coach_agent.py:952`) offers `create_followup_plan` **only** in
+`IDLE_PLAN_ABORTED`. `IDLE_FINISHED` and `IDLE_DROPPED` are not keys in the
+matrix at all → "Any other state: none" → the Coach has **no tools** there.
+Consequences:
+
+* `IDLE_FINISHED`: intended to auto-continue (FD-01), but that is not wired
+  (LIF-04). So a finished user who talks to the Coach cannot start the next
+  plan through any path — the tool exists in the backend but is unreachable.
+* `IDLE_DROPPED`: a lapsed user who returns and asks to restart cannot —
+  the Coach has no `create_followup_plan` there.
+
+Fix: reconcile the two. Either add `create_followup_plan` (and the
+supporting evening tools) to the `IDLE_FINISHED` / `IDLE_DROPPED` matrix
+rows, or explicitly document why those states route elsewhere (e.g.
+automatic continuation for FINISHED once LIF-04 is wired). The backend and
+the Coach matrix must not disagree on where a tool is legal.
+
+#### RT-07 — No plan-switch (7↔14) capability exists
+
+Severity: P2 (new feature; not MVP must-have, but contractually referenced)
+Status: confirmed
+
+FD-01 references an "explicit 7↔14 switch" as a separate user action, but
+no switch tool exists (`grep` for switch/change_plan is empty). The only
+way to change format is `cancel_plan` → `IDLE_PLAN_ABORTED` →
+`create_followup_plan(other type)`. That path (a) is framed as a permanent
+end with **no progress summary** (cancel semantics, DEL-04/COACH), and (b)
+requires two deliberate steps. So a user on a 7-day plan who wants 14 loses
+their current-period closure to switch.
+
+Founder note (2026-07-23): not an MVP must-have. Consider building it
+inside this tools package only if cheap — it is logically needed and the
+tools are already open. If built, it should switch format without the
+"permanent end / no summary" framing that `cancel_plan` imposes.
+
+#### RT-08 — `change_day_time` / `change_evening_time` have no backend state guard
+
+Severity: P2
+Status: confirmed
+
+Neither `change_day_time` (`tools.py:194`) nor `change_evening_time`
+(`tools.py:222`) checks `current_state` — they validate HH:MM and update.
+All state gating for them lives in the Coach matrix. So any caller path
+that bypasses the matrix (a direct call, a future entry point, an LLM
+misfire the matrix didn't catch) can change delivery times in any state.
+Contrast pause/resume/cancel, which all guard `current_state` in the
+backend. The evening guard from RT-01 partly covers `change_evening_time`;
+`change_day_time` should also assert a sane state (has a plan / follow-up
+context) rather than trusting the matrix alone.
+
+#### RT-09 — The Coach does not voice tool outcomes; a fixed template does
+
+Severity: P1
+Status: confirmed (cross-ref COACH-09)
+
+The prompt (`coach_agent.py:669-674`) instructs the Coach to return **only**
+the tool call, no user-facing text, and not to claim success. The
+orchestrator then sends a fixed `_TOOL_REPLY_TEMPLATES` string
+(`orchestrator.py:1226-1235`). So the Coach never sees or interprets the
+actual result — the user hears a canned line. Consequences directly
+relevant to this round:
+
+* soft/failure results have no natural voice. Today only two are handled
+  explicitly (`needs_evening_time`, the MEDIUM cascade); the RT-01
+  `no_evening_slot` result proposed above would have **no** template and
+  fall through unless the orchestrator is extended case-by-case.
+* the founder's concern is the inverse risk once the Coach *is* allowed to
+  respond: the backend returns one thing and the Coach, not seeing it,
+  narrates something else ("схоже, система заблокувала…") and invents
+  detail. The Coach is the system's face; it must speak from the real
+  result, not around it.
+
+Fix (COACH-09): a bounded tool-result loop — the tool result is returned to
+the Coach, which forms one natural response grounded in the actual
+outcome (success, soft, or failure), instead of the orchestrator guessing a
+template per tool. This is the same Bounded Tool-Result Loop already
+recorded as COACH-09; this round confirms the runtime tools depend on it,
+especially once soft results (RT-01) exist.
+
+### Recommended fix shape
+
+Priority order:
+
+1. **Reconcile the two state authorities (RT-06, RT-05).** The backend
+   `_FOLLOWUP_STATES` and the Coach `_TOOL_NAMES_BY_STATE` must agree, and
+   the `create_first_plan` guard must track the `IDLE_ONBOARDED` removal.
+   These are correctness gaps that make real tools unreachable or broken.
+2. **Backend guards (RT-01/RT-02/RT-08).** Evening and time-change tools
+   refuse to act outside a valid context, returning soft results, never
+   false success — authoritative, independent of the LLM.
+3. **Plan-type-aware filtering (RT-03/RT-04).** The Coach is never even
+   offered a meaningless tool. Defense-in-depth, "do not rely on the prompt
+   for guarantees."
+4. **Bounded tool-result loop (RT-09/COACH-09).** Required before soft
+   results (RT-01) exist, so the Coach voices the real outcome.
+5. **Optional this package if cheap (RT-07):** a real 7↔14 switch.
 
 ### Per-file work list
 
 * `app/plan_runtime/tools.py`
   * `change_evening_time`: add the no-evening-slot guard (RT-01);
-  * `record_evening_time`: gate persistence to the pending-MEDIUM flow (RT-02).
+  * `record_evening_time`: gate persistence to the pending-MEDIUM flow (RT-02);
+  * `change_day_time`: add a backend state guard (RT-08);
+  * `create_first_plan`: update the `IDLE_ONBOARDED` entry guard when that
+    state is removed (RT-05 / ONB-07);
+  * (RT-07, optional) a `switch_plan(plan_type)` that changes format without
+    cancel's "permanent end / no summary" framing.
 * `app/orchestrator.py`
   * `_execute_plan_tool` / cascade: handle the new `no_evening_slot` soft
-    result with a friendly message; optionally refuse `record_evening_time`
-    unless `pending_action == collect_evening_time_for_medium` (RT-02);
+    result; optionally refuse `record_evening_time` unless
+    `pending_action == collect_evening_time_for_medium` (RT-02);
   * context builder (`:1124-1130`): add `plan_type`/`total_days` +
     `evening_slot_collected` (RT-04);
-  * `_humanize_tool_error`: map the new evening-guard error to friendly copy.
+  * `_humanize_tool_error`: map the new guard errors to friendly copy;
+  * tool-result handling: replace per-tool fixed templates with a bounded
+    result loop so the Coach voices the real outcome (RT-09/COACH-09).
 * `app/workers/coach_agent.py`
+  * `_TOOL_NAMES_BY_STATE`: add `IDLE_FINISHED` / `IDLE_DROPPED` rows (or
+    document why they route elsewhere) so it matches `_FOLLOWUP_STATES`
+    (RT-06);
   * `_context_message`: forward `plan_type` / evening-configured (RT-04);
-  * `_coach_tools_for_state`: filter `change_evening_time` /
-    `record_evening_time` by plan type + pending state (RT-03);
-  * state→tools matrix + notes (`:652-660`): align the doc with the
-    enforced filter once RT-03/RT-04 land.
+  * `_coach_tools_for_state`: filter evening tools by plan type + pending
+    state (RT-03);
+  * state→tools matrix + notes (`:652-660`): align the doc with the enforced
+    filter once RT-03/RT-04/RT-06 land.
 * tests: 7-day user cannot change evening time (soft refusal, no false
   success); `record_evening_time` outside the pending-MEDIUM flow does not
-  set the flag; the Coach is not offered evening tools for a SHORT plan.
+  set the flag; the Coach IS offered `create_followup_plan` in
+  `IDLE_FINISHED`/`IDLE_DROPPED` (or the auto-path is proven); `change_day_time`
+  refuses from an invalid state; `create_first_plan` works from the
+  post-onboarding state.
 
 ### Scope boundary
 
-This round covers the evening-time runtime tools and their gating. It does
-not re-audit pause/resume/cancel/get_plan_status (touched in the Coach
-round) beyond noting they share the same state-only gating. The FSM state
-model itself (whether plan type *should* be part of state) belongs to the
-States/guards round assigned in parallel.
+This round audits all 9 runtime tools against their Coach-side declaration.
+The FSM state model itself (whether plan type *should* be part of state,
+and the `IDLE_ONBOARDED` removal) is the FSM State & Guard round below; RT-05
+and RT-06 cross-reference it. The Bounded Tool-Result Loop architecture is
+owned by COACH-09; RT-09 only confirms the runtime tools depend on it.
+
+---
+
+# FSM State & Guard Findings
+
+## FSM State & Guard Area — Audit Round 2026-07-22
+
+Status: completed; findings recorded only, no runtime fixes applied
+
+### Files and paths inspected
+
+* `app/fsm/states.py`
+* `app/fsm/guards.py`
+* `app/fsm/__init__.py`
+* `app/db.py`
+* `app/orchestrator.py`
+* `app/plan_runtime/tools.py`
+* `app/plan_pause.py`
+* `app/plan_finalization.py`
+* `app/scheduler.py`
+* `app/telegram.py`
+* `app/session_memory.py`
+* FSM, schedule-adjustment, runtime-tool, onboarding, completion, and Coach tests
+* FSM-related SQL migrations in `migrations/`
+
+### Accepted target
+
+Per `C_state`, FD-01, FD-04, and the accepted pause/cancel contract, the
+target MVP lifecycle is:
+
+```text
+IDLE_NEW -> ONBOARDING:* -> ACTIVE
+ACTIVE <-> ACTIVE_PAUSED
+ACTIVE -> IDLE_FINISHED -> ACTIVE (automatic same-format continuation)
+ACTIVE / ACTIVE_PAUSED -> IDLE_PLAN_ABORTED
+IDLE_PLAN_ABORTED -> ACTIVE (explicit new sequence)
+```
+
+`IDLE_FINISHED` may be a short-lived technical state while completion and
+automatic continuation are committed. `IDLE_ONBOARDED`, `IDLE_DROPPED`, and
+`SCHEDULE_ADJUSTMENT` are not part of the target FSM. Plan format remains
+plan data, not a separate FSM state.
+
+### Summary
+
+The three states accepted for removal are still represented across the ORM
+constraint, guards, runtime branches, tool entry conditions, scheduler,
+Telegram callbacks, Redis session memory, and tests. They are not equally
+dead:
+
+* `IDLE_ONBOARDED` is absent from the current onboarding path but remains a
+  load-bearing precondition of `create_first_plan`;
+* `IDLE_DROPPED` has an orphan writer with no production caller, but is still
+  accepted by follow-up creation and transition guards;
+* `SCHEDULE_ADJUSTMENT` is a zombie subsystem: the old entry dispatcher has
+  no production caller, while callbacks, timeout recovery, session storage,
+  and an active scheduler job remain.
+
+The guard layer is also only partially authoritative: several core services
+write `user.current_state` directly after local checks. This has already
+allowed the pause and completion contracts to drift apart.
+
+### Findings
+
+#### FSM-01 — `IDLE_ONBOARDED` is target-dead but still load-bearing
+
+Severity: P1
+Status: confirmed; cross-reference ONB-07 / COACH-07
+
+Current behavior:
+
+* a new Telegram user is created directly in `ONBOARDING:START`;
+* the current mock onboarding branch does not persist a transition to
+  `IDLE_ONBOARDED` or create a plan;
+* `create_first_plan()` still rejects every state except
+  `IDLE_ONBOARDED`;
+* `states.py`, `guards.py`, the ORM constraint, and tests still treat the
+  state as live.
+
+This means the state is unreachable through the present onboarding
+implementation, yet deleting it mechanically would remove the only backend
+entry accepted for first-plan creation.
+
+Expected behavior: deterministic onboarding saves the required setup and
+creates the first SHORT sequence idempotently, ending directly in `ACTIVE`.
+
+Minimal fix: implement the accepted onboarding-completion transaction first;
+then remove `IDLE_ONBOARDED` from state definitions, guards, tool preconditions,
+tests, and the DB constraint. Do not temporarily expose first-plan creation to
+the Coach merely to preserve the legacy state.
+
+#### FSM-02 — `IDLE_DROPPED` has no live entry path
+
+Severity: P1 cleanup before beta
+Status: confirmed
+
+`_auto_drop_plan_for_new_flow()` is the only runtime writer of
+`IDLE_DROPPED`, and it has no production or test caller. Explicit cancellation
+uses `IDLE_PLAN_ABORTED`. Nevertheless, `IDLE_DROPPED` remains in
+`PLAN_CREATION_ENTRY_STATES`, `_FOLLOWUP_STATES`, end-state guards, the ORM
+constraint, migrations, and FSM tests.
+
+Expected behavior: one user-visible stopped-sequence state,
+`IDLE_PLAN_ABORTED`, covers the post-cancellation return path. There is no
+background-drop behavior in the accepted MVP.
+
+Minimal fix: remove the orphan helper and all `IDLE_DROPPED` allowances. In a
+forward migration, map any existing `IDLE_DROPPED` rows to
+`IDLE_PLAN_ABORTED` before replacing the constraint. Log the affected row
+count; do not silently discard plan records.
+
+#### FSM-03 — `SCHEDULE_ADJUSTMENT` is a zombie subsystem, not one dead constant
+
+Severity: P1
+Status: confirmed; expands SCH-02
+
+The old `run_plan_tool_call()` dispatcher has no production caller, so the
+normal target flow cannot enter `SCHEDULE_ADJUSTMENT`. Time changes now use
+the direct `change_day_time` and `change_evening_time` runtime tools.
+
+However, the legacy subsystem still includes:
+
+* transition constants and guard branches;
+* four orchestrator handlers plus old keyboard builders;
+* Telegram `sched_task:*`, `sched_time:*`, and timeout callbacks;
+* Redis context, last-active, and soft-prompt keys/methods;
+* the active `stuck_schedule_adj_check` scheduler job and hard-reset path;
+* two dedicated test modules.
+
+The DB definition is internally inconsistent as well: `app/db.py` permits
+`SCHEDULE_ADJUSTMENT`, but no checked SQL migration adds it. Its availability
+therefore depends on whether a database was created from ORM metadata or
+evolved through migrations.
+
+Expected behavior: time changes are atomic deterministic tool operations and
+do not change FSM state.
+
+Minimal fix, in safe order:
+
+1. remove any persisted `stuck_schedule_adj_check` job and disable its
+   registration;
+2. inspect/reset any existing `SCHEDULE_ADJUSTMENT` rows to their recorded
+   pre-tunnel `ACTIVE` or `ACTIVE_PAUSED` state before dropping the state;
+3. remove the legacy dispatcher, handlers, callbacks, Redis methods, constants,
+   and tests;
+4. keep and test the direct time-change tools instead.
+
+Do not add a migration that makes the obsolete tunnel valid merely to repair
+the current ORM/migration mismatch.
+
+#### FSM-04 — `guards.py` is not the authoritative transition boundary
+
+Severity: P1
+Status: confirmed
+
+`can_transition()` is enforced by `_commit_fsm_transition()` for the generic
+`transition_signal` path and the legacy schedule-adjustment tunnel. Core
+runtime paths instead assign `user.current_state` directly:
+
+* first/follow-up creation and plan finalization -> `ACTIVE`;
+* pause/resume -> `ACTIVE_PAUSED` / `ACTIVE`;
+* cancellation -> `IDLE_PLAN_ABORTED`;
+* completion -> `IDLE_FINISHED`;
+* the orphan drop helper -> `IDLE_DROPPED`.
+
+Those services have some local preconditions, but a transition can therefore
+exist in code even if it is absent from `guards.py`. The file is a partial
+validator, despite comments and the product contract treating the FSM guard as
+the transition authority.
+
+Expected behavior: deterministic services own the action, but all persisted
+state changes pass through one shared transition boundary with the accepted
+matrix and consistent logging.
+
+Minimal fix: after the three legacy states are removed, introduce or reuse one
+small transition helper for runtime services and replace direct assignments
+incrementally. Do not build a new agent or a generic workflow engine. Keep
+tool-specific business preconditions in the tools; centralize only state
+validation, persistence semantics, and transition telemetry.
+
+#### FSM-05 — prefixed onboarding states are valid in one validator and invalid in another
+
+Severity: P1 (must be resolved with onboarding)
+Status: confirmed
+
+`is_valid_fsm_state("ONBOARDING:START")` returns `True`, and the DB constraint
+accepts `ONBOARDING:%`. `_normalize_fsm_state()` instead checks exact membership
+in `FSM_ALLOWED_STATES`, so every `ONBOARDING:*` value normalizes to `None`.
+The generic transition-signal path therefore cannot consistently validate the
+same state family that `states.py`, guards, tests, and the DB call valid.
+
+Minimal fix: make normalization use the canonical state validator, or remove
+generic agent-driven onboarding transitions entirely when deterministic
+onboarding lands. Add one integration test for the real
+`ONBOARDING:* -> ACTIVE` completion path; unit-testing only
+`is_valid_fsm_state()` is insufficient.
+
+#### FSM-06 — a paused sequence can reach natural completion while still paused
+
+Severity: P1
+Status: confirmed; related to COACH-04
+
+Pause changes the user/profile state but leaves the plan `active` and does not
+move `plan_end_date`. The completion cron selects active plans whose end date
+has passed without excluding `ACTIVE_PAUSED`, and `_auto_complete_plan_if_needed()`
+then writes `IDLE_FINISHED`. `guards.py` also explicitly permits
+`ACTIVE_PAUSED -> IDLE_FINISHED`.
+
+This conflicts with the accepted pause meaning: future delivery stops and the
+remaining sequence is preserved for resume. A sufficiently long pause can
+instead finish the sequence in the background.
+
+Minimal fix: completion candidates must exclude paused users, and the
+pause/resume fix in COACH-04 must re-anchor remaining steps and the plan end
+date. Remove ordinary `ACTIVE_PAUSED -> IDLE_FINISHED` from the target guard
+matrix. If a special last-step edge case is desired later, encode it as an
+explicit lifecycle condition rather than a blanket transition.
+
+#### FSM-07 — current tests preserve and partially fail the obsolete architecture
+
+Severity: P1 test replacement
+Status: confirmed
+
+`tests/test_fsm_states.py` passes all 8 tests, but three of those tests
+explicitly assert the legacy `IDLE_ONBOARDED`, `IDLE_DROPPED`, and
+`SCHEDULE_ADJUSTMENT` transitions. The green suite therefore protects the old
+FSM rather than the accepted one.
+
+The dedicated schedule-adjustment tests are already stale against other
+accepted changes. With a syntactically valid test bot token and the unavailable
+Trio parametrization excluded, the targeted run produced `13 passed, 7 failed`;
+the failures expect the removed user-facing `MORNING` slot and old tunnel
+behavior. The default test token also fails aiogram validation during
+collection.
+
+Minimal fix: replace legacy tests with a target transition-matrix suite,
+direct-tool tests for time changes, onboarding-to-first-plan integration,
+paused-completion prevention, and a DB-constraint migration test. Remove the
+schedule-adjustment test modules together with their runtime subsystem.
+
+### Required MVP work and order
+
+1. implement deterministic onboarding completion and first-plan creation
+   (ONB-07 / FSM-01);
+2. prevent paused plans from completing and finish pause/resume re-anchoring
+   (COACH-04 / FSM-06);
+3. disable the legacy schedule-adjustment scheduler job, inspect legacy rows,
+   then remove the full tunnel (SCH-02 / FSM-03);
+4. remove `IDLE_DROPPED` and merge any rows into `IDLE_PLAN_ABORTED` (FSM-02);
+5. ship one forward migration that remaps legacy rows and replaces
+   `ck_users_current_state` with the target set;
+6. align `states.py`, `guards.py`, runtime tools/services, Coach state-tool
+   filtering, and tests to that same matrix;
+7. centralize state persistence behind a small shared transition boundary
+   without introducing a new workflow framework (FSM-04).
+
+### What is not a finding
+
+`IDLE_NEW` is bypassed when Telegram creates a user directly in
+`ONBOARDING:START`, but it remains the accepted conceptual/default pre-onboarding
+state and is not classified as dead in this round. `IDLE_FINISHED` is also not
+dead: it remains the technical completion boundary until FD-01 automatic
+continuation is implemented atomically.
 
 ---
 
