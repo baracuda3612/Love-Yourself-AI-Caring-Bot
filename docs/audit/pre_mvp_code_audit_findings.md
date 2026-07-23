@@ -2154,52 +2154,137 @@ COACH-04, Lifecycle Completion, and COACH-08 respectively.
 
 # Runtime Tools Findings
 
-## Runtime Tools Area — Audit Round 2026-07-22 (revised same day: full matrix)
+## Runtime Tools Area — Audit Round 2026-07-22, full-matrix revalidation 2026-07-23
 
-Status: completed. **First pass was too narrow** — it only compliance-checked
-the evening-time rule the founder flagged, not the area. Revised into a
-full audit: take the whole tool matrix (Coach state→tools + prompt rules)
-and check **every** tool against its backend implementation. The Coach
-*prompt* side was already handled in the Coach round; this round is the
-code.
+Status: completed; findings recorded only, no runtime fixes applied.
+**First pass was too narrow** — it only compliance-checked the evening-time
+rule the founder flagged, not the area. The revalidation takes the whole
+tool matrix (Coach state→tools + prompt rules) and checks every tool through
+schema, registration, backend guard, side effects, result handling, and tests.
 
-Method: for each of the 9 runtime tools — what states/rules does the Coach
-side declare, what does the backend actually enforce, and do they align?
+Method: for each of the 8 Coach-callable runtime tools — what states/rules does the Coach
+side declare, what does the backend actually enforce, do the side effects
+fulfil the declared result, and can the user-facing reply be trusted?
 
 ### Files inspected
 
-* `app/plan_runtime/tools.py` — `record_evening_time`, `change_evening_time`, `change_day_time`
-* `app/orchestrator.py` — tool registry, `_execute_plan_tool`, context builder, evening cascade
-* `app/workers/coach_agent.py` — state→tools matrix, `_coach_tools_for_state`, context message
-* `app/time_slots.py` — `update_user_time_slots`
-* `app/plan_drafts/service.py` — evening slot handling at plan creation
+* `app/plan_runtime/tools.py` — all 8 Coach-callable runtime functions
+* `app/orchestrator.py` — tool registry, `_execute_plan_tool`, result/error
+  formatting, context builder, and evening cascade
+* `app/workers/coach_agent.py` — prompt contract, schemas, state→tools matrix,
+  `_coach_tools_for_state`, and API call
+* `app/time_slots.py` — validation and future-step recomputation
+* `app/plan_drafts/service.py` — first/follow-up plan invariants
+* `app/plan_finalization.py` — activation and scheduling side effects
+* `app/plan_pause.py`, `app/plan_guards.py`, and `app/scheduler.py`
+* `app/session_memory.py` — pending 14-day action
+* runtime-tool, Coach schema/filter, orchestrator, pause/resume, and status tests
+* `conceptual_map.md`, `conceptual_map_en.md`, and the Coach system prompt
 
 ### Summary — the root problem
 
-The evening-time problem (below) is one instance of a broader pattern:
-tool gating is **state-based**, but several tool preconditions are
-**plan-type-based** or **backend-state-based**, and the two are only
-bridged by prompt prose. Plus the backend `_FOLLOWUP_STATES` and the Coach
-`_TOOL_NAMES_BY_STATE` matrix disagree, and one contractually-referenced
-capability (7↔14 switch) has no implementation at all.
+The outer command boundary is materially better than it was before the Coach
+rewrite:
+
+* only allowlisted tools are registered;
+* tools are filtered before the API call by `current_state`;
+* schemas are strict, reject extra properties, and require tool arguments;
+* unknown DB fields are not dumped directly to the user;
+* pause, resume, and cancel have backend state checks.
+
+But the full path still has four systemic gaps:
+
+1. tool gating is state-based while several preconditions are plan-type- or
+   pending-flow-based, and prompt prose is the only bridge;
+2. some tools commit product state before external scheduler side effects,
+   then return success even when those side effects failed or never happened;
+3. the Coach never receives the tool result, so hardcoded Ukrainian templates
+   become a second, drifting source of user-facing truth;
+4. Product Map promises one atomic 7↔14 format switch, but no such tool exists.
 
 ### Per-tool matrix (Coach declaration vs backend)
 
 | Tool | Coach offers in states | Backend guard | Aligned? |
 |---|---|---|---|
-| `create_first_plan` | not a Coach tool (onboarding-internal) | `IDLE_ONBOARDED` | state is being deleted → RT-05 |
-| `create_followup_plan` | `IDLE_PLAN_ABORTED` only | `_FOLLOWUP_STATES` = {FINISHED, DROPPED, ABORTED} | **mismatch** → RT-06 |
-| `record_evening_time` | `IDLE_PLAN_ABORTED` | none | no context guard → RT-02 |
-| `change_day_time` | ACTIVE, ACTIVE_PAUSED, ABORTED | none | no backend guard → RT-08 |
-| `change_evening_time` | ACTIVE, ACTIVE_PAUSED, ABORTED | none | false success for 7-day → RT-01 |
-| `pause_plan` | ACTIVE | `ACTIVE` | ✅ aligned |
-| `resume_plan` | ACTIVE_PAUSED | `ACTIVE_PAUSED` | ✅ aligned |
-| `cancel_plan` | ACTIVE, ACTIVE_PAUSED | `ACTIVE`/`ACTIVE_PAUSED` | ✅ aligned |
-| `get_plan_status` | ACTIVE, ACTIVE_PAUSED, ABORTED | none (read-only) | ✅ aligned |
+| `create_followup_plan` | `IDLE_PLAN_ABORTED` only | FINISHED, DROPPED, ABORTED + silent defaults | **mismatch** → RT-06 |
+| `record_evening_time` | `IDLE_PLAN_ABORTED` plus pending 14-day flow | no state/pending guard; format-only time validation | **mismatch** → RT-02 / RT-10 |
+| `change_day_time` | ACTIVE, ACTIVE_PAUSED, ABORTED | no state guard | partial/paused false-result risk → RT-08 / RT-12 |
+| `change_evening_time` | ACTIVE, ACTIVE_PAUSED, ABORTED plus configured evening | no state/plan-format guard | false success for 7-day → RT-01 / RT-12 |
+| `pause_plan` | ACTIVE | `ACTIVE` | state aligns; promised preservation does not → RT-13 |
+| `resume_plan` | ACTIVE_PAUSED | `ACTIVE_PAUSED` + profile flag | state aligns; “next remaining day” does not → RT-13 |
+| `cancel_plan` | ACTIVE, ACTIVE_PAUSED + extra consent | state only | consent is model-governed; cleanup incomplete → RT-13 |
+| `get_plan_status` | ACTIVE, ACTIVE_PAUSED, ABORTED | any state (read-only) | mostly aligned; final-day facts can be wrong → RT-14 |
 | plan switch 7↔14 | — | — | **does not exist** → RT-07 |
 
-The four ✅ tools (pause/resume/cancel/get_plan_status) are correctly
-guarded on both sides and need no work. Everything else has a gap.
+The prompt table and `_TOOL_NAMES_BY_STATE` match each other exactly. The
+remaining mismatches are between that declaration and runtime truth, not
+between the two copies of the Coach-side matrix.
+
+### Reverse audit — Product Map promise to execution path
+
+This pass also starts from the user-facing Product Map rather than the existing
+tool list. A declared capability does not automatically require a Coach tool:
+deterministic lifecycle operations, Telegram callbacks, and supplied runtime
+context are separate execution mechanisms.
+
+| Product Map capability | Correct execution owner | Current status | Missing Coach tool? |
+|---|---|---|---|
+| Create the first 7 working days after setup | deterministic onboarding completion | backend flow missing/incomplete; ONB-01/ONB-07 | No |
+| Automatically continue 7→7 or 14→14 after completion | deterministic completion lifecycle | not implemented; LIF-04/FD-01 | No |
+| Pause delivery | `pause_plan` | tool exists; preservation semantics incomplete (RT-13) | No |
+| Resume with the next remaining day | `resume_plan` | tool exists; re-anchoring incomplete (RT-13) | No |
+| Permanently cancel the current period | `cancel_plan` | tool exists; cleanup incomplete (RT-13/DEL-04) | No |
+| Start a new 7- or 14-day period after cancellation | `create_followup_plan` | tool exists; guards/defaults drift (RT-06) | No |
+| Change daytime or configured evening delivery time | `change_day_time` / `change_evening_time` | tools exist; plan/state/reconciliation gaps (RT-01/RT-03/RT-08/RT-12) | No |
+| Switch 7↔14 as one confirmed action | atomic `switch_plan_format` | no schema, backend operation, registry entry, or test | **Yes — RT-07 / COACH-11** |
+| Choose the first evening time when entering 14 days | `record_evening_time` plus pending creation/switch flow | tool exists; pending-flow guard incomplete (RT-02) | No |
+| See current period status/progress | `get_plan_status`; completion report for closed periods | tool exists; final-day calculation gap (RT-14) | No |
+| Mark the delivered exercise Done or Skip | Telegram callback buttons | implemented outside Coach tools | No |
+| Treat no button response by local end of day as not completed | expiry/lifecycle job | deterministic delivery lifecycle, not a conversation action | No |
+| Explain how to perform today's exercise | `current_exercise_context` supplied to Coach | context gap tracked under COACH-08 | No |
+| Send the completion summary and prepare the next period | completion/report lifecycle | lifecycle gaps already tracked | No |
+| Direct an unanswered factual question to support | deterministic support contact or escalation flow | no real path; COACH-10 backlog | Maybe later; not currently offered as an action |
+
+Therefore the only missing Coach action required by the current Product Map is
+`switch_plan_format`. `create_first_plan`, automatic continuation, completion,
+Done/Skip, expiry, and exercise-context retrieval must not be converted into
+LLM tools merely because they are missing or incomplete elsewhere.
+
+The Product Map says the user chooses working days during setup, but does not
+promise that working days can be changed during an active period. Likewise it
+does not promise user-controlled timezone changes, one-off snoozing, replaying
+an exercise, marking Done/Skip through free text, or retrieving arbitrary
+historical reports through the Coach. Possible future tools such as
+`change_work_days`, `change_timezone`, `snooze_current_exercise`,
+`record_exercise_result`, or `get_latest_completion_summary` would expand the
+product contract rather than close a current implementation gap.
+
+Of those candidates, `change_work_days` is the strongest post-MVP possibility:
+Fogg's Ability/Routine-fit lens says a changed work schedule can make every
+prompt mistimed. But current users can skip, pause, or change time, and there is
+no usage evidence yet that runtime work-day editing is a bottleneck. Keep it as
+a decision/data question rather than adding another scheduling mutation before
+the core loop is reliable.
+
+The Fogg working paper is an analytical lens, not the MVP source of truth. Its
+recommendations to let users choose exercises, generate tiny variants, or adapt
+content after behavior conflict with the approved Product Map and the frozen
+adaptation decision. They do not justify additional runtime tools in this
+round.
+
+### Consent boundary
+
+Natural-language intent and consent are interpreted by the Coach. The backend
+can validate tool name, state, arguments, and product invariants, but it does
+not independently know whether a sentence was genuine confirmation.
+Consequently, cancellation's additional confirmation requirement is enforced
+by prompt/model behavior, not a durable confirmation token or callback.
+
+This is not automatically a separate architecture bug for an AI-first MVP,
+but it is a real control boundary. It requires scenario/evaluation coverage.
+If deterministic proof of irreversible consent is later required, cancellation
+needs a confirmation button/token; adding another prose rule will not create
+backend enforcement.
 
 ### Findings
 
@@ -2276,63 +2361,67 @@ Fix: add the active plan's `plan_type` (or `total_days`) and
 `evening_slot_collected` to the payload at `orchestrator.py:1124`, thread
 them through to `_coach_tools_for_state`, and use them in the filter (RT-03).
 
-#### RT-05 — `create_first_plan` requires `IDLE_ONBOARDED`, a state being deleted
+#### RT-06 — `create_followup_plan` has stale states and fail-open defaults
 
 Severity: P1
-Status: confirmed (cross-ref ONB-07)
-
-`create_first_plan` (`tools.py:63-79`) raises unless
-`user.current_state == "IDLE_ONBOARDED"`. ONB-07 records that
-`IDLE_ONBOARDED` is being removed. When it goes, this guard breaks
-first-plan creation unless the entry-state check is updated in lockstep.
-This was already flagged in the Onboarding round; it belongs here too
-because a tool-matrix audit must catch it — the first-pass evening-only
-audit missed it entirely, which is exactly why this round was widened.
-
-Fix: when `IDLE_ONBOARDED` is removed, update the `create_first_plan`
-entry guard to the replacement onboarding-complete state (ONB-07).
-
-#### RT-06 — `create_followup_plan`: backend allows 3 states, Coach offers 1
-
-Severity: P1
-Status: confirmed
+Status: confirmed; cross-reference COACH-03 / FSM-02
 
 Backend `_FOLLOWUP_STATES` = {`IDLE_FINISHED`, `IDLE_DROPPED`,
 `IDLE_PLAN_ABORTED`} (`tools.py:25`). But `_TOOL_NAMES_BY_STATE`
 (`coach_agent.py:952`) offers `create_followup_plan` **only** in
-`IDLE_PLAN_ABORTED`. `IDLE_FINISHED` and `IDLE_DROPPED` are not keys in the
-matrix at all → "Any other state: none" → the Coach has **no tools** there.
-Consequences:
+`IDLE_PLAN_ABORTED`. Under the accepted target, the Coach matrix is the
+correct direction: `IDLE_FINISHED` auto-continues through FD-01, and
+`IDLE_DROPPED` is removed. Adding those rows back to the Coach would restore
+the old architecture rather than reconcile it.
 
-* `IDLE_FINISHED`: intended to auto-continue (FD-01), but that is not wired
-  (LIF-04). So a finished user who talks to the Coach cannot start the next
-  plan through any path — the tool exists in the backend but is unreachable.
-* `IDLE_DROPPED`: a lapsed user who returns and asks to restart cannot —
-  the Coach has no `create_followup_plan` there.
+There are also two fail-open defaults:
 
-Fix: reconcile the two. Either add `create_followup_plan` (and the
-supporting evening tools) to the `IDLE_FINISHED` / `IDLE_DROPPED` matrix
-rows, or explicitly document why those states route elsewhere (e.g.
-automatic continuation for FINISHED once LIF-04 is wired). The backend and
-the Coach matrix must not disagree on where a tool is legal.
+* `_build_tool_registry()` uses `args.get("plan_type", "SHORT")`, silently
+  creating 7 days if the required model argument is missing;
+* `create_followup_plan()` uses `"14:00"` when the saved DAY time is absent,
+  silently inventing a schedule instead of reporting broken setup.
+
+Both contradict the prompt contract: the user chooses the specific format,
+and saved setup is the source of truth.
+
+Fix:
+
+* narrow `_FOLLOWUP_STATES` to `IDLE_PLAN_ABORTED`;
+* keep automatic same-format continuation as a separate deterministic
+  lifecycle service, not a Coach call from `IDLE_FINISHED`;
+* remove `IDLE_DROPPED` with FSM-02;
+* require `args["plan_type"]` and fail closed when the saved DAY time is
+  missing; do not default either decision.
 
 #### RT-07 — No plan-switch (7↔14) capability exists
 
-Severity: P2 (new feature; not MVP must-have, but contractually referenced)
-Status: confirmed
+Severity: P1 before beta under the current Product Map
+Status: confirmed; accepted target dependency, not implemented
 
-FD-01 references an "explicit 7↔14 switch" as a separate user action, but
-no switch tool exists (`grep` for switch/change_plan is empty). The only
-way to change format is `cancel_plan` → `IDLE_PLAN_ABORTED` →
-`create_followup_plan(other type)`. That path (a) is framed as a permanent
-end with **no progress summary** (cancel semantics, DEL-04/COACH), and (b)
-requires two deliberate steps. So a user on a 7-day plan who wants 14 loses
-their current-period closure to switch.
+The English and Ukrainian Product Maps explicitly tell the Coach that format
+can be switched from 7 to 14 or 14 to 7 as **one user-confirmed action**.
+`product_contract.md` also lists `switch_plan_format` among the known backend
+dependencies that must close before beta. No schema, registry entry, backend
+function, state row, or test exists.
 
-Founder note (2026-07-23): not an MVP must-have. Consider building it
-inside this tools package only if cheap — it is logically needed and the
-tools are already open. If built, it should switch format without the
-"permanent end / no summary" framing that `cancel_plan` imposes.
+The only current approximation is `cancel_plan` followed by
+`create_followup_plan(other type)`. That is not equivalent:
+
+* it requires two actions and extra friction;
+* cancellation permanently ends the current sequence and suppresses its
+  progress summary;
+* a failure between the two actions leaves the user with no active sequence;
+* first switch to 14 days needs an evening-time subflow.
+
+This is not a quick wrapper around two existing calls. The switch must be
+atomic at the data level: validate all inputs first, end the old sequence and
+create the new format in one transaction, roll back to the old sequence if
+creation fails, then reconcile scheduler jobs idempotently. For the first
+7→14 switch, collect evening time before ending the current sequence.
+
+Current contract gives two honest options: implement the atomic tool before
+beta, or explicitly remove the capability from Product Map and the Product
+Contract for MVP. Leaving the claim while calling it optional is not coherent.
 
 #### RT-08 — `change_day_time` / `change_evening_time` have no backend state guard
 
@@ -2378,66 +2467,240 @@ template per tool. This is the same Bounded Tool-Result Loop already
 recorded as COACH-09; this round confirms the runtime tools depend on it,
 especially once soft results (RT-01) exist.
 
+The current templates also bypass Section 3 language adherence: every success,
+soft result, and error is Ukrainian even when the user speaks English. Several
+templates restore old user-facing `план` terminology, and the evening-time
+question requires manual `20:30` input despite the prompt allowing natural
+language. These are additional symptoms of the same missing result loop, not
+reasons to grow a larger template catalog.
+
+#### RT-10 — backend time validation accepts impossible values
+
+Severity: P1
+Status: confirmed and directly reproduced
+
+`_validate_hhmm()` checks only `^\d{2}:\d{2}$`. Direct execution accepted all
+of `24:00`, `99:99`, and `12:60`. The strict OpenAI schema correctly prevents
+those values on a compliant model call, and `change_day_time` /
+`change_evening_time` later pass through `time_slots._parse_time()`. But
+`record_evening_time` writes the value directly after `_validate_hhmm()`, so
+an invalid time can be persisted as trusted profile setup.
+
+Expected behavior: one backend validator is authoritative for every time
+entry point and enforces real 24-hour time (`00:00` through `23:59`). The
+schema remains defense-in-depth, not the only semantic validation.
+
+This validator does not choose or convert a timezone. The accepted `HH:MM`
+is a local wall-clock value in the user's saved `user.timezone`.
+`change_day_time` / `change_evening_time` already pass that timezone into
+`compute_scheduled_for()`, which converts the result to UTC; first MEDIUM-plan
+finalization does the same after `record_evening_time`. Correct collection and
+validation of `user.timezone` is a separate setup contract.
+
+Minimal fix: replace the format-only regex helper with parsing that returns a
+normalized `HH:MM`, and use it in all three time tools and onboarding. Add
+boundary tests for `00:00`, `23:59`, `24:00`, invalid minutes, and malformed
+input.
+
+#### RT-11 — plan creation can report success after activation side effects failed
+
+Severity: P1
+Status: confirmed
+
+Both creation tools commit the finalized plan and `ACTIVE` state, then call
+`activate_plan_side_effects()` outside that transaction. That function catches
+every exception, logs it, and returns `None`; it also returns normally when the
+plan/user cannot be loaded. The caller therefore always returns
+`{"status": "ok"}` and the orchestrator says the new sequence was launched,
+even if no exercise jobs were scheduled.
+
+The failure can also be partial: scheduling earlier steps mutates APScheduler,
+then a later exception is swallowed. The DB may say active while only part of
+the sequence has jobs.
+
+Minimal fix: make activation an idempotent, observable operation. At minimum,
+return/raise a structured activation result and never claim full success when
+job activation failed. The durable target should use an outbox/reconciliation
+record so a committed plan can retry job activation without duplicate jobs.
+Do not attempt to make a DB transaction roll back external scheduler changes.
+
+#### RT-12 — time changes commit before scheduler reconciliation and fail while paused
+
+Severity: P1
+Status: confirmed; related to COACH-04 / FSM-06
+
+`change_day_time` and `change_evening_time` first commit the profile and
+rewritten `scheduled_for` timestamps, then call `reschedule_plan_steps()` in a
+separate session. If rescheduling raises, the orchestrator reports failure
+although the saved time and DB schedule already changed.
+
+For `ACTIVE_PAUSED`, the prompt explicitly offers both time tools, but
+`schedule_plan_step()` refuses every step because `can_deliver_tasks()` accepts
+only `ACTIVE`. The tool therefore commits the new times, schedules zero jobs,
+and returns `status=ok`. Resume only flips flags/state and does not rebuild the
+jobs. The promised result — future delivery at the new time after resume — is
+not implemented.
+
+Minimal fix: treat schedule reconciliation as an idempotent post-commit result,
+not an assumed side effect. For paused users, persist the new time but defer job
+creation to the required resume re-anchoring flow. Return structured facts such
+as `saved=true`, `jobs_reconciled=true/false/deferred`, and let the bounded
+result loop describe only what actually happened.
+
+#### RT-13 — state guards align for pause/resume/cancel, but their declared effects do not
+
+Severity: P1
+Status: confirmed; cross-reference COACH-04, DEL-04, and FSM-06
+
+The backend correctly rejects pause outside `ACTIVE`, resume outside
+`ACTIVE_PAUSED`, and cancel outside those two states. That part matches the
+prompt. The promised consequences do not:
+
+* pause says the remaining sequence is preserved, but due steps fire and are
+  lost while delivery is gated;
+* resume says delivery continues with the next remaining day, but it only
+  flips `is_paused` and `current_state`; it does not re-anchor or reschedule;
+* resume does not verify that an active/paused `AIPlan` actually exists;
+* cancel changes plan/user state and removes future scheduler jobs, but does
+  not close delivered/pending step state or remove visible Telegram keyboards
+  (DEL-04).
+
+Cancellation's additional verbal confirmation is also model-governed as noted
+under Consent boundary; the backend validates state, not conversation history.
+
+Minimal fix: do not create another set of tool-specific work items here.
+Implement the accepted pause/resume re-anchoring once (COACH-04 / FSM-06), the
+cancelled-step/keyboard closure once (DEL-04), and add integration tests through
+the runtime tools so their advertised results become true.
+
+#### RT-14 — `get_plan_status` can report one day remaining after the last day was delivered
+
+Severity: P1 factual correctness
+Status: confirmed
+
+`current_day` advances when all steps for a day are delivered, not when they
+are completed. On the final day, `maybe_advance_current_day()` caps the value at
+`total_days`; it cannot advance to `total_days + 1`. `get_plan_status()` then
+calculates:
+
+```text
+days_remaining = total_days - current_day + 1
+```
+
+Therefore, after every final-day exercise has already been delivered,
+`current_day == total_days` and the tool still reports `1` day remaining until
+the plan moves out of the active state. The existing test hardcodes a middle
+day and does not cover this boundary.
+
+Minimal fix: define status facts from actual scheduled days/remaining
+non-terminal or not-yet-delivered steps rather than inferring all semantics
+from a capped cursor. Add first-day, middle-day, final-day-before-delivery,
+final-day-after-delivery, paused, and no-plan cases. Keep the structured result;
+the bounded Coach result loop should verbalize it.
+
+#### RT-15 — tests prove wiring, not the declared product outcomes
+
+Severity: P1 test expansion
+Status: confirmed
+
+The targeted current suite passed (`44 passed` with unavailable Trio cases
+excluded), but it primarily mocks each function's collaborators and asserts
+that they were called. It does not cover:
+
+* impossible but regex-valid times;
+* missing `plan_type` silently becoming SHORT;
+* missing DAY time silently becoming `14:00`;
+* activation-side-effect failure after plan commit;
+* time-change reconciliation failure or paused time changes;
+* pending-action absence/expiry around first evening collection;
+* actual `_execute_plan_tool()` success/soft/error/cascade behavior;
+* language adherence after a tool call;
+* final-day status facts;
+* cancellation consent scenarios or cleanup through the runtime boundary;
+* the absent format-switch contract.
+
+The green suite is useful regression coverage for current wiring, but it is not
+evidence that the prompt/tool contract is fulfilled. Add outcome-level tests
+alongside the fixes rather than enlarging mocks of the current behavior.
+
 ### Recommended fix shape
 
 Priority order:
 
-1. **Reconcile the two state authorities (RT-06, RT-05).** The backend
-   `_FOLLOWUP_STATES` and the Coach `_TOOL_NAMES_BY_STATE` must agree, and
-   the `create_first_plan` guard must track the `IDLE_ONBOARDED` removal.
-   These are correctness gaps that make real tools unreachable or broken.
-2. **Backend guards (RT-01/RT-02/RT-08).** Evening and time-change tools
-   refuse to act outside a valid context, returning soft results, never
-   false success — authoritative, independent of the LLM.
-3. **Plan-type-aware filtering (RT-03/RT-04).** The Coach is never even
-   offered a meaningless tool. Defense-in-depth, "do not rely on the prompt
-   for guarantees."
-4. **Bounded tool-result loop (RT-09/COACH-09).** Required before soft
-   results (RT-01) exist, so the Coach voices the real outcome.
-5. **Optional this package if cheap (RT-07):** a real 7↔14 switch.
+1. **Close false-success paths (RT-11/RT-12/RT-13).** A created or changed
+   sequence must have observable, retryable scheduler reconciliation; pause,
+   resume, and cancellation must fulfil their existing Product Map contract.
+2. **Align follow-up entry points (RT-06).** Automatic continuation is not a
+   Coach tool; user-requested follow-up creation is only from
+   `IDLE_PLAN_ABORTED`; remove stale states and silent defaults.
+3. **Add authoritative input/context guards (RT-01/RT-02/RT-08/RT-10).**
+   Invalid time, wrong plan format, wrong state, or absent pending flow must
+   fail before persistence.
+4. **Make filtering plan-aware (RT-03/RT-04).** The Coach should not receive
+   tools that cannot be meaningful for the current plan/context.
+5. **Implement the bounded tool-result loop (RT-09/COACH-09).** The Coach
+   receives one safe structured result and writes one grounded reply; templates
+   remain failure fallback only.
+6. **Resolve the accepted format-switch contract (RT-07).** Implement the
+   atomic tool before beta, or explicitly remove the promise from Product Map
+   and Product Contract.
+7. **Correct status facts and outcome tests (RT-14/RT-15).**
 
 ### Per-file work list
 
 * `app/plan_runtime/tools.py`
   * `change_evening_time`: add the no-evening-slot guard (RT-01);
   * `record_evening_time`: gate persistence to the pending-MEDIUM flow (RT-02);
-  * `change_day_time`: add a backend state guard (RT-08);
-  * `create_first_plan`: update the `IDLE_ONBOARDED` entry guard when that
-    state is removed (RT-05 / ONB-07);
-  * (RT-07, optional) a `switch_plan(plan_type)` that changes format without
-    cancel's "permanent end / no summary" framing.
+  * use one semantic time parser for record/change operations (RT-10);
+  * add backend state/context guards to both time-change tools (RT-08);
+  * narrow follow-up creation to `IDLE_PLAN_ABORTED`; require explicit
+    `plan_type` and saved DAY time (RT-06);
+  * return structured, factual results for activation and scheduler
+    reconciliation instead of unconditional `status=ok` (RT-11/RT-12);
+  * implement atomic `switch_plan_format(plan_type)` or remove its product
+    promise before beta (RT-07);
+  * derive status fields from real remaining/delivered steps (RT-14).
 * `app/orchestrator.py`
   * `_execute_plan_tool` / cascade: handle the new `no_evening_slot` soft
-    result; optionally refuse `record_evening_time` unless
+    result; refuse `record_evening_time` unless
     `pending_action == collect_evening_time_for_medium` (RT-02);
+  * remove the `SHORT` default in the `create_followup_plan` registry wrapper
+    (RT-06 / COACH-03);
   * context builder (`:1124-1130`): add `plan_type`/`total_days` +
     `evening_slot_collected` (RT-04);
   * `_humanize_tool_error`: map the new guard errors to friendly copy;
   * tool-result handling: replace per-tool fixed templates with a bounded
-    result loop so the Coach voices the real outcome (RT-09/COACH-09).
+    result loop so the Coach voices the real outcome in the user's language
+    (RT-09/COACH-09);
+  * emit telemetry for requested / soft-pending / succeeded / failed as
+    distinct outcomes, not one `plan_tool_executed` event.
 * `app/workers/coach_agent.py`
-  * `_TOOL_NAMES_BY_STATE`: add `IDLE_FINISHED` / `IDLE_DROPPED` rows (or
-    document why they route elsewhere) so it matches `_FOLLOWUP_STATES`
-    (RT-06);
   * `_context_message`: forward `plan_type` / evening-configured (RT-04);
   * `_coach_tools_for_state`: filter evening tools by plan type + pending
     state (RT-03);
-  * state→tools matrix + notes (`:652-660`): align the doc with the enforced
-    filter once RT-03/RT-04/RT-06 land.
-* tests: 7-day user cannot change evening time (soft refusal, no false
-  success); `record_evening_time` outside the pending-MEDIUM flow does not
-  set the flag; the Coach IS offered `create_followup_plan` in
-  `IDLE_FINISHED`/`IDLE_DROPPED` (or the auto-path is proven); `change_day_time`
-  refuses from an invalid state; `create_first_plan` works from the
-  post-onboarding state.
+  * keep `IDLE_FINISHED` and removed `IDLE_DROPPED` out of the Coach tool
+    matrix; prove the deterministic auto-continuation path separately (RT-06);
+  * add `switch_plan_format` schema/state availability only when its backend
+    atomic operation exists (RT-07);
+  * on the second bounded call, disable tools and ground the answer solely in
+    the safe structured result (RT-09).
+* `app/plan_finalization.py` / scheduler integration:
+  * make activation and rescheduling idempotent and observable; do not swallow
+    activation failure while callers report success (RT-11/RT-12);
+  * implement the existing pause/resume and cancel lifecycle fixes once, then
+    exercise them through tool-level integration tests (RT-13).
+* tests: implement the outcome coverage enumerated in RT-15, including
+  invalid semantic time, plan-creation activation failure, paused time change,
+  final-day status, and the full tool-result loop.
 
 ### Scope boundary
 
-This round audits all 9 runtime tools against their Coach-side declaration.
-The FSM state model itself (whether plan type *should* be part of state,
-and the `IDLE_ONBOARDED` removal) is the FSM State & Guard round below; RT-05
-and RT-06 cross-reference it. The Bounded Tool-Result Loop architecture is
-owned by COACH-09; RT-09 only confirms the runtime tools depend on it.
+This round audits all 8 Coach-callable runtime functions and the missing
+format-switch capability against their declarations. First-plan creation
+belongs to the deterministic onboarding flow and is tracked separately under
+ONB-07 / FSM-01. The FSM state model itself is covered by the FSM State &
+Guard round below. The Bounded Tool-Result Loop architecture is owned by
+COACH-09; RT-09 only confirms the runtime tools depend on it.
 
 ---
 
