@@ -487,6 +487,125 @@ Key accepted points (full text in the contract):
 
 ---
 
+## FD-07 — Store three explicit feedback signals in one database table
+
+Status: accepted (2026-07-23)
+Priority: P1 for beta learning
+Area: Feedback / Coach / Delivery / Telemetry
+
+### Decision
+
+The beta collects three different feedback signals. They answer different
+product questions but share one storage model:
+
+1. `exercise_efficacy` — optional one-tap feedback after an exercise was
+   marked completed (already accepted under FD-05/FD-06);
+2. `coach_quality` — thumbs up/down attached to free-form Coach responses,
+   with a short reason after thumbs down;
+3. `product_feedback` — feedback the user explicitly asks to submit about
+   Love Yourself, captured through natural conversation and a dedicated
+   `capture_product_feedback` runtime tool.
+
+All three are stored in one `feedback_events` table with a `source` field.
+The database is the source of truth. Beta scope is capture only: no email
+notification, support inbox, admin Telegram channel, dashboard, automatic
+triage workflow, or response-time promise is required.
+
+### Explicit-intent boundary
+
+`capture_product_feedback` is available only when the user clearly asks to
+submit or pass feedback to the product/development team. A direct request that
+already contains the feedback is sufficient consent.
+
+Examples that allow capture:
+
+```text
+Хочу залишити відгук про продукт: ...
+Передай розробникам, що ...
+Запиши це як фідбек: ...
+```
+
+A complaint, question, frustration, or negative phrase alone is not consent
+to store product feedback. For example, "я не розумію, коли приходять вправи"
+is first a product-support question: Coach answers it from the Product Map.
+It is captured only if the user also clearly asks for it to be submitted.
+
+Do not require the feedback topic to be absent from the Product Map. The map
+determines whether Coach can answer a factual question; it does not restrict
+what the user may criticize or submit as feedback.
+
+If the user expresses intent to leave feedback but has not said what should be
+submitted, ask one brief question. Do not infer feedback text or submit ambient
+conversation automatically.
+
+### Classification and fidelity
+
+Classification happens only after explicit submission intent is established.
+It may sort feedback into a small enum such as `bug`, `confusion`,
+`feature_request`, `content`, `coach`, or `other`, but classification never
+acts as the trigger.
+
+Store the exact source message and any model-extracted submitted text
+separately. The original user wording is authoritative; a category or summary
+must not replace it. Do not attach the full conversation by default.
+
+`product_feedback` is not COACH-10 escalation:
+
+* feedback records an opinion and does not promise a human response;
+* escalation asks a human to resolve an unanswered product question and may
+  require a response path;
+* they may share infrastructure later, but their user-facing contracts remain
+  distinct.
+
+### Storage shape
+
+Minimum shared fields:
+
+```text
+id
+user_id
+source                     # exercise_efficacy / coach_quality / product_feedback
+source_entity_id           # exercise, Coach message, or source Telegram message
+value                      # source-specific rating/answer
+reason                     # optional structured reason
+feedback_text              # optional submitted text
+category                   # optional post-intent classification
+context                    # bounded JSON: plan/exercise/prompt/model/state identifiers
+created_at
+```
+
+Do not make feedback company-facing. Company reporting remains anonymized and
+aggregated under the existing privacy contract. Feedback does not change the
+current or future exercise sequence for the individual user.
+
+### Source-specific interaction rules
+
+* `exercise_efficacy`: show only after `completed`, never after `skipped`;
+  one optional tap, no plan adaptation.
+* `coach_quality`: attach only to free-form Coach responses, not scheduled
+  exercises or deterministic tool confirmations. A negative rating may expose
+  a compact reason row (`incorrect`, `irrelevant`, `tone`, `too_long`,
+  `other`). One user/message pair must be idempotent and may update its latest
+  rating rather than create duplicates.
+* `product_feedback`: no slash command is required. Natural-language explicit
+  intent invokes the tool. Confirm storage only after the database write
+  succeeds; do not promise that a person will reply.
+
+### Deferred deliberately
+
+* outbound email to `hello@loveyourselfua.com`;
+* admin/support Telegram channel;
+* feedback dashboard or issue-tracker integration;
+* automatic alerts and triage;
+* automatic prompt, exercise, timing, or per-user plan changes based on
+  feedback.
+
+Feedback is reviewed in batches during product iteration. If volume later
+makes manual database review a bottleneck, notifications or a review surface
+can be added without changing the capture contract.
+
+---
+
 # Scheduler Findings
 
 ## SCH-01 — Re-engagement job active
