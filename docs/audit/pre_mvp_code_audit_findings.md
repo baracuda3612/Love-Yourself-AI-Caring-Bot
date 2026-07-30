@@ -3811,6 +3811,32 @@ Minimal fix:
 * reconcile failed aggregate writes observably; never rebuild them during
   account deletion as an ad hoc migration.
 
+Three-layer clarification (2026-07-30): dual-write is right, but **not every
+counter without a `user_id` is anonymous.** A cell like `company_id + day +
+exercise + count=1` has no identifier yet deanonymizes trivially by side
+knowledge. Distinguish three layers:
+
+1. **User-linked events** — personal, retained until account deletion.
+2. **Restricted operational aggregates** — company/time/exercise buckets that
+   may still be small (low-N). These are **not** company-facing and **not**
+   treated as anonymous; they follow the same bounded retention and deletion
+   as personal data.
+3. **Sealed aggregates** — have passed the cohort/cell threshold, contain no
+   join keys, and cannot be reversed to individuals. **Only these** may be
+   retained indefinitely and may ever appear in a report.
+
+So the founder's "aggregate survives deletion" applies **only to sealed
+aggregates**, not to every counter. The dual-write persists to the restricted
+layer; sealing is a separate gated step.
+
+Related telemetry ceiling (2026-07-30): the bot cannot measure exercise
+**execution** or **read** — Telegram Bot API has no read receipts for
+bot-sent messages, and a `Виконано` tap does not prove the exercise was done.
+So `ignored` means only "no registered response," not "did not recover." The
+chain *no tap → not resting → overloaded → risk* has three unmeasured jumps.
+"Read" and real "duration" become measurable only inside a Mini App the user
+opens (post-beta) — do not design metrics that assume either.
+
 #### PRIV-08 — Completion and pulse report bearer links do not expire or revoke
 
 Severity: P1 before beta
