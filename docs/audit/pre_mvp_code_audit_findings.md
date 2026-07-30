@@ -575,9 +575,11 @@ context                    # bounded JSON: plan/exercise/prompt/model/state iden
 created_at
 ```
 
-Do not make feedback company-facing. Company reporting remains anonymized and
-aggregated under the existing privacy contract. Feedback does not change the
-current or future exercise sequence for the individual user.
+Do not make feedback company-facing. Feedback may contribute only to
+product-internal learning and privacy-safe aggregates under FD-09; no
+individual answer, free text, or small-group slice is available to a company.
+Feedback does not change the current or future exercise sequence for the
+individual user.
 
 ### Source-specific interaction rules
 
@@ -691,6 +693,96 @@ operation.
 FSM survives as a **concept and a derived view**, not as a duplicated stored
 column. `app/fsm/states.py` (the value/mode vocabulary) stays as the canonical
 mode enum; `app/fsm/guards.py` (the transition matrix) is removed per FSM-04.
+
+---
+
+## FD-09 — Privacy-gated company analytics and independent aggregation
+
+Status: accepted (2026-07-30)
+Priority: P1 data architecture before beta; company reporting post-MVP
+Area: Privacy / Telemetry / B2B Analytics
+
+### Decision
+
+Love Yourself may retain user-linked behavioral telemetry for product
+operation and product learning while the account exists. It must also build
+independent statistical aggregates from accepted events at ingestion time.
+Account deletion removes the user-linked history but does not subtract a
+contribution that has already become genuinely aggregate.
+
+This is **parallel aggregation from day one**, not a transfer performed during
+account deletion:
+
+```text
+accepted behavioral event
+  -> user-linked event
+  -> independent aggregate contribution
+```
+
+The operation must be idempotent. Retries cannot increment the aggregate
+twice, and a partial failure cannot silently leave personal and aggregate
+records inconsistent. The implementation may use one database transaction or
+an event plus a durable outbox, but it must have one stable event identity and
+an observable reconciliation path.
+
+Independent aggregates contain no user identifier, stable user hash, raw
+conversation or feedback text, exact user-level timeline, or field combination
+that can reconstruct a person's history. High-cardinality metrics use coarse
+buckets and bounded contribution. Product-internal aggregate metrics may
+include completion / skip / ignore counts, response-latency buckets, streak
+buckets, plan completion, activation, and D3/D7 retention. Response latency is
+delivery-to-response time; it is not exercise duration. These aggregates may
+be retained indefinitely once they meet this independence standard.
+
+An idempotency/outbox ledger may temporarily retain an event identity to make
+retries safe, but that ledger belongs to the personal/operational retention
+boundary. The indefinite aggregate counters do not retain the event identity
+or another join key back to the personal event.
+
+### Company-facing boundary
+
+The first MVP and beta expose **no behavioral analytics to the company**,
+including no manual spreadsheet or one-off "anonymous" report. The current
+code has no company dashboard or HR endpoint; preserve that safe default.
+
+Future company reporting is a separate feature and may read only from the
+aggregate layer. It must never expose user-level events, conversations,
+exercise histories, stable pseudonyms, small-cohort slices, drill-down, or
+filters that reduce a report below the privacy gate.
+
+The initial design gate for future reporting is:
+
+* at least **100 eligible users** in the covered cohort;
+* at least **50 distinct actual contributors** in the reporting period.
+
+Both conditions are required. Invited or licensed users who did not contribute
+data do not increase the effective cohort. The threshold is centrally
+controlled and cannot be lowered by HR, the buyer, or a company administrator.
+Reports use broad periods, coarse buckets, rounding, small-cell suppression,
+and no person-level comparison. The 100/50 rule is a conservative starting
+default, **not a mathematical anonymity guarantee**; differential privacy and
+formal contribution limits remain future hardening if stronger guarantees are
+needed.
+
+User-facing and sales language must say **aggregate data without individual or
+small-group views**, not promise absolute anonymity.
+
+### Product rationale
+
+The privacy gate is also a forcing function for serious adoption: useful
+company reporting becomes possible only after broad rollout and real employee
+use, rather than a five-person pilot selected from visible high performers.
+This aligns incentives without weakening the employee boundary. Privacy is the
+reason for the gate, not an artificial seat-sales tactic.
+
+### Sequencing
+
+1. implement the user-linked event plus idempotent aggregate write before the
+   first beta so trustworthy aggregate history begins on day one;
+2. implement retention and account deletion against the personal layer;
+3. do not build the company gate, report API, or dashboard during MVP;
+4. before any future company report ships, implement the centralized privacy
+   gate and re-review re-identification risk against real cohort sizes.
 
 ---
 
@@ -3006,9 +3098,8 @@ COACH-09; RT-09 only confirms the runtime tools depend on it.
 
 ## Lifecycle State & Persistence Area — Audit Round 2026-07-22, consistency pass 2026-07-23
 
-Status: technical pass completed and revalidated; persistence ownership remains
-an explicit architecture decision under FSM-08; findings recorded only, no
-runtime fixes applied
+Status: technical pass completed and revalidated; persistence ownership resolved
+by FD-08; findings recorded only, no runtime fixes applied
 
 ### Files and paths inspected
 
@@ -3028,25 +3119,25 @@ runtime fixes applied
 
 ### Accepted target
 
-Per `C_state`, FD-01, FD-04, and the accepted pause/cancel contract, the
-target MVP lifecycle is:
+Per `C_state`, FD-01, FD-04, FD-08, and the accepted pause/cancel contract,
+the target MVP lifecycle is:
 
 ```text
-IDLE_NEW -> ONBOARDING:* -> ACTIVE
-ACTIVE <-> ACTIVE_PAUSED
-ACTIVE -> IDLE_FINISHED -> ACTIVE (automatic same-format continuation)
-ACTIVE / ACTIVE_PAUSED -> IDLE_PLAN_ABORTED
-IDLE_PLAN_ABORTED -> ACTIVE (explicit new sequence)
+incomplete onboarding -> current_mode=ONBOARDING
+current plan active    -> current_mode=ACTIVE
+current plan paused    -> current_mode=ACTIVE_PAUSED
+no current plan        -> current_mode=NO_ACTIVE_PLAN
+
+active plan -> completed plan + active same-format successor
+active / paused plan -> abandoned plan -> NO_ACTIVE_PLAN
+NO_ACTIVE_PLAN -> active plan (explicit new sequence)
 ```
 
-`IDLE_FINISHED` may be a short-lived technical state while completion and
-automatic continuation are committed. `IDLE_ONBOARDED`, `IDLE_DROPPED`, and
-`SCHEDULE_ADJUSTMENT` are not part of the target FSM. Plan format remains
-plan data, not a separate FSM state.
-
-This graph defines product behavior/modes. It does **not** by itself require
-each mode to be stored in `users.current_state`; the plan-centric persistence
-decision is reopened under FSM-08.
+These are derived product modes, not values stored in `users.current_state`.
+`IDLE_ONBOARDED`, `IDLE_FINISHED`, `IDLE_PLAN_ABORTED`, `IDLE_DROPPED`, and
+`SCHEDULE_ADJUSTMENT` are not target persisted user states. Automatic
+continuation recovery uses an idempotent outbox/reconciliation record, not an
+`IDLE_FINISHED` queue state. Plan format remains plan data, not a separate mode.
 
 ### Summary
 
@@ -3310,12 +3401,11 @@ The status vocabulary is also internally inconsistent: the unused Python
 `abandoned`. No cross-table constraint or startup reconciliation verifies that
 these values form one valid aggregate.
 
-Architecture decision reopened by the guard-removal review (2026-07-23):
-after the flow tunnels disappear, persisting a separate user FSM may add more
-drift than value. The product still has lifecycle **modes**, but those modes can
-be derived from onboarding progress plus the current plan.
+The guard-removal review reopened this decision; FD-08 then resolved it on
+2026-07-23. The product still has lifecycle **modes**, but they are derived from
+onboarding progress plus the current plan rather than persisted independently.
 
-Preferred Occam target for review:
+Accepted FD-08 target:
 
 * onboarding progress owns setup state;
 * `AIPlan.status` owns plan lifecycle (`active`, `paused`, `completed`,
@@ -3325,13 +3415,8 @@ Preferred Occam target for review:
 * `UserProfile.is_paused` is removed;
 * completion timing has one authoritative source derived from actual steps.
 
-Fallback if persisted `User.current_state` is retained: it must be the single
-authoritative interaction mode, plan status must not also encode pause, and all
-mirrors must be updated/checked in one locked transaction.
-
-Do not ship the current hybrid. Choose the plan-centric derived mode
-(recommended) or the persisted-user-state model before writing the FSM-11
-migration and aggregate operation boundary.
+Do not ship the current hybrid. Implement the accepted plan-centric model
+through the FSM-11 migration and operation-level aggregate boundaries.
 
 #### FSM-09 — state-only checks can manufacture valid-looking states without a plan
 
@@ -3408,12 +3493,12 @@ The ORM, SQL files, and deployed-schema bootstrap do not define one FSM:
 Consequently, behavior depends on whether a database was created from current
 ORM metadata or evolved through an undocumented subset/order of raw SQL files.
 
-Minimal fix: after the FSM-08 ownership decision, ship one explicit forward
-migration that remaps legacy rows, removes or constrains
-`users.current_state`, makes retained lifecycle columns non-null, and
-normalizes plan-status values. Record applied migration/version state and add a
-startup assertion for the selected lifecycle contract. Do not rely on
-`create_all()` to upgrade an existing database.
+Minimal fix: implement FD-08 through one explicit forward migration that remaps
+legacy rows, removes `users.current_state` and `UserProfile.is_paused`, removes
+the duplicate `User.plan_end_date`, makes the retained lifecycle columns
+non-null, and normalizes plan-status values. Record applied migration/version
+state and add a startup assertion for the selected lifecycle contract. Do not
+rely on `create_all()` to upgrade an existing database.
 
 #### FSM-12 — the database does not enforce one current plan per user
 
@@ -3485,8 +3570,8 @@ Do not create duplicate fixes for these; the consistency pass confirmed them:
 
 ### Required MVP work and order
 
-1. decide FSM-08 ownership: recommended plan-centric persistence + derived
-   `current_mode`, or retained authoritative `users.current_state`;
+1. implement accepted FD-08 ownership: plan-centric persistence plus one
+   derived `current_mode` function;
 2. implement deterministic onboarding completion through `create_plan()`
    directly and delete the dead first-plan wrapper (ONB-07 / FSM-01);
 3. prevent paused plans from completing and implement null-on-pause plus
@@ -3497,7 +3582,7 @@ Do not create duplicate fixes for these; the consistency pass confirmed them:
 6. remove the unreachable Coach mutation/draft path, then delete
    `_guard_fsm_transition`, `_commit_fsm_transition`, and `app/fsm/guards.py`
    (FSM-04 / FSM-05 / FSM-10);
-7. ship one forward migration for the selected ownership model, non-null
+7. ship one forward migration for the accepted ownership model, non-null
    lifecycle fields, legacy-row remapping, and normalized plan statuses
    (FSM-11);
 8. align `states.py` or the derived-mode builder, runtime tools/services, Coach
@@ -3508,11 +3593,310 @@ Do not create duplicate fixes for these; the consistency pass confirmed them:
 
 ### What is not a finding
 
-`IDLE_NEW` is bypassed when Telegram creates a user directly in
-`ONBOARDING:START`, but it remains the accepted conceptual/default pre-onboarding
-state and is not classified as dead in this round. `IDLE_FINISHED` is also not
-dead: it remains the technical completion boundary until FD-01 automatic
-continuation is implemented atomically.
+`IDLE_NEW` and `IDLE_FINISHED` remain facts of the current implementation until
+FD-08 and FD-01 are implemented. They are not target persisted user states:
+incomplete setup derives `ONBOARDING`, while completion/continuation is an
+atomic lifecycle operation with durable outbox recovery.
+
+---
+
+# Privacy & Data Boundaries Findings
+
+## Privacy & Data Boundaries Area — Audit Round 2026-07-30
+
+Status: product boundary accepted under FD-09; code findings recorded only,
+no runtime fixes applied
+
+### Files and paths inspected
+
+* `app/db.py`
+* `app/telegram.py`
+* `app/orchestrator.py`
+* `app/session_memory.py`
+* `app/workers/coach_agent.py`
+* `app/ai.py`
+* `app/api.py`
+* `app/plan_completion/tokens.py`
+* `app/telemetry.py`
+* `app/plan_metrics.py`
+* `resource/assets/product/conceptual_map.md`
+* `resource/assets/product/conceptual_map_en.md`
+* `docs/audit/product_contract.md`
+
+### External facts used
+
+* The current Ukrainian Law "On Personal Data Protection" requires notice
+  about the controller, collected data, purpose, recipients, and data-subject
+  rights at collection when data comes from the person (Article 12), and gives
+  the person access to their data and a response/content right within 30
+  calendar days (Article 8):
+  `https://zakon.rada.gov.ua/laws/show/2297-17`.
+* OpenAI states that API data is not used for model training unless the
+  customer opts in, while abuse-monitoring logs may contain prompts/responses
+  and are retained for up to 30 days by default, subject to stated exceptions:
+  `https://developers.openai.com/api/docs/guides/your-data`.
+
+These facts define engineering requirements and disclosure inputs. They are not
+a substitute for legal review of the final Privacy Policy, processing basis,
+contracts, or cross-border data-transfer setup.
+
+### Accepted retention and access model
+
+* raw user/Coach conversations: retain for **90 days**, then delete from
+  Postgres, Redis, and any application logs that duplicate content;
+* user-linked product and behavioral history: retain while the account exists,
+  subject to the final Privacy Policy and deletion workflow;
+* independent aggregates produced under FD-09: may be retained indefinitely
+  and survive account deletion only after they are no longer linked or
+  reasonably reconstructable as a person's history;
+* user access/export/deletion may be handled manually during beta through a
+  real support path; a self-service privacy center is not required for MVP.
+
+#### PRIV-01 — No user-facing privacy notice or recorded notice version
+
+Severity: BLOCKER before beta
+Status: confirmed
+
+No Privacy Policy, onboarding privacy notice, notice-version record, or
+acceptance/acknowledgement path exists in the inspected product code. The
+system nevertheless collects Telegram identifiers, profile/schedule data,
+conversation text, plan activity, and behavioral events, and sends
+conversation context to OpenAI.
+
+Minimal fix:
+
+* publish a concise Privacy Policy and onboarding notice that identify the
+  controller/contact path, data categories, purposes, recipients/processors
+  (including Telegram and OpenAI), retention periods, user rights, and whether
+  any company-facing analytics exists;
+* record which notice version and timestamp were shown/acknowledged before
+  free-form Coach use;
+* have counsel confirm the processing basis and any required processor /
+  cross-border terms; do not describe a checkbox as solving every legal basis.
+
+#### PRIV-02 — Raw conversations and content-bearing logs have indefinite retention
+
+Severity: BLOCKER before beta
+Status: confirmed
+
+Every incoming user message and several assistant reply paths write full text
+to `ChatHistory` (`telegram.py`). `get_stm_history()` reads it as the Postgres
+fallback, so the table is live, not legacy. There is no age filter or cleanup
+job.
+
+Redis keeps the last 20 messages with `RPUSH` + `LTRIM`, but the message key has
+no `EXPIRE`; the 1-2 hour TTLs elsewhere in `session_memory.py` belong to
+pending actions and schedule-adjustment state, not chat history.
+
+`coach_agent.py` also logs the first 500 characters of every model response.
+That can create a third content copy with a separate, undefined log-retention
+policy.
+
+Minimal fix:
+
+* add a scheduled, observable 90-day deletion job for `ChatHistory`;
+* make the Postgres fallback query exclude rows outside the retention window;
+* set an explicit expiry on Redis message keys and delete the key during
+  account deletion;
+* stop logging response bodies in production, or redact/structure them so
+  conversational content is not copied into logs;
+* define and enforce application-log retention separately.
+
+#### PRIV-03 — OpenAI storage controls and payload minimization are not explicit
+
+Severity: P1 before beta
+Status: confirmed
+
+The Responses API calls in `app/ai.py` and `coach_agent.py` do not explicitly
+set `store=False`. The Coach sends the current message, up to 20 recent
+messages, Product Map, prompt, and bounded runtime facts. Direct Telegram
+identity fields are not currently serialized by `_compose_messages()`:
+`user_id` is used locally to build context but is omitted from
+`_context_message()`. This is a good current property but is not enforced by a
+contract test.
+
+Minimal fix:
+
+* set `store=False` on every compatible OpenAI call and audit all AI entry
+  points, not only Coach;
+* keep names, Telegram IDs/usernames, email, employer identity, and other
+  direct identifiers out of model input unless a specific product need is
+  accepted;
+* add a test that inspects the final request payload and fails if direct
+  identity fields leak;
+* disclose OpenAI processing accurately: no training by default is not the
+  same promise as zero provider retention.
+
+#### PRIV-04 — No access, export, correction, or deletion request workflow exists
+
+Severity: BLOCKER before beta
+Status: confirmed
+
+No product command, API, support runbook, or tested service handles a request
+to access, export, correct, or delete the user's data. The statutory
+access/content deadline cannot be operationalized by a Privacy Policy alone.
+
+Minimal beta fix:
+
+* provide one real support contact and identity-verification procedure;
+* document a manual export format covering profile/schedule, plans, exercise
+  events, conversations still inside retention, and feedback;
+* document correction and deletion handling, responsible owner, request log,
+  and deadline tracking;
+* do not claim that a request was received or completed unless a real path
+  records it.
+
+#### PRIV-05 — Account deletion is not one tested data operation
+
+Severity: P1 before beta
+Status: confirmed
+
+There is no account-deletion service or endpoint. Several ORM relationships
+have delete-orphan cascade, but `TaskStats` and `FailureSignal` reference users
+without corresponding `User` relationships/cascade ownership. Redis session
+keys, scheduler jobs, report access, and content-bearing logs are outside ORM
+cascade entirely. Deleting a `User` directly is therefore not a deletion
+contract and may fail, leave dependent data, or leave live access paths.
+
+Minimal fix:
+
+* implement one idempotent deletion service and manual beta runbook;
+* stop delivery and scheduler jobs, invalidate report access, delete Redis
+  keys, then remove all user-linked database rows in a defined transaction /
+  reconciliation sequence;
+* preserve only aggregates already made independent under FD-09;
+* add an integration test that seeds every user-linked table and external key,
+  deletes the account, and proves no user-level record or access path remains.
+
+#### PRIV-06 — Internal telemetry is personal data, not anonymous analytics
+
+Severity: P1 contract enforcement before beta
+Status: confirmed; collection accepted under FD-09
+
+`UserEvent`, `TaskStats`, `FailureSignal`, plan rows, and completion metrics are
+linked to `user_id` or a user-owned plan execution. They can support product
+operation and learning, but they remain user-level data even if the UI omits a
+name. A stable pseudonym would still be linkable and would not make the
+longitudinal history anonymous.
+
+Expected boundary:
+
+* user-linked telemetry is product-internal and disclosed to the user;
+* access is least-privilege and never available through a company/HR surface;
+* raw Coach text and free-form feedback are not analytics dimensions;
+* company-facing reporting, if built later, reads only the independent
+  aggregate layer under FD-09.
+
+#### PRIV-07 — Independent idempotent aggregation is not implemented
+
+Severity: P1 data architecture before beta
+Status: confirmed; target accepted under FD-09
+
+Current telemetry writes only user-linked rows and computes metrics from them.
+No independent aggregate table, aggregation ledger, idempotency key, or outbox
+exists. Consequently, deleting personal events either destroys all historical
+product learning or tempts the system to retain linkable data indefinitely.
+
+Minimal fix:
+
+* give each accepted behavioral event one stable identity;
+* in the same reliable operation, persist the personal event and its bounded
+  aggregate contribution, with retry-safe uniqueness;
+* store aggregate counts/buckets without user identifiers, stable hashes,
+  exact user timelines, or raw text;
+* treat any event-ID/idempotency ledger as operational data with bounded
+  retention; do not copy that join key into indefinite aggregate counters;
+* include completion/skip/ignore, response-latency buckets, streak buckets,
+  plan completion, activation, and D3/D7 where definitions are stable;
+* reconcile failed aggregate writes observably; never rebuild them during
+  account deletion as an ad hoc migration.
+
+#### PRIV-08 — Completion and pulse report bearer links do not expire or revoke
+
+Severity: P1 before beta
+Status: confirmed
+
+`make_report_token()` signs only `plan_id`. `verify_report_token()` validates
+that signature with no issued-at time, expiry, token version, or revocation
+state. The same token is accepted by report/pulse routes. A copied URL
+therefore remains usable indefinitely, including after chat retention expires
+or an account is deleted, unless the plan/database disappears.
+
+Minimal fix:
+
+* define a bounded report-link lifetime;
+* include expiry and token version in the signed payload, or store a
+  revocable access grant;
+* invalidate access on account deletion and secret/token rotation;
+* add expired, revoked, deleted-user, tampered, and valid-token tests;
+* do not put additional personal data into the token itself.
+
+#### PRIV-09 — Dead sensitive-looking schema expands the risk surface
+
+Severity: P2 cleanup; complete during the database audit
+Status: confirmed
+
+`FactCategory.MEDICAL` / `UserFact` and
+`UserDailyLog.stress_level`, `energy_level`, and `mood_note` exist in the ORM,
+but no production write path was found. These fields are not harmless
+documentation: they imply planned storage of health/mental-state information,
+expand future misuse risk, and make the real data inventory harder to explain.
+
+Minimal fix: confirm the tables/columns are unused in deployed data, then
+remove them through the database migration rather than preserving speculative
+"memory" or mood-tracking schema. Reintroduce such data only after a concrete
+use case, legal basis, retention rule, and user-facing contract exist.
+
+#### PRIV-10 — `/user/time-slots` can mutate another user's schedule without authorization
+
+Severity: BLOCKER before beta
+Status: confirmed
+
+`POST /user/time-slots` accepts a caller-supplied internal `user_id`, performs
+no authentication or authorization, updates that user's saved slots and
+active steps, and then reschedules jobs. It also reveals whether an internal
+user ID exists through its 404 behavior. This is a direct integrity and
+privacy boundary failure, independent of future company analytics.
+
+Minimal fix: if the endpoint is legacy/not required by MVP, remove it. If it
+must remain, authenticate the caller, derive the user identity from a verified
+session or signed Telegram WebApp payload rather than a query parameter,
+authorize the operation, rate-limit it, and add cross-user denial tests.
+
+### Confirmed safe current property
+
+No company model, HR dashboard, company-facing analytics endpoint, or
+user-level reporting API was found. Preserve that default for MVP. Do not
+create a manual company report from production user-level tables while calling
+it anonymous.
+
+### Required MVP work and order
+
+1. publish the privacy notice and establish the manual rights-request path
+   (PRIV-01 / PRIV-04);
+2. remove or secure the unauthenticated time-slot endpoint (PRIV-10);
+3. enforce 90-day conversation retention across Postgres, Redis, and logs
+   (PRIV-02);
+4. add OpenAI `store=False`, request-payload minimization tests, and accurate
+   disclosure (PRIV-03);
+5. implement the idempotent personal-event + independent-aggregate operation
+   before beta telemetry begins (PRIV-06 / PRIV-07 / FD-09);
+6. implement and test account deletion across DB, Redis, scheduler, logs, and
+   report access (PRIV-05);
+7. add bounded, revocable report tokens (PRIV-08);
+8. remove unused sensitive-looking schema during the database migration
+   (PRIV-09);
+9. keep all company reporting disabled; implement the future privacy gate only
+   when a company-facing analytics product is actually designed.
+
+### What this round does not decide
+
+The mere presence of a free-text Coach does not by itself prove that Love
+Yourself systematically processes health, violence, or other special-risk
+categories. The product does not solicit those categories for analytics and
+should not add classification or storage for them by implication. Reassess
+regulatory notification and special-category requirements if later features
+deliberately collect, classify, or operationalize that information.
 
 ---
 

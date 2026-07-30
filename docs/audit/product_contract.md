@@ -21,7 +21,7 @@
 |**Product spirit.txt**                   |Принципи / дух продукту         |Approved (v2, травень)                      |8 принципів, заборони                                |**Високий** як верхній критерій                                      |Принцип “ніколи >1 push/день” конфліктує з 14-day two-push. Треба переписати (див. Conflict C2).                                                                      |
 |**ai_coach_decision_summary.docx**       |Рішення по Coach                |**Final** (26 червня — найпізніший док)     |AI Coach vs кнопки, A/B                              |**Дуже високий** для Coach-контракту                                 |Найсвіжіший документ. Рішення: доробити Coach, A/B після. AI = retention-диференціатор, не sales.                                                                     |
 |**touchpoint map.txt** (T1.3 v3)         |Situation→Touchpoint мапа       |Approved (v3, березень)                     |Scheduled/reactive/background канали                 |**Середній.** Механіка — так; частина — гіпотези                     |v3 прибрав MORNING. Background-канали (re-engagement, adaptation signal) = гіпотези/теорія, конфліктують з “чесним контрактом”.                                       |
-|**Conceptual map.txt**                   |User-facing пояснення продукту  |Approved (робоча, ~v6 за пам’яттю проєкту)  |Що продукт дає, правила паузи/скасування, приватність|**Середній-високий** для user-facing поведінки                       |Плоска мова, для юзера і Coach. Розділ 14 (proactive vs reactive) — фінальна позиція по каналах. Розділ 5 — приватність.                                              |
+|**Conceptual map.txt**                   |User-facing пояснення продукту  |Approved (робоча, ~v6 за пам’яттю проєкту)  |Що продукт дає, правила паузи/скасування, приватність|**Середній-високий** для user-facing поведінки                       |Плоска мова, для юзера і Coach. Розділ 14 (proactive vs reactive) — фінальна позиція по каналах. Розділ 6 — приватність.                                              |
 |**exercise_library_v5_approved.html**    |Бібліотека вправ                |**Approved** (v5, “v0.1 для тесту”, травень)|8 вправ, 2 механіки                                  |**Високий** для контенту                                             |Слоти M/D/E всередині — legacy metadata, не user-facing (див. Conflict C8). “Не фінал — тестова гіпотеза”.                                                            |
 |**t0_3_riskiest_assumptions.html**       |Ризикові припущення             |Approved (T0.3, квітень)                    |C1/C3/B2 + експерименти                              |**Низький для механіки, високий для Test Map**                       |Не продуктовий контракт. Джерело порогів для секції 6 (D7≥30%, activation≥30%).                                                                                       |
 |**love_yourself_market_positioning.docx**|Ринок / позиціонування          |Final (червень)                             |Конкуренти, ніша, buyer pain                         |**Низький для MVP-механіки**                                         |Бізнес-лінза. Впливає на B2/privacy framing, не на код.                                                                                                               |
@@ -59,7 +59,7 @@ Telegram-бот, що раз на робочий день у обраний юз
 
 1. Бот приходить тільки коли домовились — не раніше, не частіше, не з іншим приводом. *(Product spirit §6 “Чесний контракт”)*
 1. Не більше scheduled push-ів, ніж юзер явно обрав (7-day = 1/день; 14-day = 2/день). *(переписане правило, див. Conflict C2)*
-1. Компанія ніколи не бачить зміст, конкретну вправу, individual completion чи переписку. *(Conceptual map §5)*
+1. Компанія ніколи не бачить зміст, конкретну вправу, individual completion чи переписку. *(Conceptual map §6)*
 1. Skip і pause є завжди; пропуск = дані, не провал; без покарання і тиску. *(Product spirit §4,5)*
 1. Одне повідомлення — одна вправа — один момент. Без меню з 5 варіантів у момент доставки. *(Product spirit §7)*
 1. Жодної вправи без пояснення механізму; ніякої езотерики. *(Product spirit §2)*
@@ -174,11 +174,12 @@ Telegram-бот, що раз на робочий день у обраний юз
 
 ## 2.9 Privacy / B2B contract
 
-- **Юзер бачить:** всю свою активність, динаміку виконання у тижневому звіті. *(Conceptual map §5)*
-- **Компанія бачить:** тільки знеособлені агреговані дані про використання в команді загалом. *(Conceptual map §5)*
-- **Компанія НІКОЛИ не бачить:** переписку, яку вправу отримав, individual completion/skip, індивідуальні відповіді. *(Conceptual map §5)*
-- **Що означає “агрегована аналітика” на MVP:** мінімум — факт використання на рівні команди без імен. B2B дашборд — **P3, не існує на MVP**. Тобто на беті агрегат може бути ручним/мінімальним, не продуктовим дашбордом. *(priorities and freeze P3 “B2B дашборд”; hr_discovery C2)*
-- **Обіцянки, які код мусить захистити:** приватність — базовий принцип системи, не toggle. Battery-check дані в дашборд — тільки явно, з відома юзера з онбордингу. *(Conceptual map §5; exercise_library рішення §2)*
+- **Юзер бачить:** всю свою активність, динаміку виконання у тижневому звіті. *(Conceptual map §6)*
+- **Компанія на MVP/беті не отримує поведінкової аналітики взагалі:** ні dashboard, ні ручний spreadsheet, ні разовий “anonymous report”. *(FD-09; Conceptual map §6)*
+- **Компанія НІКОЛИ не бачить:** переписку, отримані вправи, individual completion/skip, індивідуальні відповіді, user-level events, стабільні псевдоніми чи дрібногрупові зрізи. *(FD-09; Conceptual map §6)*
+- **Внутрішня телеметрія:** user-linked події збираються для роботи продукту і product learning; паралельно з дня один формується незалежний aggregate layer. Видалення акаунта прибирає персональний шар, але не вже незалежний агрегований внесок; справді незалежні aggregates можуть зберігатися безстроково. Event-ID/idempotency ledger має окремий обмежений retention і не входить у безстроковий aggregate. *(FD-09; PRIV-06/07)*
+- **Майбутня company reporting:** окрема post-MVP фіча тільки з aggregate layer. Стартовий privacy-gate: ≥100 eligible users і ≥50 distinct actual contributors за період; обидві умови обов’язкові, поріг централізований і не знижується HR. Без drill-down, малих зрізів і точних user timelines. Це консервативний дефолт, не математична гарантія анонімності. *(FD-09)*
+- **Мова обіцянки:** “aggregate data without individual or small-group views”, не абсолютне “anonymous”. Приватність — базовий принцип системи, не toggle.
 
 ## 2.10 Telemetry / experiment contract
 
@@ -327,12 +328,12 @@ Telegram-бот, що раз на робочий день у обраний юз
 
 ### C13 — Privacy/analytics обіцянки vs telemetry-потреби
 
-- **Документи:** Conceptual map §5 (компанія не бачить individual) + Product spirit vs telemetry-контракт (нам потрібні individual completion/D3/D7 для C1/C3).
-- **Конфлікт:** уявний, але критичний для реалізації. Нам (продукту) потрібні individual-дані для валідації; компанії — не можна їх показувати.
-- **Чому важливо:** якщо межа “product-internal telemetry” vs “company-facing analytics” не проведена в коді — ризик витоку individual-даних у B2B-в’юху.
-- **Рекомендована MVP-істина:** individual telemetry збирається для продукту (нас), АЛЕ company-facing шар = тільки агрегат без імен. Це два різні шари даних з різними правами доступу.
-- **Code implication:** перевірити що будь-який company/HR-facing endpoint віддає тільки агрегат; individual-таблиці недосяжні ззовні.
-- **Founder decision?** Ні (принцип ясний), але це **архітектурний блокер** для будь-якого B2B-дашборду (який і так P3).
+- **Документи:** Conceptual map §6 (компанія не бачить individual) + Product spirit vs telemetry-контракт (нам потрібні individual completion/D3/D7 для C1/C3).
+- **Конфлікт:** закрито FD-09. Нам потрібні user-linked дані для роботи продукту і валідації; компанії вони не показуються.
+- **Рекомендована MVP-істина:** user-linked telemetry + незалежний aggregate layer пишуться паралельно та ідемпотентно. На MVP company-facing analytics = zero.
+- **Code implication зараз:** побудувати independent aggregate contribution на ingestion, retention/deletion для personal layer і не створювати company endpoint/report.
+- **Code implication потім:** company reporting читає лише aggregate layer після централізованого 100 eligible / 50 actual contributors gate, suppression і no-drill-down.
+- **Founder decision?** Закрито FD-09.
 
 ### C_state — FSM стани: IDLE_ONBOARDED / SCHEDULE_ADJUSTMENT живі vs на видалення
 
@@ -342,13 +343,11 @@ Telegram-бот, що раз на робочий день у обраний юз
   кілька конкуруючих джерел lifecycle-правди.
 - **Рекомендована MVP-істина:** цільовий FSM без IDLE_ONBOARDED, IDLE_DROPPED, SCHEDULE_ADJUSTMENT (останній замінено determіністичними tools change_day_time/change_evening_time). Онбординг → ACTIVE напряму.
 - **Code implication:** на код-аудиті перевірити, чи ці стани ще досяжні, хто
-  їх читає/пише, і які legacy paths мають бути видалені. Окремо вирішити,
-  чи post-onboarding mode зберігається в `users.current_state`, чи
-  обчислюється з canonical plan lifecycle (FSM-08).
-- **Founder decision?** Видалення dead states і `SCHEDULE_ADJUSTMENT` — інженерне
-  прибирання. Окреме архітектурне рішення лишається відкритим: зберігати
-  post-onboarding mode у `users.current_state` чи обчислювати його з canonical
-  plan lifecycle (FSM-08).
+  їх читає/пише, і які legacy paths мають бути видалені. За FD-08
+  post-onboarding mode обчислюється з canonical plan lifecycle; persisted
+  `users.current_state` видаляється як дубльоване джерело правди.
+- **Founder decision?** Закрито FD-08: plan-centric lifecycle + derived
+  `current_mode`.
 
 -----
 
@@ -365,9 +364,8 @@ Telegram-бот, що раз на робочий день у обраний юз
 Решта конфліктів (C1, C4, C5, C6, C8, C9, C10, C13 і dead-state
 частина C_state) вже вирішені наявними документами — вони йдуть у Раунд 2
 як прийнята істина, тільки з позначкою “перевірити на код-аудиті”.
-Подальший state-аудит окремо відкрив FSM-08: чи зберігати
-post-onboarding mode у `users.current_state`, чи обчислювати його з canonical
-plan lifecycle.
+Подальший state-аудит відкрив FSM-08; FD-08 закрив його на користь
+plan-centric lifecycle з derived `current_mode`.
 
 -----
 
@@ -390,8 +388,8 @@ plan lifecycle.
 |**C10**    |Згоден, report threshold — таке собі, на MVP не треба.                                                                                                        |Закрито.                                                                        |Report для всіх. Немає гейта за 50%.                                                                                             |
 |**C11**    |A/B у силі, але Coach здоровенний, переписування обісралось. 2 розділи готові локально, 5 чекають ноутбука.                                                   |Уточнено стан.                                                                  |Див. окреме уточнення нижче — стан ще сиріший.                                                                                   |
 |**C12**    |Re-engagement OFF. Агрегат по активних — не на початку.                                                                                                       |Закрито.                                                                        |silent_2/5_days OFF. Немає proactive job.                                                                                        |
-|**C13**    |Не конфлікт — **TODO з межею**: individual телеметрія збирається (для нас), b2b dashboard = тільки агрегат.                                                   |Перекваліфіковано: Conflict → контрактний факт + код-чек межі доступу.          |Секція 4: контрактний факт. Секція 7: чек що HR-endpoint віддає лише агрегат.                                                    |
-|**C_state**|IDLE_ONBOARDED/IDLE_DROPPED видаляються; SCHEDULE_ADJUSTMENT замінюється tools. Це цільове рішення, а не опис поточного коду.|Перекваліфіковано: Conflict → **implementation lag**. Код досі містить legacy states, tunnel, constraints і тести.|Використовувати контракт як target, а код-аудит — для повного removal inventory. Окремий FSM-08 вирішує persisted state vs derived mode.|
+|**C13**    |Закрито FD-09: user-linked telemetry + independent aggregate layer; company-view = zero на MVP.                                                           |Founder decision + privacy audit.                                               |Dual-write рано; future company reporting тільки через centralized 100/50 gate, suppression і no-drill-down.                    |
+|**C_state**|IDLE_ONBOARDED/IDLE_DROPPED видаляються; SCHEDULE_ADJUSTMENT замінюється tools; FD-08 прибирає persisted user FSM на користь plan-centric lifecycle + derived mode.|Перекваліфіковано: Conflict → **implementation lag**. Код досі містить legacy states, tunnel, constraints і тести.|Використовувати контракт як target, а код-аудит — для повного removal inventory та FD-08 migration.|
 
 ## Уточнення C11 — реальний стан Coach (оновлено 2026-07-16, після завершення переписування)
 
@@ -431,7 +429,7 @@ plan lifecycle.
 
 - **TODO-Coach-1 (з C8):** визначити що саме Coach може/не може пояснювати про метадану вправ (механізм — так; slot/fogg/id — ні). Вирішується під час переписування промпту.
 - **TODO-Coach-2:** завершити 5/7 розділів промпту; задеплоїти 2 локальних; звірити хмару з задумом.
-- **TODO-telemetry-1 (з C13):** провести межу в коді: individual-таблиці (product-internal) vs company-facing агрегат. Два шари доступу.
+- **TODO-telemetry-1 (FD-09 / PRIV-07):** на ingestion ідемпотентно писати user-linked event + незалежний aggregate contribution. Company-view не будувати на MVP.
 
 -----
 
@@ -452,10 +450,10 @@ plan lifecycle.
 |**14-day plan**               |DAY(state_switch)+EVENING(unload)                                                                                      |Пропонується після 1-го                                      |2 push/день                                      |Ні (після 7-day)                 |t23_t24                         |Evening бібліотека 3→5+ = P2                         |
 |**Coach**                     |Реактивний AI-канал; tools+consent                                                                                     |Жива реакція на текст                                        |Повертає tool_call; Orchestrator виконує         |**Так для бети** (промпт готовий, backend gap лишається)|ai_coach_summary; PR #246   |Промпт написаний; хмара досі стара до merge; ONB-01/LIF-04/switch_plan_format відкриті|
 |**Telemetry**                 |activation, 1st completed, D3/D7, completion, skip/ignore, reactive, pause/cancel/change, continuation, Telegram-deploy|—                                                            |Product-internal                                 |**Так**                          |t0_3; HR C5/D1                  |Reflection/NPC/blacklist = P2                        |
-|**Privacy**                   |Компанія не бачить individual нічого                                                                                   |Юзер бачить своє                                             |Базовий принцип, не toggle                       |**Так**                          |Conceptual §5                   |Battery-check в дашборд лише явно                    |
-|**B2B analytics**             |Тільки агрегат без імен                                                                                                |—                                                            |Окремий шар доступу                              |Ні (дашборд P3)                  |HR C2; priorities P3            |Individual telemetry ≠ company-facing                |
+|**Privacy**                   |Компанія не бачить individual, conversation або small-group data                                                       |Юзер бачить своє                                             |Базовий принцип, не toggle                       |**Так**                          |FD-09; Conceptual §6            |User-linked telemetry лишається product-internal     |
+|**B2B analytics**             |На MVP відсутня; майбутня — тільки privacy-gated aggregate layer                                                       |—                                                            |100 eligible + 50 actual contributors; centralized gate|Ні (post-MVP)               |FD-09                           |Не продавати як абсолютну анонімність                |
 |**Frozen components**         |Adaptation, engagement layer, 21/90, pulse, snapshot MEDIUM+                                                           |Невидимі                                                     |Працюють як є / не спрацьовують                  |—                                |priorities freeze               |C7: adaptation не спрацьовує взагалі                 |
-|**P2/P3 components**          |Reflection, NPC, blacklist, dashboard, ML, HR API, GDPR                                                                |Немає                                                        |Немає / заглушка                                 |Ні                               |priorities P2/P3                |Не чіпати до даних                                   |
+|**P2/P3 components**          |Reflection, NPC, blacklist, dashboard, ML, HR API                                                                      |Немає                                                        |Немає / заглушка                                 |Ні                               |priorities P2/P3                |Privacy notice/retention/deletion вже не P3          |
 
 -----
 
@@ -513,7 +511,6 @@ plan lifecycle.
 |HR API інтеграція (відпустки, графіки) |priorities P3|
 |ML персоналізація по completion history|priorities P3|
 |Churn детекція / offboarding           |priorities P3|
-|GDPR / видалення даних                 |priorities P3|
 |B2B дашборд для HR                     |priorities P3|
 |Авто-плани (без вибору юзера)          |priorities P3|
 |Кастомні графіки роботи                |priorities P3|
@@ -542,9 +539,9 @@ plan lifecycle.
 
 ### lifecycle modes / persistence
 
-- **Має підтримувати як product modes:** IDLE_NEW → ONBOARDING → ACTIVE →
-  IDLE_FINISHED → ACTIVE(новий). ACTIVE↔ACTIVE_PAUSED. Це не є автоматичним
-  рішенням зберігати кожен mode у `users.current_state`.
+- **Має підтримувати як derived product modes:** ONBOARDING, ACTIVE,
+  ACTIVE_PAUSED, NO_ACTIVE_PLAN. За FD-08 вони обчислюються з onboarding
+  progress + canonical plan lifecycle і не зберігаються в `users.current_state`.
 - **Legacy шукати:** IDLE_ONBOARDED, IDLE_DROPPED, SCHEDULE_ADJUSTMENT —
   досяжні? хто їх читає/пише? які callbacks/jobs/session keys залежать від них?
   `app/fsm/guards.py` видаляється після schedule-adjustment і `transition_signal`
@@ -558,7 +555,7 @@ plan lifecycle.
 
 - **Має підтримувати:** plan(duration enum), work_days, day_time/evening_time, completion events (task_completed/skipped), timezone.
 - **Legacy шукати:** slot M-семантика; поля під MORNING; поля plan_completion_v5.
-- **Блокер:** individual-completion досяжна з company-facing шару (C13).
+- **Блокер:** немає перевіреної account-deletion/cascade операції та незалежного aggregate write (PRIV-05/07).
 - **Frozen:** 21/90 enum значення; pulse-поля.
 - **Evidence:** t23_t24 §5; C13.
 
@@ -632,11 +629,11 @@ plan lifecycle.
 
 ### privacy / B2B analytics
 
-- **Має підтримувати:** individual (product-internal) окремо від company-facing (агрегат без імен).
-- **Легасі шукати:** будь-який HR/company endpoint що віддає individual.
-- **Блокер:** individual completion/зміст досяжні company-facing (C13) — порушення контракту приватності.
-- **Frozen:** dashboard (P3).
-- **Evidence:** Conceptual §5; C13.
+- **Має підтримувати до бети:** user-linked event + незалежний aggregate contribution в одній ідемпотентній операції; 90-day chat retention; manual access/export/delete path; company-view = zero.
+- **Легасі шукати:** будь-який HR/company endpoint або ручний report з user-level tables; content-bearing logs; безстрокові report tokens; sensitive dead schema.
+- **Блокери:** PRIV-01/02/04/10. P1 architecture: PRIV-03/05/06/07/08.
+- **Frozen:** company dashboard/report API. Майбутній gate за FD-09 не імплементувати до реального дизайну reporting.
+- **Evidence:** FD-09; Privacy Audit 2026-07-30; Conceptual §6.
 
 ### Coach / orchestrator — СТАТУС: ГОТОВИЙ ДО АУДИТУ (з відомими backend-залежностями)
 
@@ -661,7 +658,7 @@ plan lifecycle.
 |Re-engagement               |silent_2/5_days Spark             |“Повернути тих хто зник”                   |Труть із чесним контрактом; block-ризик у B2B2C                     |Втрата drop-юзерів                             |**Зрізати з MVP (C12)**           |
 |Daily pulse                 |Щоденна цитата push               |“Щоденний контакт”                         |Push без цінності = mute/block                                      |—                                              |**Заморожено (крон off)**         |
 |21/90 плани user-facing     |Довгі формати                     |—                                          |Не валідовано навіть 7 днів                                         |—                                              |**Невидимі (frozen)**             |
-|B2B дашборд                 |HR-в’юха                          |“Продати легше”                            |P3; нема даних; ризик приватності                                   |HR pitch трохи слабший                         |**P3, ручний агрегат на беті**    |
+|B2B дашборд                 |HR-в’юха                          |“Продати легше”                            |Company-view = zero на MVP; privacy gate ще не реалізований          |HR pitch без behavioral report                 |**Post-MVP; без ручного агрегату на беті**|
 |Completion message polish   |Гарний текст підсумку             |“Перше враження”                           |Базова версія працює                                                |Трохи менш елегантно                           |**Базова версія, P2 polish**      |
 
 **Occam-висновок:** мінімальний контракт що валідує C1/C3 = онбординг(1 час) + 7-day state_switch план + scheduler(work_days) + delivery(структура+кнопки) + completion(report для всіх) + next-plan вибір + reactive Coach + must-have телеметрія. Все інше — відкласти/заморозити.
@@ -679,7 +676,7 @@ plan lifecycle.
 |**Adaptation спрацьовує випадково**    |План/час міняється сам → surveillance-відчуття         |Заморожений шар не інертний                                                |Несподівані зміни плану в логах                            |C7: перевірити що adaptation не викликається жодним шляхом      |**Блокер**                                     |
 |**Немає ясності по 1-му таску**        |Юзер не знає коли прийде → не чекає → низька activation|gap M1 (немає confirm)                                                     |Activation просідає на day 0-1                             |Confirm-повідомлення “завтра о HH:MM”                           |**Блокер**                                     |
 |**Plan state confusion**               |Юзер в ACTIVE після завершення, без фідбеку            |gap M2; dead FSM-стани                                                     |Юзери застряглі в ACTIVE/IDLE_ONBOARDED                    |Confirm після останнього таску; прибрати dead states            |**Блокер**                                     |
-|**Privacy fear**                       |Юзер боїться що HR бачить → не відкриває               |Неясна комунікація приватності; individual досяжний company-facing         |Низька activation в “обережних” компаніях; питання про дані|Явна privacy-комунікація в онбординзі; C13 межа в коді          |**Блокер** (C1 залежить)                       |
+|**Privacy fear**                       |Юзер боїться що HR бачить → не відкриває               |Неясна комунікація; немає notice/retention/deletion contract; майбутній company-view може обійти gate|Низька activation в “обережних” компаніях; питання про дані|Явна privacy-комунікація; FD-09; PRIV-01…10; company-view = zero на MVP|**Блокер** (C1 залежить)|
 |**Renderer schema-mismatch**           |Вправа показується поламано (порожні кроки)            |P0: renderer читає root замість display.*                                  |Порожні/криві повідомлення вправ                           |Виправити P0 renderer до бети                                   |**Блокер**                                     |
 |**Low activation (<10%)**              |Мало хто дійшов до 1-го таску                          |cold deploy; friction онбордингу; stigma                                   |Activation %                                               |Warm intro/champion; мінімальний онбординг                      |Блокер для C1, але 10-30% = launch-ітерація    |
 |**Low D3/D7**                          |Не повертаються                                        |вправи не заходять; немає craving/closure                                  |D3/D7; completion                                          |Мінімум: чиста доставка. Closure — P2                           |<15% D7 = продуктовий блокер; 15-30% = ітерація|
@@ -704,7 +701,7 @@ plan lifecycle.
 1. Scheduler: тільки work_days + обраний час + ACTIVE, у timezone юзера. Не у вихідні.
 1. Pause(resume з місця)/cancel(→день1)/change_time — детерміновані tools, не AI.
 1. Completion report для ВСІХ: 1–2 хв після дії на останній вправі або no-action шлях після expiry; UTC cron лише safety net. Same-format continuation автоматичне. plan_completion_v5 deprecated.
-1. Приватність: компанія не бачить individual нічого. Базовий принцип, не toggle.
+1. Приватність: компанія не бачить individual нічого; company behavioral analytics = zero на MVP. User-linked telemetry і незалежні aggregates — різні шари за FD-09.
 1. Coach = реактивний AI-канал, retention-диференціатор (не sales). Не змінює план без tools+consent.
 1. Re-engagement OFF. Тільки scheduled(домовлений) + reactive(юзер сам).
 1. Adaptation/21-90/pulse/engagement layer — заморожені, adaptation не спрацьовує взагалі.
@@ -720,21 +717,22 @@ plan lifecycle.
 1. Report для всіх, без 50%-гейта.
 1. Re-engagement OFF на беті.
 1. Цільовий FSM без IDLE_ONBOARDED/IDLE_DROPPED/SCHEDULE_ADJUSTMENT.
-1. Individual telemetry ≠ company-facing (два шари доступу).
+1. FD-09: user-linked event + independent aggregate contribution з дня один; company-view = zero на MVP; future gate = 100 eligible / 50 actual contributors.
 1. Перша бета = AI-only, кнопкова заморожена.
 1. Coach-промпт написаний (PR #246); закрити backend-залежності (`ONB-01`/`LIF-04`/`switch_plan_format`) ДО бети (критичний шлях).
 
 ## Top 10, що ігнорувати зараз
 
-1. B2B дашборд (P3). 2. ML персоналізація (P3). 3. HR API (P3). 4. GDPR delete (P3). 5. Churn/offboarding (P3). 6. Re-engagement (C12). 7. Blacklist (P2). 8. NPC (P2). 9. 21/90 user-facing. 10. Evening бібліотека розширення (P2, до 14-day запуску).
+1. B2B дашборд (post-MVP). 2. ML персоналізація (P3). 3. HR API (P3). 4. Churn/offboarding (P3). 5. Re-engagement (C12). 6. Blacklist (P2). 7. NPC (P2). 8. 21/90 user-facing. 9. Evening бібліотека розширення (P2, до 14-day запуску). Privacy notice, retention, access/deletion і independent aggregation **не входять** до цього списку — вони потрібні до бети за PRIV-01…10.
 
 ## Top 10 код-областей для інспекції (першими)
 
-1. scheduler (timezone, work_days, re-engagement/pulse OFF). 2. plan generation (SHORT/state_switch, adaptation не впливає). 3. onboarding (1 час, без evening/тривалості). 4. completion logic (timezone, report для всіх). 5. delivery renderer (P0 schema display.*). 6. lifecycle modes/persistence (dead states, plan-centric vs persisted user state). 7. runtime tools (record_evening_time тільки 14-day). 8. privacy межа (individual vs company-facing). 9. content library (slot не user-facing). 10. telemetry (activation/D7 присутні). 11. Coach/orchestrator integration (промпт готовий — PR #246; перевірити tool contract і target-vs-backend gaps проти реальних runtime preconditions).
+1. scheduler (timezone, work_days, re-engagement/pulse OFF). 2. plan generation (SHORT/state_switch, adaptation не впливає). 3. onboarding (1 час, без evening/тривалості). 4. completion logic (timezone, report для всіх). 5. delivery renderer (P0 schema display.*). 6. lifecycle modes/persistence (dead states + FD-08 plan-centric migration). 7. runtime tools (record_evening_time тільки 14-day). 8. privacy межа (individual vs company-facing). 9. content library (slot не user-facing). 10. telemetry (activation/D7 присутні). 11. Coach/orchestrator integration (промпт готовий — PR #246; перевірити tool contract і target-vs-backend gaps проти реальних runtime preconditions).
 
 ## Founder decisions, які ще потрібні
 
 - **Закриті цією сесією:** C1, C2, C4, C5, C6, C7, C9, C10, C11(скоуп), C12, C13 і dead-state частина C_state.
-- **Лишаються відкритими:** C3 (reflection; не блокер) і FSM-08 — persisted `users.current_state` чи plan-centric lifecycle з derived `current_mode`.
+- **Лишається відкритим:** C3 (reflection; не блокер). FSM-08 закрито FD-08:
+  plan-centric lifecycle з derived `current_mode`.
 - **Оновлено 2026-07-16:** Coach-промпт завершено (усі 7 секцій, integration pass, PR #246 відкритий). Критичний шлях до бети тепер: (1) review/merge PR #246, (2) закрити backend-залежності які цільовий контракт передбачає (`ONB-01`, `LIF-04`, `switch_plan_format`, Bounded Tool-Result Loop), (3) deploy на прод.
 - **Питання для тебе на потім (не зараз):** коли саме A/B (Coach vs кнопки) — після якого сигналу першої бети? Не блокує поточний аудит.
