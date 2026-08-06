@@ -786,6 +786,79 @@ reason for the gate, not an artificial seat-sales tactic.
 
 ---
 
+## FD-10 — Content Library overhaul: a versioned beta protocol, not an instant-effect catalogue
+
+Status: accepted (2026-08-06)
+Priority: P1 before beta content migration
+Area: Content Library / Plan Generation / Delivery / Telemetry
+
+### Decision
+
+Replace the current eight-parent/variation-based library with nine independent,
+stable exercise records: six `switch` exercises and three `unload` exercises.
+Every exercise has its own stable ID, content version, exact user-facing copy,
+duration, modality, requirements, and review state. Runtime variations are
+removed; changing instructions creates a new `content_version`, not an
+untracked mutation or nested variation.
+
+Love Yourself does not promise an instant physiological hit or a game-like
+energy refill. The intended product value is the repeated rhythm of interrupting
+workday autopilot with one short, bounded action. Individual exercises are
+selected for low execution cost, a clear endpoint, credible `switch` or
+`unload` intent, and enough variety to reduce habituation. Their exact effect
+remains a beta hypothesis and must not be presented as diagnosis, treatment,
+or guaranteed cognitive recovery.
+
+The accepted active catalogue is:
+
+```text
+switch: breathing, fist PMR, surface touch, distant gaze, one sound,
+        cool-water facial immersion
+unload: one-item brain dump, one thing that went well, first step tomorrow
+```
+
+The cool-water exercise belongs to the catalogue but is release-gated pending
+medical review. All exercises begin with `review_status=unreviewed`; only the
+cool-water exercise has `review_required=true`. Eligibility is:
+
+```text
+is_active
+AND (review_required = false OR review_status = approved)
+```
+
+Therefore the cool-water exercise cannot be selected or delivered until its
+required review is approved. The other exercises may enter a limited beta
+while their broader evidence/behavioral review remains visibly uncompleted.
+
+### Boundaries
+
+* Internal metadata supports selection, accessibility reasoning, telemetry,
+  and later learning. It is not user-facing and must not be turned into hidden
+  psychological labels.
+* No user trait, diagnosis, disability, or preference is inferred from a skip.
+* Telegram response latency is not exercise duration, and a completed tap does
+  not prove execution or benefit.
+* Text instructions remain complete without media. GIFs/visuals are optional
+  versioned delivery assets, not hidden instructions or evidence of effect.
+* Exact notification composition, preview, media placement, buttons, and
+  channel fallbacks belong to a separate Delivery UX / Exercise Presentation
+  audit. This decision defines the content payload supplied to that renderer.
+
+### Sequencing
+
+1. record this decision and the `CONTENT-*` findings without modifying runtime
+   code or the production JSON during the audit;
+2. complete the separate Delivery UX / Exercise Presentation audit;
+3. obtain the required medical review for cool-water immersion and seek an
+   external behavioral/evidence review of the remaining catalogue before broad
+   market claims;
+4. implement the JSON/schema/loader/builder/renderer/telemetry migration as one
+   reviewed change, with backward-data handling and tests;
+5. calibrate content through versioned beta evidence, not silent edits or
+   behavior-based personalization.
+
+---
+
 # Scheduler Findings
 
 ## SCH-01 — Re-engagement job active
@@ -3923,6 +3996,333 @@ categories. The product does not solicit those categories for analytics and
 should not add classification or storage for them by implication. Reassess
 regulatory notification and special-category requirements if later features
 deliberately collect, classify, or operationalize that information.
+
+---
+
+# Content Library Findings
+
+## Content Library Area — Audit Round 2026-08-06
+
+Status: audit complete; target accepted under FD-10; implementation deferred
+
+### Files and paths inspected
+
+* `resource/assets/content_library/tasks/burnout_combined_content_library.json`
+* `resource/assets/product/product_internal_spec.md`
+* `docs/audit/product_contract.md`
+* `app/content_library.py`
+* `app/db.py` (`ContentLibrary`, `AIPlanStep`, `UserEvent`, `TaskStats`,
+  `FailureSignal`)
+* `app/plan_drafts/plan_builder_v5.py`
+* `app/ux/task_notification.py`
+* `app/telemetry.py`
+* plan-generation and delivery-renderer findings already recorded above
+* supplied evidence reviews and Fogg/behavior-design material as supporting
+  context, not as final external expert approval
+
+### Accepted exercise catalogue
+
+The following is the canonical target catalogue. IDs are stable and do not
+contain a version suffix; instruction changes increment `content_version`.
+Durations are explicit user-facing execution contracts, not clinical doses or
+claims that a particular duration guarantees an effect.
+
+| `exercise_id` | User-facing title and instructions | Duration | `mechanic` | `modality` |
+|---|---|---:|---|---|
+| `breathing_sigh` | **Дихання**<br>Повільно вдихни носом.<br>Не видихаючи, зроби ще один коротший вдих.<br>Повільно видихни ротом до кінця.<br>Повтори ще двічі. | 30 sec | `switch` | `breathing` |
+| `pmr_fist` | **Кулак**<br>Стисни один кулак із помірною силою на 5 секунд.<br>На видиху повністю розтисни й зачекай 5 секунд.<br>Повтори ще двічі. | 30 sec | `switch` | `muscle` |
+| `tactile_surface` | **Дотик**<br>Поклади долоню на поверхню поруч.<br>Зверни увагу на її температуру.<br>Потім — на текстуру. | 20 sec | `switch` | `tactile` |
+| `visual_distance` | **Погляд вдалину**<br>Відведи погляд від екрана.<br>Знайди найдальший об'єкт, який бачиш.<br>Дай очам сфокусуватися на ньому. | 20 sec | `switch` | `visual` |
+| `auditory_sound` | **Один звук**<br>Знайди один фоновий звук, який уже чуєш.<br>Залиш увагу на ньому.<br>Поміть, чи він рівний, чи змінюється. | 20 sec | `switch` | `auditory` |
+| `cold_water_face` | **Холодна вода**<br>Набери в долоні прохолодну воду.<br>Затримай дихання й занур обличчя у воду на 2–3 секунди.<br>Підніми голову й повернися до звичайного дихання.<br>Повтори ще двічі. | 15 sec | `switch` | `thermal` |
+| `brain_dump` | **Brain Dump**<br>Напиши сюди або в нотатку одну річ, яка зараз крутиться в голові.<br>Без структури. Як є. | 60 sec | `unload` | `writing` |
+| `one_thing` | **Одна річ**<br>Напиши сюди або в нотатку одну річ, яка сьогодні вдалася — будь-яку.<br>Зав'язати шнурки теж підходить. | 30 sec | `unload` | `writing` |
+| `first_step_tomorrow` | **Перший крок завтра**<br>Напиши сюди або в нотатку перший конкретний крок, з якого почнеш наступний робочий день. | 60 sec | `unload` | `writing` |
+
+User-facing duration labels are flat and exact (`Тривалість: 20 секунд`,
+`Тривалість: 1 хвилина`). Do not add `орієнтовно`, `приблизно`, or
+`комфортно`. For sensory exercises, duration is displayed separately from the
+steps; do not turn it into a counting instruction unless counting is itself
+the protocol.
+
+### Accepted requirements matrix
+
+Requirements describe execution constraints, not user traits. They may later
+support explicit eligibility/preferences, but the system must not infer a
+disability, diagnosis, or preference from completion behavior.
+
+| `exercise_id` | `capabilities` | `environment` | `friction` |
+|---|---|---|---|
+| `breathing_sigh` | `breath_control` | — | — |
+| `pmr_fist` | `hand_use` | — | — |
+| `tactile_surface` | `hand_use` | `touchable_surface` | — |
+| `visual_distance` | `vision` | `distant_focus_target` | — |
+| `auditory_sound` | `hearing` | `audible_sound` | `headphones_may_interfere` |
+| `cold_water_face` | `hand_use`, `breath_hold`, `facial_water_contact` | `sink`, `water` | `leave_desk`, `shared_resource`, `socially_visible` |
+| `brain_dump` | `text_entry` | `chat_or_note` | `written_response` |
+| `one_thing` | `text_entry` | `chat_or_note` | `written_response` |
+| `first_step_tomorrow` | `text_entry` | `chat_or_note` | `written_response` |
+
+The attention shift requested by every `switch` exercise is part of the global
+content contract, not a discriminating per-exercise requirement.
+
+### Target record shape
+
+```json
+{
+  "id": "stable_exercise_id",
+  "content_version": 1,
+  "is_active": true,
+  "mechanic": "switch",
+  "modality": "tactile",
+  "requirements": {
+    "capabilities": [],
+    "environment": [],
+    "friction": []
+  },
+  "duration_seconds": 20,
+  "cooldown_days": 1,
+  "review_required": false,
+  "review_status": "unreviewed",
+  "display": {
+    "title": "...",
+    "steps": ["..."],
+    "duration_label": "20 секунд"
+  }
+}
+```
+
+Common initial values: `content_version=1`, `is_active=true`, and
+`cooldown_days=1`. Cooldown remains a beta variety hypothesis, not a claimed
+therapeutic interval.
+
+Remove rather than repurpose:
+
+```text
+variations
+weight
+duration_minutes
+extended_minutes
+category
+difficulty
+energy_cost
+logic_tags
+slot / hardlock / office / remote legacy classification
+```
+
+`mechanic`, `modality`, and structured `requirements` replace the overloaded
+legacy tags. No category or requirement is user-facing.
+
+### Findings
+
+#### CONTENT-01 — Current library structure encodes the abandoned model
+
+Severity: P1 migration before beta
+Status: confirmed; target accepted under FD-10
+
+The current JSON contains eight parent exercises plus nested runtime
+variations, minute-based durations, weight, and legacy classification. The
+builder ignores nested variations, uses `weight`, and routes only by mechanic;
+the ORM/loader preserve required `category`, `difficulty`, `energy_cost`, and
+`logic_tags` fields that no longer express product decisions. Keeping this
+shape would make the target catalogue appear implemented while runtime still
+selects the old parents.
+
+Required implementation: replace the library as one versioned migration,
+update loader validation and builder selection, and remove the dead fields
+from JSON, ORM, database, documentation, and tests. Do not layer the new axes
+into `logic_tags` as another compatibility blob.
+
+#### CONTENT-02 — Exact instructions and durations are now a versioned contract
+
+Severity: P1 editorial/data contract before beta
+Status: accepted
+
+The canonical table above replaces parent/variation copy. The text is short,
+imperative, self-contained, and does not prescribe an emotion or promise what
+the user will feel. The renderer must read the exact selected content version;
+content edits increment `content_version` and must remain distinguishable in
+telemetry.
+
+`Brain Dump`, `Одна річ`, and `Перший крок завтра` are accepted beta `unload`
+hypotheses. In particular, the first-step action may unload an open loop or may
+restart work planning; wording alone cannot settle that question. Measure it
+rather than adding a rationale sentence that claims the outcome.
+
+#### CONTENT-03 — The 10/20/30-second sensory dose is not evidence-derived
+
+Severity: founder decision / beta calibration
+Status: accepted initial protocol; re-evaluate with evidence
+
+No reviewed evidence establishes that tactile, visual, or auditory attention
+requires exactly 10, 20, or 30 seconds to "switch focus." Experimental
+orienting can occur much faster, but that is not equivalent to a useful
+workday pause, subjective relief, or restored performance. Microbreak studies
+use heterogeneous protocols, and the familiar 20-second visual-break rule
+does not establish a universal cognitive threshold.
+
+Twenty seconds is accepted as the shared initial dose for touch, distant gaze,
+and sound because it is a reasonable friction/effect midpoint, not because it
+is scientifically optimal. Calibrate with timed usability observation and
+versioned beta comparisons. Telegram delivery-to-tap latency must never be
+used as measured execution duration.
+
+#### CONTENT-04 — Requirements need first-class structure, but must not become profiling
+
+Severity: P1 schema requirement; eligibility use may remain post-MVP
+Status: accepted
+
+The exercises do not have identical physical and environmental requirements.
+Hand use, vision, hearing, a distant target, headphones, text entry, and sink
+access materially affect feasibility. Recording the requirements matrix makes
+these constraints inspectable and prevents future code from hiding them in
+labels such as `office`, `remote`, or a guessed user persona.
+
+For MVP the metadata does not authorize inferred personalization. A skip or
+slow response cannot be interpreted as inability, disability, aversion, or a
+mental-state signal. Later exclusion/preferences must be explicit and
+user-controlled.
+
+#### CONTENT-05 — Review state must enforce a real release gate
+
+Severity: P1 for cool-water activation; external review before broad claims
+Status: accepted; reviews outstanding
+
+A decorative `safety_status` is insufficient. All exercises start
+`review_status=unreviewed`. `review_required` is the runtime gate:
+
+```text
+eligible = is_active
+           AND (not review_required OR review_status == approved)
+```
+
+Only `cold_water_face` starts with `review_required=true`; therefore it is
+present in the target catalogue but cannot be selected or delivered until
+approved. Obtain a short review from a qualified clinician with relevant
+cardiovascular/arrhythmia or sports-medicine competence, covering cool (not
+ice) water, facial immersion, breath-hold wording, repetitions,
+contraindications, and the corporate self-guided context.
+
+The remaining exercises have `review_required=false` and may enter a limited
+beta while `unreviewed`. Before broad market claims, seek an external review
+from a behavioral scientist/psychologist experienced in brief workplace
+interventions, behavior design, and evidence appraisal. Until then, claim only
+the intended `switch`/`unload` mechanism and product rhythm — not treatment,
+stress reduction, focus recovery, nervous-system regulation, or company
+performance effects as guaranteed outcomes.
+
+#### CONTENT-06 — Visual assets are optional versioned delivery aids
+
+Severity: P2 delivery experiment, not an MVP content blocker
+Status: accepted boundary; asset design deferred
+
+GIFs or short visuals may demonstrate the non-obvious motion or make a trivial
+action easier to enter, especially breathing, fist tension/release, and the
+walk-to-sink context around cool water. They must not carry instructions that
+are absent from text, act as a synchronized timer, imply a guaranteed internal
+effect, or make the exercise unusable when media fails.
+
+If introduced, store a versioned asset reference and accessibility text with
+the content version, and record the renderer/delivery variant in telemetry.
+Exact message hierarchy, notification preview, media placement, buttons,
+fallback, and Telegram/Slack/app behavior belong to the separate Delivery UX /
+Exercise Presentation audit.
+
+#### CONTENT-07 — `UserEvent.step_id` mixes plan-step and exercise identity
+
+Severity: P1 data integrity before beta telemetry
+Status: confirmed; target accepted, implementation not yet verified
+
+`UserEvent.step_id` is a `Text` field with a foreign key to
+`content_library.id`, but current task paths pass integer `AIPlanStep.id`.
+`log_user_event()` resolves either a content ID or a plan-step ID into the same
+value and may manufacture an inactive `ContentLibrary` stub for a numeric plan
+step. Event-to-plan joins require guarded casts; exercise-level `TaskStats` and
+`FailureSignal` can be keyed by a unique occurrence; future category analysis
+can therefore look precise while joining the wrong entity.
+
+Accepted target:
+
+* `user_events.plan_step_id`: nullable integer foreign key to
+  `ai_plan_steps.id` — the scheduled occurrence;
+* `user_events.exercise_id`: nullable text foreign key to
+  `content_library.id` — the reusable exercise;
+* `content_version`: the exact instructions delivered;
+* later delivery experiments use an explicit renderer/delivery variant.
+
+Migration requirements:
+
+1. add both columns/indexes without changing user-facing behavior;
+2. backfill numeric values only when they match a real plan step, then derive
+   the exercise from `AIPlanStep.exercise_id`;
+3. recover exercise IDs only from validated context or genuine legacy content
+   IDs;
+4. move all new writes and joins to explicit columns;
+5. keep old nullable `step_id` only for a bounded compatibility window;
+6. add migration, completion/skip/ignore, metrics, and legacy backfill tests.
+
+A local uncommitted implementation draft was accidentally created during the
+audit. It is not an accepted production fix and must remain uncommitted until
+the migration and behavior-preservation tests are reviewed.
+
+#### CONTENT-08 — Product contracts and specifications still describe the old library
+
+Severity: P1 contract synchronization with implementation
+Status: confirmed
+
+`product_contract.md` still states eight exercises and five `switch`
+exercises, and preserves `variants[]`/legacy slot metadata. The internal
+product specification still describes old parent IDs, minute durations,
+micro-walking, the removed thought exercise, and the legacy schema. The JSON,
+database model, loader, tests, Product Map references, and documentation must
+be updated together when FD-10 is implemented. Until then, the audit decision
+is the target and current runtime remains explicitly legacy.
+
+#### CONTENT-09 — Exercise presentation requires its own UX audit
+
+Severity: P1 product-touchpoint design before beta
+Status: founder accepted as a separate upcoming audit stage
+
+The earlier Delivery Renderer audit established technical correctness and the
+basic Done/Skip lifecycle, but did not lock the full user-facing presentation:
+title/duration/steps hierarchy, Telegram notification preview, button labels,
+GIF placement and fallback, media failure, accessibility copy, or portability
+to Slack/a future app.
+
+Content Library owns **what** the renderer receives: title, exact steps,
+duration, and optional versioned asset/alt text. Delivery UX owns **how** those
+fields become a channel interaction. Complete that audit before implementing
+the final renderer/content migration so neither side silently dictates the
+other.
+
+### Required implementation work and order
+
+1. complete Delivery UX / Exercise Presentation audit;
+2. complete the required cool-water medical review or keep it gated out;
+3. design one forward content/DB migration from the legacy library;
+4. replace JSON and loader validation with the target record shape;
+5. update builder selection to independent exercises and enforce the review
+   gate; remove variations/weight/legacy metadata;
+6. update renderer to consume exact `display` and optional asset metadata;
+7. normalize event identity and record `exercise_id`, `plan_step_id`,
+   `content_version`, and delivery variant;
+8. implement the completed-only `better/same/worse` feedback path under
+   FD-05/FD-07 without changing plan generation;
+9. synchronize Product Map, product contract, internal specification, and
+   tests;
+10. run schema, migration, generation, renderer, callback, review-gate, and
+    telemetry tests before enabling the new catalogue.
+
+### Explicitly deferred
+
+* behavior-based personalization or plan adaptation;
+* exercise levels/unlocks;
+* runtime variations;
+* expanding the catalogue to rescue retention before beta evidence;
+* Mini App timer or measured execution duration;
+* inferred accessibility profiles;
+* clinical, neurological, productivity, or company-ROI claims without
+  appropriate evidence review.
 
 ---
 
