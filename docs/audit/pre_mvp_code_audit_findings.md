@@ -1,13 +1,231 @@
-# Love Yourself — Pre-MVP Code Audit Findings
+# LY Workday — Pre-MVP Product, System, and Code Audit
 
-## Status
+## Final audit status
 
-Living audit document. Updated after each audit area.
+**Status:** FINAL / AUDIT DISCOVERY CLOSED · **Version:** 1.0 · **Close date:** 2026-08-20
 
-This file tracks factual code audit findings against the Pre-MVP Product Contract.
+**Document ID:** LYW-PREMVP-AUDIT-2026-01 · **Classification:** Confidential — founder and authorized implementation team
 
-The goal is not to brainstorm new features and not to refactor the system.  
-The goal is to identify what must be fixed, frozen, removed, or verified before the first beta.
+This document is the authentic, canonical findings register for the Love
+Yourself / LY Workday pre-MVP audit. It records the accepted product decisions,
+factual repository findings, required corrections, frozen or rejected legacy
+behavior, implementation dependencies, research-to-product traceability, and
+release gates identified before external beta.
+
+`Audit discovery closed` means the agreed repository and product surfaces have
+been reviewed and the findings baseline is frozen for implementation planning.
+It does **not** mean the findings are fixed, the test suite is green, the system
+is production-ready, or the product hypotheses are validated. Those are
+separate implementation, verification, beta, and release outcomes.
+
+## Document control
+
+| Field | Recorded value |
+|---|---|
+| Client / product organization | Love Yourself |
+| Employee-facing product | LY Workday |
+| Audit type | Founder-directed internal pre-MVP product, architecture, privacy, operations, research-traceability, and static code audit |
+| Audit period | 2026-07-03 through 2026-08-20 |
+| Calendar span | 49 calendar days inclusive; active labor hours were not metered and are not claimed |
+| Product and decision authority | Founder, Love Yourself |
+| Analysis and report preparation | OpenAI Codex, operating under founder direction and explicit decision approval |
+| Audited application repository | `/Users/Baracuda/Desktop/Love Yourself/Tech/ly_wellness_bot_mvp` |
+| Committed application baseline | branch `docs/plan-generation-audit`, commit `ac2711da00c3af6bac1690da3458a629d98260f4` |
+| Worktree boundary | Static review included the committed baseline and explicitly identified local uncommitted drafts/changes; the dirty worktree is not represented as a releasable commit |
+| Canonical source | `docs/audit/pre_mvp_code_audit_findings.md` |
+| Companion deliverable | `docs/audit/output/LY_Workday_Pre-MVP_Product_System_Code_Audit_2026-08-20.pdf` |
+| Evidence corpus | Application repository, Product Contract and maps, 19 primary end-user interview documents, buyer-side discovery, R&D syntheses, evidence reviews, Founder Decisions, and read-only Railway metadata recorded in the relevant rounds |
+| Independence statement | Internal founder-directed, AI-assisted audit; not an independent third-party certification or assurance engagement |
+
+## Executive audit statement
+
+The existing repository does not implement one coherent beta-ready product.
+It contains valuable current components alongside multiple historical product
+models: old onboarding and free-form plan creation, duplicated lifecycle truth,
+adaptation and engagement remnants, mixed telemetry identity, legacy completion
+reports, incomplete privacy/deletion boundaries, and non-reproducible release
+operations. Adding features on top of those contradictions would make beta
+behavior and resulting metrics unreliable.
+
+The audit therefore defines a smaller target system:
+
+* a privacy-respecting B2B2C product delivered through Telegram;
+* short, bounded, versioned workday actions from one canonical Content Library;
+* a scheduled channel and an independent user-initiated `Вправа зараз` channel;
+* deterministic onboarding, exercise presentation, lifecycle controls, and
+  cycle summary;
+* a reactive Coach whose tools remain bounded by backend authorization;
+* PostgreSQL-authoritative lifecycle and event identity;
+* telemetry that measures delivery and registered interaction without inferring
+  wellbeing, burnout, execution, or productivity;
+* no hidden behavior-based adaptation, individual employer view, streak
+  pressure, or speculative expansion before beta evidence.
+
+The repository requires substantial correction before external beta. The
+dominant work is removal, consolidation, migration, and verification rather
+than feature accumulation. The research-to-product round additionally concludes
+that the model is aligned at the problem and trust-boundary level but remains a
+set of testable hypotheses at the exact channel, cadence, content, Coach, and
+continuation level.
+
+## Audit inventory
+
+The final register contains **19 accepted Founder Decisions** and **216 unique
+numbered findings** across **19 numbered finding areas**, plus one separate
+research-to-product traceability round.
+
+| Area | IDs | Count |
+|---|---:|---:|
+| Scheduler | `SCH-01…06` | 6 |
+| Lifecycle completion | `LIF-01…19` | 19 |
+| Onboarding | `ONB-01…08` | 8 |
+| Coach / Orchestrator | `COACH-01…12` | 12 |
+| Plan generation | `PLAN-01…09` | 9 |
+| Delivery renderer | `DEL-01…08` | 8 |
+| Runtime tools | `RT-01…15` | 15 |
+| Lifecycle state / FSM | `FSM-01…13` | 13 |
+| Privacy and personal data | `PRIV-01…10` | 10 |
+| Content Library | `CONTENT-01…09` | 9 |
+| Telemetry | `TEL-01…15` | 15 |
+| PostgreSQL / Redis integrity | `DB-01…20` | 20 |
+| Delivery UX / exercise presentation | `UX-01…18` | 18 |
+| Security and configuration | `SEC-01…10` | 10 |
+| Legacy reachability cleanup | `LEG-01…04` | 4 |
+| Company deployment | `COMP-01…10` | 10 |
+| Release and operations | `OPS-01…12` | 12 |
+| Exercise on demand | `EOD-01…12` | 12 |
+| Miscellaneous / closure items | `MISC-01…06` | 6 |
+
+Long severity labels in individual findings retain their contextual release
+gate, but the normalized reporting classes remain `BLOCKER`, `P1`, `P2`,
+`FROZEN`, `OK`, and `UNCLEAR` as defined below. A finding marked confirmed or
+accepted may still describe unimplemented target behavior.
+
+## Scope reviewed
+
+The audit reviewed the complete application surface relevant to the accepted
+MVP model:
+
+* all 57 Python modules under `app/`, their import/reachability relationships,
+  Telegram entrypoints, callbacks, command and Coach routing;
+* scheduled delivery, exercise rendering, media fallback, action windows,
+  completion, pause/resume/cancel/time change, automatic continuation, and
+  on-demand lifecycle;
+* onboarding, plan generation/finalization, Content Library schema and assets,
+  Product Contract, product maps, and user-facing language;
+* Coach prompt/tool boundaries, model request handling, conversation memory,
+  abuse/cost controls, safety and failure fallbacks;
+* event contract, activation/retention definitions, feedback, channel
+  separation, personal telemetry, independent aggregation, and company-facing
+  reporting limits;
+* SQLAlchemy models, PostgreSQL constraints and migrations, Redis ownership,
+  idempotency, concurrency, restart/reconciliation, retention and deletion;
+* secrets and configuration, FastAPI endpoints, bearer links, enrollment and
+  entitlement design, Docker/Railway release topology, backups, observability,
+  health/readiness, rollback, and incident handling;
+* all repository tests, development tools, stress-test scripts, active and stale
+  documentation, templates, static website assets, and release declarations;
+* primary end-user interviews separately from secondary R&D interpretation,
+  buyer discovery, evidence reviews, and the final product constructor.
+
+## Technology stack in scope
+
+The reviewed implementation and deployment surface uses:
+
+* Python 3.11 container runtime;
+* aiogram 3 / Telegram Bot API polling;
+* FastAPI and Uvicorn;
+* SQLAlchemy with PostgreSQL / psycopg2;
+* Redis and aiogram Redis FSM storage;
+* APScheduler;
+* OpenAI Python SDK / Responses API for Coach and historical plan components;
+* Jinja2 HTML templates and application-managed SVG/media assets;
+* Docker and Railway deployment infrastructure;
+* SQL migrations, Pytest-based tests, and manual development/stress tooling;
+* structured JSON/YAML-style content and event contracts defined by the audit.
+
+This list describes the audited stack, not an endorsement that every pinned
+version, dependency, process declaration, or tool should survive implementation.
+
+## Methodology
+
+The work used a contract-first audit method:
+
+1. establish source authority among Product Contract, later Founder Decisions,
+   product maps, current code, and historical documents;
+2. inspect reachable producers and consumers, not filenames or registered
+   handlers alone;
+3. trace user journeys, durable state, external side effects, event identity,
+   and failure/restart paths across modules;
+4. reproduce selected renderer, lifecycle, and test behavior where the local
+   environment allowed it;
+5. separate current behavior, expected behavior, minimal fix, and intentionally
+   deferred work;
+6. apply privacy, concurrency, inversion, failure-mode, and margin-of-safety
+   reasoning only where they changed an implementation or trust boundary;
+7. classify primary interview signals separately from secondary synthesis and
+   mark exact product choices as hypotheses where evidence does not validate
+   them;
+8. preserve founder product authority: analysis could expose trade-offs and
+   contradictions, while accepted product decisions required explicit founder
+   approval.
+
+## Limitations and exclusions
+
+This report must not be represented as more than the work performed:
+
+* it is a static repository and product-contract audit, not a penetration test,
+  formal security certification, SOC/ISO audit, financial audit, or legal
+  opinion;
+* stopped production services were not started merely for audit completion;
+  the physical production PostgreSQL schema and row-level state were not
+  introspected, and must be verified from a restored backup before migrations;
+* live Railway ingress, deployed image contents, environment-variable values,
+  provider budgets, database roles, alert delivery, and current network
+  visibility remain release-gate verification items;
+* the audit did not establish one clean, complete, passing test-suite baseline;
+  collection/environment failures and obsolete tests are recorded in `OPS-05`;
+* no live iOS/Android Telegram acceptance test, load test, failover drill,
+  backup-restore drill, full incident exercise, or production migration was
+  performed as part of closing the findings register;
+* dependency-vulnerability findings were not inferred without a resolved SCA
+  run; provider compromise is outside the repository threat model;
+* legal roles, notices, contracts, cross-border processing, and any DPIA need
+  require qualified legal review before the first company deployment;
+* exercise evidence review does not constitute medical approval. The cool-water
+  action remains gated, and exact efficacy of all short exercises remains a
+  beta hypothesis;
+* interview and R&D traceability can show support, absence, or tension. It
+  cannot manufacture product-market fit, causality, or representative market
+  demand from the supplied sample;
+* the local worktree contains pre-existing uncommitted application and document
+  changes. They were preserved and reviewed where relevant, but this report
+  does not certify that dirty state as a release artifact.
+
+## Deliverable and closure rule
+
+This Markdown file remains the editable source of truth. The companion PDF is
+a typeset, read-only representation of the same version and must be regenerated
+after any approved source change. Implementation planning may prioritize and
+group findings, but may not silently rewrite their product boundary or mark
+them resolved without code, migration, test, and operational evidence
+proportionate to the finding.
+
+The next controlled stages are:
+
+```text
+closed audit baseline
+-> prioritized implementation plan
+-> reversible implementation rounds
+-> migration and release verification
+-> testnet beta
+-> evidence review
+-> company production gate
+```
+
+The goal of the findings register remains to identify what must be fixed,
+frozen, removed, implemented, or verified before each applicable gate. It is
+not a backlog mandate to build every deferred idea.
 
 ---
 
@@ -76,7 +294,7 @@ Old flow:
 
 ```text
 completion report → user chooses the next 7- or 14-day format
-````
+```
 
 New flow:
 
@@ -698,8 +916,9 @@ mode enum; `app/fsm/guards.py` (the transition matrix) is removed per FSM-04.
 
 ## FD-09 — Privacy-gated company analytics and independent aggregation
 
-Status: accepted (2026-07-30)
-Priority: P1 data architecture before beta; company reporting post-MVP
+Status: accepted (2026-07-30), company-reporting boundary amended 2026-08-15
+Priority: P1 data architecture before beta; reporting gate before the first
+company pilot closes
 Area: Privacy / Telemetry / B2B Analytics
 
 ### Decision
@@ -741,16 +960,13 @@ or another join key back to the personal event.
 
 ### Company-facing boundary
 
-The first MVP and beta expose **no behavioral analytics to the company**,
-including no manual spreadsheet or one-off "anonymous" report. The current
-code has no company dashboard or HR endpoint; preserve that safe default.
+During a pilot the company receives no live behavioral view, employee-level
+data, manual spreadsheet, or improvised "anonymous" report. The current code
+has no company dashboard or HR endpoint; preserve that safe default.
 
-Future company reporting is a separate feature and may read only from the
-aggregate layer. It must never expose user-level events, conversations,
-exercise histories, stable pseudonyms, small-cohort slices, drill-down, or
-filters that reduce a report below the privacy gate.
-
-The initial design gate for future reporting is:
+After the pilot, the company may receive **one aggregate product-usage
+summary**, and only from the independent aggregate layer after both design
+gates are satisfied:
 
 * at least **100 eligible users** in the covered cohort;
 * at least **50 distinct actual contributors** in the reporting period.
@@ -763,6 +979,27 @@ and no person-level comparison. The 100/50 rule is a conservative starting
 default, **not a mathematical anonymity guarantee**; differential privacy and
 formal contribution limits remain future hardening if stronger guarantees are
 needed.
+
+The accepted post-pilot summary contains only:
+
+```text
+Employees eligible at launch:            200
+Deployment enrollments created:          150
+Active in the stated 7- or 14-day window: 90
+```
+
+Every label has an event-contract definition. `Deployment enrollment` means a
+valid one-time invitation created an enrollment; it is not a verified-employment
+claim. `Active` means the enrolled user performed at least one accepted
+exercise response **or** sent at least one user-authored Coach turn after
+onboarding during the exact printed 7- or 14-day window. Automated delivery,
+onboarding itself, and backend continuation do not count.
+
+The company receives no names, Telegram identities, invitation-level status,
+teams/offices, completion or skip breakdown, Coach/exercise split, Coach text,
+weekly or finer dynamics, real-time dashboard, or drill-down. The buyer cannot
+lower the privacy threshold. This is aggregate product-usage reporting, not a
+wellbeing, stress, health, or productivity outcome.
 
 User-facing and sales language must say **aggregate data without individual or
 small-group views**, not promise absolute anonymity.
@@ -780,9 +1017,10 @@ reason for the gate, not an artificial seat-sales tactic.
 1. implement the user-linked event plus idempotent aggregate write before the
    first beta so trustworthy aggregate history begins on day one;
 2. implement retention and account deletion against the personal layer;
-3. do not build the company gate, report API, or dashboard during MVP;
-4. before any future company report ships, implement the centralized privacy
-   gate and re-review re-identification risk against real cohort sizes.
+3. do not build a live company dashboard or user-level export during MVP;
+4. before the first post-pilot summary ships, implement the centralized gate,
+   compute the three values from the accepted event contract, and re-review
+   re-identification risk against the real cohort.
 
 ---
 
@@ -856,6 +1094,704 @@ while their broader evidence/behavioral review remains visibly uncompleted.
    reviewed change, with backward-data handling and tests;
 5. calibrate content through versioned beta evidence, not silent edits or
    behavior-based personalization.
+
+---
+
+## FD-11 — Telemetry measures product interaction, not inferred wellbeing
+
+Status: accepted (2026-08-08)
+Priority: experiment-validity blocker before beta
+Area: Telemetry / Activation / Retention / Privacy
+
+### Decision
+
+Telemetry exists to reduce uncertainty about two MVP questions:
+
+1. can a company deployment bring an eligible employee through onboarding to
+   a successfully delivered first exercise;
+2. does the employee continue registering interaction with scheduled short
+   actions across working days and into the next automatic cycle.
+
+The scheduled prompt is part of the product mechanism. Continued response to
+scheduled delivery is valid evidence of product use; the user does not need to
+start exercises without a prompt for the product thesis to survive. Reactive
+or self-initiated use is a useful secondary signal only when the product
+actually offers a distinct self-start action and records it explicitly.
+
+Telemetry may describe delivery, registered actions, timing, and continued
+use. It may not infer that an exercise was physically performed, that the user
+felt better, that stress or burnout decreased, or that company productivity
+improved. Such outcome claims require a separate validated evidence design.
+
+### Metric hierarchy
+
+* **Deployment:** eligible population and attributed bot starts by deployment.
+* **Activation:** onboarding completion, plan creation, successful first
+  delivery, first explicit response, and first registered completion.
+* **Rhythm:** registered completion by plan working day, completed-day coverage,
+  explicit skip, silent expiry, and response in the next automatic cycle.
+* **Content diagnostics:** exposure and response by stable exercise ID and
+  content version; optional explicit feedback under FD-07.
+* **Operations:** delivery, scheduler, tool, and continuation failures. These
+  explain whether the mechanism worked and are not user-value metrics.
+
+User-facing streaks, streak-triggered praise, and streak-based adaptation are
+not part of the MVP value model. Raw dated actions remain available so run
+lengths can be derived later for analysis without storing or optimizing a
+`streak` score. `hidden_compensation_score` and similar inferred-state scores
+are rejected, not merely disabled.
+
+### Interpretation rules
+
+* A `completed` tap means **registered completion**, not verified execution or
+  benefit.
+* `skipped` means an explicit user choice; `expired` means no registered action
+  before the real action deadline. Neither is a diagnosis or reason code.
+* A Coach message is not automatically reactive exercise use. Product support,
+  plan control, free feedback, and workday support must not be collapsed into
+  one behavioral metric.
+* Automatic creation or delivery of the next cycle is an operational event,
+  not retention. Retention requires a later user response in that cycle.
+* Percentages must always include numerator, denominator, raw `n`, cohort, and
+  observation window. With a 10-15 person beta, thresholds are directional
+  priors rather than statistically decisive kill/continue rules.
+* Raw conversation text, brain-dump content, and free-text feedback are never
+  analytics dimensions.
+
+### Sequencing
+
+1. lock the event and metric contract in documentation;
+2. implement stable event identity, linkage, and idempotency;
+3. instrument the deployment and activation funnel together with deterministic
+   onboarding;
+4. repair task expiry and runtime-action telemetry;
+5. implement the independent aggregate contribution required by FD-09;
+6. validate events against operational state before interpreting beta results;
+7. build reports only after the underlying events pass reconciliation tests.
+
+---
+
+## FD-12 — Production data is covered by Railway backups
+
+Status: accepted (2026-08-12)
+Priority: operational requirement
+Area: Data durability / Railway operations
+
+### Decision
+
+Railway volume backups are now a required part of operating Love Yourself, not
+an optional safeguard added only before a risky migration.
+
+The production PostgreSQL volume must have scheduled backups enabled. The MVP
+default is daily and weekly backups. A fresh manual backup must additionally be
+created before any migration, backfill, cleanup, or schema drop.
+
+A backup is not treated as proven recovery until it has been restored to a
+separate scratch/staging instance and the expected schema and data can be read.
+PITR is not required for the MVP.
+
+### Operational implications
+
+* purchase/enable Railway volume backups for the existing production volume;
+* keep the backup schedule enabled while production data exists;
+* periodically verify that a backup can be restored;
+* never use the live production database as the first place to test a migration;
+* include backup storage in the normal infrastructure cost of the product.
+
+### Database implementation order
+
+When implementation reaches the database round:
+
+```text
+scheduled backup + fresh manual backup
+→ restore to scratch/staging
+→ start and verify the restored database
+→ read-only physical schema and row-count inspection
+→ Alembic baseline
+→ forward migrations
+→ post-migration verification
+```
+
+The stopped production services do not need to be started merely to complete
+the audit. The restored copy is started when database implementation begins.
+
+---
+
+## FD-13 — Love Yourself is the company; LY Workday is the product
+
+Status: accepted (2026-08-13)
+Priority: P1 before beta-facing copy is finalized
+Area: Product identity / Delivery UX / User-facing documentation
+
+### Decision
+
+The employee-facing product is named **LY Workday**. **Love Yourself** remains
+the company and umbrella brand.
+
+The product name should be used consistently in the Telegram bot profile,
+entry flow, onboarding, exercise delivery, cycle summary, support surfaces,
+privacy copy, and future channel adapters. Internal Python package names and
+database identifiers do not need a cosmetic rename before beta.
+
+This is a naming and product-clarity decision. It is not a claim that Telegram
+notifications can conceal the sender or that the product should disguise its
+purpose.
+
+---
+
+## FD-14 — The notification preview is neutral; the exercise lives inside the chat
+
+Status: accepted (2026-08-13)
+Priority: P1 before beta
+Area: Delivery UX / Notification preview / Telegram
+
+### Decision
+
+The first visible line of a scheduled exercise notification uses one short,
+neutral workday-break label such as `Пауза` or `Перерва`. It does not expose the
+exercise title, an emotional label, a wellness claim, or internal scheduling
+metadata on the lock screen.
+
+The actual exercise is revealed after the user opens the Telegram chat. The
+in-chat message contains the exercise title, duration, exact instructions, and
+the available action buttons. Curiosity may help the user cross the first tap,
+but the product is optimized for registered exercise action, not notification
+opens as an engagement metric.
+
+Telegram cannot place the bot's custom inline action buttons directly in the
+operating-system notification. The accepted MVP path is therefore:
+
+```text
+neutral notification preview
+→ open Telegram chat
+→ read/do the exercise
+→ press the in-chat action
+```
+
+Exercise duration must not be inflated to keep the phone screen awake. Buttons
+and exercise state must remain recoverable after screen lock and chat reopen.
+The exact word and truncation behavior must be verified on real iOS and Android
+devices before beta.
+
+---
+
+## FD-15 — The MVP cycle summary is a deterministic Telegram image
+
+Status: accepted (2026-08-13)
+Priority: P1 before beta lifecycle completion
+Area: Completion / Delivery UX / Privacy
+
+### Decision
+
+Every completed cycle produces a small, tangible result artifact. For MVP this
+artifact is a deterministic image rendered by application code and delivered
+in Telegram, not prose or artwork generated by an LLM and not a long-lived
+bearer-link HTML report.
+
+The summary contains only controlled factual data:
+
+* a visual completed/not-completed day grid;
+* registered completion count such as `5 із 7` or `10 із 14`;
+* confirmation that the next same-format cycle is prepared;
+* the date and local time of the next scheduled exercise.
+
+It contains no score, tier, streak reward, psychological interpretation,
+diagnosis, productivity claim, adaptation count, dominant-slot inference, or
+choice CTA that contradicts FD-01 automatic continuation.
+
+The image renderer must be deterministic and testable from structured data.
+A concise text caption/fallback must preserve the same facts when image
+delivery or image access fails.
+
+---
+
+## FD-16 — Instructional GIFs are required for three technique-sensitive exercises
+
+Status: accepted (2026-08-13)
+Priority: P1 before the affected exercise enters beta delivery
+Area: Content Library / Delivery UX / Media
+
+### Decision
+
+Instructional GIFs are required for:
+
+```text
+breathing
+fist PMR
+cool-water facial immersion
+```
+
+For these exercises the visual is part of execution-quality support, not a
+generic engagement decoration. It demonstrates the key movement or sequence
+that compact text can be read too quickly or performed incorrectly.
+
+Each GIF is a versioned content asset linked to the exercise ID and
+`content_version`. Text instructions remain complete and authoritative; a
+media failure falls back to the same text exercise without losing the action.
+The cool-water GIF and exercise remain blocked by the medical review gate in
+FD-10. Other exercises do not require GIFs for the first beta.
+
+---
+
+## FD-17 — Coach has no user-visible quota, with invisible abuse controls
+
+Status: accepted (2026-08-15)
+Priority: beta operating decision
+Area: Coach / Telemetry / Operations
+
+### Decision
+
+The beta does not impose a product allowance, daily message allocation, or
+user-facing Coach quota. The product does not display remaining messages or
+ask a normal user to ration Coach usage.
+
+This product decision does not authorize unbounded concurrency or automated
+abuse. The beta uses the following invisible operational controls:
+
+* at most one Coach turn runs at a time per user. When no turn is active, the
+  first accepted free-text message starts immediately with no debounce or quiet
+  window;
+* while that turn runs, a process-local FIFO accepts at most nine additional
+  free-text messages for the same user. They remain separate ordered turns and
+  are processed one at a time after the active turn. A tenth pending message is
+  refused rather than creating another waiter. Refusal does not cancel, pause,
+  or reorder the active turn or the nine accepted pending turns;
+* after Telegram-update deduplication, the abuse guard counts every attempted
+  user-authored free-text message, including messages rejected because the FIFO
+  is full. It allows at most 30 attempts in a rolling minute and 300 in a
+  rolling hour per user. Deterministic commands and callbacks do not count and
+  must bypass the model. These deliberately generous thresholds target obvious
+  automation rather than ordinary fragmented conversation, are deployment
+  configuration rather than a product allowance, and must be reviewed against
+  beta evidence;
+* Coach usage and cost are separate counters: an accepted free-text message is
+  one Coach turn; a bounded tool-result continuation belongs to that initiating
+  turn; every actual model request and token counts toward operational cost;
+* a blocked request receives one neutral availability response such as
+  `Coach is temporarily unavailable. Please try again shortly.` It must not be
+  framed as the user exhausting a quota;
+* model calls have an explicit timeout, bounded retries, and a global
+  application circuit breaker for abnormal request, token, or cost volume;
+* Coach runs in a dedicated OpenAI project with budget alerts. Configure a
+  provider-enforced hard spend limit only if that behavior is available and
+  verified for the active account; otherwise the application circuit breaker
+  remains the hard stop;
+* the future Bounded Tool-Result Loop in COACH-09 is capped at one initial
+  model response, at most one runtime tool execution, and one final model
+  response with tools disabled. It must never recurse.
+
+The process-local lock is sufficient only while one bot process owns Coach
+traffic. A second replica requires distributed serialization or a single
+ingress owner before scaling; silent multi-process lock divergence is not an
+acceptable upgrade path.
+
+The per-user lock covers the complete ordered turn: persist the accepted user
+message, read the authoritative conversation history, call the Coach, execute
+the bounded tool-result continuation when required, and persist the final
+result. Locking only the OpenAI request does not preserve conversation order.
+The lock/FIFO registry entry is removed through race-safe cleanup once that user
+has no active or pending turn, so a long-running process does not accumulate one
+permanent synchronization object per user.
+
+The active turn and nine-slot FIFO are deliberately process-local for the
+one-process MVP. A Railway restart can discard the active result and messages
+accepted into the local queue but not yet processed. This is an accepted beta
+limitation, must be named in incident diagnosis, and must not be misclassified
+as user abandonment. Add durable Redis/PostgreSQL intake only if restart loss
+is observed, multiple replicas are introduced, or delivery guarantees become
+a product requirement.
+
+Queue overflow uses a deterministic Telegram response, not the Coach model:
+`Я ще опрацьовую попередні повідомлення. Це повідомлення не додалося — надішли
+його трохи пізніше.` The notice does not enter the FIFO, does
+not consume the Coach rate limit, and does not interrupt accepted work. Emit it
+once per continuous full-queue episode rather than once for every rejected
+message, so an automated sender cannot make the bot generate reply spam.
+
+Rate limiting is defense-in-depth, not the financial source of truth. Per-user
+thresholds protect conversation ordering and obvious automation; the global
+application circuit breaker is derived from measured cost per complete Coach
+turn and the founder's explicit loss budget. Provider project budgets and
+alerts are monitored, but the application must not assume that a configured
+provider budget is an immediate hard stop unless that behavior is verified for
+the active account.
+
+The existing `DEFAULT_DAILY_LIMIT` setting does not represent accepted product
+behavior and must be removed rather than left as misleading dead configuration.
+
+Unmetered product access does not mean unobserved use. Each model request must
+record privacy-safe operational usage facts such as model, input/output/total
+tokens, request outcome, and an estimated cost where available. These facts are
+for founder operations and beta learning, not user scoring or company-facing
+analytics. Rate-limit events, circuit-breaker state, and spend alerts are also
+founder-only operational facts and must not become company-facing behavior
+scores.
+
+The decision may be revisited only after real beta usage and cost data exists.
+
+---
+
+## FD-18 — Production access is roster-gated; individual beta runs on an isolated testnet
+
+Status: accepted (2026-08-15)
+Priority: BLOCKER for testnet isolation and token enrollment before individual
+beta; BLOCKER for roster/SSO/reconciliation before the first company production
+deployment
+Area: Company Deployment / Privacy / Enrollment
+
+### Decision
+
+Love Yourself has two isolated runtime environments built from the same
+release artifact and product behavior:
+
+1. **Production** — first enrollment is possible only through a personal,
+   scoped, expiring, single-use Telegram handoff token backed by an active
+   company entitlement. The token is issued only after the employee passes the
+   company's roster and corporate-identity check.
+2. **Testnet** — the individual developer beta uses separate infrastructure,
+   credentials, bot identity, data, telemetry, and token namespace. The founder
+   issues test entitlements and the same one-time handoff tokens directly. Once
+   a token is redeemed, onboarding, plans, exercises, Coach, lifecycle, and
+   telemetry behave exactly as in production.
+
+Testnet is not a reduced or divergent product branch. Environment isolation
+and the source that grants the initial entitlement are the only intended
+differences. Testnet users and events never enter production company counts,
+sealed aggregates, reports, or operational data.
+
+Testnet participation does not create a right to migrate the account, Coach
+history, plans, or telemetry into production. The testnet bot may be retired
+after the beta under its disclosed retention/deletion terms. The intended exit
+for a successful beta participant is to become a champion and bring a company
+deployment; that production enrollment starts in the production bot without
+history migration. Record founder-known `testnet participant -> company
+introduction/deployment` conversion as a qualitative/commercial beta signal,
+not as behavioral company analytics.
+
+Production has no public or organic first-enrollment path. A bare `/start`, an
+unknown token, or an expired/revoked entitlement cannot create a production
+account or plan. This does not block a returning enrolled user from opening the
+bot normally while their entitlement remains active.
+
+### Production enrollment
+
+Before launch, the company supplies a current roster containing only the email
+required for access control. An employee opens the deployment-specific
+enrollment page and proves control of that roster-listed address. Google
+Workspace or Microsoft 365 OIDC is preferred; a one-time email verification
+flow supports roster-listed contractors, personal addresses, and companies on
+other mail providers. The backend verifies the authentication/challenge,
+normalized email, deployment, and active roster membership. A successful check
+creates or retrieves one revocable `access_entitlement`.
+
+The enrollment page then mints one short-lived Telegram handoff token bound to
+that entitlement. The raw value is shown only for the immediate Telegram open;
+the backend stores only its hash and bounded issuance/redeem state. Redemption
+atomically consumes the token and creates or resumes one
+`deployment_enrollment` linked to the entitlement and Telegram user. The token
+is transport, not the license: it is never reusable and is irrelevant after
+redemption.
+
+Returning users continue through their Telegram account and do not repeat SSO
+or enter another token while the entitlement remains valid. Renewing a company
+deployment keeps its active entitlements without user action. SSO is an initial
+identity proof, not a background membership-sync mechanism.
+
+### Roster reconciliation and revocation
+
+Roster synchronization is batch-based; SCIM is not required. The cadence is a
+deployment contract field: annual may be accepted for a small client, while a
+large client normally supplies a quarterly roster or another explicitly agreed
+interval. Love Yourself owns requesting, validating, and applying the update;
+the user never reauthenticates because a reconciliation is due. New hires may
+be added between full reconciliations.
+
+Each import is versioned, declares an explicit `import_mode`, and runs as
+`validate -> preview diff -> explicit confirm -> atomic apply`:
+
+* `full_snapshot` represents the complete current roster. Only in this mode may
+  omission from the accepted file revoke an existing entitlement.
+* `delta` contains explicit add/revoke operations only. Omission has no meaning
+  and every stable entitlement remains untouched.
+
+The system never infers mode from file size, cadence, filename, or prior
+imports. A missing/unknown mode, empty or malformed input, an unexpectedly
+small full snapshot, or wrong-domain/wrong-deployment data fails closed and
+cannot mass-revoke access. Preview shows mode and exact add/keep/revoke counts
+before confirmation. The previous accepted roster version remains available
+for operational rollback.
+
+Roster cadence does **not** define entitlement expiry. If no roster arrives, or
+an import fails validation, the current roster and every existing entitlement
+remain unchanged. A missed reconciliation raises founder/champion reminders and
+an overdue operational alert; it never triggers mass revocation.
+
+When a valid full snapshot is explicitly accepted, an employee present remains
+active and an employee absent is revoked at the import's agreed effective time.
+An accepted delta changes only its explicit rows and cannot revoke an omitted
+employee.
+People who leave between reconciliations may therefore retain access until the
+next successful annual, quarterly, or otherwise contracted sync. The company
+may also request an earlier access-only revocation. Active company entitlements
+otherwise live through the deployment's commercial period; renewal extends the
+deployment centrally without SSO, another token, or user action. If the company
+does not renew, the deployment commercial end stops all company-sponsored
+access. Revocation stops delivery and Coach access but does not delete the
+personal account, historical plan, messages, or telemetry; retention and
+deletion remain governed by the Privacy round.
+
+Individual paid production access is a known future path, not an almost-built
+pricing choice. It requires payment, verified email, a personal entitlement,
+and the same one-time Telegram handoff token without a company roster. It is
+not part of MVP and no current production user can enter through it.
+
+### Explicit MVP edge cases and market boundary
+
+* A lost or replaced Telegram account is handled manually by support. After the
+  person re-verifies the roster-listed identity, an audited operator procedure
+  may close the old enrollment and rebind the active entitlement. No self-serve
+  account recovery is built for MVP.
+* One Telegram account may have only one active deployment enrollment. Genuine
+  simultaneous entitlement through two client companies is unsupported until a
+  real case exists; changing employers is handled as an explicit enrollment
+  replacement rather than rewriting history.
+* Contractors and employees using personal or non-Google/Microsoft addresses
+  are eligible when the company includes that address in the roster and the
+  user completes email verification.
+* Workforces whose members have no reachable individual email identity are
+  outside the current ICP. Production, retail, field, and similar access models
+  are not silently promised by this decision.
+
+### Privacy and access boundary
+
+Love Yourself necessarily retains a restricted mapping from corporate identity
+to entitlement and enrollment so access can be reconciled and revoked. It does
+not promise that this mapping is physically unknowable. The enforceable promise
+is narrower and operationally useful: corporate identity is used only for
+authentication, license administration, revocation, support, fraud prevention,
+and security; it is not used for employee scoring, behavioral profiling, Coach
+analysis, or company-facing individual reporting.
+
+Identity/access records are separated from exercise, Coach, feedback, and
+behavioral telemetry in schema, service permissions, logs, and administrative
+views. HR may submit the roster and receive its validation result and total
+accepted count, but has no SSO/enrollment status or identity-to-activity view.
+Company reporting remains limited by `FD-09`.
+This purpose limitation must appear consistently in the company agreement,
+data-protection terms, deployment-bound privacy notice, and employee-facing SSO
+screen.
+
+Required controls:
+
+* request only the minimum OIDC scopes and validate signature, issuer,
+  audience, expiry, nonce/state, tenant/domain, stable subject, and verified
+  roster-listed email server-side;
+* for non-OIDC addresses, use a short-lived, single-use email challenge with
+  rate limits, neutral responses, hashed challenge storage, and no indication
+  whether an arbitrary address exists in a roster;
+* store normalized corporate identity with restricted access; raw roster files
+  have bounded retention and are not copied into product telemetry;
+* cryptographically random, entitlement-bound, expiring, single-use handoff
+  tokens; raw values are never logged, persisted, or exposed after issuance;
+* atomic token redemption and idempotent enrollment creation;
+* one neutral response for unknown, expired, revoked, already-spent, or
+  unauthorized tokens;
+* `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, CSRF protection,
+  and privacy-safe request logging on the enrollment page;
+* deployment-wide pause, entitlement-level revocation, roster-import audit
+  history, and emergency token-key revocation without exposing behavior;
+* fully separate production and testnet secrets, databases, Redis namespaces,
+  Telegram bots, OpenAI projects, token signing keys, URLs, backups, alerts,
+  and aggregate sinks.
+
+Do not add a speculative provisioning-provider interface, SCIM adapter, HR
+dashboard, or per-seat billing system before a real requirement exists. The
+durable data boundary is required now: `access_entitlement` remains separate
+from `deployment_enrollment`, and both remain separate from behavioral data.
+
+---
+
+## FD-19 — Exercise on demand is an independent user-initiated delivery channel
+
+Status: accepted (2026-08-19)
+Priority: P1 before the feature enters beta
+Area: Exercise on demand / Delivery / Coach / Telemetry
+
+### Decision
+
+LY Workday adds one small reactive channel named **`Вправа зараз`**. It lets an
+authorized, onboarded user request one short `switch` exercise when the user
+already recognizes a need to interrupt the current work state. It is not a
+second plan, does not create another proactive schedule, and does not assume
+that scheduled delivery is the preferred or ultimately correct product model.
+
+The beta must preserve scheduled and on-demand activity as separate observable
+channels so the product can learn whether users prefer scheduled delivery,
+reactive delivery, both, or neither. Movement from scheduled use toward
+on-demand use is a product-learning outcome, not a failure or a risk to be
+prevented. No combined adherence percentage may hide that channel choice.
+
+### Entry surfaces
+
+The MVP has exactly two entry surfaces:
+
+1. a deterministic Telegram command-menu item with the user-facing description
+   `Вправа зараз`; `/exercise` is the internal Telegram command identifier;
+2. a Coach runtime tool invoked only when the user explicitly asks to receive
+   an exercise or to switch state now.
+
+Both entry surfaces call the same authoritative on-demand application service.
+The Coach does not generate, rewrite, choose, or deliver its own exercise. A
+clear direct request is sufficient consent and does not require another
+confirmation question. Mentioning tiredness, stress, a difficult day, or a
+work problem without asking for an exercise must not trigger the tool.
+
+There is no persistent reply-keyboard button and no Mini App or Web App in the
+MVP. Product copy refers to the action as `Вправа зараз`; it does not instruct
+the user to type the internal `/exercise` command.
+
+### Availability and isolation
+
+The channel is available after onboarding while the user's access entitlement
+is valid:
+
+* with an active scheduled sequence;
+* while that sequence is paused;
+* with no active sequence;
+* on weekends, non-working days, and outside configured delivery times.
+
+It is unavailable during incomplete onboarding and after entitlement
+revocation or account deletion. It creates no new user/FSM mode and never
+changes plan status, day progression, scheduled steps, scheduled jobs,
+continuation, pause/resume/cancel behavior, or scheduled completion metrics.
+The two channels share the Content Library and presentation infrastructure but
+have independent execution records and source identities.
+
+### Selection
+
+The target source pool is the six `switch` records accepted by FD-10. Runtime
+selection includes only records that are active, pass their review gate, and
+have all beta-required assets configured. The expected launch pool is five
+exercises after the required GIF work; `cold_water_face` becomes the sixth only
+after both its medical-review gate and media prerequisite are satisfied.
+
+For each request, selection is uniform random over the currently eligible pool
+after excluding the most recently successfully delivered **on-demand**
+exercise when it would otherwise repeat immediately. Every remaining record
+has equal probability. This is the only variety rule:
+
+```text
+A -> A             forbidden
+A -> B -> A        allowed
+A -> B -> A -> B   allowed
+```
+
+There is no shuffle bag, anti-ping-pong rule, full-cycle uniqueness,
+behavior-based weighting, completion/skip contingency, inferred preference,
+or AI choice. FD-10's provisional `cooldown_days` does not impose a separate
+on-demand cooldown. The feature must not be enabled with fewer than two
+release-eligible exercises; an empty or undersized pool fails closed rather
+than delivering gated content or violating the immediate-repeat rule.
+
+The immediate-repeat rule is scoped to consecutive on-demand selections.
+Scheduled history does not change the on-demand pool, and on-demand history
+does not reorder or replace a prepared scheduled sequence. The channels share
+the library, renderer, and telemetry infrastructure, not selection state.
+
+### Occurrence lifecycle and frequency
+
+Each accepted request creates one independent PostgreSQL occurrence:
+
+```text
+pending_delivery
+-> delivered
+-> completed | skipped | expired
+
+pending_delivery -> delivery_failed
+open occurrence  -> canceled only for access/account closure
+```
+
+Only one `pending_delivery` or `delivered` on-demand occurrence may exist per
+user. A duplicate command, duplicate Coach tool execution, Telegram retry, or
+double tap returns/reuses the existing occurrence and cannot select or send a
+second exercise. After completion, skip, expiry, or terminal delivery failure,
+the user may request another exercise immediately. There is no product daily
+quota, frequency cap, or user-visible allowance in the MVP; broad invisible
+abuse protection remains an operational control, not a product rule.
+
+The response window is 30 minutes from confirmed Telegram delivery. At expiry
+the system atomically records `expired`, removes `Виконано` / `Пропустити`, and
+edits the message with the exact neutral state:
+
+```text
+Час виконання минув.
+```
+
+The callback handler checks authoritative database time as well as visible
+message state, so an in-flight, duplicated, or stale-client callback cannot
+complete an expired occurrence. A late callback receives the same factual
+copy; it does not silently fail and does not automatically create a new
+exercise.
+
+### Presentation and feedback
+
+Delivery uses the shared canonical `ExercisePresentation` and renderer. The
+in-chat exercise contains only the exercise title, exact duration, exact
+steps, required versioned media when applicable, and the actions `Виконано`
+and `Пропустити`. It contains no sequence day, internal slot, scheduled-plan
+progress, plan rationale, inferred state, or adaptation message.
+
+Text remains authoritative. A transient media-send failure falls back to the
+same complete text presentation and records the actual `delivery_variant`; a
+missing required asset at release configuration time makes the content
+ineligible instead. Optional FD-07 `better / same / worse` feedback appears
+only after registered completion and never changes selection or either
+delivery channel.
+
+### Telemetry and summary
+
+On-demand uses the canonical telemetry infrastructure with an explicit
+`exercise_source=on_demand`, an `on_demand_request_id`, stable `exercise_id`,
+exact `content_version`, delivery variant, source-operation identity, and
+delivery/response timestamps. Scheduled references are null. Request,
+delivery, delivery failure, completion, skip, expiry, and optional feedback
+are separate validated events. Response latency means time from confirmed
+delivery to accepted callback, not exercise duration or effect.
+
+Scheduled and on-demand denominators remain separate. In the deterministic
+cycle summary, the on-demand section appears only when at least one on-demand
+exercise was completed inside the summary window. The accepted language is:
+
+```text
+За розкладом: 4 із 5 виконано
+За власним запитом: 2 виконано
+Усього виконано: 6
+```
+
+If no on-demand exercise was completed, the second line is absent and the
+summary does not display a zero or imply another obligation. Skipped, expired,
+and failed occurrences remain available to founder analytics but are not a
+user-facing voluntary-channel score. The combined line is a count only; the
+system never divides scheduled and on-demand activity by one shared
+denominator.
+
+On-demand exercise and Coach activity remain personal product data under
+FD-09. A company receives no channel split, exercise history, completion,
+skip, expiry, feedback, or individual activity. A valid on-demand completed or
+skipped response may contribute once to FD-09's sealed aggregate definition of
+an active user; request, delivery, delivery failure, and expiry alone do not.
+
+### Explicitly outside MVP
+
+* content expansion beyond the FD-10 catalogue;
+* AI/contextual selection and behavior-inference personalization;
+* persistent reply keyboard, Mini App, Web App, or separate exercise browser;
+* user-facing quotas, therapeutic cooldowns, and gamified rewards;
+* replacing scheduled delivery or declaring either channel the winner before
+  beta evidence;
+* experiment-assignment infrastructure, pilot cohort machinery, or feature-
+  flag administration solely for this audit round;
+* a standalone weekly pulse/report outside the accepted FD-15 cycle summary.
 
 ---
 
@@ -3719,6 +4655,10 @@ contracts, or cross-border data-transfer setup.
   Postgres, Redis, and any application logs that duplicate content;
 * user-linked product and behavioral history: retain while the account exists,
   subject to the final Privacy Policy and deletion workflow;
+* FD-18 roster and identity records: separate, purpose-limited access data
+  retained only for the active entitlement, commercial relationship, and a
+  bounded security/audit need. Raw roster uploads have a shorter documented
+  retention than normalized access records and never enter behavioral stores;
 * independent aggregates produced under FD-09: may be retained indefinitely
   and survive account deletion only after they are no longer linked or
   reasonably reconstructable as a person's history;
@@ -3736,12 +4676,21 @@ system nevertheless collects Telegram identifiers, profile/schedule data,
 conversation text, plan activity, and behavioral events, and sends
 conversation context to OpenAI.
 
+FD-18 additionally requires production collection of an employer-supplied
+email roster and either minimum Google/Microsoft identity claims or a verified
+email challenge. These are access-control data, not behavioral telemetry, but
+they are still personal data and must be disclosed rather than hidden behind
+the word SSO.
+
 Minimal fix:
 
 * publish a concise Privacy Policy and onboarding notice that identify the
   controller/contact path, data categories, purposes, recipients/processors
   (including Telegram and OpenAI), retention periods, user rights, and whether
   any company-facing analytics exists;
+* describe roster email/identity use as limited to authentication,
+  entitlement, revocation, support, fraud prevention, and security; state that
+  the employer receives no individual product behavior under FD-09;
 * record which notice version and timestamp were shown/acknowledged before
   free-form Coach use;
 * have counsel confirm the processing basis and any required processor /
@@ -3965,9 +4914,10 @@ authorize the operation, rate-limit it, and add cross-user denial tests.
 ### Confirmed safe current property
 
 No company model, HR dashboard, company-facing analytics endpoint, or
-user-level reporting API was found. Preserve that default for MVP. Do not
-create a manual company report from production user-level tables while calling
-it anonymous.
+user-level reporting API was found. Preserve the absence of live and
+user-level company views. The only accepted exception is FD-09's single gated
+post-pilot aggregate product-usage summary, built from sealed aggregates rather
+than an ad hoc query over user-linked rows.
 
 ### Required MVP work and order
 
@@ -3985,8 +4935,9 @@ it anonymous.
 7. add bounded, revocable report tokens (PRIV-08);
 8. remove unused sensitive-looking schema during the database migration
    (PRIV-09);
-9. keep all company reporting disabled; implement the future privacy gate only
-   when a company-facing analytics product is actually designed.
+9. keep live, sliced, invitation-level, and user-level company reporting
+   disabled; implement FD-09's centralized gate before producing the one
+   accepted post-pilot aggregate summary.
 
 ### What this round does not decide
 
@@ -4326,6 +5277,3465 @@ other.
 
 ---
 
+## Telemetry Area — Audit Round 2026-08-08
+
+### Files and paths inspected
+
+* `app/telemetry.py`
+* `app/db.py`
+* `app/telegram.py`
+* `app/scheduler.py`
+* `app/orchestrator.py`
+* `app/plan_runtime/tools.py`
+* `app/plan_pause.py`
+* `app/plan_finalization.py`
+* `app/plan_completion/metrics.py`
+* `app/plan_metrics.py`
+* `app/api.py`
+* telemetry, task-lifecycle, completion, dashboard, and orchestrator tests
+* `docs/audit/product_contract.md`
+* FD-05, FD-07, FD-08, FD-09, FD-10, PRIV-06/07, and CONTENT-07
+
+The code inspection used committed `HEAD` (`ac2711d`) because a local
+uncommitted draft already changes event identity fields. That draft is not
+treated as implemented or verified.
+
+### Audit objective
+
+Define the minimum trustworthy event contract needed to validate corporate
+deployment/activation (`C1`) and continued rhythm (`C3`) from the
+[Riskiest Assumptions → MVP Test Map](product_contract.md#7-riskiest-assumptions--mvp-test-map),
+then compare it with the current runtime. The audit deliberately separates:
+
+* operational facts the application can observe;
+* proxies such as a registered completion tap;
+* product interpretations such as continued rhythm;
+* health, psychological, and company-performance claims the product cannot
+  infer from interaction telemetry.
+
+### Target event envelope
+
+Every persisted event must use the same explicit envelope:
+
+```text
+event_id                 UUID generated once per source operation
+event_name               versioned, allow-listed name
+event_schema_version     integer
+occurred_at              timestamp of the real operation
+recorded_at              ingestion timestamp
+source_operation_id      stable idempotency key
+user_id                  nullable only for pre-user deployment facts
+organization_id          nullable internal organization reference
+deployment_id            nullable opaque launch/cohort reference
+plan_id                  nullable FK to ai_plans
+plan_cycle_number        nullable integer
+plan_step_id             nullable FK to ai_plan_steps
+exercise_id              nullable FK to content_library
+content_version          nullable integer
+delivery_variant         nullable versioned renderer/channel variant
+properties               allow-listed event-specific fields only
+```
+
+`source_operation_id` is unique within an event source. Examples are Telegram
+`update_id`/`callback_query.id`, scheduler job plus step plus event name, runtime
+tool execution ID, and plan/cycle plus lifecycle event. A retry reuses the key;
+it never manufactures another product event.
+
+Free text, names, Telegram handles, Coach content, brain-dump content, inferred
+mood, diagnosis, or skip reason are not valid `properties`. Raw conversation
+and feedback content remain in their separately retained personal stores.
+
+### Target event catalogue
+
+| Event | Exact occurrence | Required linkage |
+|---|---|---|
+| `bot_started` | Telegram delivers a `/start` update | `deployment_id` when present, user |
+| `roster_import_applied` | a validated and explicitly confirmed roster version atomically becomes current | organization, deployment, roster version, explicit import mode, add/keep/revoke counts; no email in event properties |
+| `access_entitlement_granted` / `access_entitlement_extended` / `access_entitlement_revoked` | the access-control operation commits the new entitlement boundary | deployment, entitlement, source operation; no behavior linkage in event properties |
+| `invitation_issued` | roster-gated corporate authentication or testnet founder issuance creates one expiring Telegram handoff token | deployment, entitlement, invitation operation ID; no raw token |
+| `deployment_enrollment_created` | a valid invitation redemption atomically creates one deployment enrollment | user, deployment, enrollment; invitation operation ID retained only inside the bounded idempotency boundary |
+| `onboarding_started` | deterministic onboarding first screen is accepted for processing | user, deployment |
+| `onboarding_completed` | all required setup is durably committed | user, deployment |
+| `plan_created` | target `AIPlan` and steps commit | user, plan, cycle |
+| `plan_scheduling_succeeded` | all required delivery jobs are durably registered | user, plan, cycle |
+| `task_delivered` | Telegram confirms the exercise message was sent | plan, step, exercise, content/renderer version |
+| `task_delivery_failed` | a delivery attempt reaches a terminal failure for that attempt | same as delivery plus bounded error class |
+| `task_completed` | valid Done callback commits the step as completed | same as delivery plus callback operation ID |
+| `task_skipped` | valid Skip callback commits the step as skipped | same as delivery plus callback operation ID |
+| `task_expired` | the real action deadline commits an unanswered step as expired | same as delivery |
+| `plan_paused` / `plan_resumed` | the runtime action commits the new plan status | user, plan, tool execution ID |
+| `plan_cancelled` | cancellation and step closure commit | user, plan, tool execution ID |
+| `delivery_time_changed` | the new time commits; reschedule outcome is recorded separately | user, plan if active, tool execution ID |
+| `plan_format_switched` | an atomic active-format switch commits | user, old/new plan, tool execution ID |
+| `plan_completed` | cycle finalization commits | user, plan, cycle |
+| `completion_report_sent` | Telegram confirms report delivery | user, plan, cycle |
+| `next_cycle_created` | automatic same-format next cycle commits | user, prior/new plan, cycle |
+| `user_message_received` | a non-command inbound message is durably accepted | user only; no semantic claim |
+| `feedback_submitted` | an explicit FD-07 feedback action commits | source type plus allowed target IDs |
+
+The product may use more operational events later, but no metric may depend on
+an undocumented event or an ad-hoc JSON key.
+
+### Metric definitions and denominators
+
+#### Deployment funnel
+
+Production `eligible_count_at_launch` is the count of active access-eligible
+records in the accepted launch roster version. Testnet is excluded. The company
+still confirms the intended launch audience and announcement time, because a
+roster proves eligibility but not that employees saw the enrollment message.
+
+```text
+SSO authorization rate = distinct invitation_issued entitlements
+                         / eligible_count_at_launch
+
+deployment start rate = distinct deployment_enrollment_created users
+                        / eligible_count_at_launch
+
+onboarding conversion = distinct onboarding_completed users
+                        / distinct deployment_enrollment_created users
+```
+
+Successful roster/SSO authorization and Telegram Start/redemption are separate
+observable steps. Opening the issued Telegram invitation without pressing Start
+remains unobservable through the bot and must not be reported as enrollment.
+
+#### Product activation funnel
+
+Report each stage, not one blended percentage:
+
+```text
+onboarding_completed
+→ plan_created
+→ plan_scheduling_succeeded
+→ first task_delivered
+→ first explicit response (task_completed or task_skipped)
+→ first registered task_completed
+```
+
+`first-completion activation` uses users with a successfully delivered first
+task as its immediate denominator. Deployment activation remains a separate
+eligible-population metric so channel failure cannot disappear from the
+numbers.
+
+#### Working-day retention and rhythm
+
+`D1`, `D3`, and `D7` mean the first, third, and seventh configured **plan
+working day**, not calendar days and not rolling 24/72/168-hour windows.
+
+```text
+Dn response retention = activated users with task_completed or task_skipped
+                        on plan working day N
+                        / activated cohort whose day-N action window elapsed
+
+Dn completion retention = activated users with task_completed on day N
+                          / the same cohort denominator
+```
+
+Pause and cancellation remain visible outcomes in that denominator; delivery
+failures are reported separately and must not be misclassified as user silence.
+Always show numerator, denominator, raw `n`, cohort start, configured work-day
+rule, and observation cutoff.
+
+For each completed cycle also report:
+
+```text
+completed-day coverage = plan working days with >=1 registered completion
+                         / elapsed eligible plan working days
+
+task completion rate = task_completed
+                       / successfully delivered, non-cancelled tasks whose
+                         action window ended
+
+explicit skip rate = task_skipped / the same task denominator
+silent expiry rate = task_expired / the same task denominator
+
+next-cycle response retention = users with an explicit response in the
+                                automatic next cycle
+                                / users whose prior cycle completed and whose
+                                  next-cycle first action window elapsed
+```
+
+Day coverage and task completion are separate because the 14-day format can
+deliver two actions per day.
+
+#### Content and reactive diagnostics
+
+Per-exercise results require a `task_delivered` exposure denominator and are
+grouped by `exercise_id`, `content_version`, and delivery variant. Tiny beta
+samples are shown as counts, not ranked as winners and losers.
+
+`user_message_received` measures Coach traffic only. It is not self-started
+exercise use, need, distress, or value. A future `start exercise now` feature
+must emit its own explicit event before self-initiated use becomes a metric.
+Response latency measures time from confirmed delivery to callback; it is not
+exercise duration or proof that the exercise happened.
+
+### Inference guardrails
+
+Telemetry must never turn the following proxies into stronger claims:
+
+| Observed fact | Allowed interpretation | Forbidden interpretation |
+|---|---|---|
+| `task_completed` | user registered completion | exercise was performed correctly or helped |
+| `task_skipped` | user explicitly skipped | exercise was bad, inaccessible, or user lacked motivation |
+| `task_expired` | no registered action before deadline | user ignored the bot, was overloaded, or received no value |
+| fast callback | quick registered response | exercise was short, easy, or effective |
+| repeated scheduled response | product rhythm continued | habit is autonomous or user is dependent |
+| Coach message | user contacted the Coach | user needed emotional support or started an exercise |
+| company aggregate change | interaction pattern changed | burnout, health, or productivity changed |
+
+### Findings
+
+#### TEL-01 — The deployment and activation funnel is not instrumented
+
+Severity: experiment-validity BLOCKER before beta
+Status: confirmed
+
+`/start` creates or retrieves a user but emits no `bot_started`, deployment,
+onboarding-start, or onboarding-completed events. There is no organization or
+deployment attribution model and no eligible-population denominator. The code
+can therefore calculate neither cold-deployment adoption nor onboarding
+drop-off. `/start → first completed` would also hide everyone who never pressed
+Start.
+
+Required implementation: create deployment, roster version, restricted access
+identity, entitlement, and FD-18 invitation records; derive
+`eligible_count_at_launch` from the accepted roster and store announcement
+confirmation; instrument roster/SSO authorization and invitation issuance;
+redeem the opaque `?start=<invitation_token>` into one attributed enrollment;
+and instrument deterministic onboarding stages. Testnet uses the same events
+under an isolated testnet deployment and is excluded from production metrics.
+The native Telegram Start button remains the user action; the visible command
+message may be deleted after the event is durably captured if the UX audit
+chooses that presentation.
+
+#### TEL-02 — D1/D3/D7 and completion metrics are not one stable contract
+
+Severity: experiment-validity BLOCKER before beta
+Status: confirmed
+
+The product contract names D3/D7 without defining calendar versus working-day
+semantics, activity event, denominator, pause/cancel handling, or observation
+cutoff. It describes first-plan completion relative to active days, while
+runtime completion code calculates completed task steps over terminal eligible
+steps. Those definitions diverge for the two-action 14-day format.
+
+Required implementation: adopt the definitions in this round, centralize the
+queries, and test weekends, custom work days, pause, cancellation, failed
+delivery, one-action and two-action formats, and incomplete observation windows.
+
+#### TEL-03 — Events are detached from the authoritative plan aggregate
+
+Severity: data-integrity BLOCKER before beta
+Status: confirmed; overlaps DB audit, FD-08, and CONTENT-07
+
+Current telemetry auto-creates/reuses legacy `PlanInstance` and an open
+`PlanExecutionWindow` instead of linking directly to the actual `AIPlan` cycle.
+The window is not reliably closed. `UserEvent.step_id` mixes scheduled step and
+exercise identity and can manufacture fake inactive content rows. A
+`plan_activated` event stores `plan_<id>` in a content foreign-key field.
+
+Required implementation: use the FD-08 plan aggregate and explicit target
+linkage from the event envelope. Complete and verify the CONTENT-07 migration;
+remove the legacy instance/window compatibility layer after backfill.
+
+#### TEL-04 — Event ingestion is not idempotent
+
+Severity: data-integrity BLOCKER before beta
+Status: confirmed; overlaps DB audit and PRIV-07
+
+Each call generates a new random UUID and has no source-operation uniqueness.
+Telegram retries, scheduler retries, completion retries, or repeated tool
+execution can produce duplicate events, counters, and future aggregate
+contributions.
+
+Required implementation: enforce a unique source operation key, make the
+user-linked event and independent aggregate contribution one idempotent
+transaction, and add duplicate-update/retry tests.
+
+#### TEL-05 — `task_ignored` does not represent the real expiry transition
+
+Severity: experiment-validity BLOCKER before beta
+Status: confirmed
+
+`check_ignored_tasks()` scans a sliding 24-hour delivery-event window at a
+fixed UTC job time and logs `task_ignored` without changing step status. The
+separate `expire_overdue_steps()` applies the real per-step deadline and marks
+`expired` without emitting the corresponding event. A task can therefore be
+logged ignored before its real deadline and later be completed, or expire with
+no ignored event.
+
+Required implementation: delete the independent 24-hour inference. Emit one
+idempotent `task_expired` from the same transaction that changes the step from
+`delivered` to `expired`. Enforce one terminal user outcome per plan step.
+
+#### TEL-06 — Runtime actions are not logged consistently
+
+Severity: P1 before beta
+Status: confirmed
+
+Target runtime tools commit pause, resume, cancellation, first evening time,
+day/evening time changes, and plan creation without one consistent telemetry
+path. Old adaptation code logs some pause/resume events but is not the target
+tool authority. Cancellation and direct time changes can succeed with no
+product event.
+
+Required implementation: emit action events from the authoritative runtime
+service only after the database transition commits, using tool execution IDs.
+Record scheduler/reschedule success or failure as a linked operational result,
+not as proof that the user action failed after its DB state committed.
+
+#### TEL-07 — Automatic continuation makes the old continuation metric invalid
+
+Severity: P1 contract correction before beta
+Status: confirmed
+
+The old contract measures whether the user chose another 7/14-day plan. FD-01
+now creates the next same-format cycle automatically. Creation and delivery can
+happen with no user choice, so counting them as retention would mechanically
+inflate success.
+
+Required implementation: record `next_cycle_created` as an operational fact
+and use the first explicit response in that cycle as behavioral retention.
+Format switching, pause, and cancellation remain separate choices.
+
+#### TEL-08 — `user_message` is not a reactive-use metric
+
+Severity: P1 measurement correction
+Status: confirmed
+
+Every inbound text is logged as `user_message`, regardless of whether it is
+product support, a plan-control request, workday emotional support, feedback,
+or unrelated text. Its only context is message length. Counting it as
+self-initiated recovery would be false, while classifying raw text into
+psychological categories would violate the product/privacy boundary.
+
+Required implementation: retain a neutral inbound-message operational event
+if useful. Count explicit runtime actions and FD-07 feedback through their own
+events. Do not create a self-start metric until a distinct self-start feature
+exists.
+
+#### TEL-09 — Legacy inference scores and streak incentives contradict FD-11
+
+Severity: P1 removal before beta
+Status: confirmed
+
+`hidden_compensation_score` combines night completions, an ad-hoc edge-of-day
+JSON flag, and batch completion into an inferred score with no validated
+meaning. `EngagementStatus`, `FailureSignal`, skip-streak helpers, and several
+friction labels preserve the same legacy adaptation worldview. Success streak
+is also used in completion messages, reports, Coach context, templates, and
+tests, so removing it as a product mechanism is cross-domain work rather than
+dropping one telemetry column.
+
+Required implementation: remove inferred-state scores, failure labels, and
+adaptation consumers. Remove user-facing/streak-trigger behavior and stored
+streak optimization; keep dated terminal actions so descriptive run lengths
+remain derivable if later analysis needs them.
+
+#### TEL-10 — Operational reliability and user behavior are mixed
+
+Severity: P1 before beta interpretation
+Status: confirmed
+
+Delivery can succeed before its telemetry transaction commits; plan creation
+can commit before scheduler activation fails; time changes can commit before
+rescheduling fails. Conversely, `task_delivery_failed` is not handled through
+the same task-event linkage as successful delivery. Without reconciliation, a
+missing response can mean either user silence or a broken mechanism.
+
+Required implementation: preserve separate requested/committed/effect-applied
+operational facts, use an outbox/reconciliation path for post-commit side
+effects, and exclude unconfirmed deliveries from user-response denominators.
+
+#### TEL-11 — Event names and JSON properties have no enforced schema
+
+Severity: P1 before beta data collection
+Status: confirmed
+
+`event_type` is arbitrary text and `context` is unrestricted JSONB. Existing
+constants name events that are never emitted, while emitted names are not one
+catalogue. Context contains legacy focus/load/adaptation fields and unstable
+ad-hoc keys. A GIN index makes the blob queryable but not semantically valid.
+
+Required implementation: version and validate the event catalogue, validate
+required/allowed fields per event, reject unknown analytics properties, and
+write contract tests for every producer.
+
+#### TEL-12 — Privacy-preserving aggregates do not yet exist
+
+Severity: P1 architecture before beta telemetry
+Status: confirmed; owned jointly with PRIV-06/07 and FD-09
+
+Current analytics are user-linked rows and user-level derived tables. There is
+no independent aggregate contribution, restricted operational aggregate, or
+sealed aggregate layer. Deleting a user would delete the only contribution;
+retaining those rows indefinitely would instead violate the accepted privacy
+contract.
+
+Required implementation: add the idempotent user-event plus independent
+aggregate write from day one. No live or user-level company view is allowed;
+only FD-09's gated post-pilot summary may read sealed aggregates. Raw text and
+small-N operational aggregates never enter the sealed layer.
+
+#### TEL-13 — `User` has no immutable first-seen timestamp
+
+Severity: P1 schema requirement before beta
+Status: confirmed
+
+The current `users` table has no `created_at` or `first_seen_at`. An immutable
+account-origin timestamp is useful for lifecycle audits, migration checks, and
+reconstructing when the system first knew the user. It is not, however, the
+anchor for working-day D1/D3/D7: those cohorts start from attributed
+`bot_started`, activation, and the actual plan working-day schedule.
+
+Required implementation: add timezone-aware, server-generated
+`first_seen_at`, backfill legacy users conservatively from the earliest trusted
+user event/chat/plan timestamp, and preserve an `unknown`/backfilled marker
+when the exact first-seen moment cannot be proved. Do not silently use migration
+time as historical registration time.
+
+#### TEL-14 — There is no internal beta analytics view
+
+Severity: P1 before interpreting beta results
+Status: confirmed; implementation follows data-integrity blockers
+
+A correct event store without a repeatable way to inspect it leaves the founder
+with ad-hoc SQL and inconsistent manual calculations. No current internal view
+shows the deployment funnel, activation stages, working-day D1/D3/D7, completed
+day coverage, terminal task outcomes, next-cycle response, and delivery/runtime
+failures under the definitions in FD-11.
+
+Required implementation: after TEL-01..05 and canonical metric queries are
+verified, add a minimal founder-only read-only report or CSV export. It must
+support deployment/cohort and observation-cutoff selection and show raw
+numerators/denominators, percentages, delivery failures, and pseudonymous
+individual trajectories for the small internal beta. It is not a company
+dashboard, must not expose conversation/free-text content, and requires
+restricted access. Prefer one canonical query/service used by both screen and
+export rather than calculations in templates.
+
+Review discipline: inspect at the end of a working-day cohort or beta checkpoint,
+not as a daily scorecard. Do not encode automatic `X → Z` product decisions for
+the first 10-15 users. First verify event integrity and delivery, then distinguish
+deployment, onboarding, operational, content, continued-use, and unknown causes.
+
+#### TEL-15 — `avg_reaction_sec` is misleading and currently ungrounded
+
+Severity: P1 measurement cleanup
+Status: confirmed
+
+`TaskStats.avg_reaction_sec` sounds like exercise reaction or execution time,
+but the only defensible quantity is response latency from confirmed Telegram
+delivery to a valid callback. Current completion/skip producers do not supply a
+stable `reaction_sec`, and the aggregate table is already tied to the mixed
+`step_id` model.
+
+Required implementation: do not migrate this mutable average as-is. Derive or
+record `response_latency_seconds` from linked `task_delivered` and terminal
+callback timestamps after idempotent event linkage exists. Keep the user-facing
+and analytic definition explicit: latency to tap, not exercise duration,
+difficulty, effect, or attention. Prefer bounded buckets in sealed aggregates.
+
+### Required implementation work and order
+
+1. implement the canonical event envelope, catalogue, and source-operation
+   idempotency;
+2. finish FD-08/CONTENT-07 linkage so events reference real plan cycles, plan
+   steps, exercises, and content versions;
+3. add deployment records/deep-link attribution and instrument deterministic
+   onboarding;
+4. unify expiry status and `task_expired` emission; remove 24-hour ignored
+   inference;
+5. instrument authoritative runtime actions and automatic continuation;
+6. remove hidden compensation, legacy failure/engagement inference, and
+   user-facing streak consumers;
+7. implement FD-09/PRIV-07 independent aggregation in the same idempotent
+   ingestion operation;
+8. add and conservatively backfill immutable `User.first_seen_at`;
+9. implement and test canonical activation, working-day D1/D3/D7, cycle coverage,
+   per-task outcome, next-cycle response, and operational reliability queries;
+10. derive response latency from linked delivery/callback facts rather than the
+    legacy average;
+11. reconcile a seeded end-to-end beta cohort against plan/step state;
+12. expose the verified canonical queries through a restricted founder-only
+    report/CSV before interpreting beta results.
+
+### Explicitly deferred
+
+* D14/D30 decision thresholds until the first seven-working-day cohort and
+  automatic next-cycle behavior are trustworthy;
+* self-start exercise metrics until the product has an explicit self-start
+  action;
+* company-facing dashboards or reporting;
+* ML personalization, inferred user traits, churn scores, or adaptation;
+* claims about stress, burnout, health, productivity, or ROI from interaction
+  telemetry alone;
+* read receipts and measured exercise duration, which the Telegram bot does not
+  observe.
+
+---
+
+# Database & Redis Integrity Findings
+
+## Database & Redis Area — Audit Round 2026-08-12
+
+Status: static audit complete against committed application HEAD `ac2711d`;
+Railway production metadata checked read-only; physical SQL introspection
+deferred until the database implementation round because production services
+are stopped. No production service, migration, or data was changed.
+
+### Scope and evidence
+
+The round covered PostgreSQL models and access paths, Redis usage, scheduler
+persistence, plan lifecycle ownership, telemetry linkage, content persistence,
+privacy retention, migration authority, indexes, constraints, connection pools,
+and Railway storage/recovery metadata.
+
+Production metadata observed on 2026-08-12:
+
+* Railway project: `Love Yourself BOT`;
+* Postgres, Redis, and bot had no active deployment; previous Postgres
+  deployments were `REMOVED`;
+* the Postgres volume was `READY`, 500 MB capacity, approximately 118 MB used;
+* the Redis volume was `READY`, 500 MB capacity, approximately 49 MB used;
+* scheduled volume backups: none; existing backups: none; PITR: disabled;
+* the last Postgres deployment configuration used one replica.
+
+The physical production tables, columns, constraints, migration ledger, and row
+counts were not inspected because the database was stopped. Static findings are
+confirmed against HEAD; destructive migration details remain conditional on
+later read-only introspection of a restored copy.
+
+### Recovery dependency
+
+FD-12 is the standing operational backup policy. This module does not redefine
+it. Database implementation must follow FD-12 before physical introspection or
+the first production migration.
+
+### Findings
+
+#### DB-01 — Production schema is not reproducible from the repository
+
+Severity: beta blocker before the first schema change
+Status: confirmed in HEAD; physical production delta not yet inspected
+
+Runtime startup relies on `create_all()`, which creates missing tables but does
+not migrate existing ones. The repository does not contain an authoritative,
+continuous Alembic ledger capable of reconstructing the current production
+schema.
+
+Required work: follow FD-12 and create a baseline from the restored physical
+schema. Do not replay historical ad-hoc SQL blindly.
+
+#### DB-02 — Lifecycle truth is duplicated across several records
+
+Severity: P1
+Status: confirmed; implementation owned by FD-08 / FSM-01…08
+
+`User.current_state`, `UserProfile.is_paused`, plan status/end fields, step
+states, and scheduler jobs can disagree. The accepted target is plan-centric:
+one authoritative plan aggregate with user mode derived from it.
+
+Blanket reference: implement through FD-08 and the Lifecycle State & Persistence
+round rather than inventing a second DB-specific lifecycle contract.
+
+#### DB-03 — The database does not enforce one current plan per user
+
+Severity: beta blocker
+Status: confirmed
+
+Application checks are insufficient against retries or concurrent callbacks.
+Add the narrow database constraint/index implied by FD-08 so a user cannot have
+two current plans. This is a cheap integrity guard, not a scale optimization.
+
+#### DB-04 — Lifecycle writes are only partially serialized
+
+Severity: P1, minimal beta protection required; full framework deferred
+Status: confirmed
+
+V5 plan creation locks relevant rows, but pause/resume/cancel, completion, and
+task callbacks do not share one locking/idempotency discipline. Retries and
+double taps can affect one user; the risk is not dependent on a large audience.
+
+Required work: make critical callbacks atomic and idempotent. A universal
+locking framework may wait.
+
+#### DB-05 — Telemetry cycles are detached from the authoritative V5 plan
+
+Severity: beta blocker for trustworthy telemetry
+Status: confirmed; jointly owned by TEL-02/03 and FD-08
+
+V5 creates `AIPlan`, while telemetry creates/reuses legacy `PlanInstance` and
+`PlanExecutionWindow`; execution windows are not reliably closed. Events from
+separate cycles can therefore be attributed to one telemetry window.
+
+Blanket reference: use the canonical plan/cycle linkage specified by TEL-02/03.
+
+#### DB-06 — `UserEvent.step_id` mixes plan-step and exercise identities
+
+Severity: beta blocker for trustworthy telemetry
+Status: confirmed in committed HEAD; a local uncommitted split exists but was
+not treated as production truth
+
+Required work: separate `plan_step_id` and `exercise_id`, preserve current
+runtime behavior through a forward migration, and include `content_version` as
+specified by CONTENT-07 and the Event Contract.
+
+#### DB-07 — Event ingestion has no stable idempotency key
+
+Severity: beta blocker
+Status: confirmed; owned jointly by TEL-04 and PRIV-07
+
+Random event UUIDs identify insert attempts, not source operations. A retried
+callback or job can create duplicate facts and duplicate aggregate
+contributions.
+
+Required work: persist a stable `source_operation_id` with a unique constraint;
+write the user-linked event and independent aggregate contribution in one
+idempotent operation.
+
+#### DB-08 — PostgreSQL and external side effects cannot be reconciled
+
+Severity: P1 before beta for critical paths
+Status: confirmed
+
+Telegram delivery, scheduler mutation, Redis state, and PostgreSQL commits can
+succeed independently. Critical flows need retry-safe reconciliation:
+plan scheduling, exercise delivery logging, and delivery-time rescheduling.
+A generic outbox framework is not required before beta.
+
+#### DB-09 — Content has two competing sources of truth
+
+Severity: P1 before content rollout
+Status: confirmed; owned by FD-10 / CONTENT-01…09
+
+Generation reads JSON while plan steps reference DB `content_library` rows, and
+startup does not establish a versioned import contract. Use one versioned
+deploy/import path and snapshot the delivered content/version. Do not resolve
+this separately from the accepted Content Library overhaul.
+
+#### DB-10 — Legacy and sensitive schema remains present
+
+Severity: mixed: sensitive fields before beta; harmless legacy backlog
+Status: confirmed
+
+Dead structures include old plan/telemetry paths and sensitive-looking health
+fields such as medical facts, stress, energy, and mood notes. Remove unused
+sensitive fields before real employee data is collected. Non-sensitive legacy
+tables may be removed after the authoritative schema and row use are verified.
+
+#### DB-11 — Accepted data mechanisms do not yet exist
+
+Severity: beta blocker/P1 depending on mechanism
+Status: confirmed; blanket-owned by existing audit rounds
+
+The schema lacks accepted feedback storage, privacy notice acknowledgement,
+independent aggregate ingestion, event idempotency, review gating, and an
+outbox/reconciliation mechanism.
+
+Blanket references:
+
+* privacy acknowledgement, retention, access/export/delete: PRIV-01…10;
+* independent aggregates: FD-09 / PRIV-07;
+* feedback records: FD-05 / FD-07;
+* content review gates and versions: FD-10 / CONTENT-01…09;
+* canonical events: FD-11 / TEL-01…15.
+
+This finding inventories missing persistence; those source sections remain the
+behavioral contracts.
+
+#### DB-12 — Domain constraints are too weak
+
+Severity: P1
+Status: confirmed
+
+Key enums, date/time ranges, completion values, relationships, and one-current-
+plan invariants rely too heavily on application code. Add focused foreign-key,
+unique, check, and partial-index constraints during the baseline migration
+series. Do not blanket-constrain uncertain legacy data before introspection.
+
+#### DB-13 — High-value compound indexes are missing
+
+Severity: backlog/P2 for the small beta
+Status: confirmed
+
+Add indexes only from verified query paths and `EXPLAIN` evidence after the
+schema is authoritative. Likely candidates cover current-plan lookup,
+pending/delivered tasks, scheduler due work, chat history ordering, and canonical
+event queries. This is not a reason to delay the beta integrity fixes.
+
+#### DB-14 — Mutable derived fields can drift from source facts
+
+Severity: P1
+Status: confirmed; jointly owned by FD-08 and TEL-02
+
+Duplicated end dates, percentages, states, and counters can become stale.
+Retain a stored derived value only where it is transactionally maintained or
+explicitly rebuildable; otherwise calculate it from authoritative facts.
+
+#### DB-15 — `User` lacks immutable cohort/deployment chronology
+
+Severity: beta blocker for cohort reconstruction
+Status: confirmed; owned by TEL-01/13
+
+Add and conservatively backfill immutable `first_seen_at` (and explicit
+deployment attribution). Working-day D1/D3/D7 anchors to activation/plan days,
+not this timestamp; `first_seen_at` exists to reconstruct acquisition cohorts
+and data provenance.
+
+#### DB-16 — Privacy retention and user-rights lifecycle are absent
+
+Severity: legal/product beta blocker
+Status: confirmed; owned by Privacy round
+
+Chat history has no 90-day purge, access/export/delete workflow is absent, and
+report grants are not expiring/revocable. Implement the accepted Privacy round
+as one lifecycle. Do not reinterpret this finding as a new privacy policy.
+
+#### DB-17 — Redis conversation history can become stale authority
+
+Severity: P1
+Status: confirmed
+
+Redis retains the last messages without TTL and is preferred over PostgreSQL
+whenever non-empty, even when partial or stale. Define one bounded cache
+contract: namespaced keys, TTL aligned with chat retention, versioning, and
+explicit fallback/rebuild semantics. PostgreSQL remains durable truth.
+
+#### DB-18 — Redis contains legacy namespaces and unused FSM storage
+
+Severity: P2, with cheap cleanup during migration
+Status: confirmed
+
+Old schedule-adjustment state and unused aiogram FSM storage remain. Inventory
+actual production keys before deletion, version active namespaces, and remove
+legacy writers. Do not flush Redis wholesale.
+
+#### DB-19 — Application and scheduler create separate PostgreSQL pools
+
+Severity: backlog/P2 for current topology
+Status: confirmed
+
+Separate engines/pools are acceptable for one small bot deployment but need
+explicit limits, `pool_pre_ping`, observability, and later consolidation if
+connection pressure appears. This is not a beta blocker by itself.
+
+#### DB-20 — APScheduler assumes a single writer process
+
+Severity: deployment invariant before beta; leader election deferred
+Status: confirmed
+
+Run exactly one bot replica / scheduler writer for beta and verify this in
+deployment configuration. Multiple writers require leader election or an
+external scheduler later; do not build that framework now.
+
+### Required work before beta, in order
+
+1. **Recovery:** implement FD-12; test restore; introspect the restored physical
+   schema.
+2. **Migration authority:** create the Alembic baseline and a forward-only
+   migration sequence.
+3. **Plan integrity:** implement FD-08, one-current-plan protection, and minimal
+   atomic/idempotent lifecycle callbacks.
+4. **Telemetry integrity:** implement TEL-02/03/04/13 and CONTENT-07 linkage.
+5. **Content consistency:** implement the accepted versioned content source,
+   delivery snapshot, and review gating.
+6. **Critical reconciliation:** make scheduling, delivery logging, and time
+   rescheduling retry-safe.
+7. **Privacy minimum:** implement notice acknowledgement, 90-day chat retention,
+   manual access/export/delete, revocable report grants, and remove unused
+   sensitive fields.
+8. **Deployment guard:** one bot replica / one scheduler writer.
+
+### Explicitly deferred
+
+* full cleanup of harmless legacy tables;
+* broad index tuning without query evidence;
+* connection-pool unification;
+* scheduler leader election for multiple replicas;
+* a universal outbox/locking framework beyond critical beta paths;
+* PlanDraft simplification;
+* ML, a data warehouse, or vector storage;
+* broad Redis redesign beyond TTL, namespace, and stale-authority fixes;
+* PITR while the MVP data volume and recovery objective do not justify it.
+
+---
+
+# Delivery UX & User-Facing Product Surface Findings
+
+## Delivery UX Area — Audit Round 2026-08-13
+
+### Scope
+
+This round audits every material employee-facing touchpoint around the current
+Telegram MVP, not only exercise copy:
+
+* entry and handoff into onboarding;
+* notification preview and scheduled exercise presentation;
+* complete, skip, expiry, pause, cancel, and failure states;
+* Coach-wrapper degradation and deterministic controls;
+* completion artifact;
+* media delivery;
+* cross-channel presentation boundaries;
+* end-to-end UX verification.
+
+The onboarding conversation itself remains owned by the Onboarding round and
+its accepted rewrite. Product positioning beyond the accepted FD-13 name is
+not part of this code-audit area.
+
+### Accepted target behavior
+
+The employee-facing MVP is **LY Workday**. A scheduled action appears first as
+a neutral notification preview and then as a complete in-chat exercise. The
+interaction stays bounded:
+
+```text
+notification
+→ one exercise
+→ one explicit outcome
+→ closed state
+```
+
+The bot proactively sends only scheduled exercises and cycle summaries. It
+does not revive the removed pulse/persona/re-engagement branch. Plan controls
+remain deterministic and usable without the Coach model. The Coach receives
+the same canonical exercise facts as the renderer and may explain or execute
+allowed runtime actions within its existing scope.
+
+#### UX-01 — Entry into the product is not one finished flow
+
+Severity: P1 before beta
+Status: confirmed
+
+Current behavior: `/start` presents generic legacy bot copy, while old
+`newplan_*` deep links enter the superseded parameter-selection model. There is
+no FD-18 roster/SSO authorization, entitlement-bound invitation redemption,
+testnet issuance path, or canonical handoff into the new onboarding flow.
+
+Expected behavior: in production the employee passes roster/SSO authorization,
+opens the issued Telegram deep link, presses the native Start action, and enters
+deterministic onboarding without obsolete plan setup. Testnet begins with a
+founder-issued test token and is identical from Telegram Start onward.
+Authorization failure, repeat account entry, spent/invalid/revoked invitation,
+visible command behavior, and already-onboarded paths must be verified.
+
+Minimal fix: replace legacy start/deep-link routing with the canonical
+deployment and onboarding entry contract; do not redesign the onboarding
+conversation inside this finding.
+
+#### UX-02 — Lock-screen preview behavior is unknown on real devices
+
+Severity: P1 before beta
+Status: confirmed
+
+Current behavior: no device-level test establishes which sender name, first
+line, truncation, media preview, or privacy-sensitive text appears on iOS and
+Android lock screens.
+
+Expected behavior: implement FD-13/14, then verify the neutral first line,
+sender identity, truncation, hidden-preview settings, and media behavior on
+real supported devices. Notification copy is a privacy and action-entry
+surface, not a place for exercise rationale or emotional labels.
+
+Minimal fix: create a small device test matrix and lock one verified beta copy
+after seeing the actual notifications.
+
+#### UX-03 — The exercise renderer still implements the old delivery contract
+
+Severity: P1 before beta
+Status: confirmed; expands DEL-01, DEL-02, and DEL-07
+
+Current behavior: delivery can expose day/slot/count metadata, decorative
+framing, and rationale while failing to render the accepted `display.steps`
+payload consistently. Dynamic HTML is not safely escaped.
+
+Expected behavior: the opened chat message renders the neutral preview label,
+exercise title, exact duration, current versioned steps, required instructional
+media when applicable, and `Виконано` / `Пропустити`. Internal category, slot,
+selection, and scheduling metadata remain hidden.
+
+Minimal fix: replace the legacy formatter with one escaped canonical
+presentation renderer based on FD-06, FD-10, and FD-16.
+
+#### UX-04 — Telegram cannot complete the exercise from the OS notification
+
+Severity: platform constraint; beta UX must account for it
+Status: confirmed
+
+Telegram Bot API inline buttons are available in the chat message, not as the
+bot's custom action buttons in the operating-system notification. Therefore a
+user must open Telegram before seeing and pressing `Виконано` or `Пропустити`.
+
+Expected behavior: treat the extra open as a real funnel step, keep the in-chat
+exercise glanceable, and preserve its buttons after screen lock/reopen until
+the true action deadline. Do not claim notification-level completion and do
+not distort exercise duration to work around screen timeout.
+
+Minimal fix: test the accepted FD-14 path end to end and instrument only facts
+the Telegram wrapper can actually observe.
+
+#### UX-05 — Complete and skip still enter the removed engagement flow
+
+Severity: P1 before beta
+Status: confirmed; expands DEL-03
+
+Current behavior: completion/skip handlers can send new praise messages,
+calculate streaks, select persona triggers, and suggest adaptation after
+repeated skips.
+
+Expected behavior: edit or close the original exercise message, remove its
+buttons, and show one neutral registered state: `Виконано` or `Пропущено`.
+Optional `better / same / worse` feedback appears only after registered
+completion and remains part of the same bounded interaction under FD-07.
+
+Minimal fix: remove persona/streak/adaptation branches from callbacks and make
+the callback transition idempotent.
+
+#### UX-06 — Delivered exercise states have no one presentation contract
+
+Severity: P1 before beta
+Status: confirmed; expands DEL-04 and the lifecycle findings
+
+Current behavior: expiry may only remove buttons; expired or cancelled
+callbacks can produce silence; pause and cancellation do not consistently
+close or preserve already-delivered actions.
+
+Expected behavior: define and render `delivered`, `completed`, `skipped`,
+`expired`, and `cancelled` states consistently. An already-delivered action
+remains actionable through its existing deadline when the plan is paused.
+Cancellation closes pending/delivered actions immediately. A late tap receives
+a brief factual response rather than silence.
+
+Minimal fix: centralize visible state transitions and test each transition
+against the authoritative plan lifecycle.
+
+#### UX-07 — Exercise delivery has no bounded retry or reconciliation
+
+Severity: P1 before beta
+Status: confirmed; same underlying defect as DEL-05 and DB-08
+
+Current behavior: a transient Telegram send failure is logged and can
+permanently lose the scheduled exercise. Database, scheduler, and Telegram
+side effects do not establish one reconcilable delivery result.
+
+Expected behavior: bounded retry, stable source-operation identity, and
+reconciliation distinguish delivered, retryable, terminal failure, and
+duplicate attempts without double-sending.
+
+Minimal fix: implement retry-safe delivery logging for the beta path rather
+than a universal messaging framework.
+
+#### UX-08 — The Coach wrapper does not fail gracefully across input and API states
+
+Severity: P1 before beta
+Status: confirmed
+
+Current behavior: the primary wrapper handles text, while photo, voice, file,
+sticker, and other unsupported inputs may receive no useful response. OpenAI
+failure and rate limiting do not have one complete user-facing fallback.
+
+Expected behavior: unsupported inputs and Coach outages receive short,
+deterministic explanations. Menu and lifecycle controls remain functional
+without an LLM response. The Coach does not browse, generate arbitrary media,
+write code, or perform tasks outside the accepted prompt scope.
+
+Minimal fix: add deterministic fallback handlers around the existing scoped
+Coach; do not expand it into a general-purpose assistant.
+
+#### UX-09 — The abandoned engagement layer remains reachable
+
+Severity: P1 before beta
+Status: confirmed; cross-reference to SCH-01 and related legacy findings
+
+Current behavior: silent checks, pulse snapshots/routes/templates, persona,
+streak, comeback, quotation, silence, and adaptation remnants remain in
+runtime or user-facing paths.
+
+Expected behavior: the bot initiates only scheduled exercise delivery and the
+cycle summary. Reactive Coach replies remain allowed when the user writes
+first. No NPC-like chatter or generic re-engagement survives accidentally.
+
+Minimal fix: remove the legacy writers, routes, templates, callbacks, jobs,
+and dead persona source as one deletion pass with regression tests.
+
+#### UX-10 — Plan and schedule controls expose obsolete interaction models
+
+Severity: P1 before beta
+Status: confirmed; cross-reference to FSM-03, RT-05, and RT-07…13
+
+Current behavior: English actions such as `Confirm plan`, `Regenerate`,
+`Change parameters`, and `Restart from scratch`, plus old
+`SCHEDULE_ADJUSTMENT`, slot selection, and multi-task controls remain in code.
+
+Expected behavior: only current actions remain: status, delivery-time change,
+pause, resume, cancel, and explicit format switch when implemented. Their
+availability and wording follow the canonical plan lifecycle and Coach tool
+contract.
+
+Minimal fix: delete old callback surfaces and connect current controls to one
+authoritative runtime-action layer.
+
+#### UX-11 — Tool outcomes are hardcoded instead of returned to the Coach
+
+Severity: P1 architecture before first-class Coach UX
+Status: confirmed; same defect as RT-09 and COACH-09
+
+Current behavior: the model emits a tool call but does not receive the actual
+execution result; fixed templates voice success/failure and can diverge from
+runtime truth.
+
+Expected behavior: a bounded tool-result loop returns a structured,
+allowlisted result to the Coach, which then writes one natural user-facing
+reply grounded in the actual result. Failed actions must not be described as
+successful.
+
+Minimal fix: implement the already-recorded COACH-09 architecture with strict
+result schemas, one follow-up model turn, and no recursive tool chain.
+
+#### UX-12 — The accepted deterministic user menu is not implemented
+
+Severity: P1 before beta
+Status: confirmed
+
+Current behavior: plan control and product information depend too heavily on
+free-text interpretation and legacy keyboards. No stable user menu exists.
+
+Expected behavior: a deterministic menu available without the Coach exposes
+the current cycle and next delivery, time management, pause/resume/cancel,
+format switch when available, privacy/data information, support, and about.
+Exact labels, grouping, and callback layout are implementation design work,
+not a new founder decision.
+
+Minimal fix: build the smallest menu over canonical runtime actions; it must
+remain usable during Coach/API degradation.
+
+#### UX-13 — The user-facing privacy promise contradicts the accepted MVP boundary
+
+Severity: P1 trust and contract issue before beta
+Status: confirmed; cross-reference to FD-09 and the Privacy round
+
+Current behavior: Product Map copy states broadly that the company receives
+aggregate analytics, without FD-09's post-pilot timing, 100/50 gate, three
+allowed headline values, or prohibition on live/sliced reporting.
+
+Expected behavior: entry, onboarding, privacy menu, support copy, Product Map,
+and sales-facing facts all state the same boundary: no live or individual view;
+one gated aggregate product-usage summary after the pilot; no wellbeing,
+productivity, Coach-text, or small-group reporting.
+
+Minimal fix: synchronize both Product Maps and related product-contract copy
+before exposing the privacy surface.
+
+#### UX-14 — The current completion report contradicts the accepted lifecycle
+
+Severity: P1 before beta
+Status: confirmed
+
+Current behavior: the HTML report and its supporting code contain evaluative
+tiers, streaks, adaptation counts, dominant-slot/persona interpretation, and
+old next-plan choice actions. Its bearer link also inherits PRIV-08 risk.
+
+Expected behavior: implement the deterministic Telegram image defined by
+FD-15 for every completed cycle. It reports controlled facts, functions as the
+cycle's tangible result, and bridges directly into FD-01 automatic same-format
+continuation.
+
+Minimal fix: replace the MVP report delivery path with a tested application-
+rendered image and factual text fallback; retire the old user-facing report
+route after required compatibility handling.
+
+#### UX-15 — Instructional media delivery does not exist
+
+Severity: P1 for the FD-16 exercises before they enter beta
+Status: confirmed; expands CONTENT-06
+
+Current behavior: there is no animation/photo send path, versioned asset
+linkage, caption contract, media fallback, or telemetry linkage to the content
+version shown.
+
+Expected behavior: breathing, fist PMR, and approved cool-water delivery use
+their versioned instructional GIF under FD-16. The exact text remains
+self-sufficient, and media failure degrades to text without blocking action.
+Other exercises ship without mandatory GIFs.
+
+Minimal fix: implement the smallest versioned `sendAnimation`/fallback path
+and cover both successful and failed media delivery.
+
+#### UX-16 — Renderer, Coach, and future channels do not share presentation truth
+
+Severity: P1 for system consistency; channel expansion is deferred
+Status: confirmed
+
+Current behavior: Telegram builds a message directly from content and stores
+rendered text, while the Coach receives separately assembled context. A future
+Slack, WhatsApp, browser, or native-app adapter would likely duplicate these
+rules again.
+
+Expected behavior: one canonical structured `ExercisePresentation` supplies
+exercise ID, content version, title, duration, exact steps, media metadata,
+status, action deadline, and available actions. Each channel renders that
+structure; the Coach receives the same facts as `current_exercise_context`.
+
+Minimal fix: introduce the shared presentation object while implementing the
+new renderer. Do not build speculative channel adapters or a mini app now.
+
+#### UX-17 — There is no end-to-end user-facing beta QA path
+
+Severity: beta blocker after implementation
+Status: confirmed
+
+Current tests do not prove the complete real Telegram journey:
+
+```text
+deployment link
+→ onboarding handoff
+→ first scheduled exercise
+→ complete / skip / optional feedback
+→ expiry
+→ time change
+→ pause / resume
+→ cancel
+→ automatic continuation
+→ cycle summary
+→ Coach and media failure
+```
+
+Expected behavior: run this path on real iOS and Android Telegram clients and
+verify copy, callback states, persistence, notification preview, failure
+fallbacks, and duplicate-tap behavior.
+
+Minimal fix: create one scenario checklist plus automated integration coverage
+for deterministic transitions; perform device QA before beta invitations.
+
+#### UX-18 — Delivery-time ownership remains an explicit MVP hypothesis
+
+Severity: P1 product/UX hypothesis; exact policy not yet accepted
+Status: open; linked to ONB-04 and MISC-02
+
+Current behavior: time handling is inconsistent across legacy onboarding,
+Coach natural-language tools, and deferred picker concepts. The current system
+does not implement workflow-aware timing.
+
+Working MVP hypothesis: the employee chooses an individual exact delivery time
+inside a company/deployment workday window. The window prevents out-of-scope
+late-night scheduling while individual choice avoids synchronized office-wide
+exercise behavior and preserves autonomy. The exact window, configurability,
+and exception policy remain unapproved and must not be hardcoded from an audit
+example.
+
+Future option: delivery anchored to workflow events such as the end of a focus
+block, meeting, deployment, IDE session, or calendar event. This remains
+deferred because it adds substantial integration, consent, privacy, and
+individual-model complexity. MVP copy must not imply that the system detects
+the objectively correct moment.
+
+Minimal next step: validate the window model with the first beta company and
+employees, then record the exact policy before implementing onboarding/time-
+picker constraints.
+
+### Open implementation choices, not founder decisions
+
+* the exact neutral preview word after device testing (`Пауза` vs `Перерва`);
+* the exact allowed delivery window and whether a company can configure it;
+* detailed menu information architecture and labels;
+* final GIF art direction and asset-production process;
+* future workflow-trigger integrations and their consent/privacy model.
+
+---
+
+# Security & Configuration Findings
+
+## Security & Configuration Area — Audit Round 2026-08-15
+
+### Scope and files inspected
+
+This round covers repository, AI-agent, transport, API, and runtime
+configuration boundaries rather than re-auditing product behavior:
+
+* `.env`, `.env.example`, `.gitignore`, Docker build context, and deployment
+  entrypoints;
+* `app/config.py`, `app/ai.py`, `app/api.py`, `app/main.py`,
+  `app/redis_client.py`, dependency declarations, and container execution;
+* Coach prompt/tool exposure, orchestrator allowlisting, runtime-tool backend
+  guards, and the future tool-result loop boundary;
+* Telegram messages, callbacks, deep links, update replay/idempotency, and the
+  admin command surface;
+* model usage propagation, content-bearing logs, alerting, kill switches, and
+  incident recovery.
+
+Threat actors considered: a normal user sending accidental bursts; an
+authenticated beta user deliberately automating messages or prompt-injection
+attempts; a user replaying stale buttons; a person obtaining a bearer report or
+enrollment link; and an attacker obtaining a committed credential. Telegram,
+OpenAI, Railway, and PostgreSQL provider compromise is outside this code audit.
+
+This is a static repository audit against the current local worktree and
+committed baseline. Live Railway ingress, environment variables, service
+visibility, provider budgets, database roles, and deployed image contents must
+still be verified at the Release & Operations gate. No static review can make
+the system literally bulletproof; the target is bounded blast radius, layered
+authorization, observable failure, and recoverability.
+
+Privacy, report-token, and endpoint findings already owned by another area are
+referenced below instead of duplicated.
+
+### Findings
+
+#### SEC-01 — Production-like secrets are tracked and enter the Docker build context
+
+Severity: BLOCKER
+Status: confirmed
+
+Current behavior: `.env` has been tracked since the initial commit and contains
+non-placeholder Telegram and OpenAI credentials. `.gitignore` does not exclude
+environment files, no `.dockerignore` exists, and `Dockerfile` uses `COPY . .`.
+The build context therefore also includes local environments, Git metadata,
+development artifacts, and any tracked or untracked secret files not excluded
+by Docker.
+
+Expected behavior: no runtime secret is committed, copied into an image, or
+used as a repository default. Railway/environment secret variables are the
+runtime source; the repository contains placeholders only.
+
+Minimal fix:
+
+1. treat the Telegram and OpenAI credentials as compromised and rotate them;
+2. remove `.env` from Git tracking and add environment-file rules to
+   `.gitignore`;
+3. add a narrow `.dockerignore` for `.env*` except the explicit example, Git
+   metadata, virtual environments, caches, local R&D, logs, and OS artifacts;
+4. verify the built image contains no credential file;
+5. decide separately whether coordinated history rewriting is worthwhile.
+
+History rewriting does not replace rotation and must not be the first response.
+
+#### SEC-02 — Production configuration fails open to development behavior
+
+Severity: P1 before beta deployment
+Status: confirmed
+
+Current behavior: `ENVIRONMENT` defaults to `dev`, arbitrary values are
+accepted, and production-only validation runs only for the exact string
+`prod`. `APP_BASE_URL` and `BOT_USERNAME` have placeholder defaults. Missing
+Redis configuration silently falls back to process-local storage or disables
+Redis-backed context rather than establishing whether Redis is required for
+the selected environment.
+
+Expected behavior: environment identity and required infrastructure are
+explicit. A production typo or missing critical setting stops startup instead
+of producing partially working behavior or invalid user-facing links.
+
+Minimal fix: allow only `dev`, `staging`, and `prod`; define required settings
+per environment; reject placeholder URLs, bot names, secrets, and missing
+production dependencies at startup; keep deliberate local fallbacks limited to
+development and tests.
+
+#### SEC-03 — There is no complete authoritative configuration contract
+
+Severity: P1 before beta deployment
+Status: confirmed
+
+Current behavior: `.env.example` omits several settings used by runtime code,
+while `README.md` describes an older product and configuration model. Numeric
+parsers silently replace malformed values with defaults and do not enforce
+semantic ranges. Configuration therefore depends on code archaeology and can
+drift from Railway without an obvious failure.
+
+Expected behavior: one typed configuration contract names every supported
+setting, whether it is required, its safe default where one exists, its valid
+range, and the environments in which it applies. Secret values are never
+printed during validation.
+
+Minimal fix: synchronize `.env.example` with the typed settings model, validate
+ranges and cross-field requirements at startup, remove obsolete settings such
+as `DEFAULT_DAILY_LIMIT` under FD-17, and keep the deployment variable list as
+the canonical operational checklist.
+
+#### SEC-04 — Coach token usage is calculated and then discarded
+
+Severity: P1 before interpreting beta operating cost
+Status: confirmed
+
+Current behavior: the OpenAI response adapter extracts input, output, and total
+token usage, and `coach_agent` returns it. `handle_incoming_message` reduces the
+worker result to reply and UI fields, so usage is neither persisted nor emitted
+as a reliable operational metric. Actual unrestricted usage and cost therefore
+cannot be observed under FD-17.
+
+Expected behavior: unrestricted Coach access remains unchanged, while every
+model request produces privacy-safe operational usage data. The measurement
+must not include conversation text and must not become a user score or a
+company-facing metric.
+
+Minimal fix: propagate model name, token counts, outcome, latency, and estimated
+cost into the operational telemetry path; separate model failures from
+successful zero-usage responses; expose aggregate founder-only totals and
+provider budget alerts. Do not add automatic user quotas or refusals.
+
+#### SEC-05 — Model tool output is constrained but not fully re-authorized at execution
+
+Severity: P1 before external beta
+Status: confirmed; blast radius is currently narrow
+
+Confirmed safe properties: user content is sent as a user message rather than
+system context; only state-filtered tools are exposed to the model; tool schemas
+are strict; the orchestrator accepts only names from a fixed registry; and the
+runtime injects the authenticated current user's internal ID instead of letting
+the model choose a user. Coach has no browser, arbitrary HTTP, filesystem,
+shell, email, or raw database tool. A prompt injection therefore cannot directly
+turn Coach into a general remote-execution agent or target another user by
+supplying their ID.
+
+The remaining gap is at the final execution boundary. `_execute_plan_tool()`
+rebuilds the registry containing all known Coach tools and does not independently
+verify that the selected name was in the exact state-filtered set offered for
+this request. Several backend tools re-check state, but
+`change_day_time`, `change_evening_time`, and first-time evening collection have
+the prerequisite gaps already recorded in RT-01 and RT-08. The unused
+`_detect_foreign_instructions()` substring scanner is not called and would not
+be an authorization boundary if it were.
+
+Expected behavior: treat every model-produced tool call as untrusted input.
+Immediately before mutation, the executor must re-read the authoritative user,
+state, current plan, ownership, consent prerequisite, and tool-specific context;
+reject any tool not in the request's exact allowed set; validate arguments
+semantically in the backend; and return a bounded structured result. The second
+COACH-09 model pass receives no tools. Add adversarial tests for prompt-leak
+requests, role-change instructions, fabricated tool names, valid tool names in
+the wrong state, missing cancellation confirmation, malformed arguments, and
+cross-user identifiers.
+
+Do not add a keyword-based jailbreak detector as the primary fix. Least
+privilege, fresh authorization, backend invariants, bounded agency, and tests are
+the security boundary.
+
+#### SEC-06 — Coach has no concurrency, rate, timeout, or cost-abuse boundary
+
+Severity: P1 before external beta
+Status: confirmed; target accepted in FD-17
+
+Current behavior: several Telegram paths can enter `handle_incoming_message`,
+including legacy deterministic callbacks that unnecessarily convert button
+presses into Coach text. There is no per-user in-flight lock, inbound Coach
+admission guard, explicit model-call timeout, global token/cost circuit breaker,
+or persisted usage accounting. The output ceiling
+is not a fixed literal: `settings.MAX_TOKENS` defaults to `300` but can be
+overridden from the environment through an integer parser with no semantic
+range validation. It limits output size only; it does not bound the large
+static input, concurrent requests, retries, complete tool-result turns, or
+total paid calls.
+
+Minimal beta fix: first complete the accepted legacy cleanup so deterministic
+commands and callbacks invoke backend operations directly. At the free-text
+Coach boundary, deduplicate Telegram updates and apply admission immediately:
+start the first turn without debounce when the user is idle; while it runs,
+enqueue at most nine later messages in a process-local FIFO. Preserve each
+message as a separate turn and its arrival order. Refuse additional pending
+messages with the deterministic FD-17 overflow response without stopping or
+changing accepted work. After transport deduplication, count every attempted
+user-authored free-text message against rolling flood windows, including
+queue-rejected attempts; exclude deterministic commands, callbacks, and
+internal model continuations.
+
+Then implement FD-17 in this order: enforce one per-user worker/lock consuming
+the bounded FIFO, add explicit model timeout and bounded retry policy, persist
+privacy-safe usage from SEC-04, enforce attempted-text flood limits of 30 per
+rolling minute and 300 per rolling hour per user, add the global cost circuit
+breaker, and return the neutral fallback when admission is refused. Validate
+`MAX_TOKENS` and all numeric safety settings against explicit startup ranges.
+Hold the lock across the complete turn, not only the model request, and remove
+idle per-user lock/FIFO entries through race-safe registry cleanup.
+
+The two rolling limits are founder-selected beta abuse thresholds, not generic
+industry defaults. Observe their false-positive rate and full-turn token/cost
+distribution, then revise them from evidence. Do not add a debounce window or
+merge separate user messages merely to optimize an edge case: the first turn
+starts immediately and up to nine later turns wait in order. Do not build a
+durable queue for the one-process beta. Before adding another process, replace
+the process-local FIFO and counters with cross-process coordination.
+
+#### SEC-07 — Task callback ownership is enforced, but replay safety is not atomic
+
+Severity: P1 before external beta
+Status: confirmed; cross-reference DB-04, DB-07, and the Event Contract
+
+Confirmed safe properties: Done and Skip load the referenced plan step, compare
+the plan owner's Telegram ID with the callback sender, require an active plan,
+and reject terminal steps. Existing tests cover cross-user denial and repeated
+sequential clicks.
+
+The check and write are not one atomic operation. Neither callback locks the
+step row nor performs a conditional terminal-state update, and telemetry lacks
+a stable unique operation key. Two concurrent callbacks can both read the step
+as actionable, write conflicting or duplicate terminal outcomes, and emit two
+events. Sequential idempotency tests do not cover this race. Telegram
+`update_id` helps the transport order/confirm updates, but business mutations
+still need application-level idempotency across retries, crashes, and double
+taps.
+
+Minimal fix: make the terminal transition a row-locked or conditional atomic
+write, enforce one accepted terminal outcome per plan step at the database
+boundary, and write the lifecycle event with a stable unique idempotency key in
+the same reliable operation. Add concurrent Done/Done, Skip/Skip, and Done/Skip
+tests. Do not add signatures to current private-chat callback data as a
+substitute for ownership and atomicity.
+
+#### SEC-08 — Dependency and container security are not reproducible or scanned
+
+Severity: P1 Release & Operations gate before external beta
+Status: confirmed; no specific dependency vulnerability asserted by this audit
+
+Current behavior: several Python dependencies are not exactly pinned, one uses
+a lower bound, no hash-locked dependency artifact or automated vulnerability
+scan is configured, and the mutable `python:3.11-slim` image runs the application
+as root. SEC-01 separately covers secrets and the over-broad Docker context.
+The repository therefore cannot currently prove which dependency/image build
+was reviewed or whether known advisories were checked.
+
+Minimal fix at the final release gate: resolve and lock exact tested
+dependencies, run an SCA audit against the resolved environment, review rather
+than blindly apply upgrades, pin/rebuild the base image deliberately, run the
+container as a non-root user, scan the final image, and make dependency/security
+checks part of CI. Record accepted exceptions with an owner and review date.
+
+#### SEC-09 — Security logging and incident response are not operationalized
+
+Severity: P1 before external beta
+Status: confirmed
+
+Current behavior: logs contain user IDs, full error payloads, tool arguments,
+and up to 500 characters of Coach output, while there is no central redaction
+allowlist, security-event taxonomy, access/retention rule, alert destination,
+credential-rotation checklist, or tested kill-switch procedure. Privacy findings
+PRIV-02 and PRIV-03 own removal of conversational content; this finding owns the
+ability to detect and contain an incident without collecting more sensitive
+text.
+
+Minimal beta runbook:
+
+1. inventory Telegram, OpenAI, database, Redis, Railway, and report-token
+   credentials; name the owner and verified revocation/rotation path for each;
+2. provide independent emergency controls for Coach calls and scheduled
+   delivery, plus the FD-17 cost circuit breaker;
+3. alert on spend thresholds, request/error spikes, circuit-breaker activation,
+   authorization denials, unknown tool names, duplicate callback conflicts, and
+   repeated startup/restart failure;
+4. log structured identifiers and outcomes only; redact secrets and user text,
+   restrict log access, and enforce retention;
+5. document containment, key rotation, Railway rollback/redeploy, evidence
+   preservation, data-impact assessment, user/regulatory notification decision,
+   recovery, and post-incident verification;
+6. connect database recovery to FD-12 and test the runbook once before beta.
+
+A small beta does not need a SOC or 24/7 monitoring contract. It does need one
+named owner, reachable alerts, revocable credentials, working stop controls, and
+a written recovery sequence.
+
+#### SEC-10 — FD-18 production enrollment has no implemented identity or token boundary
+
+Severity: BLOCKER before external testnet beta for token/environment controls;
+remaining roster/identity controls before the first production company enrollment
+Status: confirmed absent; implements FD-18 / COMP-04
+
+Current behavior: the application has no roster importer, OIDC/email challenge
+callback, access identity, entitlement authorization, production/testnet token
+separation, or secure account-handoff flow. The only current `/start` grammar is
+the unrelated legacy `newplan_*` path.
+
+Expected behavior: roster import, Google/Microsoft authentication or verified
+email fallback, entitlement creation/reconciliation, invitation issuance, and
+Telegram redemption form one explicit authorization chain. No browser
+parameter, unverified email string, Telegram sender, or token alone grants
+production access.
+
+Minimal implementation and threat-model checks:
+
+* authenticate the operator performing roster imports; restrict file size and
+  type; require an explicit `full_snapshot` or `delta` mode; normalize and
+  deduplicate the expected domain; validate and preview exact add/keep/revoke
+  counts; require explicit confirmation; audit versions without copying email
+  into telemetry or general logs;
+* use authorization-code OIDC with server-side token validation and state,
+  nonce, CSRF, redirect-URI, issuer, audience, expiry, tenant/domain, stable
+  subject, and verified-email checks; request no mailbox, calendar, directory,
+  or profile permission that access verification does not require;
+* for roster-listed addresses outside the supported OIDC providers, use a
+  short-lived single-use email challenge with rate limits, hashed challenge
+  storage, and a neutral response that does not reveal roster membership;
+* authorize against the current roster and deployment on the backend; bind the
+  entitlement and invitation to one environment and deployment;
+* generate high-entropy, short-lived, single-use handoff tokens; persist only a
+  hash; make redemption and enrollment idempotent and atomic; reject replay and
+  cross-environment use with the same neutral response;
+* ensure roster revocation closes company-sponsored product access without
+  deleting history, modifying behavioral records, or exposing the affected
+  identity to company analytics;
+* test token leakage through URL/referrer/browser cache, logs, traces, exception
+  payloads, analytics, and support tooling; rotate signing/HMAC keys through a
+  documented emergency path;
+* prove production/testnet separation at startup and in CI with negative tests
+  for credentials, databases, Redis namespaces, Telegram bots, OpenAI projects,
+  token keys, URLs, and aggregate sinks.
+
+The company agreement and privacy notice are necessary purpose restrictions,
+but they do not replace these controls. Conversely, technical separation does
+not authorize reuse of corporate identity for behavioral analysis.
+
+### Verified perimeter boundaries and deferred requirements
+
+* The unauthenticated mutating `/user/time-slots` route remains the direct
+  blocker in PRIV-10. Remove it if unused; otherwise derive identity from a
+  verified caller rather than `?user_id=` and add authorization/rate-limit
+  tests.
+* Completion and pulse URLs are bearer capabilities. Expiry, revocation, account
+  deletion, and secret rotation remain owned by PRIV-08.
+* The current `newplan_*` Telegram deep link uses the authenticated Telegram
+  sender and checks that sender's current state; it does not expose a cross-user
+  mutation. It is nevertheless legacy product flow and should be removed under
+  Legacy Reachability Cleanup. FD-18's production enrollment-page URL is not
+  itself a credential. Each roster/SSO-authorized or testnet-issued Telegram
+  invitation uses an opaque, entitlement-bound, scoped, expiring, single-use
+  token, stores no raw token in logs, and embeds no employee or company facts in
+  the URL. Production and testnet token namespaces and keys are disjoint.
+* The bot currently uses long polling, so there is no public Telegram webhook
+  endpoint to authenticate. If deployment later switches to webhooks, require
+  HTTPS, validate Telegram's webhook secret header, constrain the route, and
+  preserve update idempotency.
+* No dynamic SQL built from user input, arbitrary URL fetch, user file upload,
+  shell execution, or general-purpose external tool was found in the reviewed
+  Coach path. Preserve this narrow capability surface.
+* Production OpenAPI/docs exposure, trusted-host/proxy settings, health checks,
+  Railway service visibility, and final network policy belong to the Release &
+  Operations gate and must be verified against the deployed service rather than
+  inferred from repository code.
+
+### Blanket references — do not duplicate
+
+* OpenAI payload minimization, retention controls, and explicit provider
+  storage behavior remain owned by `PRIV-03`.
+* Conversation-body logging and its retention/access boundary remain owned by
+  `PRIV-02`; SEC-09 adds the security-event and incident-response contract
+  without duplicating that privacy fix.
+* Expiry and revocation of completion/pulse bearer links remain owned by
+  `PRIV-08`.
+* Authorization for the mutating `/user/time-slots` endpoint remains owned by
+  `PRIV-10` and must be resolved before that endpoint is exposed.
+* The pulse endpoint and legacy agent/router artifacts belong to the accepted
+  Legacy Reachability Cleanup, not to a new security subsystem.
+* Telegram `/spawn` is currently allowlisted through `ADMIN_IDS`, rejects
+  non-admin callers, and caps creation at 20 tasks; no new finding is required.
+* CI, full test execution, health/readiness endpoints, graceful shutdown,
+  Railway verification, and a restore drill belong to the final Release &
+  Operations gate after product implementation. SEC-08 defines the security
+  acceptance criteria for dependencies and the final container at that gate.
+
+---
+
+# Legacy Reachability Cleanup Findings
+
+## Legacy Reachability Cleanup Area — Audit Round 2026-08-15
+
+### Scope and method
+
+This area does not audit product behavior and does not discover dead code. The
+audit already owns nearly all of it: `RT-05` is a six-item dead-code inventory,
+`FSM-03` owns the `SCHEDULE_ADJUSTMENT` zombie subsystem, `FSM-10` the
+unreachable mutation architecture, `UX-09` the reachable-but-abandoned
+engagement layer, `PRIV-09` and `DB-10` the dead sensitive schema, `TEL-09` the
+failure-inference model, and `LIF-05` the dead completion CTA.
+
+What no document currently holds is the **removal order**. Deletions in those
+findings depend on one another, several are only safe after an accepted
+decision lands, and two would be re-written if removed early. This area supplies
+that sequencing, plus the small amount of new reachability evidence found while
+building it.
+
+Method: import-graph sweep over all 57 `app/` modules; caller sweep per symbol
+across `app/` and `tests/`; and producer-side verification for data-driven
+branches, since a branch keyed on a value no producer writes is unreachable
+regardless of its guards.
+
+Rules for this area:
+
+1. **Severity is owned by the source finding.** This area never assigns or
+   changes one, except for findings that originate here.
+2. **No new founder decisions.** Where a decision exists it is applied, not
+   re-opened; where one is explicitly open it stays open.
+3. **Tests are not callers.** A test that is the only caller proves the code
+   runs, not that it is reachable. Delete tests with the code; repointing them
+   at a replacement is how this material survived (`FSM-07`).
+
+### Reachability taxonomy
+
+Three states are routinely collapsed into "legacy" and require different
+handling. The distinction is the substance of this area:
+
+| Category | Meaning | Handling |
+|---|---|---|
+| Dead | no caller, or keyed on a value no producer writes | delete |
+| Registered but unreachable | handler is registered with the framework, but nothing live produces the input that reaches it | delete — registration is not a working feature |
+| Reachable but rejected | runs in production, but the product decision has retired it | delete per the owning decision, not per reachability |
+
+The middle category is the trap. A registered `aiogram` callback handler looks
+live in every editor and every grep; whether it can be entered depends on who
+produces the `callback_data`, which is a different file.
+
+### Findings
+
+#### LEG-01 — Producer-side proof that the legacy worker envelope cannot be entered
+
+Severity: evidence only; severity owned by `FSM-10`
+Status: confirmed
+
+`FSM-10` establishes that the legacy worker-envelope architecture is dead. The
+decisive evidence was not previously recorded and is supplied here: **no worker
+emits any of the three envelope keys.** A grep for
+`plan_updates|generated_plan_object|transition_signal` across `app/workers/`
+returns zero hits, while `handle_incoming_message()` reads all three
+(`app/orchestrator.py:1489–1620`).
+
+The branches are therefore not rarely-taken paths that might still fire under
+unusual input — they are keyed on values nothing writes. This closes `FSM-10`
+from the producing side and removes any need for a runtime experiment to
+confirm it before deletion.
+
+#### LEG-02 — `_resume_plan_if_paused` is an unlisted orphan in the `FSM-03` tunnel
+
+Severity: owned by `FSM-03`
+Status: confirmed
+
+`_resume_plan_if_paused()` (`app/orchestrator.py:154`) has **zero callers**,
+including tests. It is tagged `[SCHED_ADJ]` and belongs to the
+`SCHEDULE_ADJUSTMENT` tunnel, but does not appear in `FSM-03`'s component
+inventory. Delete it with that subsystem so the tunnel removal is complete.
+
+#### LEG-03 — Six unimported modules and one orphan symbol
+
+Severity: P2 cleanup
+Status: confirmed
+
+An import-graph sweep across all 57 `app/` modules found six that production
+application code does not import, excluding the `app/main.py` entrypoint:
+
+| Module | Lines | Disposition |
+|---|---|---|
+| `app/logic/__init__.py` | 1 | empty package — delete |
+| `app/logging/llm_response_logging.py` | 59 | delete — see `LEG-04` |
+| `app/plan_drafts/activation_alignment.py` | 126 | unimported draft-alignment module alongside the live `app/plan_activation/activation_anchor.py` (used at `app/plan_finalization.py:211`); delete after a final import and behavior-ownership check |
+| `app/plan_parser.py` | 157 | test-only parser for the retired free-form `/plan` command; delete with `tests/test_plan_parser.py` rather than preserving a second plan-entry model |
+| `app/plan_normalizer.py` | 164 | test-only normalizer for the retired generated-plan payload; delete with `tests/test_plan_normalizer.py` after confirming no migration or offline fixture still consumes it |
+| `app/content_library.py` | 56 | **not a deletion candidate** — `CONTENT-01` owns its loader validation; ownership is Content implementation |
+
+Additionally, `_detect_foreign_instructions()` (`app/workers/coach_agent.py:772`)
+has **zero callers**. `SEC-05` states it would not be an authorization boundary
+even if wired up. Delete it, so that it cannot later be "just enabled" as a
+jailbreak fix.
+
+#### LEG-04 — An unimported logger would emit model output text
+
+Severity: P2 cleanup; coordinate with `PRIV-02` and `SEC-09`
+Status: confirmed
+
+Current behavior: `log_llm_text_candidates()`
+(`app/logging/llm_response_logging.py:24`) builds `"preview": part_text[:300]`
+— up to 300 characters of model output — and emits it as a JSON log line. The
+module is currently unimported, so nothing leaks today.
+
+Expected behavior: conversational content does not reach logs, and no dormant
+code exists that would start emitting it on a single import.
+
+Minimal fix: delete the module rather than leaving it as inert debug tooling.
+This is a privacy cleanup rather than tidiness, and `SEC-09`'s redaction
+allowlist should be written so that re-introducing content-bearing previews
+fails review. `PRIV-02` continues to own live conversation-body logging.
+
+### Removal-ordering index
+
+Rationale and severity belong to the owner column; this index adds only order
+and dependency.
+
+| # | What | Owner | Depends on |
+|---|---|---|---|
+| 1 | `start_plan:` buttons in the completion report (`app/orchestrator.py:629,633`) — remove the buttons, add no handler | `LIF-05` | none |
+| 2 | `app/logic/`, `llm_response_logging.py`, `_detect_foreign_instructions`, `activation_alignment.py`, `plan_parser.py`, `plan_normalizer.py`, and the two test-only legacy plan tests | `LEG-03`, `LEG-04` | final import/fixture check |
+| 3 | **The whole `SCHEDULE_ADJUSTMENT` tunnel** — dispatcher, four handlers, keyboard builders, `sched_task:`/`sched_time:`/timeout callbacks, Redis keys, `stuck_schedule_adj_check` job, FSM state, tests — plus `_resume_plan_if_paused` | `FSM-03`, `LEG-02` | none; do **not** partially retain |
+| 4 | Legacy worker-envelope architecture; then re-check whether `app/plan_adaptations.py` retains a live caller | `FSM-10`, `LEG-01` | after 3 |
+| 5 | `AIPlanVersion` — already has no reader; the single writer is `app/plan_adaptations.py:252`, so the table becomes fully dead once the adaptation path is removed | `FSM-10`, `DB-10` | after 4 |
+| 6 | `create_first_plan`, `IDLE_ONBOARDED`, `IDLE_DROPPED`, `app/fsm/guards.py` | `RT-05` items 1–3, 6 | inside the `FD-08` migration |
+| 7 | `UserFact`/`FactCategory`, `UserDailyLog` — verify production rows are empty, then drop by migration | `PRIV-09`, `DB-10` | with 6 |
+| 8 | `FailureSignal` and the failure-inference model | `TEL-09` | independent |
+| 9 | Reachable-but-rejected engagement layer: pulse, persona, streak, comeback, silence checks, `adapt_suggest` | `UX-09` | independent |
+| 10 | Preview/deep-link/action tail: `_PLAN_ACTIONS`, `newplan_*`, `build_plan_draft_preview`, `show_plan_actions`, `plan_draft_parameters` | `FSM-10`, `UX-10` | after 4 |
+
+#### Step 3 must not be partially retained
+
+The `sched_task:` and `sched_time:` handlers in `app/telegram.py:297` and `:350`
+are **registered but unreachable**. The only initial producer of their
+`callback_data` is `_build_task_select_keyboard` / `_build_time_select_keyboard`
+called from `_handle_schedule_adjustment_init` (`app/orchestrator.py:203`) and
+`_handle_schedule_adjustment_record` (`:260`) — both inside the dispatcher
+`FSM-03` already establishes has no production caller. Once entered, the
+handlers rebuild their own keyboards (`app/telegram.py:329,343,390`), which
+makes the subsystem appear self-sustaining when read in isolation. It is a
+closed loop with no entrance.
+
+Consequently the live-looking UI must not be preserved, and must not be
+rewritten on top of `change_day_time` / `change_evening_time`: either would
+restore a tunnel `FSM-03` has decided to remove. A replacement time picker is
+separate future work, already specified as `MISC-02` — buttons calling runtime
+tools directly with no LLM round-trip — and is built new rather than recovered
+from this code.
+
+### Open decision — `MORNING` is not a cleanup item
+
+`MORNING` is deliberately absent from the index above. `FD-03` keeps it as
+frozen internal metadata, and `RT-05` item 5 leaves an explicit open choice:
+remove it, or keep it frozen behind a single guarded definition instead of
+branches scattered across roughly seven files. That question is undecided, and
+this area does not resolve it. It requires a founder decision before it can
+enter any cleanup pass.
+
+### Handed to the Security area
+
+Two items surfaced while counting Coach entry points. They belong to `SEC-06`
+and are recorded here only as their origin:
+
+* **Coach entry points are broader than inbound text.**
+  `handle_incoming_message()` is called from seven sites in `app/telegram.py`,
+  of which only `:276` is user-authored text; the remainder are `/start`
+  (`:151`) and inline buttons (`:290`, `:308`, `:366`, `:399`, `:640`). Steps 3,
+  9, and 10 above remove five of the six non-text entries. The ordering
+  consequence matters: deterministic callbacks bypassing Coach is the **end**
+  state, not the current one, so an admission check written before that cleanup
+  must identify user-authored turns by an explicit parameter rather than by
+  assuming callbacks never reach Coach.
+* **`MAX_TOKENS` is deployment-configurable, not remotely controlled.**
+  `max_output_tokens` resolves to `settings.MAX_TOKENS` (`app/config.py:60`;
+  used at `app/ai.py:88` and `app/workers/coach_agent.py:993`) via the
+  unvalidated numeric parser described in `SEC-03`. There is no attacker or
+  user path to it; the defect is missing range validation on a value that
+  bounds per-request output, so a deployment typo silently raises the only
+  output ceiling that exists. It does not bound total spend.
+
+### Blanket references — do not duplicate
+
+* Component inventories for the `SCHEDULE_ADJUSTMENT` tunnel and the legacy
+  mutation architecture remain owned by `FSM-03` and `FSM-10`; this area adds
+  ordering and two missing components only.
+* The dead-code inventory itself remains owned by `RT-05`.
+* Dead sensitive schema remains owned by `PRIV-09` and `DB-10`; live
+  conversation-body logging remains owned by `PRIV-02`.
+* Content Library loader ownership remains with `CONTENT-01` under `FD-10`.
+* The abandoned engagement layer remains owned by `UX-09`, and obsolete plan and
+  schedule controls by `UX-10`.
+* Rate limiting, concurrency, and cost controls remain owned by `SEC-06` under
+  `FD-17`; callback race atomicity by `SEC-07`.
+
+---
+
+# Company Deployment Findings
+
+## Company / B2B Onboarding Area — Audit Round 2026-08-15
+
+### Scope and method
+
+This area covers everything required to launch with a real company and learn
+something trustworthy from the result: the organization/deployment record,
+the roster/SSO enrollment gateway accepted in `FD-18`, revocable entitlement,
+one-time Telegram handoff, attribution, `eligible_count`, timezone mode,
+privacy-notice binding, testnet isolation, operational controls, and the
+pre-launch smoke test.
+
+Method: grep for any company, organization, tenant, employer, or deployment
+concept across `app/`; read the pre-existing deployment funnel in
+`product_contract.md` §2.10 and the B2B privacy contract in §2.9 together with
+the later accepted `FD-09` and `FD-18` amendments; and check the existing
+`/start` and deep-link paths for anything attribution-shaped.
+
+**Result of the sweep: zero.** `company`, `organization`, `employer`,
+`deployment_id`, `org_id`, and `tenant` return **no matches anywhere in
+`app/`**. There is no model, no column, no identifier, and no attribution. This
+area therefore audits an accepted contract against an empty implementation
+rather than against defective code.
+
+**Severity has two gates.** Before the individual developer beta, implement the
+isolated testnet plus the shared deployment/entitlement/token/enrollment spine;
+the founder-issued test entitlement replaces roster/SSO only at the acquisition
+edge. Before the first company production deployment, add production roster,
+OIDC, reconciliation, company legal/configuration, and launch controls. The
+accepted sequencing still tests the product with individual developers first,
+but it no longer does so inside production or on a disposable data model.
+
+### Why this area is load-bearing
+
+`C1` — will employees open a corporate tool — is the pre-registered
+kill/continue test, and `product_contract.md` states it cannot be tested by
+interview, only by live deploy. Under `FD-18`, its accepted measurement is
+`deployment start rate = distinct deployment_enrollment_created users /
+eligible_count_at_launch`. A raw `/start` update and a successfully attributed
+company enrollment are separate events and must not be substituted for one
+another.
+
+Both sides of that fraction are missing. The numerator needs attribution that
+does not exist; the denominator needs an `eligible_count` that has nowhere to
+live. A company deployment run today would produce a number that cannot be
+computed, on a cohort that cannot be identified, against a baseline nobody
+recorded — and the founder would face a continue/kill decision with no
+evidence, having spent the scarcest asset in the plan: a real HR relationship.
+
+### Findings
+
+#### COMP-01 — No organization or deployment record exists
+
+Severity: BLOCKER before individual testnet beta (shared data spine)
+Status: confirmed absent
+
+Current behavior: no organization, deployment, or tenant entity exists in the
+schema or the code. Users are created by `_ensure_user()` from a Telegram
+identity alone (`app/telegram.py`), with no field describing where they came
+from or which company context they belong to.
+
+Expected behavior: one `deployment` record is the unit of a corporate launch
+and the join key for every other item in this area. It holds at minimum an
+internal ID, the organization it belongs to, operational dates and controls,
+accepted roster version and reconciliation cadence, timezone mode/default,
+the privacy-notice version in force at launch, a named champion contact, and
+environment identity. It does **not** hold one public enrollment token.
+
+Minimal fix: add `organization`, `deployment`, versioned roster/access-identity,
+`access_entitlement`, `deployment_invitation`, and `deployment_enrollment`
+records. Do not add `user.deployment_id`: people can move between employers or
+individual/company access over time, while historical attribution belongs on
+events and must not be rewritten with current membership.
+
+#### COMP-02 — User acquisition is unattributed, so `C1` cannot be computed
+
+Severity: BLOCKER before individual testnet beta for token attribution;
+production roster/SSO linkage before the first company deployment
+Status: confirmed absent
+
+Current behavior: `cmd_start` (`app/telegram.py:105`) parses only the
+`newplan_` argument and otherwise discards `/start` payloads. A user arriving
+from a company link is indistinguishable from an organic one. No
+`bot_started` attribution is recorded anywhere.
+
+Expected behavior: the invitation token is captured at `/start`, resolved, and
+validated against its active entitlement before it creates a
+**`deployment_enrollment`** record. The same accepted operation emits
+`deployment_enrollment_created`; `bot_started` remains the raw Telegram-entry
+event and is not the company-start numerator. Attribution is recorded on later
+events with the deployment and enrollment that were current **at the moment of
+the event**, so the accepted deployment funnel can be computed per launch.
+
+Minimal fix: capture and resolve the token in `cmd_start`; create one
+enrollment; emit idempotent `bot_started` and `deployment_enrollment_created`
+events with their distinct meanings.
+
+**Do not put a permanent `deployment_id` on `User`.** An earlier draft of this
+finding did, and it was wrong: people may change employers, replace an
+individual entitlement with a future company entitlement, or take part in a
+second pilot. A lifetime foreign key on the user conflates *how this person
+entered* with *which employer relationship is current*. The correct shape is a
+narrow enrollment record:
+
+```
+user_id, deployment_id, entitlement_id, enrolled_at, ended_at,
+status, attribution_source
+```
+
+with **one active enrollment at a time**. What must be immutable is the
+attribution stored **on historical events**, not the user's employer
+membership. Moving to a new deployment is an explicit act that opens a new
+enrollment and does not rewrite prior history; re-opening the same invitation
+is idempotent.
+
+Do not treat a deep-link open as an observed event: §2.10 states explicitly
+that opening a link without pressing Telegram Start is not observable and must
+not be presented as measured.
+
+#### COMP-03 — `eligible_count` has no home, no integrity, and no as-of date
+
+Severity: P1 before the first company deployment
+Status: confirmed absent
+
+Current behavior: nothing stores `eligible_count`. It exists only as a term in
+the accepted contract.
+
+Expected behavior: `eligible_count` is **not the company's total headcount**.
+It is the number of active, deduplicated, access-eligible corporate identities
+in the accepted roster version for this deployment at launch. That forms the
+denominator of `C1`; announcement exposure is recorded separately because a
+roster does not prove that an employee saw the launch message.
+
+Minimal fix: record it once per deployment, at launch, as a small fixed set:
+
+```
+eligible_count_at_launch, roster_version_id, source, as_of,
+announcement_channel, announcement_at
+```
+
+A versioned roster history records import mode and is required because later
+reconciliation changes entitlements but must not rewrite the launch denominator
+used for the original decision. Record the champion's announcement confirmation
+and timestamp separately. Never convert roster membership, SSO authorization,
+or tokens issued into `people_reached` by assumption.
+
+#### COMP-04 — The FD-18 roster/SSO enrollment gateway is not implemented
+
+Severity: BLOCKER before individual testnet beta for entitlement/token/enrollment;
+production roster/SSO gateway before the first company deployment
+Status: confirmed absent; implements FD-18
+
+Current behavior: the only deep link that exists is `newplan_*`, which encodes
+plan parameters in clear text and is itself legacy flow scheduled for removal
+(Legacy Reachability Cleanup, step 10). There is no enrollment mechanism.
+
+Expected behavior: the company provides a current email roster. On the
+deployment enrollment page, Google or Microsoft OIDC preferably proves control
+of the roster-listed identity; a one-time email challenge supports other
+providers and personal addresses listed by the company. The backend matches
+the verified address to the active roster and creates or retrieves one
+entitlement. It then mints one entitlement-bound Telegram token, shows the raw
+value once for immediate open, and stores only the hash. HR never assigns
+tokens and never receives a token list.
+
+Redemption validates token and entitlement in the same transaction, consumes
+the token, and creates or resumes one enrollment. The restricted
+identity-to-entitlement-to-enrollment mapping survives because roster
+reconciliation must be able to revoke company-funded access. Returning users
+resume through the account while the entitlement remains active; invalid
+invitation handling does not silently create an unentitled production user.
+
+Minimal fix: implement safe roster import/reconciliation, minimum-scope Google
+and Microsoft OIDC plus the email-verification fallback, access identity and
+entitlement records, handoff-token hash and state, atomic redemption,
+enrollment creation, neutral failure response, no-store/log-redaction controls,
+and the isolated testnet issuance path. Build it after the legacy `newplan_`
+grammar is removed. The product-level contract remains in `FD-18`; this finding
+does not restate or reopen it.
+
+#### COMP-05 — Deployment lifecycle and entitlement are undefined
+
+Severity: BLOCKER before individual testnet beta for entitlement lifecycle;
+full roster reconciliation before the first company deployment
+Status: confirmed absent; implements FD-18
+
+Current behavior: nothing expresses that a company launch starts, pauses, or
+ends, and no company enrollment or entitlement exists.
+
+Expected behavior: a deployment carries **orthogonal operational fields**, not
+a single lifecycle enum:
+
+```
+enrollment_open, delivery_enabled, starts_at, ends_at, renewal_due_at
+```
+
+Minimal fix: implement these fields directly. A single
+`draft/active/paused/ended` enum was rejected because it collapses three
+independent axes — whether new people may join, whether delivery runs, and the
+commercial period — into one dimension, which then forces invalid combinations
+and has to be unpicked later. Pausing delivery during an incident and closing
+enrollment at the end of a launch window are different acts and must be
+separately expressible. Individual invitation state (`available`, `claimed`,
+`redeemed`, `expired`, `revoked`) belongs to invitation records, not one
+deployment-level `invite_status`.
+
+`access_entitlement` separately carries at least `granted_at`, `revoked_at`,
+`source`, and the roster version that last confirmed it. Roster cadence is not
+an entitlement expiry: no roster or a rejected import leaves every existing
+entitlement unchanged. Only omission from an explicitly confirmed
+`full_snapshot`, an explicit revoke operation in an accepted `delta`, an
+authorized manual request, or the deployment's commercial end revokes company-
+sponsored access. Commercial renewal extends the deployment centrally without
+SSO, another token, or user action. The personal account and history remain.
+Future individual paid access requires its own payment, verified-email, and
+personal-entitlement path; it is not part of MVP and is not merely an undecided
+price.
+
+#### COMP-06 — Deployment timezone mode is decided but not implemented
+
+Severity: P1 before any deployment outside `Europe/Kyiv`
+Status: confirmed; product decision made 2026-07-15, not implemented
+
+*Relocated from `MISC-01` now that this area exists, per the Miscellaneous
+section's own filing rule.*
+
+Current behavior: every new user is silently defaulted to `Europe/Kyiv`, and
+timezone is never collected anywhere.
+
+Expected behavior (decided 2026-07-15, clarified 2026-08-15): the timezone
+question is asked **of the company, at company onboarding** — is everyone in
+one timezone, or is the team distributed? The answer decides whether the
+employee is asked anything at all:
+
+* **single timezone** — the company has already answered for everyone, so the
+  deployment default is applied silently and the employee is never asked;
+* **distributed** — the employee sets their own timezone during their
+  onboarding. This is deliberate: asking the one person who knows is cheaper
+  and more accurate than making the company attach timezone data to its roster
+  or produce a list of per-office defaults, and it is the only option that
+  handles remote employees who belong to no office.
+
+A per-user override exists in Settings for travel; there is no automatic
+geolocation or travel detection in MVP.
+
+Minimal fix: two deployment fields — `default_timezone` and a mode flag
+(`single` / `distributed`) — set at company onboarding. In `single` mode
+resolve the user's timezone from the deployment at attribution time; in
+`distributed` mode add one timezone step to employee onboarding. The per-user
+override remains available in both. No office hierarchy or per-office default
+list is required.
+
+Not a correctness bug today under a single-timezone launch — it becomes one the
+moment a company outside that timezone signs up, and it fails silently by
+delivering exercises at the wrong local hour, which reads to the employee as a
+broken product rather than a misconfiguration.
+
+#### COMP-07 — The privacy notice is not bound to a deployment
+
+Severity: P1 before the first company deployment
+Status: confirmed absent; extends `PRIV-01` into the company dimension
+
+Current behavior: `PRIV-01` already owns the absence of a privacy notice and
+notice-version record. Nothing connects a notice version to a company launch.
+
+Expected behavior: the notice version in force is pinned on the deployment at
+launch and on each user at acknowledgement. When the notice changes, existing
+deployments keep the version their employees actually accepted until
+re-acknowledgement, rather than retroactively appearing to have accepted new
+terms.
+
+Minimal fix: record `notice_version` on both the deployment and the user
+acknowledgement, and define the re-consent trigger. The notice and company
+agreement state the FD-18 purpose boundary: roster and corporate identity are
+used for access, licensing, revocation, support, fraud prevention, and security,
+not employee scoring or company-facing individual behavior. The user-facing
+notice mechanism itself remains owned by `PRIV-01`; only the deployment binding
+and access-identity purpose are new here.
+
+This matters commercially as well as legally: the first thing an HR buyer's
+legal contact asks is which version of the notice their employees agreed to,
+and "the current one" is not an answer if the text has changed since launch.
+
+**Legal review is required before the first company deployment — this must be
+decided, not deferred.** An earlier position deferred all data-protection
+paperwork until a paying client existed. That is wrong: an unpaid pilot still
+processes employee personal data, so the absence of an invoice changes nothing.
+
+The roles are genuinely unclear and are determined by the actual purposes and
+means of processing rather than by what a contract calls them. Because Love
+Yourself uses the data for its own telemetry and product learning, it may be a
+separate controller at least for that part, rather than a pure processor acting
+on the company's instruction. The likely outcome is that **both** are needed —
+an employee-facing privacy notice and a contractual delineation of
+responsibility with the company — but the exact construction is a lawyer's
+call, not this audit's.
+
+What this area records is only the gate: **no company deployment starts until
+that determination exists.** ISO, SOC 2, and large security questionnaires
+remain correctly deferred until traction or a concrete procurement request.
+
+#### COMP-08 — Test and demo deployments would pollute real metrics and aggregates
+
+Severity: BLOCKER before individual testnet beta
+Status: confirmed absent
+
+Current behavior: no test/production distinction exists anywhere. Founder
+testing, demos, and screenshots would be indistinguishable from real employee
+behavior.
+
+Expected behavior: FD-18 testnet and production are isolated environments built
+from the same artifact, not rows mixed in one production database. They use
+different databases, Redis namespaces, Telegram bots, OpenAI projects, token
+keys, URLs, backups, alerts, and aggregate sinks. An immutable environment ID is
+still attached to deployments/events as defense-in-depth; production rejects
+testnet tokens and vice versa.
+
+Minimal fix: create both environment configurations and enforce isolation at
+startup, token validation, persistence, telemetry ingestion, backup, and
+reporting. This is effectively unfixable after contamination: `FD-09`
+aggregates are deliberately non-reversible and retain no join key back to the
+personal event, so a test run entering production aggregates cannot be
+subtracted afterwards.
+
+#### COMP-09 — No deployment-scoped operational controls or support path
+
+Severity: P1 before the first company deployment
+Status: confirmed absent
+
+Current behavior: `SEC-09` requires global emergency controls for Coach and
+scheduled delivery. There is no way to act on a single company: no way to pause
+one deployment's delivery, and no defined support route for an employee who has
+a problem or wants their data deleted.
+
+Expected behavior: delivery and enrollment can be paused for one deployment
+without affecting others, and every deployment has a named champion contact on
+the company side plus a stated support route for employees.
+
+Minimal fix: scope the pause control by deployment; record the champion contact
+on the deployment record; state the employee support and deletion route in the
+onboarding copy. The deletion mechanism itself remains owned by the Privacy
+round — this finding only requires that a company's employees know where to
+send the request.
+
+The champion contact is a product requirement, not administrative tidiness: the
+accepted product position is that a champion is needed for install and that the
+ritual must then self-sustain. A deployment with no named human on the company
+side is a launch with no way to diagnose zero activation.
+
+#### COMP-10 — No pre-launch verification for a company deployment
+
+Severity: P1 before the first company deployment
+Status: confirmed absent
+
+Current behavior: nothing verifies that a deployment works end to end before
+the enrollment page is opened to employees.
+
+Expected behavior: a fixed smoke test is executed through the isolated
+**testnet** on the exact release artifact and its result recorded before any
+production enrollment link is announced. A final production-safe check verifies
+configuration without creating behavioral production data.
+
+Minimal fix: adopt the checklist below and require a recorded pass. The
+asymmetry justifies the ceremony — the smoke test costs under an hour, and a
+failed first impression on the first HR relationship cannot be retried.
+
+### Company Deployment Checklist
+
+The operational artifact this area exists to produce. Run per deployment; keep
+the completed copy with the deployment record.
+
+**Before production enrollment is enabled**
+
+1. Organization record exists: legal name, champion contact with a working
+   direct channel, and the agreed support route for employees.
+2. **Legal determination in place** — roles, employee notice, and any
+   contractual delineation (`COMP-07`). This is a gate, not a formality.
+3. A normalized and deduplicated roster version with explicit `full_snapshot`
+   or `delta` mode is validated, previewed, explicitly accepted, and bound to
+   the deployment; the launch full snapshot's active count becomes
+   `eligible_count_at_launch` (`COMP-03`).
+4. Timezone mode confirmed: single or distributed (`COMP-06`).
+5. Privacy-notice version pinned to the deployment (`COMP-07`).
+6. Pilot terms recorded without assuming a price model: free/paid status,
+   pricing basis if any, `starts_at` / `ends_at`, annual renewal boundary, and
+   the observation window.
+   Roster-reconciliation cadence and owner are recorded separately and never
+   act as an automatic entitlement-expiry boundary.
+7. **The pilot question written down** — this pilot tests `C1` and `C3`. No
+   health, wellbeing, stress, or productivity outcome is promised or measured.
+8. What the company receives after the pilot, and what happens to delivery and
+   data when it ends, agreed in writing (`COMP-05`, post-pilot report).
+9. Subprocessor list and a short privacy/security factsheet ready — these get
+   asked for, and improvising them is how over-promising happens.
+10. Production and testnet environment IDs, credentials, stores, token keys,
+    aggregate sinks, and bot identities verified as distinct (`COMP-08`).
+
+**Before employees can enroll**
+
+11. Smoke test executed on **testnet**, end to end on a real phone: founder test
+    entitlement → raw handoff token displayed once → Telegram Start → enrollment
+    created → onboarding completes → first exercise delivered at the correct
+    local time → response registered → Coach replies → cycle summary renders.
+12. Production FD-18 gateway verified with test identities: supported OIDC and
+    roster-listed email-verification fallback succeed; absent, wrong-domain,
+    expired, revoked, and malformed identities fail neutrally; raw token is
+    absent from logs and later views; one redemption only; an already-enrolled
+    user resumes without repeated SSO or another token. Roster tests prove both
+    directions: no roster or an invalid import changes nothing, while an
+    accepted `full_snapshot` revokes only omitted entitlements and an accepted
+    `delta` changes only explicit rows. Neither path deletes account/history or
+    exposes behavior to the company, and a missing mode is rejected.
+13. Delivery timing verified in the employee's resolved timezone, not the
+    server's.
+14. **Tested on a real corporate device and network** — Telegram reachable, not
+    blocked by policy or VPN (`C5`).
+15. Language and supported-device baseline confirmed for this workforce.
+16. Company confirms the enrollment page will be placed in an existing private
+    employee channel and that the selected OIDC or email-verification path is
+    allowed on corporate devices.
+17. Deployment-scoped pause verified to stop delivery for that deployment only
+    (`COMP-09`).
+18. Rate-limit and cost controls active per `FD-17`; provider budget alert
+    reachable by a human who is awake.
+19. Love Yourself operational owner and incident contact named for this
+    deployment.
+
+**At launch**
+
+20. Baseline recorded: launch timestamp, accepted roster version/count, initial
+    entitlement/invitation/enrollment counters, notice version, content version,
+    private announcement channel, exact launch copy, and intended reminder count.
+21. Champion confirms when the enrollment page was announced to the launch
+    roster; roster membership alone is not treated as message exposure.
+22. Champion briefed on what employees receive and what the company will and
+    will not see (`FD-09` §2.9).
+
+**After launch**
+
+23. Funnel reviewed internally at D1, D3, D7 per deployment: eligible roster,
+    successful identity authorizations/invitations, redemptions/enrollments,
+    onboarding conversion, first delivery success, response and completion.
+    This internal founder view is not the company report.
+24. Failures separated from rejection — SSO/roster denial, issued-but-unredeemed
+    invitations, undelivered messages, blocked bot, and wrong-timezone delivery
+    are not evidence about the same funnel step or about product value.
+25. **Abnormal weeks recorded explicitly** — public holidays, a release crunch,
+    an outage, or mass vacation. A pilot that lands on one of these produces
+    misleading `C3` data, and without a note it will later be misread as the
+    product failing.
+26. Deployment retrospective recorded before the next launch, so the second
+    company benefits from the first.
+27. Roster-reconciliation due dates produce founder/champion reminders and an
+    overdue alert. Missing or rejected input never disables existing users.
+
+**Method note.** A synchronous launch — everyone scanning a QR code together in
+a room — is a *different experiment*, not an improvement to this one. It will
+raise activation and will not answer `C1` as pre-registered, which is
+specifically whether people authorize and open a corporate tool after the
+enrollment page appears in their normal private company channel and the
+decision is theirs. Run
+it as a deliberate follow-up if the cold result is poor; do not mix the two.
+
+### Post-pilot company report — implementation of FD-09
+
+After the pilot, and only once `FD-09`'s **≥100 eligible / ≥50 distinct actual
+contributors** gate is met, the company may receive one aggregate
+product-usage summary:
+
+```
+Employees eligible at launch:            200
+Deployment enrollments created:          150
+Active in the stated 14-day window:       90
+```
+
+The report prints the exact 7- or 14-day window and the FD-09 definition of
+`active`: at least one accepted exercise response or one user-authored Coach
+turn after onboarding. It does not count automated delivery or continuation.
+
+Not provided, at any cohort size: names; teams, departments or offices;
+completion and skip breakdown; separate Coach/exercise counts; Coach text;
+invitation-level status; weekly or finer dynamics; any real-time dashboard;
+any ability for HR to lower the privacy threshold.
+
+**Do not defend this by claiming an aggregate count is inherently anonymous.**
+It is not — a single number can identify through a small group or through what
+the employer already knows. The protection here is the combination of the
+existing gate, a single post-pilot delivery rather than live monitoring, and
+the absence of any slice. The public wording remains the one required by §2.9:
+aggregate data without individual or small-group views.
+
+The reason this boundary is necessary is commercial as much as ethical. A
+buyer asking whether their people use the product is asking a legitimate
+question, and answering "that is private" is both untrue and fatal to renewal.
+Defining the answer in advance is what prevents it being improvised, and
+over-shared, under pressure on a sales call.
+
+### Accepted scope in this round
+
+* Production enrollment implements the FD-18 roster/SSO gateway, revocable
+  entitlement, and one-time Telegram handoff; HR supplies the roster but never
+  assigns or receives handoff tokens.
+* Individual beta runs on the isolated FD-18 testnet with founder-issued test
+  entitlements and the same post-redemption product behavior.
+* Telegram remains the employee delivery channel for MVP;
+  `deployment.channel` is recorded, while the company's internal enrollment
+  page placement is a deployment field and discovery input.
+
+### Open founder decisions
+
+Listed, not decided. Each changes what gets built:
+
+1. **Pilot pricing and unit of sale** — the first company pilot may be free,
+   flat-fee, or use another agreed basis. This audit does not decide it and no
+   per-seat billing system is built from an assumption.
+
+### Blanket references — do not duplicate
+
+* The company-facing analytics boundary, the aggregate layer, and the
+  100-eligible/50-contributor privacy gate remain owned by `FD-09`; this area
+  never widens what a company may see.
+* The privacy notice, notice-version record, and consent mechanism remain owned
+  by `PRIV-01`; the data-deletion mechanism by the Privacy round. `COMP-07` and
+  `COMP-09` add only the company binding and the support route.
+* OIDC and opaque handoff-token security originate in the Security round;
+  `FD-18` owns the roster/entitlement/privacy model and `COMP-04` implements it.
+* Global kill switches, alerting, and incident response remain owned by
+  `SEC-09`; `COMP-09` adds only per-deployment scoping.
+* Rate limiting, concurrency, and cost control remain owned by `FD-17` and
+  `SEC-06`.
+* Removal of the legacy `newplan_*` deep link remains owned by the Legacy
+  Reachability Cleanup index, step 10.
+* Controller/processor roles, necessary contractual terms, and whether a DPIA
+  is required are a legal gate under `COMP-07` before the first company
+  deployment. ISO/SOC certification, large procurement questionnaires, and an
+  HR dashboard remain deferred until traction or a concrete buyer request.
+* `product_contract.md` §2.9/§2.10 still contains the pre-`FD-09`/`FD-18`
+  company-reporting and shared-deep-link model. Updating that document and the
+  website remains the accepted final documentation/product-language gate after
+  implementation stabilizes. Until then, `FD-09`, `FD-18`, and the Telemetry
+  Event Contract in this audit govern implementation; the stale contract text
+  must not be used to recreate a shared company credential, anonymous
+  dispenser, or company-view-zero rule.
+
+---
+
+# Release & Operations Findings
+
+## Release & Operations Area — Audit Round 2026-08-15
+
+### Scope and method
+
+This area is the final release gate after the accepted product and code changes
+have been implemented. It covers:
+
+* process topology and Railway deployment behavior;
+* startup, health, readiness, and graceful shutdown;
+* schema migration, rollback, backup, and restore;
+* reproducible builds, tests, CI, and configuration;
+* monitoring, incident diagnosis, and release provenance;
+* delivery capacity and external-provider degradation.
+
+The review inspected `app/main.py`, `app/api.py`, `app/db.py`,
+`app/scheduler.py`, Docker and process declarations, dependency files, the
+test suite, and the current Railway metadata observed during the Database
+round. It did not mutate production or inspect the stopped physical production
+schema.
+
+### Accepted operational posture
+
+The MVP runs as **one bot process, one Telegram polling owner, and one scheduler
+writer**. It does not introduce leader election, multiple replicas, a durable
+message broker, or speculative channel infrastructure before those become
+necessary.
+
+The existing delivery grace remains **two hours**. This is accepted behavior,
+not a new founder decision in this round. A delivery must nevertheless never
+cross the step's own `expires_at`; the effective deadline is:
+
+```text
+min(scheduled_for + 2 hours, expires_at)
+```
+
+No scheduling jitter is added for MVP. If the capacity test in `OPS-11` fails,
+a controlled delivery window is a known later lever, not an implicit change to
+the user's selected time.
+
+Scheduled exercise delivery is deliberately deterministic and does not call
+OpenAI at delivery time. That property is preserved explicitly in `OPS-12`.
+
+### Findings
+
+#### OPS-01 — Railway deployment can violate the single-runtime-owner invariant
+
+Severity: BLOCKER before production release
+Status: confirmed
+
+Current behavior: `app/main.py` starts Telegram long polling, APScheduler, and
+Uvicorn in one process. APScheduler uses a persistent SQLAlchemy job store in
+the same PostgreSQL database as application data. Railway deployment handover
+can briefly overlap the old and new processes, while both Telegram polling and
+the scheduler require one authoritative owner. `DB-20` already accepts one
+replica / one scheduler writer for beta, but no release procedure enforces it.
+
+Expected behavior: at every moment there is at most one polling owner and one
+scheduler writer. A release cannot rely on a nominal replica count while old
+and new deployments overlap during handover.
+
+Minimal fix for MVP: keep one replica, disable unattended production
+autodeploy, and use a controlled `stop old → deploy/start new → verify ready`
+procedure. The brief downtime is accepted for beta. Record the actual Railway
+service settings and verify from logs that no overlap occurred. Add a leader
+lease or move scheduling behind one external owner only when zero-downtime or
+multiple replicas become a real requirement.
+
+#### OPS-02 — Application startup mutates schema and there is no canonical migration runner
+
+Severity: BLOCKER before the first database-changing release
+Status: confirmed
+
+Current behavior: `main()` calls `init_db()`, which executes
+`Base.metadata.create_all(bind=engine)` on every process start. This can create
+missing tables but cannot safely evolve, backfill, contract, or prove the
+version of an existing production schema. SQL migration files and ORM metadata
+do not form one enforced ledger or release command.
+
+Expected behavior: application startup verifies schema compatibility and
+fails closed; it does not perform schema mutation. Database changes run once,
+separately from application startup, after backup and restored-copy rehearsal.
+
+Minimal fix: establish one migration ledger and one migration command; remove
+`create_all()` from production startup; add a read-only schema/version check.
+Use `expand → backfill → switch → contract` for incompatible changes. Establish
+this process **before** the FD-08 lifecycle rebuild, event-ID split, sensitive
+column removal, or legacy table drops — the first large migration must not be
+the rehearsal.
+
+`apscheduler_jobs` is scheduler-owned infrastructure in the shared database.
+Exclude it from application-table cleanup and migration ownership; operate on
+it only through the explicit scheduler recovery procedure in `OPS-07`.
+
+#### OPS-03 — The process has no truthful liveness or readiness contract
+
+Severity: BLOCKER before production release
+Status: confirmed
+
+Current behavior: `app/api.py` has no liveness or readiness endpoint, and
+Uvicorn binds to hardcoded port `8000` instead of Railway's injected `PORT`.
+The HTTP server can remain reachable while polling or the unreferenced
+scheduler task has already died, so an HTTP-only check would report a healthy
+product that no longer delivers exercises.
+
+Expected behavior:
+
+* `/live` proves the process and event loop are alive;
+* `/ready` proves the schema version is compatible, required PostgreSQL and
+  Redis dependencies are reachable, and the polling and scheduler owners are
+  initialized and still running;
+* the service binds to `PORT` with a local fallback;
+* health checks are read-only and do not create schema or user data.
+
+Minimal fix: expose both endpoints, retain observable task handles, configure
+Railway's deployment health check against `/ready`, and add continuous
+application monitoring because Railway's deployment health check alone does
+not prove that polling and scheduling remain alive after rollout.
+
+#### OPS-04 — Core tasks and graceful shutdown have no one lifecycle supervisor
+
+Severity: P1 before beta
+Status: confirmed
+
+Current behavior: `asyncio.create_task(schedule_daily_loop())` discards the
+task handle; polling and Uvicorn are joined with `asyncio.gather`; scheduler
+shutdown is defined but never called. APScheduler is a `BackgroundScheduler`
+whose thread-pool jobs cross into the asyncio loop through
+`run_coroutine_threadsafe()`. A SIGTERM can therefore close one concurrency
+domain while work in the other is still waiting on it.
+
+Expected behavior: one lifecycle supervisor owns polling, HTTP, scheduler, and
+dependency cleanup. Shutdown follows an explicit order:
+
+1. reject new work and mark readiness false;
+2. pause the scheduler so no new jobs begin;
+3. keep the event loop alive while bounded in-flight scheduler threads finish;
+4. stop polling and HTTP intake;
+5. close Telegram, Redis, and database resources;
+6. cancel any remainder after a bounded deadline and exit non-zero if shutdown
+   was incomplete.
+
+Minimal fix: implement one top-level lifecycle/task-group or equivalent
+supervisor, wire SIGTERM once, retain all task handles, call
+`shutdown_scheduler(wait=True)` while the loop is still alive, and configure a
+Railway drain/termination window long enough for the bounded shutdown path.
+
+#### OPS-05 — There is no reproducible passing release-test baseline
+
+Severity: BLOCKER for a failing or partially collected suite; P1 for CI automation
+Status: confirmed
+
+Current behavior: no canonical environment and command reproduce a complete
+passing suite. The audit collected 172 tests but hit seven collection errors,
+including tests that still import removed `app.ai_plans`, missing runtime
+dependencies in the invoked environment, and Telegram bot construction during
+collection with an invalid token. A test count is not evidence when part of the
+suite never collected. There is no `.github/workflows` release check.
+
+Expected behavior: one clean command installs the locked runtime and test
+dependencies, collects the entire suite, and passes without production
+credentials. The release baseline covers PostgreSQL and Redis integration,
+migrations against an earlier schema, Docker startup, scheduler recovery,
+delivery idempotency, lifecycle transitions, and the deterministic user smoke
+path.
+
+Minimal fix: delete or rewrite the stale tests under the Legacy cleanup owner;
+make imports side-effect free; provide valid test configuration and ephemeral
+PostgreSQL/Redis services; then run the same command in CI. A manually executed
+canonical check may support the first founder-only beta, but no production
+release proceeds with collection errors, and repeated releases require CI.
+
+#### OPS-06 — The production artifact and Railway configuration are not reproducible
+
+Severity: P1 before beta
+Status: confirmed
+
+Current behavior: the repository has both a Docker `CMD` and a `Procfile`, no
+`railway.toml`, no `.dockerignore`, mutable base-image and dependency ranges,
+and no checked release declaration for health path, restart behavior, replica
+count, drain time, start command, or pre-deploy migration command. The running
+service can therefore differ from what repository review implies.
+
+Expected behavior: one build artifact and one start contract define the
+runtime. Operational settings that change correctness are versioned as code or
+captured in a release manifest and reviewed with the commit.
+
+Minimal fix: select Docker as the canonical build/start path; remove the
+competing declaration; pin the runtime and dependencies under `SEC-08`; add a
+minimal Railway config or verified manifest for `PORT`, health path, restart
+policy, one replica, drain window, and migration command. Test the built image,
+not only the host checkout.
+
+#### OPS-07 — Backup policy exists, but restore is not yet a safe product operation
+
+Severity: BLOCKER before database-changing production work
+Status: confirmed; implements FD-12 and expands DB-08 / DEL-05
+
+Current behavior: FD-12 accepts scheduled Railway backups, a manual backup
+before migration, and restore verification. The Railway inspection on
+2026-08-12 found no scheduled backup, existing backup, or PITR. In addition,
+the APScheduler job store lives inside the restored database. Restoring an old
+snapshot can therefore restore stale date jobs and stale plan state together.
+
+Most old jobs are bounded by the existing two-hour application guard, but a
+restore can still replay a recent delivery or revive future work from a plan
+that was changed after the snapshot. The callback currently rejects
+`completed`, `skipped`, `expired`, and `canceled`, but not `delivered`, so a
+restored job for an already-delivered step can send the same exercise again.
+
+Required implementation:
+
+* enable FD-12's daily/weekly Railway backups and a manual pre-migration
+  backup;
+* measure and record actual RPO and RTO in one restore drill;
+* add `delivered` to the delivery callback's no-send statuses;
+* after restore, keep the bot stopped, clear scheduler-owned
+  `apscheduler_jobs`, reconcile restored user/plan/step state, and recreate
+  only valid future jobs;
+* start exactly one runtime owner and verify that no past, canceled, completed,
+  or already-delivered exercise is sent;
+* retain the runbook even after the one-line `delivered` guard, because restore
+  can revive broader stale plan and enrollment state, not only one job.
+
+#### OPS-08 — Code rollback, database rollback, and content rollback are conflated
+
+Severity: P1 before the first database-changing release
+Status: confirmed
+
+Current behavior: Git can restore application code, but no contract describes
+which schema versions that code can read, whether a migration is reversible,
+or which content version an already-created plan contains. Exercise
+notification text is intentionally rendered and stored in the APScheduler job
+at planning time, while no explicit release provenance ties that snapshot to
+its source content.
+
+Expected behavior: normal rollback deploys compatible previous code without
+rewinding user data. Destructive rollback uses the tested restore runbook and
+is treated as data loss according to the measured RPO. Every release records
+at least Git SHA, image identifier, schema migration/version, configuration
+version, and content-library version.
+
+Minimal fix: adopt backward-compatible migrations and a release manifest.
+Persist the plan/step content snapshot and its **planning-time** content
+version explicitly. Do not relabel an old scheduled snapshot as the current
+release version, and do not re-render already-created plans from the newest
+library during delivery unless a future product decision deliberately changes
+that immutability contract.
+
+#### OPS-09 — Monitoring cannot detect product failure before users report it
+
+Severity: P1 before beta
+Status: confirmed
+
+Current behavior: logs exist, but there is no defined alert or operational
+view for a dead polling task, dead scheduler, overdue delivery backlog,
+repeated Telegram failure, dependency outage, cost-circuit-breaker trip,
+backup age, or crash loop. Railway CPU/RAM metrics cannot establish that the
+product is delivering the right exercise at the right time.
+
+Expected behavior: founder-facing monitoring covers at minimum:
+
+* process restarts and deployed release identity;
+* polling and scheduler heartbeats;
+* pending/overdue delivery count and oldest age;
+* delivery success, retry, terminal failure, and duplicate-attempt signals;
+* PostgreSQL, Redis, Telegram, and OpenAI availability;
+* Coach rate-limit and global cost-circuit-breaker activation;
+* latest successful backup age and restore-drill status.
+
+Minimal fix: emit structured operational metrics and alerts with documented
+owners and response actions. Do not include conversation bodies, feedback
+text, Telegram IDs, tokens, or other sensitive payloads in alerts; privacy-safe
+logging remains owned by `PRIV-02` and `SEC-09`.
+
+#### OPS-10 — Release smoke tests and failure drills are not one fixed gate
+
+Severity: P1 before beta
+Status: confirmed absent
+
+Current behavior: there is no recorded Go/No-Go artifact proving that the
+built production image, migrations, dependencies, and user-facing lifecycle
+work together. Individual tests do not cover Railway process behavior or the
+failure boundaries between PostgreSQL, Redis, Telegram, OpenAI, and the
+scheduler.
+
+Expected behavior: every production release runs one fixed smoke path on the
+isolated FD-18 testnet using the exact release artifact and records the result;
+a production-safe configuration check follows without writing behavioral test
+data. Before beta, the team also rehearses
+the highest-cost failures: SIGTERM during delivery, Telegram timeout, OpenAI
+outage, Redis outage, database unavailability, duplicate Telegram update, and
+database restore with scheduler reconstruction.
+
+Minimal fix: create a concise release checklist and executable smoke script.
+Verify at least: fresh start, existing active user, timezone resolution,
+scheduled delivery, complete/skip/expiry, Coach reply and deterministic outage
+fallback, runtime tool result, pause/resume/cancel, cycle completion, summary,
+automatic continuation, health endpoints, graceful shutdown, and restart. The
+company-specific invitation and attribution path remains additionally owned by
+`COMP-10`.
+
+#### OPS-11 — Delivery capacity has not been validated against a company-shaped burst
+
+Severity: P1 before the first company rollout
+Status: unmeasured
+
+Current behavior: APScheduler uses its default thread pool while each delivery
+can block waiting up to 30 seconds for an asyncio result. Telegram also applies
+provider-side throughput limits. No test establishes what happens when a real
+deployment schedules many employees for the same minute.
+
+Expected behavior: the release candidate delivers a burst at least twice the
+largest expected launch cohort without duplicate messages, starvation,
+unbounded memory growth, lost terminal state, or misleading failure telemetry.
+Provider throttling is handled by bounded retry/backoff rather than by spawning
+more schedulers.
+
+Minimal fix: run the capacity test before the first company rollout and record
+latency distribution, success/failure counts, retries, and backlog recovery.
+Do not add jitter for the 10–15-person beta. If the company-shaped test fails,
+consider a rate-aware bounded delivery dispatcher first; a founder-approved
+delivery window/jitter remains a documented fallback lever rather than a
+silent change to the selected-time promise.
+
+#### OPS-12 — Scheduled exercise delivery is correctly independent of OpenAI
+
+Severity: OK — preserve as an architectural invariant
+Status: confirmed
+
+The scheduled exercise path sends a deterministic text snapshot and does not
+call the model at delivery time. An OpenAI outage can degrade Coach and new
+plan generation without stopping already-scheduled exercises. This reduces
+cost, latency, and provider blast radius at the product's primary touchpoint.
+
+Preserve this boundary during the renderer and content overhaul. Canonical
+structured presentation and versioned media may be rendered by application
+code, but scheduled delivery must not become dependent on live LLM output.
+
+### Release Go/No-Go Checklist
+
+Run after all accepted audit implementation work and before every production
+release. Keep the completed artifact with the release record.
+
+1. Release commit, image ID, schema version, content version, and configuration
+   manifest recorded; production worktree/build context is clean.
+2. The same release artifact is selected for production and testnet; environment
+   startup checks prove disjoint databases, Redis namespaces, Telegram bots,
+   OpenAI projects, token keys, URLs, backups, alerts, and aggregate sinks.
+3. Canonical test command collects and passes the complete suite in the same
+   dependency environment used by CI.
+4. Migration rehearsed against a restored production-like backup; startup
+   performs schema verification only.
+5. FD-12 backup is current, manual pre-change backup exists, and the restore
+   procedure has a measured RPO/RTO.
+6. Railway is configured for one replica and controlled non-overlapping
+   rollout; `/live`, `/ready`, `PORT`, restart policy, and drain window verified.
+7. SIGTERM test confirms scheduler threads drain while the event loop remains
+   alive and all dependencies close within the termination window.
+8. End-to-end smoke path passes on a real Telegram testnet account, including
+   delivery, response, Coach degradation, lifecycle controls, summary, and
+   continuation.
+9. Restore drill confirms `apscheduler_jobs` reconstruction and no duplicate,
+   stale, expired, canceled, or already-delivered exercise.
+10. Monitoring and alerts identify the release, polling/scheduler health,
+   delivery backlog/failure, dependency outage, backup age, and cost controls
+   without logging sensitive payloads.
+11. Global and deployment-scoped kill switches, key-revocation path, and named
+    incident owner are reachable and tested under `SEC-09` / `COMP-09`.
+12. Capacity test passes at twice the expected peak simultaneous delivery
+    cohort before the first company rollout.
+13. Rollback choice is explicit: compatible code rollback, forward fix, or
+    destructive restore with accepted RPO. Database restore is never treated
+    as an ordinary code rollback.
+
+### Blanket references — do not duplicate
+
+* Backup policy and purchase/configuration remain owned by `FD-12`; `OPS-07`
+  turns that decision into a verified restore procedure.
+* One replica / one scheduler writer remains owned by `DB-20`; `OPS-01` applies
+  it to Railway handover behavior.
+* Retry-safe external side effects remain owned by `DB-08`, `DEL-05`, and
+  `UX-07`; `OPS-07` and `OPS-10` add restore and release verification only.
+* Container/dependency hardening remains owned by `SEC-08`; incident response,
+  kill switches, and sensitive logging by `SEC-09` and `PRIV-02`.
+* Coach admission, queueing, and cost controls remain owned by `FD-17` /
+  `SEC-06`; Operations verifies rather than redesigns them.
+* Company-specific launch verification remains owned by `COMP-10`; the release
+  gate proves the shared runtime before that per-deployment checklist begins.
+* Production/testnet enrollment and identity isolation remain owned by `FD-18`,
+  `COMP-08`, and `SEC-10`; Operations verifies the release artifact and runtime
+  configuration rather than redesigning that boundary.
+* Content snapshot/version semantics remain owned by `FD-10` and the Content
+  Library round; `OPS-08` records release provenance and rollback behavior.
+
+---
+
+# Exercise on Demand Findings
+
+## Exercise on Demand Area — Audit Round 2026-08-19
+
+Status: product/audience/system audit complete; target accepted under FD-19;
+implementation not started in this round
+
+### Scope and evidence
+
+The round inspected the end-user interview corpus and R&D synthesis separately,
+then traced the current application paths required to add the feature without
+creating another plan lifecycle:
+
+* primary end-user interviews under
+  `/Users/Baracuda/Desktop/transcripts/love yourself/Інтерв’ю з end-користувачами`;
+* R&D discovery and evidence-review documents under
+  `/Users/Baracuda/Desktop/Love Yourself/R&D`;
+* `docs/audit/product_contract.md`, the Founder Decisions above, Product Maps,
+  and the accepted Content Library and Delivery UX rounds;
+* `app/telegram.py`, `app/orchestrator.py`, `app/workers/coach_agent.py`, and
+  `app/plan_runtime/tools.py`;
+* `app/content_library.py`, the content JSON, `app/ux/task_notification.py`, and
+  `app/scheduler.py`;
+* `app/db.py`, `app/telemetry.py`, plan completion/metrics code, privacy,
+  lifecycle/FSM, PostgreSQL/Redis, Security, and Operations findings.
+
+The interviews confirm a recurring workday state-switch problem: respondents
+walk, look outside, seek quiet, use coffee/media, or continue working while
+tired when stopping is difficult. They support a short, accessible action at a
+self-recognized moment. They do not establish demand for a Telegram command,
+random selection, the exact catalogue size, a 30-minute window, or long-term
+retention. Those are explicit beta hypotheses, not evidence claims.
+
+The feature tests an action-retrieval mechanism: the user supplies the moment
+and the product removes recall and choice friction. It does not diagnose the
+user, infer why help is wanted, or promise stress reduction, restored focus,
+burnout prevention, or productivity.
+
+### Accepted end-to-end contract
+
+```text
+Telegram command menu "Вправа зараз"
+or explicit Coach request -> request_on_demand_exercise tool
+    -> one shared authorized application service
+    -> create/reuse one open occurrence
+    -> release-gated uniform selection, excluding only immediate repeat
+    -> persist exercise/content version/presentation snapshot
+    -> deterministic Telegram delivery with text fallback
+    -> delivered + 30-minute database deadline
+    -> completed | skipped | expired
+    -> canonical source-stamped telemetry
+    -> conditional, separately labelled cycle-summary count
+```
+
+### Module-by-module implementation contract
+
+| Module / boundary | Required interaction |
+|---|---|
+| Telegram command menu | Register internal `/exercise` with the visible description `Вправа зараз`. Route it before generic `F.text`; do not add a persistent reply keyboard. |
+| Command handler | Resolve the existing authorized user, enforce onboarding/entitlement, derive an idempotent Telegram update key, and call the shared on-demand service. It must not write the command into `ChatHistory` or invoke the Coach. |
+| Coach prompt and tool schema | Add `request_on_demand_exercise` in every post-onboarding authorized product mode. Use it only for an explicit exercise/state-switch request, with no redundant confirmation and no mood inference. |
+| Coach tool executor / orchestrator | Re-authorize the user and call the same service as the command handler. Return a strict allowlisted result (`delivered`, `existing_open`, `temporarily_unavailable`, or `failed`). The deterministic exercise message is the product result; the model must not invent or restate instructions. |
+| On-demand application service | Own request idempotency, one-open enforcement, selection, occurrence state, immutable presentation snapshot, delivery dispatch, and structured result. No Telegram adapter or Coach branch may reimplement selection. |
+| Content Library | Read the six FD-10 `switch` records only. Enforce `is_active`, the review gate, and release asset readiness. Do not fall back to `unload`, a legacy parent/variation, or gated content. |
+| Selector | Read on-demand shown history only; exclude the last successfully delivered on-demand exercise when it would repeat, then use equal probability across all remaining eligible records. Do not inspect completion, skip, expiry, feedback, plan state, inferred context, scheduled history, or `cooldown_days`. |
+| Exercise presentation | Build one canonical `ExercisePresentation` containing occurrence ID, exercise ID, content version, title, duration, steps, media metadata, deadline, source, and available actions. Store an immutable snapshot before the external send. |
+| Telegram delivery adapter | Render the same presentation contract used by scheduled delivery. Record confirmed message ID and delivery variant. A transient media failure retries/falls back to complete text; it never selects another exercise. |
+| PostgreSQL | Add an independent on-demand occurrence table, foreign keys/indexes, source-operation uniqueness, and a partial unique constraint for one open occurrence per user. PostgreSQL is lifecycle truth. |
+| Redis | No on-demand business state is stored in Redis. It may support a non-authoritative short operational debounce only if needed; correctness must survive Redis loss and process restart. |
+| Callback router | Use an on-demand-specific callback namespace carrying the occurrence identity, not `AIPlanStep.id`. Verify Telegram ownership, entitlement boundary, current row state, and deadline, then perform one atomic terminal transition. |
+| Expiry/reconciliation worker | Periodically claim due delivered occurrences, set `expired` once, emit the linked event, remove actions, and show `Час виконання минув.` Retry failed Telegram edits without reopening the row. Callback-time expiry is the race-safe fallback. |
+| Scheduled plan lifecycle | Share the Content Library and renderer only. Never read on-demand history to reorder a prepared sequence, and never create or mutate `AIPlan`, `AIPlanDay`, `AIPlanStep`, plan jobs, current day, plan completion, automatic continuation, or scheduled metrics. |
+| FSM / derived mode | Add no on-demand state. Availability is entitlement + onboarding, independent of active/paused/no-active-plan mode. |
+| Telemetry | Emit validated on-demand events through the canonical event ingestion path with explicit source and occurrence linkage. Do not auto-create a fake plan instance/window for on-demand activity. |
+| FD-07 feedback | Reuse the completed-only feedback interaction with `source=on_demand` and the occurrence ID. Feedback never changes selection. |
+| Cycle summary | Query on-demand completions independently for the cycle observation window. Render `За власним запитом: N виконано` only when `N > 0`; preserve the scheduled denominator and use a count-only combined total. |
+| Privacy / company aggregate | Apply personal-data retention/deletion and independent aggregate contribution. No company surface gains channel or exercise detail. Only a completed/skipped response can satisfy the accepted aggregate `active` definition. |
+| Operations | Monitor delivery/reconciliation failure, overdue open rows, duplicate attempts, callback conflicts, pool readiness, and media fallback without logging sensitive content or user text. |
+
+### Target persistence contract
+
+The minimal dedicated table is `on_demand_exercise_requests`:
+
+| Column | Contract |
+|---|---|
+| `id` | UUID primary key; the occurrence identity used by callbacks and telemetry. |
+| `user_id` | Required personal-layer foreign key with retention/deletion behavior matching user telemetry. |
+| `exercise_id` | Required foreign key to the stable Content Library record after selection. |
+| `content_version` | Exact delivered instruction version; never derived later from the current library row. |
+| `presentation_snapshot` | Controlled structured JSON needed to reproduce/edit the delivered occurrence; no Coach text or inferred state. |
+| `status` | `pending_delivery`, `delivered`, `completed`, `skipped`, `expired`, `delivery_failed`, or access/account `canceled`. |
+| `entry_surface` | `command_menu` or `coach`; future values require an event-contract change. |
+| `source_operation_id` | Unique idempotency key derived from the Telegram update/tool execution, not random per retry. |
+| `requested_at` | Server timestamp for accepted request creation. |
+| `delivered_at` | Confirmed Telegram delivery timestamp; null on terminal delivery failure. |
+| `expires_at` | Exactly 30 minutes after confirmed delivery. |
+| `responded_at` | Accepted completed/skipped callback timestamp; null for expiry/failure. |
+| `telegram_chat_id` / `telegram_message_id` | Restricted delivery references required to edit actions and reconcile external state. |
+| `delivery_variant` | Exact media/text presentation actually delivered. |
+| bounded operational fields | Retry count and allowlisted error class only; no raw provider payload or user content. |
+
+Required database rules:
+
+* partial unique index on `user_id` for `pending_delivery` and `delivered`;
+* unique `source_operation_id`;
+* index on due `expires_at` for delivered rows;
+* conditional/locked `delivered -> terminal` transition;
+* no `plan_id`, `plan_day_id`, `plan_step_id`, or `plan_execution_id` on the
+  occurrence;
+* a migration/backfill is additive; no legacy plan row is converted into an
+  on-demand occurrence.
+
+### Canonical on-demand event catalogue
+
+The canonical envelope work already required by TEL-03/04/11 must support a
+nullable `on_demand_request_id` and explicit `exercise_source`. Required event
+facts include `event_id`, event/schema version, unique source-operation ID,
+user/deployment/environment references, occurrence ID, exercise ID, content
+version, entry surface or delivery variant where applicable, `occurred_at`,
+and `recorded_at`.
+
+| Event | Required meaning |
+|---|---|
+| `on_demand_requested` | One authorized occurrence was first accepted. Idempotent recovery does not emit another event. |
+| `on_demand_delivered` | Telegram confirmed delivery and the 30-minute response window began. |
+| `on_demand_delivery_failed` | No confirmed user opportunity existed; exclude from behavior denominators. |
+| `on_demand_completed` | One valid callback registered completion before deadline. It does not prove execution or benefit. |
+| `on_demand_skipped` | One valid callback registered explicit skip before deadline. No reason is inferred. |
+| `on_demand_expired` | The authoritative occurrence closed without an accepted callback. |
+| `feedback_submitted` | Optional completed-only FD-07 answer linked to the on-demand occurrence and source. |
+
+Duplicate requests and callbacks may produce privacy-safe operational
+deduplication/conflict signals, but they must not create duplicate behavioral
+events or independent aggregate contributions. Response latency is derived
+from `delivered_at` to the accepted terminal callback and may be reported in
+bounded buckets; it is never named reaction time, execution time, or effect.
+
+### Findings
+
+#### EOD-01 — Neither accepted entry surface exists
+
+Severity: P1 before feature beta
+Status: confirmed absent
+
+Current behavior: `app/telegram.py` registers `/start`, admin `/spawn`, legacy
+callbacks, and a catch-all text handler. There is no `/exercise` menu command,
+command registration, or deterministic self-start handler. Generic text is
+stored in `ChatHistory`, logged as `user_message`, and sent to the Coach.
+
+Expected behavior: the command-menu path bypasses the model and calls the
+shared on-demand service. An explicit natural-language request may reach the
+same service through the Coach tool, but ordinary text remains Coach text and
+is not counted as exercise use.
+
+Minimal fix: add command-menu registration/handler before `F.text`, add the
+scoped Coach tool, and share one service. Do not add a reply keyboard or treat
+`user_message` as on-demand telemetry.
+
+#### EOD-02 — Coach policy and runtime tools currently forbid the accepted action
+
+Severity: P1 before Coach entry is enabled
+Status: confirmed
+
+Current behavior: the Coach prompt says not to suggest exercises outside the
+current sequence and exposes only plan-management tools by current legacy
+state. There is no runtime executor for an independent exercise request. The
+existing bounded tool-result architecture is itself still implementation work
+under COACH-09/RT-09.
+
+Expected behavior: `request_on_demand_exercise` is allowed in every authorized
+post-onboarding mode, requires explicit user intent but no redundant
+confirmation, and returns a strict runtime result. Runtime rechecks access and
+one-open invariants; model tool selection is never authorization.
+
+Minimal fix: update the prompt boundary, tool schema, state/mode availability,
+executor dispatch, result schema, and Coach tests together. On successful
+deterministic delivery, do not add a model-authored second version of the
+exercise.
+
+#### EOD-03 — The target pool is accepted, but runtime eligibility is not ready
+
+Severity: P1 content/delivery dependency
+Status: confirmed; blocked on FD-10/FD-16 implementation prerequisites
+
+Current behavior: runtime still loads the legacy eight-parent JSON/schema. The
+six target switch records, review fields, structured requirements, and media
+references are not one implemented source of truth. The cool-water medical
+gate and required GIF delivery are not runtime eligibility checks.
+
+Expected behavior: on-demand reads only the migrated FD-10 records. The beta
+launch pool contains the five non-cool-water switch exercises after required
+GIF assets are configured; approved cool water becomes the sixth. Selection
+is equal-probability random after excluding only an immediate repeat.
+
+Minimal fix: complete the existing Content Library migration and media work
+before enabling on-demand. Add selector tests proving distribution inputs,
+last on-demand-delivered exclusion, allowed `A -> B -> A -> B`, gate
+enforcement, and
+fail-closed behavior for fewer than two eligible records.
+
+#### EOD-04 — No independent occurrence aggregate exists
+
+Severity: data-integrity blocker before feature beta
+Status: confirmed absent
+
+Current behavior: executable exercise state exists only on `AIPlanStep`, whose
+foreign keys, day relation, schedule, status, and callbacks all assume a plan.
+Reusing it would create fake days/steps and couple voluntary requests to plan
+completion. No separate request ID or one-open database constraint exists.
+
+Expected behavior: the dedicated PostgreSQL table and lifecycle above own all
+on-demand state. The row stores the selected version/snapshot before send and
+survives restart. It is independently queryable without plan joins.
+
+Minimal fix: add one additive migration, ORM model, repository/service access,
+constraints, indexes, and deletion/retention behavior. Do not generalize this
+into a universal workflow engine.
+
+#### EOD-05 — Current renderer and delivery path are plan-step-specific
+
+Severity: P1 before feature beta
+Status: confirmed; shared prerequisite with UX-03/15/16
+
+Current behavior: `format_task_notification()` requires plan day, task index,
+task total, and rationale/decorative fields. `send_scheduled_message()` builds
+callbacks from `AIPlanStep.id` and records delivery back to that step. Media
+delivery and canonical `ExercisePresentation` are absent.
+
+Expected behavior: the shared renderer consumes structured presentation facts
+without assuming a plan. The on-demand adapter displays title, duration,
+steps, media when required, and only its two actions. Delivery is deterministic
+and independent of OpenAI.
+
+Minimal fix: implement UX-16's canonical presentation and a small on-demand
+delivery adapter over it. Preserve scheduled delivery behavior until its own
+accepted refactor is implemented; do not route on-demand through a fabricated
+scheduled job.
+
+#### EOD-06 — Callback, expiry, and visible terminal-state behavior are absent
+
+Severity: P1 lifecycle/concurrency before feature beta
+Status: confirmed absent
+
+Current behavior: scheduled callbacks parse `AIPlanStep.id`, perform ownership
+checks, and then write terminal state without an atomic conditional transition.
+Expired/canceled scheduled taps may fail silently. Scheduled expiry and the
+legacy `task_ignored` event are already split incorrectly under TEL-05.
+
+Expected behavior: on-demand callbacks identify the occurrence, enforce
+ownership and `delivered` state, compare authoritative time to `expires_at`,
+and atomically accept exactly one terminal action. A periodic reconciler and
+callback-time check close overdue rows, remove actions, and show
+`Час виконання минув.` Late/duplicate callbacks return a factual state and
+never reopen or duplicate the occurrence.
+
+Minimal fix: add the on-demand callback namespace, conditional update/row
+locking, expiry reconciler, idempotent message edit, and race/restart tests.
+Reuse low-level Telegram edit helpers where useful, not scheduled plan state.
+
+#### EOD-07 — Plan, FSM, scheduler, and Redis isolation must be enforced by tests
+
+Severity: P1 system-integrity invariant
+Status: accepted target; no feature code exists yet
+
+Current behavior: several current gates derive exercise availability from
+`User.current_state == ACTIVE`, an active plan, an active working day, and a
+scheduled timestamp. Plan/FSM truth is already duplicated, and Redis stores
+legacy session tunnels.
+
+Expected behavior: on-demand authorization depends on completed onboarding and
+valid entitlement, not active plan or workday. Requests work during active,
+paused, and no-plan modes and outside schedule. No on-demand write touches plan
+tables, plan jobs, `current_state`, `current_day`, pause flags, or Redis
+business state.
+
+Minimal fix: place availability in the on-demand service/access guard and add
+negative side-effect assertions across every plan/FSM field and job store.
+Keep PostgreSQL authoritative after process or Redis restart.
+
+#### EOD-08 — Current telemetry cannot represent a truthful on-demand source
+
+Severity: experiment-validity blocker before feature beta
+Status: confirmed; depends on TEL-03/04/11 and CONTENT-07
+
+Current behavior: `log_user_event()` requires/reuses a legacy
+`PlanExecutionWindow`, event type and JSON properties are not one enforced
+catalogue, source-operation uniqueness is absent, and task statistics assume
+scheduled task semantics. `user_message` cannot identify reactive exercise
+use.
+
+Expected behavior: on-demand events use the canonical envelope and occurrence
+foreign key without fake plan linkage. Source, content version, delivery
+variant, timestamps, and terminal outcome are explicit. Delivery failure is
+operational; completion/skip/expiry remain separate behavioral facts.
+
+Minimal fix: extend the accepted canonical event migration, validation,
+idempotent aggregate write, and founder-only query set. Do not copy on-demand
+facts into legacy `TaskStats`, `FailureSignal`, compensation, streak, or
+engagement-inference tables.
+
+#### EOD-09 — The accepted cycle summary has no conditional on-demand axis
+
+Severity: P1 before the first cycle containing on-demand completion closes
+Status: confirmed absent; current report is separately obsolete under UX-14
+
+Current behavior: completion metrics and report code query only plan steps and
+use plan/streak/persona language that FD-15 already replaces. There is no
+on-demand observation-window query or separate count.
+
+Expected behavior: the deterministic FD-15 summary retains the canonical
+scheduled numerator/denominator under the neutral label `За розкладом`.
+On-demand contributes `За власним запитом: N виконано` only when `N > 0` for
+the cycle window. `Усього виконано` may sum registered completions as a raw
+count; no shared percentage or adherence denominator exists. If the user has
+no active/completed scheduled cycle, on-demand telemetry does not create a
+standalone weekly report in MVP.
+
+Minimal fix: add one independent completion-count query and structured summary
+field while implementing FD-15. Test zero omission, one/many completions,
+boundary timestamps, paused cycles, and denominator isolation.
+
+#### EOD-10 — Privacy and company reporting must not expose channel behavior
+
+Severity: privacy blocker before feature beta
+Status: accepted boundary under FD-09; implementation follows PRIV-06/07
+
+Current behavior: independent privacy-preserving aggregate contributions are
+not implemented. User-linked telemetry and conversation records remain the
+only practical analytics layer.
+
+Expected behavior: entry surface, exercise, response, latency, feedback, and
+channel mix remain personal/founder-restricted data. No company report gains
+on-demand counts or comparisons. A completed/skipped on-demand response may
+contribute idempotently to the sealed distinct-active aggregate, without a
+source dimension or user join; request/delivery/expiry does not.
+
+Minimal fix: include on-demand events in personal retention/deletion and the
+already-accepted independent aggregate transaction. Add privacy tests proving
+that company queries cannot select the new occurrence/event fields.
+
+#### EOD-11 — Failure and restart semantics need one reconcilable truth
+
+Severity: P1 operational reliability before feature beta
+Status: target accepted; implementation absent
+
+Current behavior: Telegram send and database telemetry can diverge in the
+scheduled path, and current scheduler jobs are not a durable on-demand request
+queue. Process memory cannot safely enforce double-tap or one-open behavior.
+
+Expected behavior:
+
+* a duplicate Telegram update or Coach tool execution resolves to one source
+  operation and one occurrence;
+* selection and presentation snapshot are stable across retries;
+* confirmed delivery begins the deadline; unconfirmed delivery is never a user
+  skip/expiry opportunity;
+* transient GIF failure falls back to text; total send failure becomes
+  `delivery_failed` and permits a later new request;
+* restart recovery scans durable pending/delivered rows and never reselects or
+  double-sends blindly;
+* entitlement/account closure cancels open rows without classifying the user as
+  inactive;
+* simultaneous scheduled/on-demand delivery may coexist without lifecycle
+  corruption.
+
+Minimal fix: implement stable source-operation identity, transaction/outbox or
+equivalent narrow reconciliation, bounded delivery retry, overdue-row
+monitoring, and restart/failure tests. Do not solve this with process-local
+sets or Redis-only locks.
+
+#### EOD-12 — Beta reporting must preserve the open channel hypothesis
+
+Severity: P1 measurement contract before interpreting use
+Status: accepted under FD-19
+
+Current behavior: FD-11's metric hierarchy is centered on scheduled rhythm and
+explicitly deferred reactive metrics until a distinct action existed. That
+action is now accepted, but no canonical founder view separates it.
+
+Expected behavior: founder-only beta analytics shows raw cohort/window values
+for eligible users, distinct on-demand requesters, requests, confirmed
+deliveries, completed/skipped/expired outcomes, repeat requesters, response-
+latency buckets, content/version exposure, and optional completed-only effect
+feedback. It also permits descriptive scheduled-only, on-demand-only, both,
+and neither groupings without treating any group as success by definition.
+
+This observational split reveals channel preference but does not by itself
+prove that one channel caused a better outcome. Pilot cohorts/feature flags are
+a possible later experiment mechanism, not implementation scope for this
+feature round.
+
+Minimal fix: extend the restricted canonical founder query/report after event
+integrity is verified. Show numerator, denominator, raw `n`, observation
+window, and delivery failures; do not encode automatic keep/kill thresholds or
+claim causal superiority from self-selection.
+
+### Required implementation order
+
+1. complete FD-10 target records, review eligibility, and FD-16 media
+   prerequisites for the five-record launch pool;
+2. finish the canonical `ExercisePresentation` and deterministic media/text
+   delivery boundary required by UX-15/16;
+3. add the on-demand table, constraints, migration, repository, and shared
+   application service;
+4. add the command-menu route and exact authorization/idempotency path;
+5. add the Coach tool, runtime re-authorization, strict result handling, and
+   prompt tests over the same service;
+6. add the uniform immediate-no-repeat selector and pool-readiness checks;
+7. implement delivery, callback, 30-minute expiry, visible terminal state,
+   reconciliation, and restart/failure handling;
+8. extend the canonical telemetry envelope/catalogue and independent aggregate
+   contribution without legacy plan-window or inference writes;
+9. extend the FD-15 deterministic summary with the conditional on-demand count;
+10. reconcile seeded scheduled and on-demand trajectories against database
+    state/events, then run real Telegram device QA before enabling the feature.
+
+### Required test matrix
+
+* command and Coach entries call one service and differ only by
+  `entry_surface`/source operation;
+* explicit Coach request calls the tool; stress/fatigue mention alone does not;
+* active, paused, no-active-plan, weekend, and off-hours access succeeds;
+  onboarding-incomplete/revoked access fails;
+* equal eligible pool, immediate duplicate exclusion, allowed
+  `A -> B -> A -> B`, and no completion/skip/feedback weighting;
+* cool-water/media/review gates and fewer-than-two pool fail closed;
+* command/tool retries and double taps create one occurrence/delivery;
+* success, existing-open, media fallback, delivery failure, and retry results;
+* completed/skip race, expiry race, stale callback, duplicate callback, and
+  exact `Час виконання минув.` presentation;
+* restart between request/selection/send, between delivery/event write, and
+  before expiry reconciliation;
+* no mutation of plan, plan step/day, scheduler job, continuation, FSM, or
+  Redis business state;
+* event IDs/linkage/content version/source/variant and independent aggregate
+  idempotency;
+* summary omission at zero, conditional count above zero, count-only total,
+  and unchanged scheduled denominator;
+* retention/deletion, company-query exclusion, privacy-safe logs, and alert
+  payloads.
+
+### Explicitly deferred
+
+* additional exercises or user-browsable exercise catalogue;
+* full non-repeating shuffle, anti-ping-pong rules, weights, recommendations,
+  or learned preferences;
+* user-facing daily limits and therapeutic cooldown claims;
+* persistent keyboard, Web App, Mini App, or other channel adapters;
+* separate weekly summary/pulse outside the accepted cycle artifact;
+* causal scheduled-vs-reactive experiment assignment until a real pilot design
+  and sample justify it.
+
+### Blanket references — do not duplicate
+
+* FD-10 owns target exercise records and review eligibility; FD-16 owns the
+  required GIF boundary.
+* UX-15/16 own canonical presentation and media fallback; this round specifies
+  how the new channel consumes them.
+* COACH-09/RT-09 own the bounded tool-result architecture; EOD-02 adds one
+  scoped tool and its authorization/result contract.
+* FD-08 and the Lifecycle round own plan-derived modes; EOD-07 forbids a second
+  lifecycle authority.
+* CONTENT-07 and TEL-03/04/11 own canonical identity, linkage, event schema, and
+  idempotency; EOD-08 adds the on-demand source/occurrence.
+* FD-07 owns completed-only effect feedback; this round only adds source and
+  occurrence linkage.
+* FD-09/PRIV-06/07 own personal retention and independent aggregation; EOD-10
+  prevents channel leakage.
+* FD-15/UX-14 own the deterministic cycle summary; EOD-09 adds a conditional
+  count without changing scheduled adherence.
+* SEC-07, DB-04/08, and OPS-09/10 own atomic callbacks, retry/reconciliation,
+  monitoring, and release verification; this round applies them to the new
+  occurrence.
+
+---
+
+# Research-to-Product Traceability Findings
+
+## Research-to-Product Alignment — Audit Round 2026-08-20
+
+Status: completed; evidence classification only, no new product decision
+
+### Purpose and authority boundary
+
+This round tests whether the product model assembled by the audit is traceable
+to the available end-user interviews, buyer research, and intervention evidence.
+It is not a new discovery exercise and does not ask an AI system to invent a
+product from market material.
+
+The traceability chain is:
+
+```text
+primary participant signal
+-> secondary research interpretation
+-> accepted product mechanism
+-> evidence class
+-> beta question or system obligation
+```
+
+This section creates no Founder Decision and does not override one. A direct
+match means the underlying problem or behavior appeared in primary evidence; it
+does **not** prove that the exact feature, copy, cadence, interface, or business
+model will work. Conversely, no direct evidence does not automatically reject a
+choice. Security, privacy, consistency, and recoverability controls can be
+required by the selected architecture even when no interview participant asked
+for them.
+
+### Evidence classification
+
+| Class | Meaning in this audit |
+|---|---|
+| **DIRECT** | A participant described the relevant past behavior, constraint, or problem in a primary interview. This validates the signal, not the proposed feature. |
+| **SECONDARY** | An R&D synthesis, buyer report, evidence review, or framework supports the mechanism or boundary. It remains interpretation unless linked back to a primary source. |
+| **HYPOTHESIS** | A deliberate product bet that the reviewed evidence does not directly validate. It must be tested rather than presented as research truth. |
+| **NO EVIDENCE** | The reviewed source set neither supports nor rejects the exact choice. Absence is recorded so later storytelling does not manufacture validation. |
+| **TENSION** | Evidence points in more than one direction, or a source explicitly warns against an overly broad version of the mechanism. |
+| **SYSTEM** | A technical, privacy, security, operational, or experiment-integrity requirement derived from implementing the accepted model. It is not a user-demand claim. |
+
+A row may carry more than one class. For example, the workday-fatigue problem
+can be `DIRECT`, while a Telegram command chosen to address it remains a
+`HYPOTHESIS`.
+
+### Blanket source register
+
+Primary end-user interviews are stored under:
+`/Users/Baracuda/Desktop/transcripts/love yourself/Інтерв’ю з end-користувачами/`.
+The short references used below map to these authentic transcript documents:
+
+* `EU-01` — `01 — Інтерв’ю з Володимиром Красулею.docx`;
+* `EU-02` — `02 — Інтерв’ю з Богданом Нескороженим.docx`;
+* `EU-03` — `03 — Інтерв’ю з Яриком Єрміловим.docx`;
+* `EU-04` — `04 — Інтерв’ю з Дмитром Ковальчуком.docx`;
+* `EU-05` — `05 — Інтерв’ю з Іриною Падалкою.docx`;
+* `EU-06` — `06 — Інтерв’ю із Сергієм Донецьким.docx`;
+* `EU-07` — `07 — Інтерв’ю з Євгенієм Логвиненком.docx`;
+* `EU-08` — `08 — Інтерв’ю з Олександром Вапняруком.docx`;
+* `EU-09` — `09 — Інтерв’ю з Олегом Ліпяцьким.docx`;
+* `EU-10` — `10 — Інтерв’ю з Михайлом Сахариленком.docx`;
+* `EU-11` — `11 — Інтерв’ю з Олександром Очеретним.docx`;
+* `EU-12` — `12 — Інтерв’ю з Василем Франківим.docx`;
+* `EU-13` — `13 — Інтерв’ю з Артемом Колодієм.docx`;
+* `EU-14` — `14 — Інтерв’ю з Іриною Лисач.docx`;
+* `EU-15` — `15 — Інтерв’ю з Дмитром Селютіним.docx`;
+* `EU-17` — `17 — Інтерв’ю з Дмитром Пархоменком.docx`;
+* `EU-18` — `18 — Інтерв’ю з Максимом Будником.docx`;
+* `EU-19` — `19 — Інтерв’ю з Романом Овчаренком.docx`;
+* `EU-20` — `20 — Інтерв’ю з Олександром Потаповим.docx`.
+
+`EU-ALL` means the complete 19-document primary set above. There is no
+`EU-16` file in the supplied corpus. Participant statements are direct
+evidence; interviewer prompts, embedded AI suggestions, editorial notes, and
+future willingness such as “show me the beta” are not counted as behavior.
+
+Secondary and synthesis references are stored under
+`/Users/Baracuda/Desktop/Love Yourself/R&D/`:
+
+* `DISC` — `Дослідження ринку Love Yourself/discovery_working.docx`;
+* `HR` — `Дослідження ринку Love Yourself/hr_discovery_final-2.pdf`;
+* `POS` — `Дослідження ринку Love Yourself/love_yourself_market_positioning.docx`;
+* `JTBD` — `Дослідження ринку Love Yourself/jtbd_love_yourself.docx`;
+* `EVID-LY` — `Підготовлені матеріали/Love Yourself Evidence Review for Wartime Ukrainian IT Workplaces.docx`;
+* `EVID-MICRO` — `Підготовлені матеріали/Evidence Review on Short Workplace Micro-Interventions for Cognitive Workers in Wartime Ukraine.docx`;
+* `FOGG` — `Підготовлені матеріали/fogg_framework_loveyourself(1).md`;
+* `ASSUMPTIONS` — `Дослідження ринку Love Yourself/t0_3_riskiest_assumptions.html`.
+
+`DISC`, `POS`, `JTBD`, `EVID-*`, `FOGG`, and `ASSUMPTIONS` are secondary
+interpretations or frameworks even where they summarize interviews. `HR` is a
+buyer-side synthesis based on nine full interviews and four LinkedIn exchanges;
+it does not substitute for employee evidence.
+
+### Accepted-decision coverage index
+
+This compact index proves that every accepted Founder Decision is represented
+in the constructor below. It is a cross-reference only: it creates no new FD,
+does not re-open an accepted decision, and does not upgrade a hypothesis into
+research evidence.
+
+| Existing decision | Constructor coverage | Evidence classification and blanket source boundary |
+|---|---|---|
+| `FD-01` automatic same-format continuation | Constructor C, cycle lifecycle | **HYPOTHESIS + TENSION** — friction reasoning and autonomy evidence, but no direct continuation test. (`FOGG`; `EVID-LY`; `EVID-MICRO`; `EU-ALL`: no exact flow) |
+| `FD-02` remove the two-hour completion trigger | Constructors C and H | **SYSTEM** — deadline and lifecycle correctness; no user-demand claim. |
+| `FD-03` MORNING/DAY/EVENING are internal tags | Constructors C and H | **SYSTEM + HYPOTHESIS schedule model** — internal normalization supports the selected schedule; exact slots are not research-validated. (`EU-ALL`; `EVID-LY` timing discussion) |
+| `FD-04` deterministic mechanism-sale onboarding | Constructor B | **SECONDARY + HYPOTHESIS** — supported by `DISC`/`JTBD` interpretation, exact funnel untested. (`DISC` §4; `JTBD`; `EU-ALL`) |
+| `FD-05` no behavioral contingency; randomness for variety; explicit effect feedback | Constructors B, D, and F | **SECONDARY + SYSTEM** for no hidden inference; **HYPOTHESIS** for random variety and exact feedback UI. (`EVID-LY`; `EVID-MICRO`; `EU-ALL`) |
+| `FD-06` canonical exercise delivery contract | Constructors C and F | **SECONDARY + SYSTEM + HYPOTHESIS UI** — concrete/shame-free interaction is supported; exact message composition is not. (`DISC`; `EVID-LY`; `EVID-MICRO`) |
+| `FD-07` three explicit feedback sources in one table | Constructors F and G | **SECONDARY + SYSTEM** for explicit proximal measurement and source separation; exact table/UI is not user demand. (`EVID-LY` Recommended MVP metrics; `EVID-MICRO` MVP metrics) |
+| `FD-08` plan-centric lifecycle | Constructor H | **SYSTEM** — consistency, concurrency, and migration authority. |
+| `FD-09` privacy-gated company analytics and independent aggregation | Constructors B and G | **DIRECT buyer-side + SECONDARY + SYSTEM** for privacy; **HYPOTHESIS policy** for the exact 100/50 gate and three-line report. (`HR`; `POS`; `EVID-LY`; `EVID-MICRO`) |
+| `FD-10` versioned nine-record Content Library | Constructor E | **SECONDARY** for intervention families; **HYPOTHESIS / NO DIRECT EVIDENCE** for exact records, count, instructions, and effect. (`EVID-LY`; `EVID-MICRO`; `EU-ALL`) |
+| `FD-11` interaction-only telemetry | Constructor G | **SECONDARY + SYSTEM** — proximal metrics and claims ceiling are evidence-aligned. (`EVID-LY`; `EVID-MICRO`; `ASSUMPTIONS`) |
+| `FD-12` Railway backup and restore requirement | Constructor H | **SYSTEM** — durability and recoverability, not market evidence. |
+| `FD-13` Love Yourself / LY Workday naming architecture | Constructor A | **HYPOTHESIS / NO EVIDENCE** — brand decision not tested in the reviewed corpus. (`DISC`; `HR`; `POS`: no naming test) |
+| `FD-14` neutral preview, exercise in chat | Constructor F | **SECONDARY + HYPOTHESIS** — privacy/stigma support discretion; exact preview and reveal behavior require device/user testing. (`HR`; `EVID-LY`; `EVID-MICRO`) |
+| `FD-15` deterministic Telegram cycle image | Constructors C and F | **HYPOTHESIS + SYSTEM** — factual deterministic output avoids inference; the artifact itself is unvalidated. (`EU-17` adjacent weekly-review behavior; `EU-ALL`: no image test) |
+| `FD-16` required GIFs for three exercises | Constructor E | **HYPOTHESIS execution support + SYSTEM** — no media-format comparison in the reviewed evidence. (`EU-ALL`; `EVID-LY`; `EVID-MICRO`) |
+| `FD-17` no visible Coach quota, invisible operational controls | Constructors F and H | **HYPOTHESIS + SYSTEM** — user quota expectations are untested; abuse, ordering, and spend bounds are operational necessities. (`EU-ALL`: no quota evidence) |
+| `FD-18` roster-gated production plus isolated testnet | Constructors B, G, and H | **SECONDARY** privacy/adoption boundary plus **SYSTEM** identity and environment design; exact OIDC/token flow untested. (`HR`; `EVID-LY`; `EVID-MICRO`) |
+| `FD-19` independent Exercise on demand channel | Constructors D, E, F, and G | **DIRECT problem/mechanism match + HYPOTHESIS feature + SYSTEM separation**. (`EU-01`, `EU-02`, `EU-05`–`EU-10`, `EU-12`, `EU-14`, `EU-15`, `EU-17`–`EU-20`; `DISC`; `EVID-LY`) |
+
+### Constructor A — Problem, positioning, and market model
+
+| Product component or accepted choice | Evidence class | Evidence and mismatch boundary | Consequence for implementation or beta |
+|---|---|---|---|
+| Workday fatigue accumulates before the day ends, and a person may need a context switch while still working. | **DIRECT + SECONDARY** | Participants described mid-day fatigue, silence, looking out a window, walking, coffee, media, music, meditation, or continuing despite fatigue. The research synthesis names a concrete 2–5 minute reset job. (`EU-01`, `EU-02`, `EU-06`–`EU-10`, `EU-14`, `EU-15`, `EU-17`–`EU-20`; `DISC` §3.2–3.3) | This is the strongest end-user problem match. Beta should test whether LY Workday is hired at that moment, not merely whether the problem exists. |
+| The product is bounded workday recovery support, not therapy, diagnosis, burnout prevention, or a productivity engine. | **SECONDARY + SYSTEM** | Evidence is strongest for momentary recovery, fatigue, vigor, and stress; effects on demanding cognitive performance are weak or null, and ultra-brief actions do not establish burnout prevention. (`EVID-LY` Executive summary, Safe claims, Product implications; `EVID-MICRO` Executive summary, Product implications) | Product, sales, Coach, summary, telemetry, and company reporting must stay inside the claims fence. |
+| The core value is a trigger plus a small structure, not a browsable wellness catalogue. | **DIRECT + SECONDARY + TENSION** | People already switch through physical/contextual behaviors, while one participant explicitly rejected wellness apps. `DISC` says “trigger and structure, not a set of exercises” and separately records that willingness to perform exercises through an app was not confirmed. (`EU-04`; `EU-01`, `EU-02`, `EU-05`, `EU-09`, `EU-10`, `EU-12`, `EU-15`, `EU-17`–`EU-20`; `DISC` §3.3–3.5, §4) | Exercise delivery is a controlled mechanism hypothesis, not validated demand for an exercise app. Avoid building a catalogue/browser before use proves the mechanism. |
+| Love Yourself is the company; LY Workday is the employee-facing product. | **HYPOTHESIS / NO EVIDENCE** | The reviewed research predates or does not test this naming architecture. (`DISC`, `HR`, `POS`: no direct naming test) | Treat as a brand-clarity decision. Validate comprehension in onboarding and buyer conversations; do not describe it as research-backed naming. |
+| B2B2C: a company purchases access and employees use the product voluntarily. | **DIRECT buyer-side + HYPOTHESIS employee-side** | HR research supports a buyer, budget, privacy concern, leadership/champion dependency, and a detection gap. The same report labels employee use of a corporate tool as critical and beta-only validation. (`HR` §§2–7; `POS` §§4–6; `ASSUMPTIONS` C1/D1) | Preserve two distinct value propositions and two funnels. Buyer interest cannot stand in for employee adoption or continued use. |
+| Initial ICP centers on remote/hybrid Ukrainian cognitive/IT work rather than all workplaces. | **DIRECT + SECONDARY, bounded sample** | Primary participants are mainly cognitive workers and often remote/hybrid; buyer research identifies remote/hybrid companies and explicitly notes sample limitations. (`EU-01`, `EU-02`, `EU-07`, `EU-08`, `EU-15`, `EU-17`–`EU-19`; `HR` §2 and §7) | Do not generalize beta conclusions to workforces without individual email, Telegram access, or cognitive-work context. |
+
+### Constructor B — Entry, enrollment, onboarding, and user control
+
+| Product component or accepted choice | Evidence class | Evidence and mismatch boundary | Consequence for implementation or beta |
+|---|---|---|---|
+| Telegram is the first delivery and Coach channel. | **HYPOTHESIS + SECONDARY** | Telegram is argued as low-friction, but end-user interviews did not test channel preference. Buyer research marks whether Telegram is blocked as unverified until beta. (`POS` §3 and §5; `HR` C5 and §7; `ASSUMPTIONS` C5) | Instrument attributed start and delivery failure. A blocked or distrusted channel is a deployment result, not proof that the reset job is absent. |
+| Production enrollment is roster-gated with verified identity, entitlement, and a single-use Telegram handoff; individual beta uses an isolated testnet. | **SYSTEM + SECONDARY** | Privacy and confidential adoption are direct buyer concerns. No interview specifies roster schemas, OIDC, email challenges, token hashing, or environment topology. (`HR` §4.2, C2; `EVID-LY` Privacy and trust; `EVID-MICRO` Privacy/Data Protection) | Exact access design is a privacy/security consequence of B2B2C, not a market-demand feature. It must be tested for friction and isolation without claiming interview validation. |
+| Onboarding is short, deterministic, and helps the user understand the mechanism before scheduling. | **SECONDARY + HYPOTHESIS** | `DISC` interprets low Job Experience and low Solution Experience and recommends a dialogue rather than a form. Primary interviews did not test the accepted onboarding flow or copy. (`DISC` §4; `JTBD` switching/onboarding discussion) | Validate completion by stage and qualitative comprehension. Do not infer that research participants approved the funnel. |
+| Onboarding and product copy avoid labeling the user as burned out. | **DIRECT buyer-side + SECONDARY** | HR participants reported “burnout” as overused or unsafe; evidence reviews support non-clinical framing. End users described fatigue and coping more often than asking for a diagnosis. (`HR` §4.10, B8, §6; `DISC` §4; `EVID-LY` Positioning; `EVID-MICRO` Positioning) | Keep symptom/state language bounded and verify actual copy in beta interviews. |
+| Pause, resume, cancel, skip, time change, and format switch remain explicit user controls. | **SECONDARY + SYSTEM** | User control, opt-out, shame-free return, and privacy are consistent evidence-review and buyer requirements. Exact controls were not tested in primary interviews. (`EVID-LY` Delivery timing, notification frequency, privacy; `EVID-MICRO` Retention and shame-free return; `HR` §4.2) | These controls are integrity and autonomy requirements; measure their use without interpreting it as failure or pathology. |
+| No hidden behavior-inference personalization or adaptation in MVP. | **SECONDARY + SYSTEM** | Evidence favors user control and warns about surveillance and context-sensitive engagement. The 10–15-user beta has no statistical basis for reliable personal inference. Primary interviews did not request learned adaptation. (`EVID-LY` Privacy, Open questions; `EVID-MICRO` Privacy and engagement; `HR` §4.2) | Remove adaptation code and derived user-trait logic completely. Global content learning may use aggregate beta evidence; per-user inference may not. |
+
+### Constructor C — Scheduled channel and cycle lifecycle
+
+| Product component or accepted choice | Evidence class | Evidence and mismatch boundary | Consequence for implementation or beta |
+|---|---|---|---|
+| A scheduled prompt is one possible product trigger. | **DIRECT problem match + SECONDARY + HYPOTHESIS mechanism** | Some participants continued working because a task felt too important or defaulted to coffee/media; this supports a prompt problem. Evidence reviews support conservative prompts but do not prove pre-scheduled delivery is superior to JIT or self-start. (`EU-01`, `EU-02`, `EU-07`, `EU-08`, `EU-18`, `EU-19`; `DISC` §3.2–3.3; `EVID-LY` JIT delivery and Notification frequency) | Keep scheduled delivery observable as its own hypothesis. Do not treat response to a push as proof that schedule is the only correct model. |
+| MVP default is one scheduled action per selected working day. | **SECONDARY + HYPOTHESIS** | One short action per day is described as a defensible conservative baseline; evidence does not establish the product's exact optimal dose. (`EVID-LY` Notification frequency; `EVID-MICRO` Executive summary and Notification frequency) | Launch conservatively, preserve user control, and test notification fatigue, expiry, and continued response. |
+| User-selected exact delivery time and work days anchor the schedule. | **SECONDARY + HYPOTHESIS** | Evidence favors user control and rescheduling; no primary interview tested an exact-time picker, allowed company window, or weekday model. (`EVID-LY` JIT delivery, Notification frequency, Open questions; `EVID-MICRO` Notification frequency) | Timing policy remains an explicit MVP hypothesis. Record chosen time, successful delivery, and changes; do not claim the system detects an optimal moment. |
+| The first cycle is seven working days; fourteen working days is a user-selected longer format. | **HYPOTHESIS / NO DIRECT EVIDENCE** | Evidence supports repeated practice over days but not these exact formats, progression rules, or two actions for the longer format. (`EVID-LY` Recommended MVP metrics and Open questions; `EVID-MICRO` dosage/open questions) | Treat 7/14 as beta containers for observation, not established effective doses. |
+| A prepared deterministic sequence uses the same accepted library for all eligible users. | **HYPOTHESIS + SYSTEM** | Research supports low cognitive cost and concrete actions, but does not test one universal recipe. Avoiding hidden inference is evidence-aligned; exact sequence composition is not. (`DISC` §4; `EVID-LY` Exercise design and Privacy; `EVID-MICRO` Exercise design) | Version the recipe and exposure. Learn globally from beta; do not silently mutate delivered instructions or personalize from outcomes. |
+| Completion automatically prepares the same 7- or 14-day format unless the user changes or stops it. | **HYPOTHESIS + TENSION** | No interview tested automatic continuation. Reduced friction is behavior-design reasoning, while user-control evidence creates a real autonomy tension. (`FOGG`; `EVID-LY` adherence/user control; `EVID-MICRO` shame-free return) | Beta must distinguish operational continuation from actual next-cycle response. Pause/cancel/switch must remain obvious and functional. |
+| Scheduled completion, skip, and expiry close one action window without praise, streak pressure, or adaptation. | **DIRECT + SECONDARY + SYSTEM** | Motivational content and long to-do framing were described as exhausting; evidence recommends shame-free return and cautions against pressure mechanics. (`EU-02`; `EVID-LY` Engagement mechanics; `EVID-MICRO` Retention and shame-free return) | Use neutral terminal states and measure explicit response separately from silence. |
+
+### Constructor D — On-demand channel
+
+| Product component or accepted choice | Evidence class | Evidence and mismatch boundary | Consequence for implementation or beta |
+|---|---|---|---|
+| An authorized user may request `Вправа зараз` when they already notice a need to switch state. | **DIRECT problem/mechanism match + HYPOTHESIS feature** | Many participants already self-initiated a walk, silence, window gaze, coffee ritual, meditation, music, food, or another context switch. No interview asked whether they wanted a one-button product action. (`EU-01`, `EU-02`, `EU-05`–`EU-10`, `EU-12`, `EU-14`, `EU-15`, `EU-17`–`EU-20`; `DISC` §3.3) | On-demand is well matched to existing behavior but still requires live usage validation. Requests, repeat requesters, and outcomes must be observed separately from scheduled activity. |
+| Scheduled and on-demand channels coexist without declaring either one correct. | **HYPOTHESIS + experiment-integrity SYSTEM** | Evidence leaves timing superiority open; primary behavior includes both self-initiated pauses and pushing through without one. (`EU-01`, `EU-02`, `EU-07`, `EU-17`–`EU-20`; `EVID-LY` JIT delivery and Open questions; `EVID-MICRO` Open questions) | Preserve channel source and denominator. Movement toward reactive use is product learning, not adherence loss. Both and neither remain possible outcomes. |
+| Entry is a Telegram command-menu item plus an explicit Coach tool call; no persistent reply button or Mini App. | **HYPOTHESIS / NO EVIDENCE + SYSTEM** | Research did not compare these entry surfaces. The choice minimizes new UI and routes both entries through one service. (`EU-ALL`, `DISC`, `EVID-LY`: no direct interface comparison) | Test discoverability and accidental invocation. Do not interpret low command use before verifying that users could find and understand the action. |
+| On-demand remains available with an active, paused, or absent scheduled sequence, on weekends, and off-hours. | **HYPOTHESIS + SYSTEM** | A reactive job logically follows the user's recognized need, but the exact availability boundary was not researched. (`EU-ALL`: no direct availability test) | Access depends on onboarding and entitlement, not plan state. This prevents scheduled lifecycle from becoming a hidden prerequisite for the reactive hypothesis. |
+| Selection is uniform random over eligible switch exercises, excluding only the last successfully delivered on-demand exercise. | **HYPOTHESIS / NO EVIDENCE** | No interview or evidence review tested random selection, immediate-repeat tolerance, shuffle bags, or recommendation quality. (`EU-ALL`, `DISC`, `EVID-LY`, `EVID-MICRO`: no direct selection-policy evidence) | Treat equal random plus no immediate repeat as the minimal novelty rule. Measure exposure by content version; do not claim random is therapeutically superior. |
+| One open occurrence per user prevents double delivery; terminal response permits a new request immediately. | **SYSTEM** | This is a concurrency/idempotency consequence, not a user-research claim. | Enforce in PostgreSQL and reuse the occurrence across retries, commands, Coach calls, and double taps. |
+| The response window is 30 minutes; afterward the occurrence becomes expired and shows `Час виконання минув.` | **HYPOTHESIS + SYSTEM** | Research supports bounded micro-actions but does not establish a 30-minute response window or this copy. (`EVID-LY`, `EVID-MICRO`: no direct window evidence) | Treat 30 minutes as an operational beta parameter. Record delivery-to-response latency and expiry; do not infer exercise duration or effect. |
+| There is no user-visible quota, therapeutic cooldown, or daily on-demand allowance in MVP. | **HYPOTHESIS + SYSTEM** | No frequency demand was tested. Evidence cautions against burden and over-prompting, but user-initiated requests are not proactive notification load. (`EVID-LY` Notification frequency; `EVID-MICRO` Engagement; `EU-ALL`: no quota evidence) | Use only invisible abuse protection. Revisit frequency after real use and cost data, not before. |
+
+### Constructor E — Content Library and exercise-level evidence
+
+| Product component or accepted choice | Evidence class | Evidence and mismatch boundary | Consequence for implementation or beta |
+|---|---|---|---|
+| Exercises are short, concrete, bounded, and require little interpretation. | **DIRECT + SECONDARY** | Participants used simple context switches; research supports 2–5 minute resets and concrete low-effort micro-interventions. (`EU-01`, `EU-02`, `EU-05`–`EU-10`, `EU-12`, `EU-15`, `EU-17`–`EU-20`; `DISC` §3.2–3.4; `EVID-LY` Exercise design; `EVID-MICRO` Exercise design) | Preserve exact steps and duration. Beta still must establish whether the product-delivered version is acceptable and useful. |
+| The target catalogue contains six independent `switch` and three independent `unload` records. | **HYPOTHESIS / NO DIRECT EVIDENCE** | Research supports several intervention families, not this exact nine-record taxonomy, balance, or quantity. (`EVID-LY` Exercise design; `EVID-MICRO` Exercise design; `EU-ALL`: no library-size test) | Catalogue size and mix are versioned beta protocol choices. Do not market “nine evidence-proven exercises.” |
+| `breathing` switch exercise. | **SECONDARY + TENSION** | Breathwork has adjacent evidence for stress recovery, but strongest protocols often exceed the shortest LY Workday duration and rely on repetition. Primary interviews did not report this exact technique. (`EVID-LY` Executive summary and Exercise design; `EVID-MICRO` Executive summary; `EU-01` mentions meditation research, not personal breathing use) | Keep claims modest, instructions precise, and collect content-version feedback. Required GIF supports technique quality but does not strengthen efficacy evidence. |
+| `fist PMR` switch exercise. | **HYPOTHESIS / NO DIRECT EVIDENCE** | The reviewed primary interviews and core evidence summaries do not directly validate this exact localized PMR protocol. (`EU-ALL`, `DISC`, `EVID-LY`, `EVID-MICRO`: no exact-protocol evidence recorded) | Treat as a beta content hypothesis with required instructional media and external review before broad claims. |
+| `surface touch` switch exercise. | **SECONDARY + HYPOTHESIS** | Sensory grounding is supported as an intervention family, but this exact surface-touch instruction was not tested in interviews. (`EVID-MICRO` Executive summary and Exercise design; `EU-ALL`: no exact instruction) | Validate feasibility, accessibility, and reported usefulness by version. |
+| `distant gaze` switch exercise. | **DIRECT mechanism match + SECONDARY** | Participants described looking out a window, sky, nature, or walking outside to reset attention. The exact duration and steps remain untested. (`EU-01`, `EU-05`, `EU-10`, `EU-12`; `DISC` §3.3; `EVID-LY` movement/attention-shift implications) | Strongest catalogue link to observed behavior; still measure the delivered instruction rather than assuming equivalence to a spontaneous pause. |
+| `one sound` switch exercise. | **DIRECT adjacent behavior + HYPOTHESIS instruction** | Participants used silence, music, or reduced information load, but no one described the exact one-sound protocol. (`EU-01`, `EU-05`, `EU-09`, `EU-14`; `DISC` §3.3) | Treat the protocol as a content hypothesis derived from an observed attention/context need. |
+| `cool-water facial immersion` switch exercise. | **HYPOTHESIS + NO CORPUS EVIDENCE + safety SYSTEM** | The feature originated outside the reviewed interview/R&D corpus. No supplied primary or secondary source validates this exact exercise. (`EU-ALL`, `DISC`, `EVID-LY`, `EVID-MICRO`: no recorded match) | Keep the explicit medical-review and media gate. Do not deliver before approval or generalize a founder anecdote into user evidence. |
+| `one-item brain dump` unload exercise. | **SECONDARY + TENSION** | One participant used journaling with Claude, but occupational expressive-writing evidence is mixed and can increase stress. (`EU-17`; `EVID-LY` Executive summary, Exercise design, Open questions; `EVID-MICRO` expressive-writing summary) | Keep the action shallow, optional, and non-therapeutic. Review effect feedback and negative responses before wider claims. |
+| `one thing that went well` unload exercise. | **SECONDARY + HYPOTHESIS** | Positive reflection has better adjacent support than expressive unloading, and one participant used weekly “what was good / what to improve” review. The exact micro-action was not tested. (`EU-17`; `EVID-MICRO` Exercise design; `EVID-LY` writing discussion) | Treat wording and immediate usefulness as beta questions; avoid gratitude pressure or emotional interpretation. |
+| `first step tomorrow` unload exercise. | **HYPOTHESIS / NO DIRECT EVIDENCE** | The source set does not test this exact planning action. Motivation/to-do overload can be harmful when it expands demands. (`EU-02`; `EU-ALL`, `EVID-LY`: no exact-protocol support) | Keep it to one bounded item and verify that it reduces rather than creates cognitive load. |
+| The on-demand launch pool is five switch exercises; approved cool water makes six. | **HYPOTHESIS / NO EVIDENCE** | No source establishes that five or six actions are sufficient for novelty, adherence, or effect. (`EU-ALL`, `DISC`, `EVID-LY`, `EVID-MICRO`: no pool-size evidence) | Enable only when all five are release-eligible, then observe exposure, repetition complaints, and request return before expanding the library. |
+| Stable exercise ID, content version, structured requirements, review status, and fail-closed eligibility. | **SYSTEM** | These are reproducibility, safety, telemetry, and accessibility controls. They do not claim user demand. | Implement the library, builder, renderer, telemetry, and migrations as one versioned contract. |
+| Instructional GIFs are required for breathing, fist PMR, and cool water; text remains authoritative. | **HYPOTHESIS execution support + SYSTEM** | The reviewed corpus does not compare GIF versus text. Technique sensitivity provides the rationale, not outcome evidence. (`EU-ALL`, `EVID-LY`, `EVID-MICRO`: no media-format comparison) | Produce and version assets before eligibility. Record `delivery_variant`; media failure falls back to complete text. |
+
+### Constructor F — Presentation, feedback, Coach, and summary
+
+| Product component or accepted choice | Evidence class | Evidence and mismatch boundary | Consequence for implementation or beta |
+|---|---|---|---|
+| The lock-screen preview is neutral; title, duration, steps, and actions appear inside Telegram. | **SECONDARY + HYPOTHESIS** | Workplace privacy and stigma concerns support discretion, but no source tested `Пауза` versus `Перерва`, curiosity, or Telegram truncation. (`HR` §4.2; `EVID-LY` Privacy and trust; `EVID-MICRO` Privacy; `EU-ALL`: no preview test) | Device-test the exact preview. Do not optimize notification opens as a value metric. |
+| Scheduled and on-demand exercise messages share one canonical renderer and `ExercisePresentation`. | **SYSTEM** | One presentation authority prevents channel drift; this is not a user-research claim. | Route channel metadata and persistence outside the renderer. The renderer receives canonical content plus presentation state, not plan ownership. |
+| The exercise message contains only title, duration, exact steps, `Виконано`, and `Пропустити`. | **SECONDARY + HYPOTHESIS + SYSTEM** | Concrete low-load actions and shame-free skip are evidence-aligned; the exact information architecture was not tested. (`DISC` §3.3–4; `EVID-LY` Exercise design/Engagement; `EVID-MICRO` Exercise design/Retention) | Verify comprehension and callback behavior. Do not add rationale, counters, streaks, or inferred state without new evidence and decision. |
+| Optional `better / same / worse` feedback appears only after registered completion. | **SECONDARY + HYPOTHESIS** | Evidence reviews recommend immediate state change and perceived usefulness rather than inferred wellbeing. The exact three-label interaction is untested. (`EVID-LY` Recommended MVP metrics; `EVID-MICRO` MVP metrics and Pilot design) | Keep it optional and source-linked. Use it for content learning, not clinical or productivity claims. |
+| The cycle summary is a deterministic Telegram image with factual completion and next-delivery data. | **HYPOTHESIS + SYSTEM** | One participant used weekly reflection, but no source validates a completion grid, image format, or automatic-continuation artifact. (`EU-17`; `EU-ALL`: no exact summary test) | Treat it as loop-closure UX. Measure successful delivery and next-cycle response rather than assuming the image creates retention. |
+| On-demand completion appears in the cycle summary only when used, with no shared adherence denominator. | **SYSTEM + HYPOTHESIS copy** | This protects the experiment from denominator mixing; user-facing wording was not researched. | Omit zero usage, keep scheduled adherence intact, and use a count-only combined total. |
+| Coach is a reactive, non-clinical support and control channel. | **DIRECT weak signal + HYPOTHESIS** | One participant reported using Claude for conversation, journaling, and weekly review; another used a wellness app. Most interviews did not test AI Coach demand. (`EU-17`; `EU-04` rejects wellness apps; `EU-ALL`) | Coach value remains a separate beta hypothesis. Distinguish free-text support, product questions, controls, and explicit on-demand exercise requests. |
+| Coach tool execution uses a bounded tool-result loop and deterministic backend authorization. | **SYSTEM** | This follows consistency and authorization requirements, not market research. | The model may select an allowed tool but never becomes the source of truth for state, access, delivery, or success. |
+| Coach has no user-visible quota, while invisible concurrency, abuse, and cost controls apply. | **HYPOTHESIS + SYSTEM** | No primary evidence establishes expected Coach frequency or tolerance for quotas. (`EU-ALL`: no quota test) | Measure cost per complete turn and refusal events privately; revisit only with beta usage and an explicit loss budget. |
+| Crisis handling routes to bounded safety language and professional/emergency support rather than therapy by the bot. | **SECONDARY + SYSTEM** | Evidence reviews require trauma-informed safeguards and non-clinical boundaries; interviews were not crisis-efficacy tests. (`EVID-LY` positioning/privacy; `EVID-MICRO` Trauma-informed safeguards) | Test deterministic detection/routing and do not claim treatment, monitoring, or human escalation unless it exists. |
+
+### Constructor G — Telemetry, privacy, company reporting, and experiment truth
+
+| Product component or accepted choice | Evidence class | Evidence and mismatch boundary | Consequence for implementation or beta |
+|---|---|---|---|
+| Telemetry measures delivery and registered interaction, not verified exercise execution, wellbeing, burnout, or productivity. | **SECONDARY + SYSTEM** | Evidence supports proximal behavioral telemetry, short self-report, and bounded claims; hard outcome inference is not justified. (`EVID-LY` Executive summary, Recommended MVP metrics; `EVID-MICRO` MVP metrics, Safe/unsafe claims) | Event names, dashboards, summaries, and sales interpretation must retain this semantic ceiling. |
+| Scheduled and on-demand sources, occurrences, denominators, and retention views stay separate. | **SYSTEM** | This is required to observe channel preference without constructing a misleading combined adherence rate. | Show scheduled-only, on-demand-only, both, and neither descriptively; do not infer causal superiority from self-selection. |
+| Stable event identity, plan-step/exercise/content-version linkage, idempotency, and reconciliation are mandatory. | **SYSTEM** | These are experiment-integrity and failure-recovery requirements. | No beta metric is interpretable until seeded trajectories reconcile against database state. |
+| User-linked data is personal data; deletion removes it while an independently aggregated contribution may remain. | **SECONDARY + SYSTEM** | Privacy, minimum collection, transparency, and no hidden profiling are strongly supported. Exact parallel-aggregate architecture is an engineering/legal design. (`HR` §4.2/C2; `EVID-LY` Privacy and trust; `EVID-MICRO` Privacy/Data Protection) | Separate identity/access, personal behavior, operational ledgers, and independent aggregates. Test account deletion across every store. |
+| The company receives no individual behavior, Coach text, channel split, exercise history, or small-group view. | **DIRECT buyer-side + SECONDARY + SYSTEM** | Confidentiality is a repeated adoption condition. Buyer desire for aggregate visibility does not authorize individual monitoring. (`HR` §4.2, C2, D2; `POS` buyer discussion; `EVID-LY` Privacy; `EVID-MICRO` B2B reporting) | Preserve the employee trust boundary in schema, authorization, reports, contracts, and product language. |
+| A post-pilot company summary is limited to eligible employees, deployment enrollments, and active users after a 100-eligible/50-contributor gate. | **SECONDARY need + HYPOTHESIS policy + SYSTEM** | Buyer research supports aggregate adoption visibility. It does not establish these exact three fields or the 100/50 threshold as market-standard anonymity. (`HR` B4/C2/D2 and §6; `EVID-LY` Privacy; `EVID-MICRO` B2B reporting) | Describe 100/50 as a conservative policy, not a mathematical anonymity guarantee. Re-review against real cohort and legal advice. |
+| Founder-only beta analytics may inspect pseudonymous individual trajectories but no company dashboard is built. | **SYSTEM** | Small-cohort product learning requires restricted diagnosis of the mechanism; it is not employee- or buyer-requested functionality. | Restrict access, omit conversation/free text, print raw `n` and observation cutoffs, and delete personal history with the account. |
+| D1/D3/D7, completion, feedback, and continuation thresholds are directional priors for a 10–15-user beta, not automatic product verdicts. | **SECONDARY + SYSTEM** | Evidence is heterogeneous and engagement clusters in subsets; the research documents themselves label adoption/retention as beta questions. (`EVID-LY` Adherence/Open questions; `EVID-MICRO` Engagement/Open questions; `HR` §7; `ASSUMPTIONS`) | Interpret quantitative results with delivery integrity and qualitative context. Do not manufacture statistical confidence. |
+
+### Constructor H — Architecture and operations that do not require user-demand evidence
+
+| System module or accepted choice | Evidence class | Why it exists | Required boundary |
+|---|---|---|---|
+| Plan-centric lifecycle with derived mode; no duplicate stored FSM truth. | **SYSTEM** | Prevent contradictory plan/user state and make operations atomic. | Migrate once, constrain one current plan, and remove old state writers/readers rather than synchronizing them indefinitely. |
+| PostgreSQL is durable business truth; Redis is transient coordination/session state only. | **SYSTEM** | Restart, expiry, entitlement, delivery, and callback outcomes cannot depend on process memory or an evictable cache. | Every durable transition and idempotency key has a PostgreSQL authority and reconciliation path. |
+| Scheduler, delivery, callbacks, expiry, continuation, and on-demand occurrence use atomic state transitions. | **SYSTEM** | Telegram retries, double taps, process restarts, media failure, and partial writes are expected distributed-system conditions. | Conditional updates/constraints decide the winner; duplicate work returns the authoritative existing result. |
+| Shared canonical renderer with channel-specific routing and persistence. | **SYSTEM** | Prevent scheduled/on-demand presentation drift without merging their lifecycles. | The renderer does not own selection, plan progression, occurrence status, or telemetry source. |
+| Versioned forward migrations, startup schema checks, backup/restore, health/readiness, graceful shutdown, alerts, and one reproducible release artifact. | **SYSTEM** | These protect data and delivery and make findings implementable. No interview is expected to request them. | Audit closure does not equal production readiness; release proceeds only after the recorded DB/SEC/OPS gates pass. |
+| Production/testnet isolation and provider-specific secrets, databases, Redis, bots, OpenAI projects, backups, and aggregate sinks. | **SYSTEM** | Test contamination would make privacy and metrics irreversible. | Build from the same release behavior but never share data or identity namespaces. |
+| Removal of pulse, re-engagement, streak, persona, adaptation, legacy reports, old plan flows, and dead dev/test models. | **SECONDARY + SYSTEM** | Extra prompts risk fatigue; inferred personalization and evaluative messaging conflict with trust and the accepted minimal model. Dead code can still be accidentally reactivated. (`EU-02`; `EVID-LY` Adherence/Engagement/Privacy; `EVID-MICRO` Engagement/Privacy) | Delete rather than merely disable rejected mechanisms; replace tests that preserve retired architecture. |
+
+### Evidence gaps that beta must keep visible
+
+The reviewed research supports the existence of a workday recovery/context-
+switch problem and the need for privacy, autonomy, bounded claims, and
+low-friction action. It does **not** establish product-market fit or validate
+the assembled interface. The following remain explicit beta questions:
+
+1. Will an employee use a company-provided Telegram product at all?
+   (`HR` C1/C5/D1; `ASSUMPTIONS`.)
+2. Does scheduled delivery produce useful continued interaction, notification
+   fatigue, or neither? (`EVID-LY` Open questions; `EVID-MICRO` Open questions.)
+3. Do users independently request `Вправа зараз`, and do they return to it?
+   (`EU-ALL`: existing self-initiated coping, no feature test.)
+4. Do users prefer scheduled, on-demand, both, or neither when both are
+   available? No causal answer is available from self-selection alone.
+5. Are the exact five/six switch exercises feasible, acceptable, sufficiently
+   varied, and perceived as useful? (`EVID-LY` Exercise design/Open questions.)
+6. Are seven/fourteen working-day cycles and automatic continuation helpful or
+   an unwanted default? (`EU-ALL`: no direct validation.)
+7. Does Coach solve a repeated user job distinct from exercise delivery and
+   product controls? (`EU-17` is a weak direct signal, not validation.)
+8. Does the privacy/enrollment explanation create enough trust without making
+   the funnel too heavy? (`HR` confidentiality signal; exact flow untested.)
+9. Does the cycle summary close the loop or merely add another message?
+   (`EU-ALL`: no exact artifact evidence.)
+10. Can the complete mechanism run reliably enough that behavioral results are
+    about the product rather than delivery, schema, or concurrency defects?
+    (DB/SEC/OPS findings.)
+
+### Alignment conclusion
+
+The assembled LY Workday model is **aligned at the problem and boundary level**:
+short workday context switches, low cognitive load, autonomy, non-clinical
+positioning, privacy, and no employer-level individual surveillance all have
+credible direct or secondary support.
+
+It is **not yet validated at the product-configuration level**. Telegram,
+scheduled cadence, the reactive entry UI, seven/fourteen-day cycles, automatic
+continuation, exact content catalogue, random selection, GIF requirements,
+Coach, and the cycle image are product or system hypotheses. That is acceptable
+for an MVP only if telemetry preserves the distinctions above and beta results
+are not retold as evidence that existed before the beta.
+
+The scheduled-plus-on-demand model is therefore a defensible test portfolio,
+not a research conclusion. It lets the product observe scheduled preference,
+reactive preference, mixed use, and non-use without making one channel's
+denominator absorb the other. The honest outcome may be scheduled, reactive,
+both, or neither.
+
+---
+
 # Miscellaneous Findings
 
 > Standalone findings that don't yet belong to an audited area above.
@@ -4335,26 +8745,9 @@ other.
 
 ## MISC-01 — Company-level timezone model for B2B onboarding
 
-Status: product decision confirmed (2026-07-15), not implemented
-Future area: Company / B2B Onboarding (not yet audited as its own area)
-
-Decision: timezone is NOT collected per individual user in MVP — this
-is a B2B2C product, so the company sets the timezone context at
-company-onboarding time, not the employee.
-
-Model: `organization.default_timezone` / `organization.available_offices`.
-One office → timezone applied automatically, user isn't asked. Multiple
-offices → office/timezone comes from roster or invite link, or one
-question with office buttons if unknown. Per-user override in Settings
-for travel (no automatic geolocation/travel detection in MVP).
-
-Current code fact: every new user is silently defaulted to
-`Europe/Kyiv`; timezone is never actually collected anywhere. Not a
-correctness bug today (single-timezone launch), but will misroute
-delivery the moment a company outside that timezone signs up.
-
-Move to a proper "Company / B2B Onboarding" audit round when that area
-is inspected.
+**Filed 2026-08-15 → see `COMP-06`** in the Company Deployment Findings.
+Retained here as a pointer only; the decision text and current code facts now
+live in that area, per this section's filing rule.
 
 ## MISC-02 — Time Picker UX (Phase 3, not MVP)
 
@@ -4378,3 +8771,60 @@ Explicitly deferred — not MVP. Coach currently uses a natural-language
 fallback (Section 7 Time Arguments) instead.
 
 Move to a proper "Delivery UX" audit round when that area is inspected.
+
+## MISC-03 — Remove stale product and architecture documents before production
+
+Status: required pre-production documentation cleanup
+
+After the accepted core refactors are implemented, inventory repository
+documentation, prompts, context files, and other artifacts accessible to AI
+agents. Remove or clearly archive superseded concepts, abandoned architecture,
+and stale product behavior so they cannot be treated as current implementation
+instructions. Preserve history in Git rather than leaving contradictory files
+inside the active context surface.
+
+## MISC-04 — Finalize the Product Contract after core implementation stabilizes
+
+Status: required pre-production contract synchronization
+
+After all accepted core refactors and feature work are implemented, update
+`docs/audit/product_contract.md` to match the final shipped product, data,
+privacy, enrollment, telemetry, lifecycle, and operational contracts. This is
+a final consistency gate before production, not a reason to keep rewriting the
+contract while implementation is still moving.
+
+## MISC-05 — Synchronize the public website before production
+
+Status: required pre-production product-language synchronization
+
+After the product and final Product Contract stabilize, review and update the
+public website so its name, capabilities, claims, privacy boundary, enrollment
+model, and user journey describe the product that actually ships. Do not use
+the current website as an implementation source of truth during refactoring.
+
+## MISC-06 — Retire or rebuild development tools against the target model
+
+Status: required implementation/release cleanup
+
+The repository contains `devtools/common.py`, `devtools/fsm.py`,
+`devtools/plan.py`, `devtools/smoke.py`, `devtools/spawn_tasks.py`, and
+`scripts/run_coach_stress_tests.py`. They are manual development entrypoints,
+not imported production application routes, but several encode the retired
+21-day/generated-plan/adaptation/FSM model, call internal implementation
+helpers, or can create and reschedule database rows directly. Their environment
+guard also reads `ENV`, while the application configuration authority uses
+`ENVIRONMENT`.
+
+Do not carry these tools forward as if green execution proved the target LY
+Workday model. During implementation either:
+
+1. delete the obsolete tools and their stale fixtures; or
+2. rebuild a minimal explicit toolset for the accepted lifecycle, scheduled
+   delivery, on-demand occurrence, telemetry reconciliation, and deterministic
+   end-to-end smoke path.
+
+Exclude development-only tooling from the canonical production artifact unless
+a specific operational tool is deliberately retained, documented, tested, and
+guarded by the same fail-closed environment contract as the application. This
+finding does not require speculative internal tooling before implementation;
+it prevents old tools from silently becoming the test oracle for the new model.
