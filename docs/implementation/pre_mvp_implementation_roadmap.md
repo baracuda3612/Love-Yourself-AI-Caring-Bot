@@ -88,12 +88,15 @@ The operating records are:
 | One current work-package plan | Exact scope, files, migrations, tests, and acceptance criteria for the next bounded implementation round |
 | Git commits | Authentic implementation history |
 | Automated and manual test evidence | Proof that implemented behavior works |
-| Daily log under `logs/` | Decisions, completed work, evidence, blockers, and next package |
+| Private founder daily log in the separate `logs` repository | Optional continuity notes, completed work, blockers, and next package; not PR evidence or a merge prerequisite |
 | Release checklist | Final methodical Go/No-Go record |
 
-Important technical decisions are written in the daily log with four fields:
-`context`, `decision`, `reason`, and `consequence`. A separate ADR is created
-only if the founder later explicitly asks for one.
+Important technical decisions use four fields: `context`, `decision`, `reason`,
+and `consequence`. If a decision affects implementation or acceptance, its
+sanitized record belongs in the work-package document and PR so reviewers can
+inspect it. The private founder log may mirror the decision but is not an
+application-repository artifact. A separate ADR is created only if the founder
+later explicitly asks for one.
 
 ### 2.2 Work-package rule
 
@@ -423,7 +426,8 @@ and founder merge pending. Evidence in
 * create the implementation branch only after the baseline is understood;
 * add ignore rules for local environments, caches, `.DS_Store`, generated
   output, and non-release R&D material as appropriate;
-* record the first daily implementation log.
+* optionally update the founder's private daily log without making it package
+  evidence or a merge prerequisite.
 
 **Exit criteria**
 
@@ -1551,9 +1555,11 @@ block exit gate passes.
 | Next action | Resolve useful GitHub review findings on PR #248, then founder merges |
 | Current blockers | None; WP-00.2 waits until the founder merges WP-00.1 into `implementation/pre-mvp` |
 
-### Daily log minimum
+### Private founder log
 
-At the end of each implementation day, create or update `logs/YYYY-MM-DD.md`:
+When useful, create or update
+`love-yourself/session_log_YYYY-MM-DD.md` in the separate private `logs`
+repository:
 
 ```text
 Date and active package
@@ -1566,8 +1572,13 @@ Repository state and commits
 Next exact action
 ```
 
+This log is a founder convenience and private continuity record. It is not
+required for GitHub code review, package verification, or merge. Everything a
+reviewer needs must exist in the PR, work-package record, tests, or other
+non-sensitive application-repository evidence.
+
 The roadmap is updated only when package/block state, sequence, scope, or a
-decision gate changes. Routine command output belongs in the daily log or test
+decision gate changes. Routine command output belongs in private notes or test
 evidence, not in the roadmap.
 
 ---
