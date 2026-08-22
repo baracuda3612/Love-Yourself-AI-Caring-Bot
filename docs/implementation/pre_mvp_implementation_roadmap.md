@@ -1548,7 +1548,7 @@ block exit gate passes.
 |---|---|
 | Current package | `WP-00.1 — Freeze the authentic starting baseline` |
 | Status | `IN REVIEW` |
-| Next action | Push the dedicated WP branch, open the GitHub PR, resolve useful review findings, then founder merges |
+| Next action | Resolve useful GitHub review findings on PR #248, then founder merges |
 | Current blockers | None; WP-00.2 waits until the founder merges WP-00.1 into `implementation/pre-mvp` |
 
 ### Daily log minimum
