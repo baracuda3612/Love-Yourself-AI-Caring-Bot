@@ -1330,7 +1330,8 @@ not an informal task to remember later:
    the verified SHA to `main`; the resulting release is then tagged as the
    release of record.
 6. The merge, tag, source SHA, resulting `main` SHA, and post-merge verification
-   are written into the release checklist and daily log.
+   are written into the release checklist. They may also be copied into the
+   private founder daily log, but that copy is optional.
 
 Block 9 cannot be marked complete while the verified release exists only on the
 implementation branch. Block 10 deploys the tagged release-of-record; it does
