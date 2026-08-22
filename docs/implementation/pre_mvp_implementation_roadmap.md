@@ -1273,6 +1273,28 @@ because most tests passed; every failed gate has an explicit No-Go, correction,
 or documented founder exception that does not violate a privacy/security/legal
 boundary.
 
+### Main integration gate — explicit and not memory-dependent
+
+`main` remains the stable release branch while implementation accumulates on
+`implementation/pre-mvp`. The transition is a required Block 9 closeout action,
+not an informal task to remember later:
+
+1. WP-00.4 records which Git branch, if any, each Railway environment watches
+   and ensures that merging `main` cannot accidentally launch company
+   production.
+2. WP-09.3 pins the exact release-candidate Git SHA and reproducible artifact.
+3. WP-09.4 and Gate G3 must pass against that exact SHA.
+4. A reviewed PR is created from `implementation/pre-mvp` to `main`; CI and the
+   release diff must pass with no unrelated or unverified package.
+5. Only after an explicit founder Go decision is the verified SHA merged to
+   `main` and tagged as the release of record.
+6. The merge, tag, source SHA, resulting `main` SHA, and post-merge verification
+   are written into the release checklist and daily log.
+
+Block 9 cannot be marked complete while the verified release exists only on the
+implementation branch. Block 10 deploys the tagged release-of-record; it does
+not introduce unreviewed application changes during production launch.
+
 ---
 
 ## 16. Block 10 — Company production gate and controlled launch
@@ -1319,6 +1341,8 @@ including:
 **Scope**
 
 * record release manifest and Go decision;
+* verify the deployable artifact resolves to the tagged, reviewed `main`
+  release-of-record created at the Block 9 Main integration gate;
 * create fresh pre-migration backup;
 * run rehearsed forward migrations once;
 * stop old owner, start exact new artifact, verify `/ready` and no overlap;
