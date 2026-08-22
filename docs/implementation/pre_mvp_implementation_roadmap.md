@@ -149,6 +149,26 @@ push package commits directly to `implementation/pre-mvp` or `main`, or bypass
 GitHub review. After the founder merges, the local integration branch is updated
 from the remote merge result before the next work package starts.
 
+#### Review-comment closure protocol
+
+No GitHub review comment may be ignored, silently dismissed, or left without a
+written disposition. Every comment receives one explicit response:
+
+* **Accepted** — state what changed and cite the fixing commit and verification
+  evidence;
+* **Partially accepted** — state which part changed, which part did not, and why;
+* **Rejected / stale** — cite the approved target contract, code fact, or test
+  proving that the suggestion is incorrect or based on retired architecture;
+* **Deferred** — name the owning future work package and explain why deferral
+  does not violate the current package's acceptance criteria.
+
+A thread is resolved only after the response is posted and any promised fix is
+pushed. A material fix triggers the proportionate tests and, when useful, a
+repeat GitHub review. Confirmed unresolved P0/P1 findings block `VERIFIED` and
+merge. A deferred finding also blocks merge if it is required by the current
+package's exit criteria. The PR keeps the complete decision trail even when a
+thread is later collapsed or resolved.
+
 ### 2.4 AI workspace and account separation
 
 The current Codex account remains dedicated to Love Yourself because it owns
