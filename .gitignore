@@ -1,2 +1,24 @@
+# Local secrets and environment overrides
+.env
+.env.*
+!.env.example
+
+# Python environments and caches
+.venv/
+venv/
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Operating-system and editor state
+.DS_Store
+.idea/
+.vscode/
+
+# Local research and Codex working artifacts
+R&D/
+.codex-tmp/

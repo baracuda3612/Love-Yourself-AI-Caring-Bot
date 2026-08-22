@@ -88,12 +88,15 @@ The operating records are:
 | One current work-package plan | Exact scope, files, migrations, tests, and acceptance criteria for the next bounded implementation round |
 | Git commits | Authentic implementation history |
 | Automated and manual test evidence | Proof that implemented behavior works |
-| Daily log under `logs/` | Decisions, completed work, evidence, blockers, and next package |
+| Private founder daily log in the separate `logs` repository | Optional continuity notes, completed work, blockers, and next package; not PR evidence or a merge prerequisite |
 | Release checklist | Final methodical Go/No-Go record |
 
-Important technical decisions are written in the daily log with four fields:
-`context`, `decision`, `reason`, and `consequence`. A separate ADR is created
-only if the founder later explicitly asks for one.
+Important technical decisions use four fields: `context`, `decision`, `reason`,
+and `consequence`. If a decision affects implementation or acceptance, its
+sanitized record belongs in the work-package document and PR so reviewers can
+inspect it. The private founder log may mirror the decision but is not an
+application-repository artifact. A separate ADR is created only if the founder
+later explicitly asks for one.
 
 ### 2.2 Work-package rule
 
@@ -118,18 +121,33 @@ Each execution plan must contain:
 
 Implementation and review are separate passes even when both use Codex:
 
-1. implement against an approved work-package contract;
-2. run targeted checks during development;
-3. run the package acceptance suite;
-4. create a stable diff or atomic commit;
-5. review from a fresh context against the diff, audit IDs, and acceptance
-   criteria;
-6. correct findings and rerun evidence;
-7. mark the package `VERIFIED` only after the review passes.
+1. create a dedicated `wp/<package>-<slug>` branch from the current
+   `implementation/pre-mvp` integration branch;
+2. implement against an approved work-package contract and run targeted checks;
+3. run the package acceptance suite and create a stable diff;
+4. perform a fresh-context local review against the diff, audit IDs, and
+   acceptance criteria;
+5. push only the work-package branch and open a GitHub PR targeting
+   `implementation/pre-mvp`;
+6. let the configured GitHub code review run; investigate every P0/P1 and every
+   behaviorally credible lower-severity finding against the approved target
+   architecture;
+7. correct valid findings and rerun evidence; document stale-architecture or
+   hallucinated findings instead of changing correct target behavior to satisfy
+   them;
+8. mark the package `VERIFIED` only after local acceptance and the useful
+   GitHub review findings are resolved;
+9. the founder alone manually merges the PR in GitHub.
 
 The reviewer must inspect behavior, failure paths, migrations, concurrency,
 privacy, security, and regressions. It must not merely summarize the author's
 changes.
+
+Codex may create commits, push the dedicated work-package branch, open/update
+the PR, analyze review comments, and prepare fixes. Codex must not merge a PR,
+push package commits directly to `implementation/pre-mvp` or `main`, or bypass
+GitHub review. After the founder merges, the local integration branch is updated
+from the remote merge result before the next work package starts.
 
 ### 2.4 AI workspace and account separation
 
@@ -386,11 +404,16 @@ to an earlier one.
 
 ## 6. Block 0 — Development and infrastructure readiness
 
-**Status:** `NOT STARTED`  
+**Status:** `IN PROGRESS`
+
 **Target start:** Saturday, 2026-08-22  
 **Objective:** remove setup ambiguity before product refactoring begins.
 
 ### WP-00.1 — Freeze the authentic starting baseline
+
+**Status:** `VERIFIED` — local acceptance and GitHub PR review passed
+2026-08-22; founder merge pending. Evidence in
+`docs/implementation/work_packages/WP-00.1_starting_baseline.md`.
 
 **Scope**
 
@@ -403,7 +426,8 @@ to an earlier one.
 * create the implementation branch only after the baseline is understood;
 * add ignore rules for local environments, caches, `.DS_Store`, generated
   output, and non-release R&D material as appropriate;
-* record the first daily implementation log.
+* optionally update the founder's private daily log without making it package
+  evidence or a merge prerequisite.
 
 **Exit criteria**
 
@@ -1269,6 +1293,30 @@ because most tests passed; every failed gate has an explicit No-Go, correction,
 or documented founder exception that does not violate a privacy/security/legal
 boundary.
 
+### Main integration gate — explicit and not memory-dependent
+
+`main` remains the stable release branch while implementation accumulates on
+`implementation/pre-mvp`. The transition is a required Block 9 closeout action,
+not an informal task to remember later:
+
+1. WP-00.4 records which Git branch, if any, each Railway environment watches
+   and ensures that merging `main` cannot accidentally launch company
+   production.
+2. WP-09.3 pins the exact release-candidate Git SHA and reproducible artifact.
+3. WP-09.4 and Gate G3 must pass against that exact SHA.
+4. A reviewed PR is created from `implementation/pre-mvp` to `main`; CI and the
+   release diff must pass with no unrelated or unverified package.
+5. Only after an explicit founder Go decision does the founder manually merge
+   the verified SHA to `main`; the resulting release is then tagged as the
+   release of record.
+6. The merge, tag, source SHA, resulting `main` SHA, and post-merge verification
+   are written into the release checklist. They may also be copied into the
+   private founder daily log, but that copy is optional.
+
+Block 9 cannot be marked complete while the verified release exists only on the
+implementation branch. Block 10 deploys the tagged release-of-record; it does
+not introduce unreviewed application changes during production launch.
+
 ---
 
 ## 16. Block 10 — Company production gate and controlled launch
@@ -1315,6 +1363,8 @@ including:
 **Scope**
 
 * record release manifest and Go decision;
+* verify the deployable artifact resolves to the tagged, reviewed `main`
+  release-of-record created at the Block 9 Main integration gate;
 * create fresh pre-migration backup;
 * run rehearsed forward migrations once;
 * stop old owner, start exact new artifact, verify `/ready` and no overlap;
@@ -1445,7 +1495,7 @@ checkbox is marked only when every package nested under it is verified and the
 block exit gate passes.
 
 - [ ] B0 — Development and infrastructure readiness
-  - [ ] WP-00.1 — Freeze the authentic starting baseline
+  - [x] WP-00.1 — Freeze the authentic starting baseline
   - [ ] WP-00.2 — Establish the AI-assisted development workspace
   - [ ] WP-00.3 — Make the local environment reproducible
   - [ ] WP-00.4 — Secure configuration and Railway topology
@@ -1502,13 +1552,15 @@ block exit gate passes.
 | Field | Value |
 |---|---|
 | Current package | `WP-00.1 — Freeze the authentic starting baseline` |
-| Status | `NOT STARTED` |
-| Next action | On Saturday, 2026-08-22, create and execute the WP-00.1 plan |
-| Current blockers | None; dirty-worktree classification is the first package, not an unresolved prerequisite |
+| Status | `VERIFIED` |
+| Next action | Founder merges PR #248, then update local `implementation/pre-mvp` from the remote merge result |
+| Current blockers | None; WP-00.2 waits until the founder merges WP-00.1 into `implementation/pre-mvp` |
 
-### Daily log minimum
+### Private founder log
 
-At the end of each implementation day, create or update `logs/YYYY-MM-DD.md`:
+When useful, create or update
+`love-yourself/session_log_YYYY-MM-DD.md` in the separate private `logs`
+repository:
 
 ```text
 Date and active package
@@ -1521,8 +1573,13 @@ Repository state and commits
 Next exact action
 ```
 
+This log is a founder convenience and private continuity record. It is not
+required for GitHub code review, package verification, or merge. Everything a
+reviewer needs must exist in the PR, work-package record, tests, or other
+non-sensitive application-repository evidence.
+
 The roadmap is updated only when package/block state, sequence, scope, or a
-decision gate changes. Routine command output belongs in the daily log or test
+decision gate changes. Routine command output belongs in private notes or test
 evidence, not in the roadmap.
 
 ---
@@ -1532,7 +1589,8 @@ evidence, not in the roadmap.
 Roadmap changes fall into three classes:
 
 1. **Clarification:** improves wording without changing product or sequence;
-   edit and record in the daily log.
+   edit in the applicable reviewable repository record. A copy in the private
+   founder daily log is optional.
 2. **Implementation discovery:** real code/data evidence changes a package's
    method or dependency; update the package and explain the evidence.
 3. **Product/scope change:** changes an FD, privacy boundary, company output,
@@ -1546,11 +1604,11 @@ behavior.
 
 ## 22. Immediate next step after approval
 
-1. Commit this roadmap as the approved planning snapshot.
-2. On Saturday, 2026-08-22, create and execute the detailed plan for
-   `WP-00.1`.
-3. Complete B0 and confirm Gate G0.
-4. Prepare `WP-01.1` only after the Railway backup/restore conditions for Gate
+1. Preserve the approved roadmap snapshot at `e2973b9`.
+2. Complete WP-00.1 GitHub review and founder merge.
+3. Execute `WP-00.2`, then complete the remaining B0 packages.
+4. Confirm Gate G0.
+5. Prepare `WP-01.1` only after the Railway backup/restore conditions for Gate
    G1 are real.
-5. Start application refactoring with a clean, reviewed, reversible package;
+6. Start application refactoring with a clean, reviewed, reversible package;
    do not begin with a broad rewrite.
