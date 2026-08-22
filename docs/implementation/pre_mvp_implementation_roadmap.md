@@ -411,8 +411,8 @@ to an earlier one.
 
 ### WP-00.1 — Freeze the authentic starting baseline
 
-**Status:** `IN REVIEW` — local verification passed 2026-08-22; GitHub PR review
-and founder merge pending. Evidence in
+**Status:** `VERIFIED` — local acceptance and GitHub PR review passed
+2026-08-22; founder merge pending. Evidence in
 `docs/implementation/work_packages/WP-00.1_starting_baseline.md`.
 
 **Scope**
@@ -1495,7 +1495,7 @@ checkbox is marked only when every package nested under it is verified and the
 block exit gate passes.
 
 - [ ] B0 — Development and infrastructure readiness
-  - [ ] WP-00.1 — Freeze the authentic starting baseline
+  - [x] WP-00.1 — Freeze the authentic starting baseline
   - [ ] WP-00.2 — Establish the AI-assisted development workspace
   - [ ] WP-00.3 — Make the local environment reproducible
   - [ ] WP-00.4 — Secure configuration and Railway topology
@@ -1552,8 +1552,8 @@ block exit gate passes.
 | Field | Value |
 |---|---|
 | Current package | `WP-00.1 — Freeze the authentic starting baseline` |
-| Status | `IN REVIEW` |
-| Next action | Resolve useful GitHub review findings on PR #248, then founder merges |
+| Status | `VERIFIED` |
+| Next action | Founder merges PR #248, then update local `implementation/pre-mvp` from the remote merge result |
 | Current blockers | None; WP-00.2 waits until the founder merges WP-00.1 into `implementation/pre-mvp` |
 
 ### Private founder log
@@ -1589,7 +1589,8 @@ evidence, not in the roadmap.
 Roadmap changes fall into three classes:
 
 1. **Clarification:** improves wording without changing product or sequence;
-   edit and record in the daily log.
+   edit in the applicable reviewable repository record. A copy in the private
+   founder daily log is optional.
 2. **Implementation discovery:** real code/data evidence changes a package's
    method or dependency; update the package and explain the evidence.
 3. **Product/scope change:** changes an FD, privacy boundary, company output,
