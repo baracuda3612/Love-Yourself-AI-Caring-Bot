@@ -118,18 +118,33 @@ Each execution plan must contain:
 
 Implementation and review are separate passes even when both use Codex:
 
-1. implement against an approved work-package contract;
-2. run targeted checks during development;
-3. run the package acceptance suite;
-4. create a stable diff or atomic commit;
-5. review from a fresh context against the diff, audit IDs, and acceptance
-   criteria;
-6. correct findings and rerun evidence;
-7. mark the package `VERIFIED` only after the review passes.
+1. create a dedicated `wp/<package>-<slug>` branch from the current
+   `implementation/pre-mvp` integration branch;
+2. implement against an approved work-package contract and run targeted checks;
+3. run the package acceptance suite and create a stable diff;
+4. perform a fresh-context local review against the diff, audit IDs, and
+   acceptance criteria;
+5. push only the work-package branch and open a GitHub PR targeting
+   `implementation/pre-mvp`;
+6. let the configured GitHub code review run; investigate every P0/P1 and every
+   behaviorally credible lower-severity finding against the approved target
+   architecture;
+7. correct valid findings and rerun evidence; document stale-architecture or
+   hallucinated findings instead of changing correct target behavior to satisfy
+   them;
+8. mark the package `VERIFIED` only after local acceptance and the useful
+   GitHub review findings are resolved;
+9. the founder alone manually merges the PR in GitHub.
 
 The reviewer must inspect behavior, failure paths, migrations, concurrency,
 privacy, security, and regressions. It must not merely summarize the author's
 changes.
+
+Codex may create commits, push the dedicated work-package branch, open/update
+the PR, analyze review comments, and prepare fixes. Codex must not merge a PR,
+push package commits directly to `implementation/pre-mvp` or `main`, or bypass
+GitHub review. After the founder merges, the local integration branch is updated
+from the remote merge result before the next work package starts.
 
 ### 2.4 AI workspace and account separation
 
@@ -393,8 +408,9 @@ to an earlier one.
 
 ### WP-00.1 — Freeze the authentic starting baseline
 
-**Status:** `VERIFIED` — 2026-08-22, implementation commit `b28d2e4`; evidence
-in `docs/implementation/work_packages/WP-00.1_starting_baseline.md`.
+**Status:** `IN REVIEW` — local verification passed 2026-08-22; GitHub PR review
+and founder merge pending. Evidence in
+`docs/implementation/work_packages/WP-00.1_starting_baseline.md`.
 
 **Scope**
 
@@ -1286,8 +1302,9 @@ not an informal task to remember later:
 3. WP-09.4 and Gate G3 must pass against that exact SHA.
 4. A reviewed PR is created from `implementation/pre-mvp` to `main`; CI and the
    release diff must pass with no unrelated or unverified package.
-5. Only after an explicit founder Go decision is the verified SHA merged to
-   `main` and tagged as the release of record.
+5. Only after an explicit founder Go decision does the founder manually merge
+   the verified SHA to `main`; the resulting release is then tagged as the
+   release of record.
 6. The merge, tag, source SHA, resulting `main` SHA, and post-merge verification
    are written into the release checklist and daily log.
 
@@ -1473,7 +1490,7 @@ checkbox is marked only when every package nested under it is verified and the
 block exit gate passes.
 
 - [ ] B0 — Development and infrastructure readiness
-  - [x] WP-00.1 — Freeze the authentic starting baseline
+  - [ ] WP-00.1 — Freeze the authentic starting baseline
   - [ ] WP-00.2 — Establish the AI-assisted development workspace
   - [ ] WP-00.3 — Make the local environment reproducible
   - [ ] WP-00.4 — Secure configuration and Railway topology
@@ -1529,10 +1546,10 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | `WP-00.2 — Establish the AI-assisted development workspace` |
-| Status | `READY` |
-| Next action | Create and execute the bounded WP-00.2 plan |
-| Current blockers | None for planning; separate ATP account/profile setup requires founder participation during execution |
+| Current package | `WP-00.1 — Freeze the authentic starting baseline` |
+| Status | `IN REVIEW` |
+| Next action | Push the dedicated WP branch, open the GitHub PR, resolve useful review findings, then founder merges |
+| Current blockers | None; WP-00.2 waits until the founder merges WP-00.1 into `implementation/pre-mvp` |
 
 ### Daily log minimum
 
@@ -1575,9 +1592,10 @@ behavior.
 ## 22. Immediate next step after approval
 
 1. Preserve the approved roadmap snapshot at `e2973b9`.
-2. Execute `WP-00.2`, then complete the remaining B0 packages.
-3. Confirm Gate G0.
-4. Prepare `WP-01.1` only after the Railway backup/restore conditions for Gate
+2. Complete WP-00.1 GitHub review and founder merge.
+3. Execute `WP-00.2`, then complete the remaining B0 packages.
+4. Confirm Gate G0.
+5. Prepare `WP-01.1` only after the Railway backup/restore conditions for Gate
    G1 are real.
-5. Start application refactoring with a clean, reviewed, reversible package;
+6. Start application refactoring with a clean, reviewed, reversible package;
    do not begin with a broad rewrite.
