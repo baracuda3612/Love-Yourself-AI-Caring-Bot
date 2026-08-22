@@ -386,11 +386,15 @@ to an earlier one.
 
 ## 6. Block 0 — Development and infrastructure readiness
 
-**Status:** `NOT STARTED`  
+**Status:** `IN PROGRESS`
+
 **Target start:** Saturday, 2026-08-22  
 **Objective:** remove setup ambiguity before product refactoring begins.
 
 ### WP-00.1 — Freeze the authentic starting baseline
+
+**Status:** `VERIFIED` — 2026-08-22, implementation commit `b28d2e4`; evidence
+in `docs/implementation/work_packages/WP-00.1_starting_baseline.md`.
 
 **Scope**
 
@@ -1445,7 +1449,7 @@ checkbox is marked only when every package nested under it is verified and the
 block exit gate passes.
 
 - [ ] B0 — Development and infrastructure readiness
-  - [ ] WP-00.1 — Freeze the authentic starting baseline
+  - [x] WP-00.1 — Freeze the authentic starting baseline
   - [ ] WP-00.2 — Establish the AI-assisted development workspace
   - [ ] WP-00.3 — Make the local environment reproducible
   - [ ] WP-00.4 — Secure configuration and Railway topology
@@ -1501,10 +1505,10 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | `WP-00.1 — Freeze the authentic starting baseline` |
-| Status | `NOT STARTED` |
-| Next action | On Saturday, 2026-08-22, create and execute the WP-00.1 plan |
-| Current blockers | None; dirty-worktree classification is the first package, not an unresolved prerequisite |
+| Current package | `WP-00.2 — Establish the AI-assisted development workspace` |
+| Status | `READY` |
+| Next action | Create and execute the bounded WP-00.2 plan |
+| Current blockers | None for planning; separate ATP account/profile setup requires founder participation during execution |
 
 ### Daily log minimum
 
@@ -1546,10 +1550,9 @@ behavior.
 
 ## 22. Immediate next step after approval
 
-1. Commit this roadmap as the approved planning snapshot.
-2. On Saturday, 2026-08-22, create and execute the detailed plan for
-   `WP-00.1`.
-3. Complete B0 and confirm Gate G0.
+1. Preserve the approved roadmap snapshot at `e2973b9`.
+2. Execute `WP-00.2`, then complete the remaining B0 packages.
+3. Confirm Gate G0.
 4. Prepare `WP-01.1` only after the Railway backup/restore conditions for Gate
    G1 are real.
 5. Start application refactoring with a clean, reviewed, reversible package;
