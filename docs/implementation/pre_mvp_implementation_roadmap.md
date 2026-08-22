@@ -439,6 +439,10 @@ to an earlier one.
 
 ### WP-00.2 — Establish the AI-assisted development workspace
 
+**Status:** `IN REVIEW` — workspace separation and founder acceptance passed
+2026-08-22; GitHub PR review pending. Evidence in
+`docs/implementation/work_packages/WP-00.2_ai_workspace.md`.
+
 **Scope**
 
 * keep this account/workspace for Love Yourself;
@@ -1551,10 +1555,10 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | `WP-00.1 — Freeze the authentic starting baseline` |
-| Status | `VERIFIED` |
-| Next action | Founder merges PR #248, then update local `implementation/pre-mvp` from the remote merge result |
-| Current blockers | None; WP-00.2 waits until the founder merges WP-00.1 into `implementation/pre-mvp` |
+| Current package | `WP-00.2 — Establish the AI-assisted development workspace` |
+| Status | `IN REVIEW` |
+| Next action | Open the WP-00.2 PR and resolve useful GitHub review findings |
+| Current blockers | None |
 
 ### Private founder log
 
