@@ -1565,8 +1565,8 @@ block exit gate passes.
 |---|---|
 | Current package | `WP-00.4 — Secure configuration and Railway topology` |
 | Status | `REVIEW` |
-| Next action | Resolve PR review findings and complete founder merge |
-| Current blockers | GitHub review only; paid backup/restore is deferred to Gate G1 before durable data or market launch |
+| Next action | Founder merges reviewed PR #251 |
+| Current blockers | Founder merge only; paid backup/restore is deferred to Gate G1 before durable data or market launch |
 
 ### Private founder log
 
