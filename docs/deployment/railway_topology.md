@@ -51,7 +51,7 @@ contour from the reviewed release artifact.
 | Token signing | dedicated report/enrollment secrets and namespace | dedicated report/enrollment secrets and namespace |
 | Telemetry and aggregates | testnet-only sinks marked by immutable deployment ID | production-only sinks marked by immutable deployment ID |
 | Alerts | founder testnet channel/routing | founder production channel/routing |
-| Backups | restore/scratch drills; no production data copied in | daily and weekly scheduled backups plus manual pre-change backup |
+| Backups | pre-MVP data is disposable; no scheduled backup during the accepted refactoring exception | daily and weekly scheduled backups plus manual pre-change backup |
 
 No credential, database, Redis instance, bot identity, token namespace, URL,
 alert route, or aggregate sink may be shared across these environments. Testnet
@@ -125,7 +125,17 @@ Gate G1 requires this drill:
 6. record observed RPO, RTO, backup timestamp, source/target service IDs, result,
    and cleanup decision without credentials or user data.
 
-Railway billing does not need to be active for repository hardening. It must be
-active before scheduled backups can be enabled and the scratch restore can be
-created and verified. Those external actions require founder confirmation and
-must be performed only after compromised credentials are rotated.
+### Accepted pre-MVP exception
+
+On 2026-08-26 the founder accepted complete loss of the current testnet database
+during the refactoring phase. It contains no valuable company or user data and
+must remain disposable: it is never promoted or copied into production. A
+logical dump was created and its archive/checksum validated, but restore was
+not proven; this is not recovery evidence and Gate G1 remains open.
+
+This exception permits repository refactoring and founder-only testnet use
+without Railway scheduled backups. It does not permit company enrollment,
+market launch, or treating testnet data as durable. Before any such use, the
+founder must provision the production contour, enable the paid Railway backup
+capability, and complete the scratch restore drill above. A fresh backup is
+also required before any operation that could destroy non-disposable data.

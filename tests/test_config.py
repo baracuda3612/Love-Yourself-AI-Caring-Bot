@@ -85,6 +85,33 @@ def test_valid_production_configuration_is_accepted() -> None:
     assert settings.PORT == 9000
 
 
+@pytest.mark.parametrize(
+    "bot_token",
+    [
+        "123456789:token with an internal space",
+        "BOT_TOKEN=123456789:token",
+    ],
+)
+def test_invalid_production_bot_token_fails_before_aiogram(bot_token: str) -> None:
+    with pytest.raises(ConfigurationError) as raised:
+        Settings.from_mapping(
+            _base_config(
+                ENVIRONMENT="staging",
+                DEPLOYMENT_ID="love-yourself-testnet",
+                BOT_TOKEN=bot_token,
+                OPENAI_API_KEY="sk-staging-shaped-key",
+                REDIS_URL="redis://redis.internal:6379/0",
+                REPORT_TOKEN_SECRET="a" * 32,
+                APP_BASE_URL="https://testnet.example.com",
+                BOT_USERNAME="love_yourself_test_bot",
+            )
+        )
+
+    message = str(raised.value)
+    assert "BOT_TOKEN" in message
+    assert bot_token not in message
+
+
 def test_validation_error_does_not_echo_secret_values() -> None:
     secret = "replace_me_sensitive_value"
 

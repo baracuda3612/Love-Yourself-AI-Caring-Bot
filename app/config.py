@@ -35,6 +35,7 @@ _PLACEHOLDER_MARKERS = (
     "your_",
 )
 _BOT_USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{5,32}$")
+_BOT_TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_-]+$")
 
 
 def _is_placeholder(value: str) -> bool:
@@ -179,6 +180,9 @@ class Settings:
         app_base_url = source.get("APP_BASE_URL", "http://127.0.0.1:8000").strip()
         bot_username = source.get("BOT_USERNAME", "local_dev_bot").strip().lstrip("@")
 
+        if any(character.isspace() for character in bot_token):
+            errors.append("BOT_TOKEN must not contain whitespace")
+
         _url(
             "DATABASE_URL",
             database_url,
@@ -199,6 +203,8 @@ class Settings:
                 errors.append("BOT_USERNAME is required outside development")
             if _is_placeholder(bot_token):
                 errors.append("BOT_TOKEN must not be a placeholder outside development")
+            elif not _BOT_TOKEN_RE.fullmatch(bot_token):
+                errors.append("BOT_TOKEN must have Telegram token format outside development")
             if _is_placeholder(openai_api_key):
                 errors.append("OPENAI_API_KEY must not be a placeholder outside development")
             if _is_placeholder(report_secret) or len(report_secret) < 32:
