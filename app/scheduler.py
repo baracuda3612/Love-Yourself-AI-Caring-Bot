@@ -12,6 +12,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.config import settings
+from app.delivery_guards import can_send_step_status
 from app.active_days import resolve_timezone, step_expires_at
 from app.plan_completion.tokens import make_report_token
 from app.db import AIPlan, AIPlanDay, AIPlanStep, SessionLocal, User, UserEvent
@@ -148,7 +149,7 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
 
         if plan.status != "active":
             return
-        if step.step_status in ("completed", "skipped", "expired", "canceled"):
+        if not can_send_step_status(step.step_status):
             return
         if not step.scheduled_for:
             return

@@ -1,0 +1,27 @@
+# Deny by default. The release image needs only runtime code and its lock file.
+**
+!app/
+!app/**
+!requirements.txt
+!resource/
+!resource/assets/
+!resource/assets/content_library/
+!resource/assets/content_library/tasks/
+!resource/assets/content_library/tasks/burnout_combined_content_library.json
+!resource/assets/plan/
+!resource/assets/plan/plan_context_template.yaml
+!resource/assets/product/
+!resource/assets/product/conceptual_map_en.md
+!resource/assets/ux/
+!resource/assets/ux/pulse_quotes.json
+!resource/assets/ux/trigger_messages.json
+
+# Keep local artifacts and credential-shaped files excluded even under app/.
+**/__pycache__/
+**/__pycache__/**
+**/*.py[cod]
+**/.env
+**/.env.*
+**/*secret*
+**/*credential*
+**/.DS_Store

@@ -463,6 +463,10 @@ review passed; founder merged PR #249 at `5197284`. Evidence in
 
 ### WP-00.3 — Make the local environment reproducible
 
+**Status:** `VERIFIED` — GitHub review completed without findings; founder
+merged PR #250 at `d885bb3`. Evidence in
+`docs/implementation/work_packages/WP-00.3_reproducible_environment.md`.
+
 **Scope**
 
 * use the supported Python 3.12 patch line locally and pin Python 3.12.14 for
@@ -1502,7 +1506,7 @@ block exit gate passes.
 - [ ] B0 — Development and infrastructure readiness
   - [x] WP-00.1 — Freeze the authentic starting baseline
   - [x] WP-00.2 — Establish the AI-assisted development workspace
-  - [ ] WP-00.3 — Make the local environment reproducible
+  - [x] WP-00.3 — Make the local environment reproducible
   - [ ] WP-00.4 — Secure configuration and Railway topology
 - [ ] B1 — Recovery, migration authority, and data foundations
   - [ ] WP-01.1 — Restore, inspect, and establish Alembic authority
@@ -1556,10 +1560,10 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | `WP-00.3 — Make the local environment reproducible` |
-| Status | `IN REVIEW` |
-| Next action | Review the stable WP-00.3 PR; resolve useful findings; founder merges |
-| Current blockers | None |
+| Current package | `WP-00.4 — Secure configuration and Railway topology` |
+| Status | `IN PROGRESS` |
+| Next action | Complete repository hardening and verification; then rotate compromised credentials and activate Railway for backup/scratch-restore evidence with founder approval |
+| Current blockers | External credential rotation and inactive Railway block final package verification, but not repository work |
 
 ### Private founder log
 
@@ -1609,10 +1613,11 @@ behavior.
 
 ## 22. Immediate next step after approval
 
-1. Complete WP-00.3 review and founder merge.
-2. Execute WP-00.4 in a fresh package task.
-3. Confirm Gate G0.
-4. Prepare `WP-01.1` only after the Railway backup/restore conditions for Gate
+1. Complete WP-00.4 repository hardening and targeted verification.
+2. Rotate compromised provider credentials with founder approval.
+3. Activate Railway, enable backups, and complete the scratch restore.
+4. Confirm Gate G0.
+5. Prepare `WP-01.1` only after the Railway backup/restore conditions for Gate
    G1 are real.
-5. Start application refactoring with a clean, reviewed, reversible package;
+6. Start application refactoring with a clean, reviewed, reversible package;
    do not begin with a broad rewrite.

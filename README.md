@@ -1,14 +1,16 @@
 
-# Love Yourself — Wellness Bot MVP (Telegram + OpenAI)
+# Love Yourself — Wellness Bot pre-MVP
 
-Minimal MVP:
-- aiogram bot
-- APScheduler daily message
-- /ask with daily limit
-- token usage logging
-- PostgreSQL database 
+The current implementation combines an aiogram polling bot, FastAPI report
+pages, APScheduler delivery, OpenAI-backed planning and Coach behavior,
+PostgreSQL, and optional local Redis-backed state.
 
-See `.env.example` for config.
+Copy `.env.example` to an untracked `.env` for local development and replace
+the placeholders with local-only values. The typed runtime accepts exactly
+`dev`, `staging`, or `prod`; staging/production configuration fails closed when
+required infrastructure or safe public settings are missing. The non-secret
+Railway variable and isolation contract is documented in
+`docs/deployment/railway_topology.md`.
 
 ## Local development
 
@@ -45,3 +47,10 @@ make services-down
 dependencies. Their compiled `.txt` files contain the exact transitive versions
 used by local development and Docker. Artifact hashes and the final image digest
 are added at the release-security gate after the target platform is fixed.
+
+Build the same restricted Docker context used for the eventual release
+artifact with:
+
+```bash
+docker build -t love-yourself:local .
+```
