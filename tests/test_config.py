@@ -85,6 +85,15 @@ def test_valid_production_configuration_is_accepted() -> None:
     assert settings.PORT == 9000
 
 
+def test_psycopg3_url_is_rejected_when_runtime_driver_is_not_installed() -> None:
+    with pytest.raises(ConfigurationError, match="DATABASE_URL"):
+        Settings.from_mapping(
+            _base_config(
+                DATABASE_URL="postgresql+psycopg://user:pass@127.0.0.1:5432/app"
+            )
+        )
+
+
 @pytest.mark.parametrize(
     "bot_token",
     [

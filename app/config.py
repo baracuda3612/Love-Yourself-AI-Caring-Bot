@@ -186,7 +186,7 @@ class Settings:
         _url(
             "DATABASE_URL",
             database_url,
-            {"postgresql", "postgresql+psycopg", "postgresql+psycopg2"},
+            {"postgresql", "postgresql+psycopg2"},
             errors,
         )
         if redis_url:
