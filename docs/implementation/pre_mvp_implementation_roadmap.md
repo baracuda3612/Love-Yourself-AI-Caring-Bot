@@ -411,8 +411,8 @@ to an earlier one.
 
 ### WP-00.1 — Freeze the authentic starting baseline
 
-**Status:** `VERIFIED` — local acceptance and GitHub PR review passed
-2026-08-22; founder merge pending. Evidence in
+**Status:** `VERIFIED` — local acceptance and GitHub PR review passed;
+founder merged PR #248. Evidence in
 `docs/implementation/work_packages/WP-00.1_starting_baseline.md`.
 
 **Scope**
@@ -439,8 +439,8 @@ to an earlier one.
 
 ### WP-00.2 — Establish the AI-assisted development workspace
 
-**Status:** `IN REVIEW` — workspace separation and founder acceptance passed
-2026-08-22; GitHub PR review pending. Evidence in
+**Status:** `VERIFIED` — workspace separation, founder acceptance, and GitHub
+review passed; founder merged PR #249 at `5197284`. Evidence in
 `docs/implementation/work_packages/WP-00.2_ai_workspace.md`.
 
 **Scope**
@@ -465,10 +465,11 @@ to an earlier one.
 
 **Scope**
 
-* confirm the supported Python 3.11 patch line;
+* use the supported Python 3.12 patch line locally and pin Python 3.12.14 for
+  the release container;
 * resolve and lock runtime and test dependencies;
-* inspect aiogram 3.5.0 compatibility before choosing an upgrade; do not upgrade
-  it merely for freshness;
+* inspect aiogram 3.5.0 compatibility before choosing an upgrade; upgrade only
+  when compatibility or security evidence requires it;
 * establish one documented environment bootstrap command;
 * establish one canonical targeted-test command and one future full-suite
   command;
@@ -1500,7 +1501,7 @@ block exit gate passes.
 
 - [ ] B0 — Development and infrastructure readiness
   - [x] WP-00.1 — Freeze the authentic starting baseline
-  - [ ] WP-00.2 — Establish the AI-assisted development workspace
+  - [x] WP-00.2 — Establish the AI-assisted development workspace
   - [ ] WP-00.3 — Make the local environment reproducible
   - [ ] WP-00.4 — Secure configuration and Railway topology
 - [ ] B1 — Recovery, migration authority, and data foundations
@@ -1555,9 +1556,9 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | `WP-00.2 — Establish the AI-assisted development workspace` |
+| Current package | `WP-00.3 — Make the local environment reproducible` |
 | Status | `IN REVIEW` |
-| Next action | Open the WP-00.2 PR and resolve useful GitHub review findings |
+| Next action | Review the stable WP-00.3 PR; resolve useful findings; founder merges |
 | Current blockers | None |
 
 ### Private founder log
@@ -1608,11 +1609,10 @@ behavior.
 
 ## 22. Immediate next step after approval
 
-1. Preserve the approved roadmap snapshot at `e2973b9`.
-2. Complete WP-00.1 GitHub review and founder merge.
-3. Execute `WP-00.2`, then complete the remaining B0 packages.
-4. Confirm Gate G0.
-5. Prepare `WP-01.1` only after the Railway backup/restore conditions for Gate
+1. Complete WP-00.3 review and founder merge.
+2. Execute WP-00.4 in a fresh package task.
+3. Confirm Gate G0.
+4. Prepare `WP-01.1` only after the Railway backup/restore conditions for Gate
    G1 are real.
-6. Start application refactoring with a clean, reviewed, reversible package;
+5. Start application refactoring with a clean, reviewed, reversible package;
    do not begin with a broad rewrite.

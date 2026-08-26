@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from aiogram import Bot, Dispatcher, F, Router
+from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -32,7 +33,10 @@ from app.telemetry import get_success_streak, log_user_event
 from app.logging.router_logging import log_metric
 from app.fsm.states import PLAN_CREATION_ENTRY_STATES
 
-bot = Bot(token=settings.BOT_TOKEN, parse_mode="HTML")
+bot = Bot(
+    token=settings.BOT_TOKEN,
+    default=DefaultBotProperties(parse_mode="HTML"),
+)
 redis_client = create_redis_client()
 storage = create_fsm_storage(redis_client) or MemoryStorage()
 dp = Dispatcher(storage=storage)

@@ -158,9 +158,9 @@ async def completion_report(request: Request, token: str):
     }.get(metrics.outcome_tier, "tier-neutral")
 
     return templates.TemplateResponse(
+        request,
         "completion_report.html",
         {
-            "request": request,
             "tier_class": tier_class,
             "report_text": report_text,
             "observation": observation,
@@ -208,9 +208,9 @@ async def pulse_report(request: Request, token: str):
         return HTMLResponse(f"<h1>Pulse: день {data.active_day_number}</h1>")
 
     return templates.TemplateResponse(
+        request,
         "pulse.html",
         {
-            "request": request,
             "plan_name": DUR_LABELS_PULSE.get(plan.duration or "", "План"),
             "plan_focus": FOCUS_LABELS_PULSE.get((plan.focus or "").lower(), ""),
             "active_day_number": data.active_day_number,
