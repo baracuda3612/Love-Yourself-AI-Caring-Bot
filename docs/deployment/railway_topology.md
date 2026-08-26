@@ -28,12 +28,24 @@ polling, Coach serialization, and scheduler ownership are distributed safely.
 
 `staging` is the isolated founder testnet. `prod` is company production.
 
+Provisioning is phased. During pre-MVP development only one runtime contour is
+active: the existing Railway contour is classified as testnet with
+`ENVIRONMENT=staging` and `DEPLOYMENT_ID=love-yourself-testnet`. The production
+topology remains defined here but does not need to be provisioned or billed
+until preparation for the first company deployment. It must exist and pass the
+production gate before any company user is enrolled.
+
+The testnet contour is never promoted in place: its bot, PostgreSQL data,
+Redis, OpenAI project, token secrets, URLs, and aggregates are not renamed,
+copied, or reused as production. Production is created as a clean isolated
+contour from the reviewed release artifact.
+
 | Surface | Testnet (`staging`) | Production (`prod`) |
 |---|---|---|
 | Railway boundary | dedicated project or fully isolated environment | dedicated project or fully isolated environment |
 | Application service | one replica; testnet URL | one replica; production URL |
 | Telegram | dedicated test bot and token | dedicated production bot and token |
-| PostgreSQL | dedicated database/volume; disposable test data only | dedicated database/volume; company data only |
+| PostgreSQL | dedicated database/volume; pre-MVP/test data only, never promoted | dedicated database/volume; company data only |
 | Redis | dedicated instance and namespace | dedicated instance and namespace |
 | OpenAI | dedicated project, key, budget, and alerts | dedicated project, key, budget, and alerts |
 | Token signing | dedicated report/enrollment secrets and namespace | dedicated report/enrollment secrets and namespace |
