@@ -10,6 +10,7 @@ except Exception:
 import uvicorn
 
 from app.api import app
+from app.config import settings
 from app.db import audit_startup_schema, init_db
 from app.scheduler import schedule_daily_loop
 from app.telegram import bot, dp
@@ -20,7 +21,12 @@ async def main() -> None:
     audit_startup_schema()
     asyncio.create_task(schedule_daily_loop())
 
-    config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
+    config = uvicorn.Config(
+        app,
+        host="0.0.0.0",
+        port=settings.PORT,
+        log_level="info",
+    )
     server = uvicorn.Server(config)
 
     await asyncio.gather(dp.start_polling(bot), server.serve())

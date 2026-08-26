@@ -16,7 +16,7 @@ _TEST_ENV = {
     "OPENAI_API_KEY": "test-key",
     "REDIS_URL": "redis://127.0.0.1:56379/0",
     "REPORT_TOKEN_SECRET": "test-report-secret",
-    "ENVIRONMENT": "test",
+    "ENVIRONMENT": "dev",
 }
 
 for _name, _value in _TEST_ENV.items():

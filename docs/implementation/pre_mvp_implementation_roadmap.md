@@ -238,9 +238,10 @@ Required before the first application-code work package:
 
 Railway production does not need to be running merely to write local code.
 
-### Gate G1 — database-changing implementation may start
+### Gate G1 — durable-data and production migration may start
 
-Required before the lifecycle/event/content migration round:
+Required before company-user enrollment, market launch, or migration of any
+non-disposable data:
 
 * Railway daily/weekly backups are enabled;
 * a fresh backup is restored to a separate scratch environment;
@@ -358,7 +359,7 @@ package does not become `READY` until every listed package/gate is satisfied.
 | `WP-00.2` | `WP-00.1` repository ownership understood |
 | `WP-00.3` | `WP-00.1` baseline selected |
 | `WP-00.4` | `WP-00.1`; founder access to relevant credentials/Railway |
-| `WP-01.1` | `WP-00.4`; Gate G1 backup and scratch restore |
+| `WP-01.1` | `WP-00.4`; may use only explicitly disposable testnet data until Gate G1 |
 | `WP-01.2` | `WP-01.1` physical-schema evidence |
 | `WP-01.3` | `WP-01.2` target invariant ledger |
 | `WP-01.4` | `WP-01.2`; schema design aligned with `WP-01.3` lifecycle identity |
@@ -463,6 +464,10 @@ review passed; founder merged PR #249 at `5197284`. Evidence in
 
 ### WP-00.3 — Make the local environment reproducible
 
+**Status:** `VERIFIED` — GitHub review completed without findings; founder
+merged PR #250 at `d885bb3`. Evidence in
+`docs/implementation/work_packages/WP-00.3_reproducible_environment.md`.
+
 **Scope**
 
 * use the supported Python 3.12 patch line locally and pin Python 3.12.14 for
@@ -501,8 +506,8 @@ review passed; founder merged PR #249 at `5197284`. Evidence in
   `Procfile` conflict for B9;
 * define isolated testnet and production services, bots, databases, Redis,
   OpenAI projects, token keys, URLs, alerts, backups, and aggregate sinks;
-* enable Railway daily/weekly production-volume backups;
-* prepare the scratch restore required by Gate G1;
+* define the Railway daily/weekly production-volume backup prerequisite;
+* define the scratch restore required by Gate G1;
 * record one replica / one polling owner / one scheduler writer as the beta
   topology.
 
@@ -514,7 +519,8 @@ review passed; founder merged PR #249 at `5197284`. Evidence in
 * no live secret is tracked or copied into the build context;
 * invalid production configuration fails closed;
 * environment topology and ownership are explicit;
-* backups are enabled and a separate restore target exists;
+* the production backup/restore gate is explicit, including any accepted
+  pre-production exception;
 * testnet work cannot write production data.
 
 ### Block 0 completion gate
@@ -527,7 +533,7 @@ production-derived migration is designed from ORM assumptions alone.
 ## 7. Block 1 — Recovery, migration authority, and data foundations
 
 **Status:** `NOT STARTED`  
-**Depends on:** B0 and Gate G1 prerequisites  
+**Depends on:** B0; Gate G1 before any non-disposable or production migration
 **Objective:** establish PostgreSQL as reproducible durable truth before the
 first large refactor.
 
@@ -535,9 +541,9 @@ first large refactor.
 
 **Deliverables**
 
-* verified Railway backup restore to scratch/staging;
 * physical schema, enum, constraint, index, row-count, nullability, legacy-row,
-  and scheduler-job inventory;
+  and scheduler-job inventory from disposable testnet during refactoring, then
+  from a verified production backup restore before production migration;
 * authoritative Alembic baseline representing the real starting schema;
 * one forward migration command and migration test harness;
 * production startup changed from schema mutation to read-only version check;
@@ -550,7 +556,8 @@ first large refactor.
 **Exit criteria**
 
 * repository migrations reproduce the inspected schema;
-* migration rehearsals run against restored data, not first in production;
+* migration rehearsals run against disposable or restored copies, never first
+  against non-disposable production data;
 * application startup cannot silently mutate production schema;
 * restore cannot replay stale scheduled deliveries.
 
@@ -1502,7 +1509,7 @@ block exit gate passes.
 - [ ] B0 — Development and infrastructure readiness
   - [x] WP-00.1 — Freeze the authentic starting baseline
   - [x] WP-00.2 — Establish the AI-assisted development workspace
-  - [ ] WP-00.3 — Make the local environment reproducible
+  - [x] WP-00.3 — Make the local environment reproducible
   - [ ] WP-00.4 — Secure configuration and Railway topology
 - [ ] B1 — Recovery, migration authority, and data foundations
   - [ ] WP-01.1 — Restore, inspect, and establish Alembic authority
@@ -1556,10 +1563,10 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | `WP-00.3 — Make the local environment reproducible` |
-| Status | `IN REVIEW` |
-| Next action | Review the stable WP-00.3 PR; resolve useful findings; founder merges |
-| Current blockers | None |
+| Current package | `WP-00.4 — Secure configuration and Railway topology` |
+| Status | `REVIEW` |
+| Next action | Founder merges reviewed PR #251 |
+| Current blockers | Founder merge only; paid backup/restore is deferred to Gate G1 before durable data or market launch |
 
 ### Private founder log
 
@@ -1609,10 +1616,12 @@ behavior.
 
 ## 22. Immediate next step after approval
 
-1. Complete WP-00.3 review and founder merge.
-2. Execute WP-00.4 in a fresh package task.
-3. Confirm Gate G0.
-4. Prepare `WP-01.1` only after the Railway backup/restore conditions for Gate
-   G1 are real.
-5. Start application refactoring with a clean, reviewed, reversible package;
+1. Complete WP-00.4 repository hardening and targeted verification.
+2. Rotate compromised provider credentials with founder approval.
+3. Run the founder-only testnet with explicitly disposable data during
+   refactoring; defer paid backups and the verified scratch restore to Gate G1.
+4. Confirm Gate G0.
+5. Prepare `WP-01.1` against explicitly disposable testnet data; satisfy Gate
+   G1 before company enrollment, market launch, or non-disposable migration.
+6. Start application refactoring with a clean, reviewed, reversible package;
    do not begin with a broad rewrite.
