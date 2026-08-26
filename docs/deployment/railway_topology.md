@@ -35,6 +35,12 @@ topology remains defined here but does not need to be provisioned or billed
 until preparation for the first company deployment. It must exist and pass the
 production gate before any company user is enrolled.
 
+The existing Railway environment retains the legacy dashboard label
+`production`. That provider-side display name is non-authoritative and does not
+change the contour's testnet classification. Runtime identity comes from the
+validated `ENVIRONMENT` and `DEPLOYMENT_ID` values. The future company
+production contour is created separately and must not reuse this environment.
+
 The testnet contour is never promoted in place: its bot, PostgreSQL data,
 Redis, OpenAI project, token secrets, URLs, and aggregates are not renamed,
 copied, or reused as production. Production is created as a clean isolated

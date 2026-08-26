@@ -1564,9 +1564,9 @@ block exit gate passes.
 | Field | Value |
 |---|---|
 | Current package | `WP-00.4 — Secure configuration and Railway topology` |
-| Status | `IN PROGRESS` |
-| Next action | Complete repository hardening and verification; then rotate compromised credentials and activate Railway for backup/scratch-restore evidence with founder approval |
-| Current blockers | External credential rotation and inactive Railway block final package verification, but not repository work |
+| Status | `REVIEW` |
+| Next action | Resolve PR review findings and complete founder merge |
+| Current blockers | GitHub review only; paid backup/restore is deferred to Gate G1 before durable data or market launch |
 
 ### Private founder log
 
