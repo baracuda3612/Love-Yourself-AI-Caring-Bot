@@ -100,3 +100,10 @@ def test_alembic_environment_does_not_require_application_secrets() -> None:
     assert 'os.environ.get("DATABASE_URL"' in source
     assert "from app.config" not in source
     assert "from app.db" not in source
+
+
+def test_runtime_image_includes_all_forward_revisions() -> None:
+    dockerignore = Path(".dockerignore").read_text(encoding="utf-8")
+
+    assert "!migrations/alembic/versions/*.py" in dockerignore
+    assert "!migrations/alembic/versions/20260827_physical_schema_baseline.py" not in dockerignore

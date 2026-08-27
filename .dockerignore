@@ -8,7 +8,7 @@
 !migrations/alembic/env.py
 !migrations/alembic/script.py.mako
 !migrations/alembic/versions/
-!migrations/alembic/versions/20260827_physical_schema_baseline.py
+!migrations/alembic/versions/*.py
 !requirements.txt
 !resource/
 !resource/assets/
