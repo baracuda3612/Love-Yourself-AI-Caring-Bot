@@ -21,6 +21,7 @@ from sqlalchemy import (
     Time,
     create_engine,
     inspect,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
@@ -39,31 +40,28 @@ SessionLocal = sessionmaker(
 Base = declarative_base()
 logger = logging.getLogger(__name__)
 
+EXPECTED_ALEMBIC_REVISION = "20260827_schema_baseline"
+
+
+class SchemaVersionError(RuntimeError):
+    """The database is not at the application schema revision required by this build."""
+
 
 def audit_startup_schema() -> None:
-    """Assert critical schema requirements before startup."""
+    """Fail closed unless the read-only Alembic version check matches this build."""
     inspector = inspect(engine)
+    if not inspector.has_table("alembic_version"):
+        logger.critical("Startup schema audit failed: Alembic version table is missing.")
+        raise SchemaVersionError("Startup schema audit failed: database is not under Alembic authority")
 
-    required_columns = {
-        "plan_instances": {"contract_version", "schema_version", "initial_parameters"},
-    }
+    with engine.connect() as connection:
+        revisions = tuple(
+            connection.execute(text("SELECT version_num FROM alembic_version")).scalars()
+        )
 
-    for table_name, expected in required_columns.items():
-        if not inspector.has_table(table_name):
-            logger.critical("Startup schema audit failed: required table %s does not exist.", table_name)
-            raise AssertionError(f"Startup schema audit failed: missing table {table_name}")
-
-        existing = {column["name"] for column in inspector.get_columns(table_name)}
-        missing = sorted(expected - existing)
-        if missing:
-            logger.critical(
-                "Startup schema audit failed: missing columns on %s: %s",
-                table_name,
-                ", ".join(missing),
-            )
-            raise AssertionError(
-                f"Startup schema audit failed: {table_name} missing columns {', '.join(missing)}"
-            )
+    if revisions != (EXPECTED_ALEMBIC_REVISION,):
+        logger.critical("Startup schema audit failed: database revision is incompatible.")
+        raise SchemaVersionError("Startup schema audit failed: database revision is incompatible")
 
 
 class PlanStatus(PyEnum):
@@ -499,10 +497,6 @@ class UserDailyLog(Base):
 
 
 # -------------------- SESSION HELPERS --------------------
-def init_db():
-    Base.metadata.create_all(bind=engine)
-
-
 def get_db():
     db = SessionLocal()
     try:

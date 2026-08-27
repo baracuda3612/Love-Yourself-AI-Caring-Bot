@@ -6,7 +6,7 @@ PIP_VERSION := 26.2.1
 PIP_TOOLS_VERSION := 7.6.1
 TARGET_TESTS ?= tests/test_plan_parser.py tests/test_plan_builder_v5.py
 
-.PHONY: bootstrap lock services-up services-down test-collect test-targeted test audit
+.PHONY: bootstrap lock services-up services-down migrate test-migrations test-collect test-targeted test audit
 
 bootstrap:
 	@actual="$$($(PYTHON) -c 'import platform; print(platform.python_version())')"; \
@@ -26,6 +26,12 @@ services-up:
 
 services-down:
 	docker compose -f compose.test.yml down -v
+
+migrate:
+	$(VENV)/bin/python -m alembic -c alembic.ini upgrade head
+
+test-migrations:
+	$(VENV)/bin/python -m scripts.test_migrations
 
 test-collect:
 	$(VENV)/bin/python -m pytest --collect-only -q

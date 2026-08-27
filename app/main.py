@@ -11,13 +11,12 @@ import uvicorn
 
 from app.api import app
 from app.config import settings
-from app.db import audit_startup_schema, init_db
+from app.db import audit_startup_schema
 from app.scheduler import schedule_daily_loop
 from app.telegram import bot, dp
 
 
 async def main() -> None:
-    init_db()
     audit_startup_schema()
     asyncio.create_task(schedule_daily_loop())
 

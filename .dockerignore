@@ -2,6 +2,13 @@
 **
 !app/
 !app/**
+!alembic.ini
+!migrations/
+!migrations/alembic/
+!migrations/alembic/env.py
+!migrations/alembic/script.py.mako
+!migrations/alembic/versions/
+!migrations/alembic/versions/*.py
 !requirements.txt
 !resource/
 !resource/assets/

@@ -1506,11 +1506,11 @@ A package checkbox is marked only when the package is `VERIFIED`. A block
 checkbox is marked only when every package nested under it is verified and the
 block exit gate passes.
 
-- [ ] B0 — Development and infrastructure readiness
+- [x] B0 — Development and infrastructure readiness
   - [x] WP-00.1 — Freeze the authentic starting baseline
   - [x] WP-00.2 — Establish the AI-assisted development workspace
   - [x] WP-00.3 — Make the local environment reproducible
-  - [ ] WP-00.4 — Secure configuration and Railway topology
+  - [x] WP-00.4 — Secure configuration and Railway topology
 - [ ] B1 — Recovery, migration authority, and data foundations
   - [ ] WP-01.1 — Restore, inspect, and establish Alembic authority
   - [ ] WP-01.2 — Define the target schema and invariant ledger
@@ -1563,10 +1563,10 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | `WP-00.4 — Secure configuration and Railway topology` |
+| Current package | `WP-01.1 — Restore, inspect, and establish Alembic authority` |
 | Status | `REVIEW` |
-| Next action | Founder merges reviewed PR #251 |
-| Current blockers | Founder merge only; paid backup/restore is deferred to Gate G1 before durable data or market launch |
+| Next action | Founder merges PR #252, then verify the automatic Railway rollout and close WP-01.1 bookkeeping |
+| Current blockers | None for disposable founder-only refactoring; paid backup/restore remains deferred to Gate G1 before durable data or market launch |
 
 ### Private founder log
 
