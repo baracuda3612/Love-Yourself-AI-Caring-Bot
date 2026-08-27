@@ -1564,8 +1564,8 @@ block exit gate passes.
 | Field | Value |
 |---|---|
 | Current package | `WP-01.1 — Restore, inspect, and establish Alembic authority` |
-| Status | `IN PROGRESS` |
-| Next action | Inspect the disposable testnet read-only and establish the authoritative Alembic baseline and migration harness |
+| Status | `REVIEW` |
+| Next action | Review the WP-01.1 PR, resolve valid findings, then adopt the disposable testnet ledger before founder merge |
 | Current blockers | None for disposable founder-only refactoring; paid backup/restore remains deferred to Gate G1 before durable data or market launch |
 
 ### Private founder log

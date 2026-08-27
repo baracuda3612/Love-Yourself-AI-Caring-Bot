@@ -14,6 +14,8 @@ aiohttp==3.14.3
     # via aiogram
 aiosignal==1.4.0
     # via aiohttp
+alembic==1.19.1
+    # via -r requirements.in
 annotated-doc==0.0.5
     # via fastapi
 annotated-types==0.8.0
@@ -94,10 +96,14 @@ license-expression==30.4.4
     # via cyclonedx-python-lib
 magic-filter==1.0.12
     # via aiogram
+mako==1.4.1
+    # via alembic
 markdown-it-py==4.2.0
     # via rich
 markupsafe==3.0.3
-    # via jinja2
+    # via
+    #   jinja2
+    #   mako
 mdurl==0.1.2
     # via markdown-it-py
 msgpack==1.2.1
@@ -182,7 +188,9 @@ sniffio==1.3.1
 sortedcontainers==2.4.0
     # via cyclonedx-python-lib
 sqlalchemy==2.0.52
-    # via -r requirements.in
+    # via
+    #   -r requirements.in
+    #   alembic
 starlette==1.6.0
     # via fastapi
 tomli==2.4.1
@@ -200,6 +208,7 @@ typing-extensions==4.16.0
     #   aiogram
     #   aiohttp
     #   aiosignal
+    #   alembic
     #   anyio
     #   cyclonedx-python-lib
     #   fastapi
