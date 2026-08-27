@@ -1565,7 +1565,7 @@ block exit gate passes.
 |---|---|
 | Current package | `WP-01.1 — Restore, inspect, and establish Alembic authority` |
 | Status | `REVIEW` |
-| Next action | Review the WP-01.1 PR, resolve valid findings, then adopt the disposable testnet ledger before founder merge |
+| Next action | Founder merges PR #252, then verify the automatic Railway rollout and close WP-01.1 bookkeeping |
 | Current blockers | None for disposable founder-only refactoring; paid backup/restore remains deferred to Gate G1 before durable data or market launch |
 
 ### Private founder log
