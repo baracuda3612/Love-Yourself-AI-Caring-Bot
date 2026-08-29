@@ -94,7 +94,9 @@ def test_on_demand_response_window_starts_only_after_delivery() -> None:
     source = LEDGER_PATH.read_text(encoding="utf-8")
 
     assert "no response deadline before confirmed delivery" in source
-    assert "`expires_at = delivered_at + 30 minutes`" in source
+    assert "`expires_at = delivered_at + INTERVAL '30 minutes'`" in source
+    assert "`delivered`, `completed`, `skipped`, and `expired` require both" in source
+    assert "`pending_delivery` and `delivery_failed` require both null" in source
     assert "`pending_delivery` follows separate retry/terminal-failure rules" in source
 
 
@@ -113,6 +115,7 @@ def test_required_deferrals_are_explicit_and_owned() -> None:
     required = {
         "pool_unification",
         "broad_index_tuning",
+        "resource_efficiency_hardening",
         "scheduler_leader_election",
         "harmless_legacy_table_cleanup",
         "plan_draft_simplification",
@@ -140,3 +143,14 @@ def test_ledger_preserves_baseline_and_external_scheduler_ownership() -> None:
     assert "Complete tunnel deletion in WP-02.1" in source
     assert "no synchronized user FSM column" in source
     assert "JSON files, plan-step text, Redis" in source
+
+
+def test_privacy_content_and_sealed_correction_constraints_are_exact() -> None:
+    source = LEDGER_PATH.read_text(encoding="utf-8")
+
+    assert "`expires_at = created_at + INTERVAL '90 days'`" in source
+    assert "`created_at > now() - INTERVAL '90 days'`" in source
+    assert "composite `MATCH FULL` FK" in source
+    assert "equivalent both-null/both-non-null check" in source
+    assert "`uq_aggregate_sealed_cell_revision`" in source
+    assert "unique non-null `supersedes_record_id` prevents two replacement branches" in source

@@ -231,6 +231,26 @@ billing implementation.
 
 ## Decision assessment
 
+### MVP urgency filter
+
+The static risk pass found no new, unowned launch blocker. The launch-critical
+items are already explicit package gates:
+
+| Risk | MVP decision | Existing owner |
+|---|---|---|
+| Conversation data outliving the accepted cutoff | Must close before beta: exact 90-day PostgreSQL cutoff, age-bounded reads/deletion, matching per-message cache cutoff, and content-safe logs. | WP-04.2 (`PRIV-02`, `DB-16…17`) |
+| A Coach call consuming unbounded time/concurrency/cost | Must close before Coach beta: explicit timeout/retry, one in-flight worker per user, bounded FIFO/flood handling, usage telemetry, and global cost circuit breaker. | WP-05.3 (`FD-17`, `PRIV-03`) |
+| Runtime/task failure or launch burst exceeding the small-beta topology | Must be observable and pass the launch gate: retained tasks/graceful drain, saturation/backlog alerts, dependency-outage drills, and a two-times launch-cohort burst test. | WP-09.2/WP-09.4 |
+
+The remaining static gaps are not launch requirements without failed gate or
+production evidence: database/Redis connection and socket tuning, statement
+timeouts, scheduler query batching/keyset pagination, removal of proven N+1
+paths, bounded async fan-out, partitioning/cold-data movement, and broader
+index tuning. They stay one post-beta **resource-efficiency hardening** backlog
+direction. WP-09.2/WP-09.4 measurements may promote only the smallest evidenced
+fix before launch; they do not justify building a warehouse, new cache layer,
+or partitioning framework speculatively.
+
 Keep:
 
 * immutable plan/content/presentation snapshots — their storage cost is small

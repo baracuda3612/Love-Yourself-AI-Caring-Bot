@@ -169,7 +169,7 @@ change.
 | `uq_notice_ack_source_operation` | Unique `source_operation_id` and unique `(user_id, deployment_id, notice_version_id)`. | WP-01.4 |
 | `uq_report_access_grants_token_digest` | Unique token digest. | WP-01.4 |
 | `uq_aggregate_contribution_source` | Unique source operation where `record_kind='contribution'`. | WP-01.4 |
-| `uq_aggregate_sealed_cell` | Unique metric/schema/period/dimension key where `record_kind='sealed_cell'`. | WP-07.3 |
+| `uq_aggregate_sealed_cell_revision` | Unique metric/schema/period/dimension/revision key where `record_kind='sealed_cell'`; `revision=1` is the original cell. A correction appends the next revision with `supersedes_record_id` pointing to the prior leaf, and unique non-null `supersedes_record_id` prevents two replacement branches. | WP-07.3 |
 
 ### Foreign-key, range, and state checks
 
@@ -181,18 +181,18 @@ change.
 | Plan chronology | `activated_at` is present for current/completed/abandoned plans; terminal timestamps cannot precede activation. Completion time is calculated from the last terminal step fact. |
 | Step state | `step_status` is the only execution state; `completed` requires a completion timestamp; other terminal states require their terminal timestamp; terminal states cannot transition again. |
 | Step scheduling | `expires_at > scheduled_for` when both exist; `time_slot IN ('DAY','EVENING')` for new P1 rows; mechanic is `switch` or `unload`. |
-| Conversation | `role IN ('user','assistant')`; `expires_at > created_at`; PostgreSQL and each cached message share the same 90-day retention cutoff, while the disposable Redis key may expire earlier. |
+| Conversation | `role IN ('user','assistant')`; `created_at` and `expires_at` are non-null; `expires_at = created_at + INTERVAL '90 days'`. PostgreSQL reads also require both `created_at > now() - INTERVAL '90 days'` and `expires_at > now()` so a malformed legacy row cannot extend retention; each cached message carries the same cutoff, while the disposable Redis key may expire earlier. |
 | Deployment | `starts_at < ends_at` when both exist; counts are non-negative; `single` timezone mode requires a valid default timezone; environment is immutable. |
 | Entitlement/invitation | `revoked_at >= granted_at`; invitation `expires_at > issued_at`; redeemed/revoked times cannot precede issuance; token digest is non-empty and raw token is absent. |
 | Enrollment | `ended_at > enrolled_at` when ended; enrollment deployment must equal its entitlement deployment, enforced by a composite FK/unique key. |
 | Event envelope | `recorded_at >= occurred_at`; at least one allowed subject/operation linkage required by the catalogue; properties validate against the catalogue and exclude free text/identity/diagnostic fields. |
-| Event content linkage | `plan_step_id` is an integer FK; `exercise_id` plus `content_version` is a composite FK; legacy mixed `step_id` receives no new writes and is removed after compatibility. |
+| Event content linkage | `plan_step_id` is an integer FK; nullable `(exercise_id, content_version)` uses a composite `MATCH FULL` FK (or an equivalent both-null/both-non-null check), so half-populated content identity is invalid; legacy mixed `step_id` receives no new writes and is removed after compatibility. |
 | Feedback | Source-specific check requires exactly its valid target/value shape; exercise feedback follows a completed plan-step or on-demand occurrence and permits at most one efficacy submission per `(user, occurrence)`, Coach quality targets an assistant message, and product feedback preserves explicit source wording. |
 | Notice acknowledgement | Acknowledged notice version must be the deployment-pinned version unless a recorded re-acknowledgement operation changes the binding. |
 | Report grant | `expires_at > issued_at`; `revoked_at >= issued_at`; active state is calculated; deletion/secret-version retirement revokes access. |
 | Aggregate contribution | Contribution rows require `user_id` and source operation, forbid seal fields, contain no raw text, and follow personal retention/deletion. |
-| Aggregate sealed cell | Sealed rows forbid user/event/operation identifiers, require `sealed_at` and gate evidence, are immutable, and use only approved coarse dimensions. Company-summary cells require the centralized 100-eligible/50-contributor gate. |
-| On-demand occurrence | Exactly one content/version snapshot; `entry_surface IN ('command_menu','coach')`; no response deadline before confirmed delivery; `expires_at = delivered_at + 30 minutes`; terminal states have one terminal time; no plan/day/step/execution FK. `pending_delivery` follows separate retry/terminal-failure rules and cannot expire as user inactivity. |
+| Aggregate sealed cell | Sealed rows forbid user/event/operation identifiers, require `sealed_at` and gate evidence, are immutable, and use only approved coarse dimensions. An original cell has `revision=1` and no predecessor; a correction is an append-only next revision whose `supersedes_record_id` references the prior leaf with the same logical cell key. Readers select the leaf revision; unique logical-key/revision and unique predecessor constraints plus a locked append prevent forks without mutating the replaced row. Company-summary cells require the centralized 100-eligible/50-contributor gate. |
+| On-demand occurrence | Exactly one content/version snapshot; `entry_surface IN ('command_menu','coach')`; no response deadline before confirmed delivery; `(delivered_at IS NULL) = (expires_at IS NULL)` and `expires_at = delivered_at + INTERVAL '30 minutes'` when present. `delivered`, `completed`, `skipped`, and `expired` require both delivery timestamps; `pending_delivery` and `delivery_failed` require both null. `completed`/`skipped` require `responded_at <= expires_at`; `delivered`/`expired`/`delivery_failed` forbid `responded_at`. Cancellation may occur before or after delivery but must preserve paired timestamp nullability. No plan/day/step/execution FK is allowed; `pending_delivery` follows separate retry/terminal-failure rules and cannot expire as user inactivity. |
 
 ## High-value index ledger
 
@@ -266,7 +266,7 @@ Only the three classifications below are permitted:
 | percentages, completion rates, streaks, counters | `calculate` | Query authoritative steps/events or approved aggregate records with explicit denominator/window. |
 | `task_stats.*` mutable counters | `remove` | Canonical events and the aggregate authority replace them. |
 | `plan_execution_windows` counters and hidden compensation score | `remove` | They are legacy/inferred fields and cannot drive lifecycle or telemetry. |
-| sealed aggregate values and gate evidence | `immutable_snapshot` | Sealing is one-way; corrections create an auditable replacement cell, not an in-place personal rebuild. |
+| sealed aggregate values and gate evidence | `immutable_snapshot` | Sealing is one-way; corrections append a versioned successor linked by `supersedes_record_id`. The old cell remains immutable, and no correction may rebuild from deleted personal data. |
 
 ## Redis namespace and TTL ledger
 
@@ -301,6 +301,7 @@ Current namespaces are migration inputs, not target exceptions:
 |---|---|---|
 | `pool_unification` | Keep the application and APScheduler pools separate; no schema consequence and no new pool layer. | Revisit only on observed connection pressure; DB-19/backlog. |
 | `broad_index_tuning` | Add only the integrity/query-path indexes named above; do not copy duplicate/GIN/speculative indexes into target migrations. | Production-shaped `EXPLAIN` evidence; DB-13/backlog. |
+| `resource_efficiency_hardening` | Do not add speculative partitioning, cold-storage infrastructure, broad query rewrites, or a cache redesign for the small beta. WP-09.2 must expose database/Redis saturation and backlog signals, and WP-09.4 must test the launch burst; only a failed launch gate promotes the smallest evidenced fix (explicit connection/socket/statement bounds, bounded/keyset batches, removal of a proven N+1 path, or bounded task fan-out). Otherwise these remain post-beta unit-economics and storage-efficiency improvements. | WP-09.2/WP-09.4 evidence; post-beta backlog when launch gates pass. |
 | `scheduler_leader_election` | Preserve exactly one bot replica/scheduler writer; do not add database or Redis leadership primitives. | Multi-replica requirement; WP-09.2/DB-20. |
 | `harmless_legacy_table_cleanup` | Stop legacy readers/writers first; leave inert non-sensitive tables until row/use evidence and compatibility boundaries permit removal. | WP-08.1 after WP-01.3/WP-01.4/WP-02.1 switches. |
 | `plan_draft_simplification` | Do not resolve `draft_data`/step duplication in this package. | WP-03.2 builder migration. |
