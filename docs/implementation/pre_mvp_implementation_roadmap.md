@@ -539,6 +539,10 @@ first large refactor.
 
 ### WP-01.1 — Restore, inspect, and establish Alembic authority
 
+**Status:** `VERIFIED` — GitHub review passed; founder merged PR #252 as
+`9086951d3005c266b5cd6323b9a8ada2423fec06`, and the automatic Railway rollout
+completed successfully with the application, PostgreSQL, and Redis online.
+
 **Deliverables**
 
 * physical schema, enum, constraint, index, row-count, nullability, legacy-row,
@@ -1512,7 +1516,7 @@ block exit gate passes.
   - [x] WP-00.3 — Make the local environment reproducible
   - [x] WP-00.4 — Secure configuration and Railway topology
 - [ ] B1 — Recovery, migration authority, and data foundations
-  - [ ] WP-01.1 — Restore, inspect, and establish Alembic authority
+  - [x] WP-01.1 — Restore, inspect, and establish Alembic authority
   - [ ] WP-01.2 — Define the target schema and invariant ledger
   - [ ] WP-01.3 — Implement the plan-centric lifecycle migration
   - [ ] WP-01.4 — Establish event, privacy, and deployment primitives
@@ -1563,9 +1567,9 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | `WP-01.1 — Restore, inspect, and establish Alembic authority` |
-| Status | `REVIEW` |
-| Next action | Founder merges PR #252, then verify the automatic Railway rollout and close WP-01.1 bookkeeping |
+| Current package | `WP-01.2 — Define the target schema and invariant ledger` |
+| Status | `IN PROGRESS` |
+| Next action | Complete the bounded target-schema and invariant-ledger design, verification, and GitHub review |
 | Current blockers | None for disposable founder-only refactoring; paid backup/restore remains deferred to Gate G1 before durable data or market launch |
 
 ### Private founder log
