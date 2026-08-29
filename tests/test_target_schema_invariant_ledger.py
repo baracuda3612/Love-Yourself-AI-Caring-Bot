@@ -31,7 +31,7 @@ def test_every_required_mechanism_has_one_named_database_authority() -> None:
         "lifecycle": "ai_plans",
         "deployment": "deployments",
         "entitlement": "access_entitlements",
-        "occurrence": "on_demand_requests",
+        "occurrence": "on_demand_exercise_requests",
         "events": "user_events",
         "feedback": "feedback_events",
         "notice acknowledgement": "notice_acknowledgements",
@@ -84,6 +84,8 @@ def test_target_redis_namespaces_are_versioned_transient_and_bounded() -> None:
     messages = next(
         row for row in rows if ":messages:" in row["Namespace template"]
     )
+    assert int(messages["TTL seconds"]) == 24 * 60 * 60
+    assert "At most 20 Coach-context messages" in messages["Failure semantics"]
     assert "each payload carries `created_at`" in messages["Failure semantics"]
     assert "every read/append prunes entries" in messages["Failure semantics"]
 
@@ -92,8 +94,19 @@ def test_on_demand_response_window_starts_only_after_delivery() -> None:
     source = LEDGER_PATH.read_text(encoding="utf-8")
 
     assert "no response deadline before confirmed delivery" in source
-    assert "`deadline_at = delivered_at + 30 minutes`" in source
-    assert "Pending delivery follows separate retry/terminal-failure rules" in source
+    assert "`expires_at = delivered_at + 30 minutes`" in source
+    assert "`pending_delivery` follows separate retry/terminal-failure rules" in source
+
+
+def test_on_demand_contract_preserves_audit_identity_surface_and_feedback_guard() -> None:
+    source = LEDGER_PATH.read_text(encoding="utf-8")
+
+    assert "`on_demand_exercise_requests`" in source
+    assert "`entry_surface IN ('command_menu','coach')`" in source
+    assert "`status IN ('pending_delivery','delivered')`" in source
+    assert "`uq_on_demand_exercise_requests_source_operation`" in source
+    assert "`ux_feedback_exercise_on_demand`" in source
+    assert "Unique `(user_id, on_demand_request_id)`" in source
 
 
 def test_required_deferrals_are_explicit_and_owned() -> None:

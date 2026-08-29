@@ -30,7 +30,7 @@ immutable terminal snapshot do not become a parallel writer.
 | lifecycle | `ai_plans` aggregate root | `ai_plans.status` owns plan lifecycle and `ai_plan_steps.step_status` owns child execution; onboarding progress applies only before a plan exists. | `users.current_state`, `user_profiles.is_paused`, `users.plan_end_date`, Redis FSM state, and scheduler jobs cannot describe plan lifecycle. | WP-01.3 |
 | deployment | `deployments` | One row owns launch identity, environment, operational controls, dates, timezone policy, and pinned notice version. | Configuration labels, a user column, invitation tokens, and event properties cannot redefine a deployment. | WP-01.4 schema; WP-04.1 behavior |
 | entitlement | `access_entitlements` | Grant and revocation chronology owns sponsored access for one deployment/access identity. | Telegram identity, enrollment, invitation state, SSO success, roster omission, and Redis cannot independently grant access. | WP-01.4 schema; WP-04.1 behavior |
-| occurrence | `on_demand_requests` | One request row owns the independent on-demand lifecycle and selected content/presentation snapshot. | Plans, plan steps, FSM, scheduler plan jobs, events, and Redis cannot stand in for the request. | WP-06.1 (table intentionally absent until then) |
+| occurrence | `on_demand_exercise_requests` | One request row owns the independent on-demand lifecycle, accepted entry surface, and selected content/presentation snapshot. | Plans, plan steps, FSM, scheduler plan jobs, events, and Redis cannot stand in for the request. | WP-06.1 (table intentionally absent until then) |
 | events | `user_events` | One allow-listed envelope per stable source operation owns personal event history. | `plan_execution_windows`, `task_stats`, `failure_signals`, logs, and aggregate rows cannot manufacture personal events. | WP-01.4 schema; WP-07.1 instrumentation |
 | feedback | `feedback_events` | One source-typed record owns the submitted value and, when allowed, exact user wording. | Coach chat, event properties, aggregate dimensions, email, and issue trackers cannot be the capture authority. | WP-01.4 schema; WP-03.4/WP-05.2 behavior |
 | notice acknowledgement | `notice_acknowledgements` | User, deployment, exact notice version, acknowledgement time, and source operation own the fact. | Current policy text, deployment default, onboarding state, and logs cannot imply acknowledgement. | WP-01.4 schema; WP-04.2 behavior |
@@ -100,12 +100,12 @@ enrolment instead of rewriting history.
 |---|---|---|
 | `event_catalog` | `ADD`: `(event_name, event_schema_version)`, event kind, allowed property schema, and activation chronology. | `user_events` references the composite key; catalogue rows are never deleted while referenced. |
 | `user_events` | `RESHAPE`: canonical `event_id`, catalogue identity, `occurred_at`, `recorded_at`, `event_source`, `source_operation_id`, nullable personal/deployment/plan/step/content linkage, immutable attribution snapshots, and allow-listed `properties`. | FKs to user, organization, deployment, plan, step, and composite content version. Personal events are removed through user deletion; historical attribution is never rewritten. |
-| `feedback_events` | `ADD`: `user_id`, `source`, stable source operation, explicit target FKs, `value`, optional reason/category, authoritative source message, optional extracted text, bounded context, and `created_at`. | Target columns reference plan step, on-demand request, or chat message rather than a polymorphic unvalidated ID. User deletion cascades. |
+| `feedback_events` | `ADD`: `user_id`, `source`, stable source operation, explicit target FKs, `value`, optional reason/category, authoritative source message, optional extracted text, bounded context, and `created_at`. | Target columns reference plan step, `on_demand_request_id`, or chat message rather than a polymorphic unvalidated ID. User deletion cascades. |
 | `privacy_notice_versions` | `ADD`: immutable version, publication time, content digest/location, current marker, and retirement time. | Deployment and acknowledgement references use `ON DELETE RESTRICT`. |
 | `notice_acknowledgements` | `ADD`: user, deployment, notice version, `acknowledged_at`, and stable source operation. | FKs to user/deployment/notice; user deletion cascades, other references restrict. |
 | `report_access_grants` | `ADD`: user, plan, purpose, unique token digest, token version, issued/expires/revoked chronology, and revocation reason. | User and plan deletion invalidate/remove grants; no token contains personal fields. |
 | `aggregate_records` | `ADD`: `record_kind`, metric/schema identity, bounded period and dimensions, numeric value/counts, and timestamps. A contribution has personal `user_id` plus stable source operation and bounded retention; a sealed cell has neither and has immutable seal/gate evidence. | Contribution `user_id -> users.id ON DELETE CASCADE`; sealed cells have no user/event/operation FK or reversible join key. |
-| `on_demand_requests` | `ADD LATER`: user, source operation, status chronology, content/version/presentation snapshot, `requested_at`, nullable `delivered_at`, response deadline set only after confirmed delivery, delivery linkage, and optimistic version. Pending delivery uses its own retry/terminal-failure lifecycle. | Added only in WP-06.1; event/delivery FKs are added with it and no placeholder rows are invented earlier. |
+| `on_demand_exercise_requests` | `ADD LATER`: `user_id`, `exercise_id`, `content_version`, immutable `presentation_snapshot`, status chronology, `entry_surface IN ('command_menu','coach')`, unique `source_operation_id`, `requested_at`, nullable `delivered_at`, `expires_at` set only after confirmed delivery, nullable `responded_at`, restricted Telegram delivery references, exact `delivery_variant`, and bounded operational fields. Pending delivery uses its own retry/terminal-failure lifecycle. | Added only in WP-06.1; event, feedback, and delivery FKs are added with it and no placeholder rows are invented earlier. No plan/day/step/execution FK is allowed. |
 
 ### Legacy table disposition
 
@@ -137,7 +137,7 @@ Legacy enum families are not reused just because they already exist.
 | `report_grant_purpose` | `completion_report`, `pulse_report` | WP-01.4 |
 | `event_kind` | `user_behavior`, `operational`, `access_control` | WP-01.4 |
 | `aggregate_record_kind` | `contribution`, `sealed_cell` | WP-01.4 |
-| `on_demand_status` | `requested`, `delivered`, `delivery_failed`, `completed`, `skipped`, `expired`, `canceled` | WP-06.1 |
+| `on_demand_status` | `pending_delivery`, `delivered`, `completed`, `skipped`, `expired`, `delivery_failed`, `canceled` | WP-06.1 |
 
 Invitation, entitlement, enrolment, report-grant, and deployment availability
 are calculated from explicit timestamps/booleans. They are not synchronized
@@ -159,8 +159,10 @@ change.
 | `ux_deployment_enrollments_one_active_user` | Unique `deployment_enrollments(user_id)` where `ended_at IS NULL`. | WP-04.1 |
 | `ux_privacy_notice_versions_one_current` | Unique constant/current marker where `is_current`. | WP-04.2 |
 | `ux_feedback_exercise_plan_step` | Unique `(user_id, plan_step_id)` where `source='exercise_efficacy' AND plan_step_id IS NOT NULL`. | WP-03.4 |
+| `ux_feedback_exercise_on_demand` | Unique `(user_id, on_demand_request_id)` where `source='exercise_efficacy' AND on_demand_request_id IS NOT NULL`. | WP-06.1 |
 | `ux_feedback_coach_message` | Unique `(user_id, coach_message_id)` where `source='coach_quality'`. | WP-05.2 |
-| `ux_on_demand_requests_one_open` | Unique `on_demand_requests(user_id)` where status is `requested` or `delivered`. | WP-06.1 |
+| `ux_on_demand_exercise_requests_one_open` | Unique `on_demand_exercise_requests(user_id)` where `status IN ('pending_delivery','delivered')`. | WP-06.1 |
+| `uq_on_demand_exercise_requests_source_operation` | Unique `on_demand_exercise_requests(source_operation_id)`. | WP-06.1 |
 | `ux_exercise_deliveries_one_sent` | Unique source occurrence where delivery state is successful; retries remain separate attempts. | WP-03.4/WP-06.2 |
 | `uq_user_events_source_operation` | Unique `(event_source, source_operation_id, event_name)`. | WP-01.4 |
 | `uq_feedback_events_source_operation` | Unique `(source, source_operation_id)`. | WP-01.4 |
@@ -179,18 +181,18 @@ change.
 | Plan chronology | `activated_at` is present for current/completed/abandoned plans; terminal timestamps cannot precede activation. Completion time is calculated from the last terminal step fact. |
 | Step state | `step_status` is the only execution state; `completed` requires a completion timestamp; other terminal states require their terminal timestamp; terminal states cannot transition again. |
 | Step scheduling | `expires_at > scheduled_for` when both exist; `time_slot IN ('DAY','EVENING')` for new P1 rows; mechanic is `switch` or `unload`. |
-| Conversation | `role IN ('user','assistant')`; `expires_at > created_at`; retention cleanup and Redis TTL share the same deadline. |
+| Conversation | `role IN ('user','assistant')`; `expires_at > created_at`; PostgreSQL and each cached message share the same 90-day retention cutoff, while the disposable Redis key may expire earlier. |
 | Deployment | `starts_at < ends_at` when both exist; counts are non-negative; `single` timezone mode requires a valid default timezone; environment is immutable. |
 | Entitlement/invitation | `revoked_at >= granted_at`; invitation `expires_at > issued_at`; redeemed/revoked times cannot precede issuance; token digest is non-empty and raw token is absent. |
 | Enrollment | `ended_at > enrolled_at` when ended; enrollment deployment must equal its entitlement deployment, enforced by a composite FK/unique key. |
 | Event envelope | `recorded_at >= occurred_at`; at least one allowed subject/operation linkage required by the catalogue; properties validate against the catalogue and exclude free text/identity/diagnostic fields. |
 | Event content linkage | `plan_step_id` is an integer FK; `exercise_id` plus `content_version` is a composite FK; legacy mixed `step_id` receives no new writes and is removed after compatibility. |
-| Feedback | Source-specific check requires only its valid target/value shape; exercise feedback follows completed occurrences, Coach quality targets an assistant message, and product feedback preserves explicit source wording. |
+| Feedback | Source-specific check requires exactly its valid target/value shape; exercise feedback follows a completed plan-step or on-demand occurrence and permits at most one efficacy submission per `(user, occurrence)`, Coach quality targets an assistant message, and product feedback preserves explicit source wording. |
 | Notice acknowledgement | Acknowledged notice version must be the deployment-pinned version unless a recorded re-acknowledgement operation changes the binding. |
 | Report grant | `expires_at > issued_at`; `revoked_at >= issued_at`; active state is calculated; deletion/secret-version retirement revokes access. |
 | Aggregate contribution | Contribution rows require `user_id` and source operation, forbid seal fields, contain no raw text, and follow personal retention/deletion. |
 | Aggregate sealed cell | Sealed rows forbid user/event/operation identifiers, require `sealed_at` and gate evidence, are immutable, and use only approved coarse dimensions. Company-summary cells require the centralized 100-eligible/50-contributor gate. |
-| On-demand occurrence | Exactly one content/version snapshot; no response deadline before confirmed delivery; `deadline_at = delivered_at + 30 minutes`; terminal states have one terminal time; no plan/day/step FK. Pending delivery follows separate retry/terminal-failure rules and cannot expire as user inactivity. |
+| On-demand occurrence | Exactly one content/version snapshot; `entry_surface IN ('command_menu','coach')`; no response deadline before confirmed delivery; `expires_at = delivered_at + 30 minutes`; terminal states have one terminal time; no plan/day/step/execution FK. `pending_delivery` follows separate retry/terminal-failure rules and cannot expire as user inactivity. |
 
 ## High-value index ledger
 
@@ -220,8 +222,8 @@ duplicate single-column indexes are not copied automatically.
 | `ix_report_grants_expiry` on `(expires_at, id)` where not revoked | Access check cleanup/revocation. | WP-04.2 |
 | `ix_feedback_user_time` on `(user_id, created_at DESC)` | Personal export/deletion and product review. | WP-01.4 |
 | `ix_aggregate_records_cell` on metric/schema/period/dimension key | Idempotent contribution/seal and approved report reads. | WP-01.4/WP-07.3 |
-| `ix_on_demand_requests_user_time` on `(user_id, requested_at DESC)` | Current/history request lookup. | WP-06.1 |
-| `ix_on_demand_requests_expiry` on `(deadline_at, id)` where open | Expiry/restart reconciliation. | WP-06.1 |
+| `ix_on_demand_exercise_requests_user_time` on `(user_id, requested_at DESC)` | Current/history request lookup. | WP-06.1 |
+| `ix_on_demand_exercise_requests_expiry` on `(expires_at, id)` where `status='delivered'` | Expiry/restart reconciliation. | WP-06.1 |
 
 ## Derived-field classification ledger
 
@@ -275,7 +277,7 @@ notice acknowledgement, report access, occurrences, or aggregates.
 
 | Namespace template | Class | TTL seconds | Failure semantics | Owner |
 |---|---|---:|---|---|
-| `ly:{environment}:session:{user_id}:messages:v1` | `transient_session` | 7776000 | Bounded Coach-context cache; each payload carries `created_at`, and every read/append prunes entries at or beyond their individual 90-day retention deadline before returning context. The key TTL is only an upper bound after the newest append, not per-message retention. Rebuild from retained `chat_history` and never prefer a partial cache as newer durable truth. | WP-04.2/WP-05.1 |
+| `ly:{environment}:session:{user_id}:messages:v1` | `transient_session` | 86400 | At most 20 Coach-context messages; each payload carries `created_at`, and every read/append prunes entries at or beyond their individual 90-day retention deadline before returning context. The one-day key TTL deliberately keeps only recently active sessions in paid RAM; rebuild from retained `chat_history` on any miss and never prefer a partial cache as newer durable truth. | WP-04.2/WP-05.1 |
 | `ly:{environment}:session:{user_id}:pending_action:v1` | `transient_session` | 3600 | A lost key repeats or safely abandons the prompt; it cannot prove an operation committed. | Owning onboarding/runtime-action package |
 
 Any future coordination namespace must name its owning operation, version, and
