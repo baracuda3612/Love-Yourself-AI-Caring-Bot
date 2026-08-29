@@ -567,6 +567,10 @@ completed successfully with the application, PostgreSQL, and Redis online.
 
 ### WP-01.2 — Define the target schema and invariant ledger
 
+**Status:** `IMPLEMENTED` — bounded target contract and structural validation
+exist in `docs/implementation/target_schema_invariant_ledger.md`; GitHub review
+is pending.
+
 **Deliverables**
 
 * target tables, foreign keys, enums, partial unique constraints, check
@@ -1568,8 +1572,8 @@ block exit gate passes.
 | Field | Value |
 |---|---|
 | Current package | `WP-01.2 — Define the target schema and invariant ledger` |
-| Status | `IN PROGRESS` |
-| Next action | Complete the bounded target-schema and invariant-ledger design, verification, and GitHub review |
+| Status | `IMPLEMENTED` |
+| Next action | Review the stable WP-01.2 diff, open its PR, and process the initial GitHub review |
 | Current blockers | None for disposable founder-only refactoring; paid backup/restore remains deferred to Gate G1 before durable data or market launch |
 
 ### Private founder log
