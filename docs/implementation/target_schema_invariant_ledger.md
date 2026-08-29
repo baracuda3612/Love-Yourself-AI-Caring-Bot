@@ -105,7 +105,7 @@ enrolment instead of rewriting history.
 | `notice_acknowledgements` | `ADD`: user, deployment, notice version, `acknowledged_at`, and stable source operation. | FKs to user/deployment/notice; user deletion cascades, other references restrict. |
 | `report_access_grants` | `ADD`: user, plan, purpose, unique token digest, token version, issued/expires/revoked chronology, and revocation reason. | User and plan deletion invalidate/remove grants; no token contains personal fields. |
 | `aggregate_records` | `ADD`: `record_kind`, metric/schema identity, bounded period and dimensions, numeric value/counts, and timestamps. A contribution has personal `user_id` plus stable source operation and bounded retention; a sealed cell has neither and has immutable seal/gate evidence. | Contribution `user_id -> users.id ON DELETE CASCADE`; sealed cells have no user/event/operation FK or reversible join key. |
-| `on_demand_requests` | `ADD LATER`: user, source operation, status chronology, content/version/presentation snapshot, 30-minute deadline, delivery linkage, and optimistic version. | Added only in WP-06.1; event/delivery FKs are added with it and no placeholder rows are invented earlier. |
+| `on_demand_requests` | `ADD LATER`: user, source operation, status chronology, content/version/presentation snapshot, `requested_at`, nullable `delivered_at`, response deadline set only after confirmed delivery, delivery linkage, and optimistic version. Pending delivery uses its own retry/terminal-failure lifecycle. | Added only in WP-06.1; event/delivery FKs are added with it and no placeholder rows are invented earlier. |
 
 ### Legacy table disposition
 
@@ -190,7 +190,7 @@ change.
 | Report grant | `expires_at > issued_at`; `revoked_at >= issued_at`; active state is calculated; deletion/secret-version retirement revokes access. |
 | Aggregate contribution | Contribution rows require `user_id` and source operation, forbid seal fields, contain no raw text, and follow personal retention/deletion. |
 | Aggregate sealed cell | Sealed rows forbid user/event/operation identifiers, require `sealed_at` and gate evidence, are immutable, and use only approved coarse dimensions. Company-summary cells require the centralized 100-eligible/50-contributor gate. |
-| On-demand occurrence | Exactly one content/version snapshot; 30-minute deadline after request; terminal states have one terminal time; no plan/day/step FK. |
+| On-demand occurrence | Exactly one content/version snapshot; no response deadline before confirmed delivery; `deadline_at = delivered_at + 30 minutes`; terminal states have one terminal time; no plan/day/step FK. Pending delivery follows separate retry/terminal-failure rules and cannot expire as user inactivity. |
 
 ## High-value index ledger
 
@@ -275,7 +275,7 @@ notice acknowledgement, report access, occurrences, or aggregates.
 
 | Namespace template | Class | TTL seconds | Failure semantics | Owner |
 |---|---|---:|---|---|
-| `ly:{environment}:session:{user_id}:messages:v1` | `transient_session` | 7776000 | Bounded Coach-context cache; rebuild from retained `chat_history`; refresh TTL on append and never prefer a partial cache as newer durable truth. | WP-04.2/WP-05.1 |
+| `ly:{environment}:session:{user_id}:messages:v1` | `transient_session` | 7776000 | Bounded Coach-context cache; each payload carries `created_at`, and every read/append prunes entries at or beyond their individual 90-day retention deadline before returning context. The key TTL is only an upper bound after the newest append, not per-message retention. Rebuild from retained `chat_history` and never prefer a partial cache as newer durable truth. | WP-04.2/WP-05.1 |
 | `ly:{environment}:session:{user_id}:pending_action:v1` | `transient_session` | 3600 | A lost key repeats or safely abandons the prompt; it cannot prove an operation committed. | Owning onboarding/runtime-action package |
 
 Any future coordination namespace must name its owning operation, version, and

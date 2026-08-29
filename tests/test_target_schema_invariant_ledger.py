@@ -81,6 +81,20 @@ def test_target_redis_namespaces_are_versioned_transient_and_bounded() -> None:
         assert namespace.endswith(":v1")
         assert 0 < ttl_seconds <= 90 * 24 * 60 * 60
 
+    messages = next(
+        row for row in rows if ":messages:" in row["Namespace template"]
+    )
+    assert "each payload carries `created_at`" in messages["Failure semantics"]
+    assert "every read/append prunes entries" in messages["Failure semantics"]
+
+
+def test_on_demand_response_window_starts_only_after_delivery() -> None:
+    source = LEDGER_PATH.read_text(encoding="utf-8")
+
+    assert "no response deadline before confirmed delivery" in source
+    assert "`deadline_at = delivered_at + 30 minutes`" in source
+    assert "Pending delivery follows separate retry/terminal-failure rules" in source
+
 
 def test_required_deferrals_are_explicit_and_owned() -> None:
     required = {
