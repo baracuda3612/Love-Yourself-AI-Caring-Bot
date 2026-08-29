@@ -567,9 +567,9 @@ completed successfully with the application, PostgreSQL, and Redis online.
 
 ### WP-01.2 — Define the target schema and invariant ledger
 
-**Status:** `IN REVIEW` — bounded target contract and structural validation
-exist in `docs/implementation/target_schema_invariant_ledger.md` and the stable
-package diff is ready for GitHub review.
+**Status:** `VERIFIED` — bounded target contract and structural validation exist
+in `docs/implementation/target_schema_invariant_ledger.md`; PR #253 review
+findings were fixed in `dcbc340`, answered individually, and resolved.
 
 **Deliverables**
 
@@ -1521,7 +1521,7 @@ block exit gate passes.
   - [x] WP-00.4 — Secure configuration and Railway topology
 - [ ] B1 — Recovery, migration authority, and data foundations
   - [x] WP-01.1 — Restore, inspect, and establish Alembic authority
-  - [ ] WP-01.2 — Define the target schema and invariant ledger
+  - [x] WP-01.2 — Define the target schema and invariant ledger
   - [ ] WP-01.3 — Implement the plan-centric lifecycle migration
   - [ ] WP-01.4 — Establish event, privacy, and deployment primitives
 - [ ] B2 — Target lifecycle and runtime actions
@@ -1572,8 +1572,8 @@ block exit gate passes.
 | Field | Value |
 |---|---|
 | Current package | `WP-01.2 — Define the target schema and invariant ledger` |
-| Status | `IN REVIEW` |
-| Next action | Complete the initial GitHub review and process every review thread without retriggering review |
+| Status | `VERIFIED` |
+| Next action | Founder merges PR #253; after confirmation, fetch and synchronize the canonical branch before WP-01.3 |
 | Current blockers | None for disposable founder-only refactoring; paid backup/restore remains deferred to Gate G1 before durable data or market launch |
 
 ### Private founder log
