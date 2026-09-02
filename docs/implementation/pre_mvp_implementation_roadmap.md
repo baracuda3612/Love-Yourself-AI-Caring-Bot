@@ -569,7 +569,9 @@ completed successfully with the application, PostgreSQL, and Redis online.
 
 **Status:** `VERIFIED` — bounded target contract and structural validation exist
 in `docs/implementation/target_schema_invariant_ledger.md`; PR #253 review
-findings were fixed through `4012874`, answered individually, and resolved.
+findings were fixed through `4012874`, answered individually, and resolved;
+founder merged PR #253 as
+`3635abb23fdef88e434cde08d635fc740dabfd3c`.
 
 **Deliverables**
 
