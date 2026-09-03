@@ -595,11 +595,11 @@ founder merged PR #253 as
 
 ### WP-01.3 — Implement the plan-centric lifecycle migration
 
-**Status:** `IMPLEMENTED` — plan/step authority, derived current mode,
+**Status:** `IN REVIEW` — plan/step authority, derived current mode,
 transactional evidence backfill, locked/idempotent mutation service, explicit
 no-overlap cutover, and disposable PostgreSQL concurrency rehearsal are
-complete on `wp/01.3-plan-centric-lifecycle`; independent GitHub review is
-pending.
+complete on `wp/01.3-plan-centric-lifecycle`; PR #254 targets
+`implementation/pre-mvp` and independent GitHub review is pending.
 
 **Deliverables**
 
@@ -1580,8 +1580,8 @@ block exit gate passes.
 | Field | Value |
 |---|---|
 | Current package | `WP-01.3 — Implement the plan-centric lifecycle migration` |
-| Status | `IMPLEMENTED` |
-| Next action | Complete stable-diff review, push the package branch, and open the PR against `implementation/pre-mvp` |
+| Status | `IN REVIEW` |
+| Next action | Process every GitHub review thread on PR #254; founder remains the sole merge authority |
 | Current blockers | None for disposable founder-only refactoring; paid backup/restore remains deferred to Gate G1 before durable data or market launch |
 
 ### Private founder log
