@@ -694,8 +694,8 @@ def _build_idle_finished_context(
     user_id: int,
 ) -> dict | None:
     """
-    Builds completion context for the latest completed plan.
-    Returns None if no completed plan found or if metrics fail.
+    Builds completion context only when the latest plan was completed.
+    Returns None when the latest cycle was abandoned or metrics fail.
     Called only when current_mode == 'NO_ACTIVE_PLAN'.
     """
     from app.plan_completion.metrics import build_completion_metrics
@@ -703,14 +703,11 @@ def _build_idle_finished_context(
 
     plan = (
         db.query(AIPlan)
-        .filter(
-            AIPlan.user_id == user_id,
-            AIPlan.status == "completed",
-        )
-        .order_by(AIPlan.created_at.desc(), AIPlan.id.desc())
+        .filter(AIPlan.user_id == user_id)
+        .order_by(AIPlan.cycle_number.desc(), AIPlan.id.desc())
         .first()
     )
-    if plan is None:
+    if plan is None or str(plan.status) != "completed":
         return None
 
     try:

@@ -184,12 +184,18 @@ def _duplicate_operation_result(
     receipt: PlanLifecycleOperation,
     *,
     expected_operation: str,
+    expected_plan_id: int | None = None,
     expected_step_id: int | None = None,
 ) -> LifecycleResult:
     if receipt.operation != expected_operation:
         raise LifecycleTransitionError(
             "source_operation_id already belongs to "
             f"{receipt.operation}, not {expected_operation}"
+        )
+    if expected_plan_id is not None and receipt.plan_id != expected_plan_id:
+        raise LifecycleTransitionError(
+            "source_operation_id already belongs to plan "
+            f"{receipt.plan_id}, not {expected_plan_id}"
         )
     if expected_step_id is not None and receipt.plan_step_id != expected_step_id:
         raise LifecycleTransitionError(
@@ -378,16 +384,21 @@ def complete_current_plan_if_ready(
     db: Session,
     *,
     user_id: int,
+    plan_id: int,
     source_operation_id: str,
 ) -> LifecycleResult | None:
     """Complete an active plan only after every child step is terminal."""
     _lock_user(db, user_id)
     existing = find_lifecycle_operation(db, user_id, source_operation_id)
     if existing:
-        return _duplicate_operation_result(existing, expected_operation="complete")
+        return _duplicate_operation_result(
+            existing,
+            expected_operation="complete",
+            expected_plan_id=plan_id,
+        )
 
     plan = get_current_plan(db, user_id, lock=True)
-    if plan is None:
+    if plan is None or plan.id != plan_id:
         return None
     if str(plan.status) != "active":
         return None
@@ -414,6 +425,7 @@ def complete_current_plan_if_ready(
             AIPlanDay.plan_id == plan.id,
             AIPlanStep.step_status.in_(TERMINAL_STEP_STATUSES),
             AIPlanStep.terminal_at.is_(None),
+            AIPlanStep.version != 0,
         )
         .scalar()
     )

@@ -103,6 +103,26 @@ def test_build_idle_finished_context_returns_none_when_plan_missing():
     assert result is None
 
 
+def test_build_idle_finished_context_ignores_older_completion_after_abandonment(
+    monkeypatch,
+):
+    latest_plan = SimpleNamespace(id=124, user_id=7, status="abandoned")
+
+    def fail_metrics(*_args):
+        raise AssertionError("abandoned latest cycle must not expose old completion context")
+
+    import app.plan_completion.metrics as metrics_mod
+
+    monkeypatch.setattr(metrics_mod, "build_completion_metrics", fail_metrics)
+
+    result = coach_agent._build_idle_finished_context(
+        _DummyDB(latest_plan),
+        user_id=7,
+    )
+
+    assert result is None
+
+
 def test_build_idle_finished_context_returns_none_on_metrics_exception(monkeypatch):
     plan = SimpleNamespace(id=123, user_id=7, status="completed", end_date=datetime.now(timezone.utc))
 

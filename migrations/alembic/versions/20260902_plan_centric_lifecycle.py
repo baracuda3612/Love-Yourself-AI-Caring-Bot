@@ -491,9 +491,12 @@ def upgrade() -> None:
     op.create_check_constraint(
         "ck_ai_plan_steps_terminal_timestamp",
         "ai_plan_steps",
-        "version = 0 OR "
+        "(version = 0 AND "
+        "step_status IN ('completed','skipped','expired','canceled') AND "
+        "terminal_at IS NULL) OR "
+        "(version > 0 AND "
         "((step_status IN ('completed','skipped','expired','canceled')) = "
-        "(terminal_at IS NOT NULL))",
+        "(terminal_at IS NOT NULL)))",
     )
 
     op.create_table(

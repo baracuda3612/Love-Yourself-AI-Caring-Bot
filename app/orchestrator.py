@@ -487,6 +487,7 @@ def _auto_complete_plan_if_needed(db: Session, user: User) -> int | None:
     result = complete_current_plan_if_ready(
         db,
         user_id=user.id,
+        plan_id=plan.id,
         source_operation_id=f"runtime:complete:{plan.id}",
     )
     if result is None or result.duplicate:
@@ -667,7 +668,12 @@ def _trigger_plan_completion(user_id: int, plan_id: int) -> None:
             logger.error("[COMPLETION_TRIGGER] db commit failed user=%s: %s", user_id, e)
             return
 
-    future = _submit_coroutine(send_plan_completion_message(user_id, plan_id))
+    if completed_plan_id is None:
+        return
+
+    future = _submit_coroutine(
+        send_plan_completion_message(user_id, completed_plan_id)
+    )
     if future:
         try:
             future.result(timeout=30)
@@ -681,7 +687,7 @@ def _auto_complete_plan_if_needed_for_user_id(user_id: int) -> None:
         if not user:
             return
 
-        _auto_complete_plan_if_needed(db, user)
+        completed_plan_id = _auto_complete_plan_if_needed(db, user)
 
         try:
             db.commit()

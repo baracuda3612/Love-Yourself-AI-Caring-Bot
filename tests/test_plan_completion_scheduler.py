@@ -41,6 +41,43 @@ class _FakeNowDateTime:
         return cls.current.astimezone(tz)
 
 
+class _RecordingActiveUsersQuery:
+    def __init__(self):
+        self.joins = []
+        self.filters = []
+
+    def join(self, *args):
+        self.joins.append(args)
+        return self
+
+    def filter(self, *criteria):
+        self.filters.extend(criteria)
+        return self
+
+
+class _RecordingActiveUsersDB:
+    def __init__(self):
+        self.user_query = _RecordingActiveUsersQuery()
+
+    def query(self, model):
+        assert model is scheduler.User
+        return self.user_query
+
+
+def test_scheduler_user_scan_requires_an_authoritative_active_plan():
+    db = _RecordingActiveUsersDB()
+
+    query = scheduler._active_plan_users_query(db)
+
+    assert query is db.user_query
+    assert db.user_query.joins
+    assert db.user_query.joins[0][0] is scheduler.AIPlan
+    assert any(
+        criterion.compare(scheduler.AIPlan.status == "active")
+        for criterion in db.user_query.filters
+    )
+
+
 class _FakeStepQuery:
     def __init__(self, count_value):
         self._count = count_value
@@ -189,6 +226,100 @@ class _DBForCompletionMessage:
 
     def commit(self):
         self.commits += 1
+
+    def rollback(self):
+        pass
+
+
+class _SubmittedFuture:
+    def result(self, timeout=None):
+        return None
+
+
+def test_trigger_plan_completion_skips_report_when_plan_is_not_ready(monkeypatch):
+    user = type("U", (), {"id": 1})()
+    db = _DBForCompletionMessage(user=user, existing_event=None)
+    monkeypatch.setattr(orchestrator, "SessionLocal", lambda: _SessionCtx(db))
+    monkeypatch.setattr(
+        orchestrator,
+        "_auto_complete_plan_if_needed",
+        lambda _db, _user: None,
+    )
+
+    submitted = []
+    monkeypatch.setattr(
+        "app.scheduler._submit_coroutine",
+        lambda coro: submitted.append(coro),
+    )
+
+    orchestrator._trigger_plan_completion(user_id=1, plan_id=99)
+
+    assert db.commits == 1
+    assert submitted == []
+
+
+def test_trigger_plan_completion_reports_the_plan_that_completed(monkeypatch):
+    user = type("U", (), {"id": 1})()
+    db = _DBForCompletionMessage(user=user, existing_event=None)
+    monkeypatch.setattr(orchestrator, "SessionLocal", lambda: _SessionCtx(db))
+    monkeypatch.setattr(
+        orchestrator,
+        "_auto_complete_plan_if_needed",
+        lambda _db, _user: 42,
+    )
+
+    submitted = []
+
+    async def _fake_send(user_id, plan_id):
+        submitted.append((user_id, plan_id))
+
+    def _fake_submit(coro):
+        try:
+            coro.send(None)
+        except StopIteration:
+            pass
+        return _SubmittedFuture()
+
+    monkeypatch.setattr(orchestrator, "send_plan_completion_message", _fake_send)
+    monkeypatch.setattr("app.scheduler._submit_coroutine", _fake_submit)
+
+    orchestrator._trigger_plan_completion(user_id=1, plan_id=99)
+
+    assert db.commits == 1
+    assert submitted == [(1, 42)]
+
+
+@pytest.mark.anyio
+async def test_message_entry_completion_wrapper_captures_result_before_send(monkeypatch):
+    user = type("U", (), {"id": 1})()
+    db = _DBForCompletionMessage(user=user, existing_event=None)
+    monkeypatch.setattr(orchestrator, "SessionLocal", lambda: _SessionCtx(db))
+    monkeypatch.setattr(
+        orchestrator,
+        "_auto_complete_plan_if_needed",
+        lambda _db, _user: 42,
+    )
+
+    sent = []
+
+    async def _fake_send(user_id, plan_id):
+        sent.append((user_id, plan_id))
+
+    created = []
+
+    def _fake_create_task(coro):
+        created.append(coro)
+        return None
+
+    monkeypatch.setattr(orchestrator, "send_plan_completion_message", _fake_send)
+    monkeypatch.setattr(orchestrator.asyncio, "create_task", _fake_create_task)
+
+    orchestrator._auto_complete_plan_if_needed_for_user_id(1)
+
+    assert db.commits == 1
+    assert len(created) == 1
+    await created[0]
+    assert sent == [(1, 42)]
 
 
 @pytest.mark.anyio

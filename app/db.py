@@ -314,9 +314,12 @@ class AIPlanStep(Base):
             name="ck_ai_plan_steps_schedule_chronology",
         ),
         CheckConstraint(
-            "version = 0 OR "
+            "(version = 0 AND "
+            "step_status IN ('completed','skipped','expired','canceled') AND "
+            "terminal_at IS NULL) OR "
+            "(version > 0 AND "
             "(step_status IN ('completed','skipped','expired','canceled')) = "
-            "(terminal_at IS NOT NULL)",
+            "(terminal_at IS NOT NULL))",
             name="ck_ai_plan_steps_terminal_timestamp",
         ),
     )

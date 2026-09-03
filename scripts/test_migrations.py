@@ -379,11 +379,17 @@ def _assert_lifecycle_concurrency(target_url: str) -> None:
             connection,
             tg_id=9000002,
         )
-        completed_user_id, completed_plan_id, _ = _seed_authoritative_plan(
+        completed_user_id, completed_plan_id, grandfathered_step_id = _seed_authoritative_plan(
             connection,
             tg_id=9000003,
             step_status="completed",
         )
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE ai_plan_steps SET terminal_at=NULL, version=0 WHERE id=%s",
+                (grandfathered_step_id,),
+            )
+        connection.commit()
     finally:
         connection.close()
 
@@ -562,9 +568,18 @@ def _assert_lifecycle_concurrency(target_url: str) -> None:
             assert canceled_ids == []
 
         with Session.begin() as session:
+            stale_completion = complete_current_plan_if_ready(
+                session,
+                user_id=completed_user_id,
+                plan_id=plan_id,
+                source_operation_id="complete-stale-plan",
+            )
+            assert stale_completion is None
+        with Session.begin() as session:
             completed = complete_current_plan_if_ready(
                 session,
                 user_id=completed_user_id,
+                plan_id=completed_plan_id,
                 source_operation_id="complete-plan",
             )
             assert completed is not None and completed.status == "completed"
@@ -572,6 +587,7 @@ def _assert_lifecycle_concurrency(target_url: str) -> None:
             completed_retry = complete_current_plan_if_ready(
                 session,
                 user_id=completed_user_id,
+                plan_id=completed_plan_id,
                 source_operation_id="complete-plan",
             )
             assert completed_retry is not None and completed_retry.duplicate is True
@@ -641,6 +657,12 @@ def _assert_lifecycle_concurrency(target_url: str) -> None:
         )
         assert_rejected(
             "UPDATE ai_plan_steps SET terminal_at=NULL WHERE id=:step_id",
+            "ck_ai_plan_steps_terminal_timestamp",
+            step_id=step_ids[1],
+        )
+        assert_rejected(
+            "UPDATE ai_plan_steps SET step_status='pending', terminal_at=now(), "
+            "version=0 WHERE id=:step_id",
             "ck_ai_plan_steps_terminal_timestamp",
             step_id=step_ids[1],
         )

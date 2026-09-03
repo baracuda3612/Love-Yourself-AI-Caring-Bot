@@ -117,6 +117,19 @@ def can_deliver_tasks(user: User, plan: AIPlan | None = None) -> bool:
     return any(getattr(candidate, "status", None) == "active" for candidate in user.plans)
 
 
+def _active_plan_users_query(db):
+    """Return enabled Telegram users whose authoritative plan is active."""
+    return (
+        db.query(User)
+        .join(AIPlan, AIPlan.user_id == User.id)
+        .filter(
+            AIPlan.status == "active",
+            User.is_active == True,
+            User.tg_id.isnot(None),
+        )
+    )
+
+
 async def _send_message_async(
     chat_id: int,
     text: str,
@@ -445,10 +458,7 @@ def send_daily_pulse():
         semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
         with SessionLocal() as db:
-            active_users = db.query(User).filter(
-                User.is_active == True,
-                User.tg_id.isnot(None),
-            ).all()
+            active_users = _active_plan_users_query(db).all()
 
             sent_today_rows = (
                 db.query(UserEvent.user_id)
@@ -522,10 +532,7 @@ def check_silent_users():
     with SessionLocal() as db:
         now = datetime.now(pytz.UTC)
         today = now.date()
-        active_users = db.query(User).filter(
-            User.is_active == True,
-            User.tg_id.isnot(None),
-        ).all()
+        active_users = _active_plan_users_query(db).all()
 
         for user in active_users:
             try:
@@ -854,6 +861,7 @@ def check_plan_completions() -> None:
                 completion = complete_current_plan_if_ready(
                     db,
                     user_id=candidate_plan.user_id,
+                    plan_id=candidate_plan.id,
                     source_operation_id=f"scheduler:complete:{candidate_plan.id}",
                 )
                 if completion and completion.status == "completed":
