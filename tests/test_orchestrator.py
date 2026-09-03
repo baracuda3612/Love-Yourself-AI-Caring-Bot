@@ -149,11 +149,27 @@ def test_format_plan_status_without_current_sequence():
     assert result == "📋 Активних 7 або 14 днів зараз немає."
 
 
+@pytest.mark.anyio
+async def test_mutation_tool_rejects_missing_stable_call_id(monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {"pause_plan": lambda *_args, **_kwargs: called.append(True)},
+    )
+
+    result = await orchestrator._execute_plan_tool(
+        7,
+        {"name": "pause_plan", "arguments": {}},
+    )
+
+    assert result == "⚠️ Не вдалось виконати дію. Спробуй ще раз."
+    assert called == []
+
+
 def test_auto_complete_marks_plan_completed_and_logs_event_with_metrics_error(monkeypatch):
     user = type("UserStub", (), {})()
     user.id = 77
-    user.current_state = "ACTIVE"
-    user.plan_end_date = datetime.now(timezone.utc) - timedelta(days=1)
 
     latest_plan = type("PlanStub", (), {})()
     latest_plan.id = 9
@@ -172,17 +188,22 @@ def test_auto_complete_marks_plan_completed_and_logs_event_with_metrics_error(mo
         captured.update(kwargs)
 
     monkeypatch.setattr(orchestrator, "log_user_event", fake_log_user_event)
+    monkeypatch.setattr(orchestrator, "get_authoritative_current_plan", lambda _db, _uid: latest_plan)
+    monkeypatch.setattr(
+        orchestrator,
+        "complete_current_plan_if_ready",
+        lambda _db, **_kwargs: type(
+            "Result", (), {"plan_id": 9, "duplicate": False}
+        )(),
+    )
     def raise_no_loop():
         raise RuntimeError("no running loop")
 
     monkeypatch.setattr(orchestrator.asyncio, "get_running_loop", raise_no_loop)
 
-    orchestrator._auto_complete_plan_if_needed(db, user)
+    completed_plan_id = orchestrator._auto_complete_plan_if_needed(db, user)
 
-    assert latest_plan.status == "completed"
-    assert latest_plan.end_date is not None
-    assert user.current_state == "IDLE_FINISHED"
-    assert user.plan_end_date is None
+    assert completed_plan_id == 9
     assert captured["event_type"] == "plan_completed"
     assert captured["context"]["plan_id"] == 9
     assert captured["context"]["metrics_error"] is True
@@ -191,8 +212,6 @@ def test_auto_complete_marks_plan_completed_and_logs_event_with_metrics_error(mo
 def test_auto_complete_without_active_plan_sets_idle_without_logging(monkeypatch):
     user = type("UserStub", (), {})()
     user.id = 88
-    user.current_state = "ACTIVE"
-    user.plan_end_date = datetime.now(timezone.utc) - timedelta(days=1)
 
     db = _AutoCompleteDB([])
     called = {"value": False}
@@ -201,19 +220,17 @@ def test_auto_complete_without_active_plan_sets_idle_without_logging(monkeypatch
         called["value"] = True
 
     monkeypatch.setattr(orchestrator, "log_user_event", fake_log_user_event)
+    monkeypatch.setattr(orchestrator, "get_authoritative_current_plan", lambda _db, _uid: None)
 
-    orchestrator._auto_complete_plan_if_needed(db, user)
+    completed_plan_id = orchestrator._auto_complete_plan_if_needed(db, user)
 
-    assert user.current_state == "IDLE_FINISHED"
-    assert user.plan_end_date is None
+    assert completed_plan_id is None
     assert called["value"] is False
 
 
-def test_auto_complete_reapplies_plan_and_user_after_event_logging_failure(monkeypatch):
+def test_auto_complete_does_not_reapply_legacy_mirrors_after_event_failure(monkeypatch):
     user = type("UserStub", (), {})()
     user.id = 101
-    user.current_state = "ACTIVE"
-    user.plan_end_date = datetime.now(timezone.utc) - timedelta(days=1)
 
     latest_plan = type("PlanStub", (), {})()
     latest_plan.id = 22
@@ -226,32 +243,29 @@ def test_auto_complete_reapplies_plan_and_user_after_event_logging_failure(monke
     latest_plan.end_date = None
 
     db = _AutoCompleteDB([latest_plan])
-    rollback_called = {"value": False}
-
     def fake_log_user_event(**_kwargs):
         raise RuntimeError("boom")
 
-    def fake_rollback():
-        rollback_called["value"] = True
-
-    db.rollback = fake_rollback
-
     monkeypatch.setattr(orchestrator, "log_user_event", fake_log_user_event)
+    monkeypatch.setattr(orchestrator, "get_authoritative_current_plan", lambda _db, _uid: latest_plan)
+    monkeypatch.setattr(
+        orchestrator,
+        "complete_current_plan_if_ready",
+        lambda _db, **_kwargs: type(
+            "Result", (), {"plan_id": 22, "duplicate": False}
+        )(),
+    )
 
-    orchestrator._auto_complete_plan_if_needed(db, user)
+    completed_plan_id = orchestrator._auto_complete_plan_if_needed(db, user)
 
-    assert rollback_called["value"] is True
-    assert latest_plan.status == "completed"
-    assert latest_plan.end_date is not None
-    assert user.current_state == "IDLE_FINISHED"
-    assert user.plan_end_date is None
+    assert completed_plan_id == 22
+    assert not hasattr(user, "current_state")
+    assert not hasattr(user, "plan_end_date")
 
 
-def test_auto_complete_warns_and_uses_latest_plan(monkeypatch, caplog):
+def test_auto_complete_rejects_multiple_current_plans(monkeypatch):
     user = type("UserStub", (), {})()
     user.id = 99
-    user.current_state = "ACTIVE"
-    user.plan_end_date = datetime.now(timezone.utc) - timedelta(days=1)
 
     latest_plan = type("PlanStub", (), {})()
     latest_plan.id = 10
@@ -274,14 +288,18 @@ def test_auto_complete_warns_and_uses_latest_plan(monkeypatch, caplog):
     older_plan.end_date = None
 
     db = _AutoCompleteDB([latest_plan, older_plan])
-    monkeypatch.setattr(orchestrator, "log_user_event", lambda **_kwargs: None)
+    from app.lifecycle import LifecycleInvariantError
 
-    with caplog.at_level("WARNING"):
+    monkeypatch.setattr(
+        orchestrator,
+        "get_authoritative_current_plan",
+        lambda _db, _uid: (_ for _ in ()).throw(
+            LifecycleInvariantError("multiple current plans")
+        ),
+    )
+
+    with pytest.raises(LifecycleInvariantError, match="multiple current plans"):
         orchestrator._auto_complete_plan_if_needed(db, user)
-
-    assert latest_plan.status == "completed"
-    assert older_plan.status == "active"
-    assert "Multiple active plans found" in caplog.text
 
 
 def test_get_avg_difficulty_unknown_value_falls_back_to_one():

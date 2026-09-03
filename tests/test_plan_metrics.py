@@ -22,8 +22,7 @@ from app import plan_metrics
 
 @dataclass
 class DummyStep:
-    is_completed: bool = False
-    skipped: bool = False
+    step_status: str = "pending"
 
 
 def _ts(value: int) -> datetime:
@@ -38,9 +37,9 @@ def test_skip_streak_no_delivered_tasks(monkeypatch):
 
 def test_skip_streak_consecutive_skips(monkeypatch):
     delivered = [
-        (DummyStep(skipped=True), _ts(3)),
-        (DummyStep(skipped=True), _ts(2)),
-        (DummyStep(skipped=True), _ts(1)),
+        (DummyStep("skipped"), _ts(3)),
+        (DummyStep("skipped"), _ts(2)),
+        (DummyStep("skipped"), _ts(1)),
     ]
     monkeypatch.setattr(plan_metrics, "fetch_delivered_steps", lambda *_args, **_kwargs: delivered)
     monkeypatch.setattr(plan_metrics, "_fetch_reset_events", lambda *_args, **_kwargs: [])
@@ -50,8 +49,8 @@ def test_skip_streak_consecutive_skips(monkeypatch):
 
 def test_skip_streak_completed_task_stops(monkeypatch):
     delivered = [
-        (DummyStep(is_completed=True), _ts(3)),
-        (DummyStep(skipped=True), _ts(2)),
+        (DummyStep("completed"), _ts(3)),
+        (DummyStep("skipped"), _ts(2)),
     ]
     monkeypatch.setattr(plan_metrics, "fetch_delivered_steps", lambda *_args, **_kwargs: delivered)
     monkeypatch.setattr(plan_metrics, "_fetch_reset_events", lambda *_args, **_kwargs: [])
@@ -61,8 +60,8 @@ def test_skip_streak_completed_task_stops(monkeypatch):
 
 def test_skip_streak_in_progress_stops(monkeypatch):
     delivered = [
-        (DummyStep(is_completed=False, skipped=False), _ts(3)),
-        (DummyStep(skipped=True), _ts(2)),
+        (DummyStep("pending"), _ts(3)),
+        (DummyStep("skipped"), _ts(2)),
     ]
     monkeypatch.setattr(plan_metrics, "fetch_delivered_steps", lambda *_args, **_kwargs: delivered)
     monkeypatch.setattr(plan_metrics, "_fetch_reset_events", lambda *_args, **_kwargs: [])
@@ -72,8 +71,8 @@ def test_skip_streak_in_progress_stops(monkeypatch):
 
 def test_skip_streak_reset_event_stops(monkeypatch):
     delivered = [
-        (DummyStep(skipped=True), _ts(3)),
-        (DummyStep(skipped=True), _ts(2)),
+        (DummyStep("skipped"), _ts(3)),
+        (DummyStep("skipped"), _ts(2)),
     ]
     resets = [_ts(2.5)]
     monkeypatch.setattr(plan_metrics, "fetch_delivered_steps", lambda *_args, **_kwargs: delivered)
@@ -93,12 +92,12 @@ def test_skip_streak_scheduler_failure(monkeypatch):
     ("delivered", "expected"),
     [
         ([], 0.0),
-        ([(DummyStep(is_completed=True), _ts(1))], 1.0),
+        ([(DummyStep("completed"), _ts(1))], 1.0),
         (
             [
-                (DummyStep(is_completed=True), _ts(3)),
-                (DummyStep(is_completed=False), _ts(2)),
-                (DummyStep(is_completed=False), _ts(1)),
+                (DummyStep("completed"), _ts(3)),
+                (DummyStep("pending"), _ts(2)),
+                (DummyStep("pending"), _ts(1)),
             ],
             1 / 3,
         ),
@@ -112,9 +111,9 @@ def test_completion_rate(monkeypatch, delivered, expected):
 
 def test_get_recent_tasks(monkeypatch):
     delivered = [
-        (DummyStep(skipped=True), _ts(3)),
-        (DummyStep(skipped=False), _ts(2)),
-        (DummyStep(skipped=False), _ts(1)),
+        (DummyStep("skipped"), _ts(3)),
+        (DummyStep("pending"), _ts(2)),
+        (DummyStep("pending"), _ts(1)),
     ]
     monkeypatch.setattr(plan_metrics, "fetch_delivered_steps", lambda *_args, **_kwargs: delivered)
 

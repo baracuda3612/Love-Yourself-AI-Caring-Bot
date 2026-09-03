@@ -1,36 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+from app import lifecycle
 from app.ux.task_notification import maybe_advance_current_day
-
-
-@dataclass
-class _Step:
-    scheduled_for: datetime | None
-    is_delivered: bool = False
-    delivered_at: datetime | None = None
-
-
-@dataclass
-class _Day:
-    plan_id: int
-    day_number: int
-    steps: list[_Step]
 
 
 class _Query:
     def __init__(self, value):
         self.value = value
-        self.locked = False
 
     def filter(self, *_args, **_kwargs):
-        return self
-
-    def with_for_update(self):
-        self.locked = True
         return self
 
     def first(self):
@@ -38,116 +18,44 @@ class _Query:
 
 
 class _DB:
-    def __init__(self, plan, day):
+    def __init__(self, plan):
         self.plan = plan
-        self.day = day
-        self.plan_query = _Query(plan)
-        self.day_query = _Query(day)
-        self.added = []
 
-    def query(self, model):
-        name = getattr(model, "__name__", "")
-        if name == "AIPlan":
-            return self.plan_query
-        if name == "AIPlanDay":
-            return self.day_query
-        raise AssertionError(name)
-
-    def add(self, obj):
-        self.added.append(obj)
+    def query(self, _model):
+        return _Query(self.plan)
 
 
-def _dt(minutes_ago: int) -> datetime:
-    return datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+def test_reports_progress_past_day_without_writing_legacy_mirror(monkeypatch):
+    plan = SimpleNamespace(id=1, current_day=None, total_days=14)
+    monkeypatch.setattr(lifecycle, "derive_current_day", lambda *_args: 4)
+
+    assert maybe_advance_current_day(_DB(plan), 1, 3) is True
+    assert plan.current_day is None
 
 
-def test_advances_after_last_step_delivered():
-    plan = SimpleNamespace(id=1, current_day=3, total_days=21)
-    day = _Day(1, 3, [_Step(_dt(10), is_delivered=True), _Step(_dt(5), delivered_at=_dt(1))])
-    db = _DB(plan, day)
+def test_reports_no_progress_when_derived_day_has_not_passed(monkeypatch):
+    plan = SimpleNamespace(id=1, current_day=12, total_days=14)
+    monkeypatch.setattr(lifecycle, "derive_current_day", lambda *_args: 3)
 
-    advanced = maybe_advance_current_day(db, 1, 3)
-
-    assert advanced is True
-    assert plan.current_day == 4
+    assert maybe_advance_current_day(_DB(plan), 1, 3) is False
+    # A stale mirror is ignored and remains untouched.
+    assert plan.current_day == 12
 
 
-def test_no_advance_if_steps_remaining():
-    plan = SimpleNamespace(id=1, current_day=3, total_days=21)
-    day = _Day(1, 3, [_Step(_dt(10), is_delivered=True), _Step(_dt(-10))])
-    db = _DB(plan, day)
-
-    advanced = maybe_advance_current_day(db, 1, 3)
-
-    assert advanced is False
-    assert plan.current_day == 3
+def test_missing_plan_is_noop(monkeypatch):
+    monkeypatch.setattr(
+        lifecycle,
+        "derive_current_day",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not derive")),
+    )
+    assert maybe_advance_current_day(_DB(None), 1, 3) is False
 
 
-def test_step_without_scheduled_for_not_counted():
-    """Steps with scheduled_for=None are excluded from delivery check."""
-    plan = SimpleNamespace(id=1, current_day=3, total_days=21)
-    day = _Day(1, 3, [_Step(_dt(10), is_delivered=True), _Step(None)])
-    db = _DB(plan, day)
-
-    advanced = maybe_advance_current_day(db, 1, 3)
-
-    assert advanced is True
-    assert plan.current_day == 4
-
-
-def test_idempotent_if_already_advanced():
-    plan = SimpleNamespace(id=1, current_day=5, total_days=21)
-    day = _Day(1, 3, [_Step(_dt(10), is_delivered=True)])
-    db = _DB(plan, day)
-
-    advanced = maybe_advance_current_day(db, 1, 3)
-
-    assert advanced is False
-    assert plan.current_day == 5
-
-
-def test_no_advance_on_last_day():
-    plan = SimpleNamespace(id=1, current_day=21, total_days=21)
-    day = _Day(1, 21, [_Step(_dt(10), is_delivered=True)])
-    db = _DB(plan, day)
-
-    advanced = maybe_advance_current_day(db, 1, 21)
-
-    assert advanced is False
-    assert plan.current_day == 21
-
-
-def test_single_step_day_advances_immediately():
-    plan = SimpleNamespace(id=1, current_day=2, total_days=21)
-    day = _Day(1, 2, [_Step(_dt(1), delivered_at=_dt(1))])
-    db = _DB(plan, day)
-
-    advanced = maybe_advance_current_day(db, 1, 2)
-
-    assert advanced is True
-    assert plan.current_day == 3
-
-
-def test_multi_step_day_waits_for_all():
-    plan = SimpleNamespace(id=1, current_day=2, total_days=21)
-    day = _Day(1, 2, [_Step(_dt(10), is_delivered=True), _Step(_dt(-2))])
-    db = _DB(plan, day)
-
-    advanced = maybe_advance_current_day(db, 1, 2)
-    assert advanced is False
-    assert plan.current_day == 2
-
-    day.steps[1].is_delivered = True
-    advanced = maybe_advance_current_day(db, 1, 2)
-    assert advanced is True
-    assert plan.current_day == 3
-
-
-def test_uses_for_update_lock_on_plan_query():
-    plan = SimpleNamespace(id=1, current_day=2, total_days=21)
-    day = _Day(1, 2, [_Step(_dt(1), is_delivered=True)])
-    db = _DB(plan, day)
-
-    maybe_advance_current_day(db, 1, 2)
-
-    assert db.plan_query.locked is True
+def test_plan_without_duration_is_noop(monkeypatch):
+    plan = SimpleNamespace(id=1, current_day=None, total_days=None)
+    monkeypatch.setattr(
+        lifecycle,
+        "derive_current_day",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not derive")),
+    )
+    assert maybe_advance_current_day(_DB(plan), 1, 3) is False
