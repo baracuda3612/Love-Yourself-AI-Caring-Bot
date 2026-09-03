@@ -23,6 +23,12 @@ from app.ux.persona import get_persona
 from app.ux.pulse_prompt import generate_pulse_message
 from app.ux.rate_limit import can_send_auto_message
 from app.ux.task_notification import format_task_notification, maybe_advance_current_day
+from app.lifecycle import (
+    LifecycleTransitionError,
+    complete_current_plan_if_ready,
+    derive_current_day,
+    transition_plan_step,
+)
 
 # Configure JobStore
 DATABASE_URL = settings.DATABASE_URL
@@ -39,7 +45,6 @@ logger = logging.getLogger(__name__)
 
 _scheduler_started = False
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
-_ALLOWED_USER_STATES = {"ACTIVE"}
 
 # Deliver a task up to 2 hours after its scheduled_for time.
 # Protects against brief server downtime without delivering stale tasks (e.g. at 23:00).
@@ -78,14 +83,8 @@ def init_scheduler():
     scheduler.add_job("app.scheduler:check_ignored_tasks", "cron", hour=8, minute=0, id="ignored_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_plan_completions", "cron", hour=10, minute=30, id="plan_completion_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:send_plan_pulse_snapshots", "cron", hour=10, minute=0, id="pulse_snapshot_check", replace_existing=True, max_instances=1)
-    scheduler.add_job(
-        "app.scheduler:check_stuck_schedule_adjustments",
-        "interval",
-        minutes=5,
-        id="stuck_schedule_adj_check",
-        replace_existing=True,
-        max_instances=1,
-    )
+    # The rejected SCHEDULE_ADJUSTMENT tunnel is compatibility-only and no
+    # longer scheduled. WP-02.1 removes its remaining inert code and Redis keys.
 
 
 def shutdown_scheduler():
@@ -107,11 +106,15 @@ def _submit_coroutine(coro):
     return asyncio.run_coroutine_threadsafe(coro, _event_loop)
 
 
-def can_deliver_tasks(user: User) -> bool:
+def can_deliver_tasks(user: User, plan: AIPlan | None = None) -> bool:
     # NOTE:
     # Missed scheduled deliveries while user is not ACTIVE are intentional.
     # Replay/recovery (if any) must be handled by adaptation/reconciliation layer.
-    return user.current_state == "ACTIVE"
+    if not user or not user.is_active:
+        return False
+    if plan is not None:
+        return plan.status == "active"
+    return any(getattr(candidate, "status", None) == "active" for candidate in user.plans)
 
 
 async def _send_message_async(
@@ -144,7 +147,7 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
         user = plan.user
         if not user or not user.is_active:
             return
-        if not can_deliver_tasks(user):
+        if not can_deliver_tasks(user, plan):
             return
 
         if plan.status != "active":
@@ -226,11 +229,16 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
                     plan_step_id=plan_step_id,
                     context=base_context,
                 )
+                delivery_transition = transition_plan_step(
+                    db,
+                    user_id=user_id,
+                    step_id=plan_step_id,
+                    target_status="delivered",
+                    source_operation_id=f"scheduler:delivery:{plan_step_id}",
+                )
                 db_step = db.query(AIPlanStep).filter(AIPlanStep.id == plan_step_id).first()
-                if db_step:
-                    db_step.step_status = "delivered"
-                    if result is not None and hasattr(result, "message_id"):
-                        db_step.tg_message_id = result.message_id
+                if db_step and result is not None and hasattr(result, "message_id"):
+                    db_step.tg_message_id = result.message_id
                 day_number = base_context.get("day_number")
                 if day_number is not None:
                     maybe_advance_current_day(db, plan_id, day_number)
@@ -263,7 +271,7 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
         
     if not user or not user.is_active:
         return False
-    if not can_deliver_tasks(user):
+    if not can_deliver_tasks(user, step.day.plan if step.day else None):
         return False
 
     if not step.day or not step.day.plan:
@@ -399,7 +407,6 @@ async def schedule_daily_loop():
             .filter(
                 AIPlan.status == "active",
                 User.is_active == True,
-                User.current_state == "ACTIVE",
                 AIPlanStep.step_status == "pending",
                 AIPlanStep.scheduled_for != None, # Only schedule if time is set
                 AIPlanStep.scheduled_for > now_utc
@@ -440,7 +447,6 @@ def send_daily_pulse():
         with SessionLocal() as db:
             active_users = db.query(User).filter(
                 User.is_active == True,
-                User.current_state == "ACTIVE",
                 User.tg_id.isnot(None),
             ).all()
 
@@ -518,7 +524,6 @@ def check_silent_users():
         today = now.date()
         active_users = db.query(User).filter(
             User.is_active == True,
-            User.current_state == "ACTIVE",
             User.tg_id.isnot(None),
         ).all()
 
@@ -687,7 +692,17 @@ def expire_overdue_steps() -> None:
             if step.expires_at is None or step.expires_at >= now_utc:
                 continue
 
-            step.step_status = "expired"
+            try:
+                transition_plan_step(
+                    db,
+                    user_id=step.day.plan.user_id,
+                    step_id=step.id,
+                    target_status="expired",
+                    source_operation_id=f"scheduler:expiry:{step.id}:{step.expires_at.isoformat()}",
+                    occurred_at=step.expires_at,
+                )
+            except LifecycleTransitionError:
+                continue
             count += 1
             if step.tg_message_id:
                 try:
@@ -809,49 +824,23 @@ async def _force_reset_schedule_adjustment(user: User, db) -> None:
     # Known trade-off for timeout edge cases:
     # if context is missing/expired at hard-timeout time, we fall back to ACTIVE.
     # This avoids getting the user stuck in tunnel; preserving paused state requires context.
-    user.current_state = "ACTIVE_PAUSED" if plan_was_paused else "ACTIVE"
-    db.add(user)
-    db.commit()
+    # Legacy tunnel storage is inert. The authoritative plan status already
+    # preserves whether delivery is paused.
     await session_memory.clear_schedule_adjustment_context(user.id)
     await session_memory.clear_schedule_adjustment_last_active(user.id)
     await session_memory.clear_schedule_adjustment_soft_prompted(user.id)
-    logger.info("[SCHED_ADJ_TIMEOUT] Hard reset user=%s -> %s", user.id, user.current_state)
+    logger.info("[SCHED_ADJ_TIMEOUT] Cleared inert compatibility context user=%s", user.id)
 
 
 def check_stuck_schedule_adjustments() -> None:
-    if not _event_loop:
-        return
-
-    async def _run():
-        from app.session_memory import session_memory
-        from app.telegram import bot as tg_bot
-
-        with SessionLocal() as db:
-            stuck_users = db.query(User).filter(User.current_state == "SCHEDULE_ADJUSTMENT").all()
-            now = datetime.now(timezone.utc)
-            for user in stuck_users:
-                if not user.tg_id:
-                    continue
-                last_active = await session_memory.get_schedule_adjustment_last_active(user.id)
-                if last_active is None:
-                    await session_memory.set_schedule_adjustment_last_active(user.id)
-                    continue
-                minutes_idle = (now - last_active).total_seconds() / 60
-                already_prompted = await session_memory.get_schedule_adjustment_soft_prompted(user.id)
-
-                if minutes_idle >= SCHEDULE_ADJ_HARD_TIMEOUT_MIN and already_prompted:
-                    await _force_reset_schedule_adjustment(user, db)
-                elif minutes_idle >= SCHEDULE_ADJ_SOFT_TIMEOUT_MIN and not already_prompted:
-                    await _send_schedule_adjustment_timeout_prompt(user, tg_bot)
-
-    asyncio.run_coroutine_threadsafe(_run(), _event_loop)
+    """Retained import boundary; the stored-FSM scanner is disabled by WP-01.3."""
+    logger.debug("[LIFECYCLE_COMPAT] schedule-adjustment scanner disabled")
 
 def check_plan_completions() -> None:
     """
     Daily cron at 10:30 UTC.
-    Safety net: finds users with active plans past end_date
-    and triggers completion. Primary trigger is _maybe_schedule_plan_completion.
-    This catches users who stopped opening the bot.
+    Safety net: completes only active aggregates whose child steps are all
+    terminal. No scheduled user/plan end-date mirror participates.
     """
     from app.orchestrator import _auto_complete_plan_if_needed, send_plan_completion_message
 
@@ -859,29 +848,18 @@ def check_plan_completions() -> None:
     completed_pairs: list[tuple[int, int]] = []
 
     with SessionLocal() as db:
-        expired_users = (
-            db.query(User)
-            .join(AIPlan, AIPlan.user_id == User.id)
-            .filter(
-                AIPlan.status == "active",
-                User.plan_end_date < now,
-                User.plan_end_date.isnot(None),
-            )
-            .all()
-        )
-        for user in expired_users:
-            candidate_plan = (
-                db.query(AIPlan)
-                .filter(AIPlan.user_id == user.id, AIPlan.status == "active")
-                .order_by(AIPlan.created_at.desc())
-                .first()
-            )
+        active_plans = db.query(AIPlan).filter(AIPlan.status == "active").all()
+        for candidate_plan in active_plans:
             try:
-                _auto_complete_plan_if_needed(db, user)
-                if candidate_plan and candidate_plan.status == "completed":
-                    completed_pairs.append((user.id, candidate_plan.id))
+                completion = complete_current_plan_if_ready(
+                    db,
+                    user_id=candidate_plan.user_id,
+                    source_operation_id=f"scheduler:complete:{candidate_plan.id}",
+                )
+                if completion and completion.status == "completed":
+                    completed_pairs.append((candidate_plan.user_id, candidate_plan.id))
             except Exception as e:
-                logger.error("[CRON_COMPLETION] failed user=%s: %s", user.id, e)
+                logger.error("[CRON_COMPLETION] failed plan=%s: %s", candidate_plan.id, e)
 
         try:
             db.commit()
@@ -931,12 +909,12 @@ async def check_pulse_triggers(db, bot) -> None:
         user = db.query(User).filter(User.id == plan.user_id).first()
         if not user or not user.tg_id:
             continue
-        if not can_deliver_tasks(user):
+        if not can_deliver_tasks(user, plan):
             continue
 
         today = _now_in_user_tz(user).date()
-        active_day = getattr(plan, "current_day", None) or 1
-        active_day = min(active_day, getattr(plan, "total_days", None) or active_day)
+        total_days = int(getattr(plan, "total_days", None) or 1)
+        active_day = derive_current_day(db, plan.id, total_days)
 
         if active_day not in thresholds:
             continue

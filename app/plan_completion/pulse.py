@@ -43,21 +43,16 @@ def _to_ratio(completed: int, delivered: int) -> float:
 
 
 def _is_step_completed(step: object) -> bool:
-    step_status = getattr(step, "step_status", None)
-    if step_status is not None:
-        return step_status == "completed"
-    # Legacy fallback for objects without step_status
-    return bool(getattr(step, "is_completed", False))
+    return getattr(step, "step_status", None) == "completed"
 
 
 def _resolve_active_day_number(plan: AIPlan, days: list[AIPlanDay]) -> int:
-    current = getattr(plan, "current_day", None)
-    if isinstance(current, int) and current > 0:
-        return current
-
     total = int(getattr(plan, "total_days", None) or len(days))
-    completed = sum(1 for d in days if getattr(d, "is_completed", False))
-    return min(completed + 1, total)
+    terminal = {"completed", "skipped", "expired", "canceled"}
+    for day in sorted(days, key=lambda item: item.day_number):
+        if any(getattr(step, "step_status", None) not in terminal for step in day.steps):
+            return min(day.day_number, total)
+    return max(1, total)
 
 
 def _resolve_window(plan_total_days: int, active_day_number: int) -> tuple[int, int]:

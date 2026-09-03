@@ -19,6 +19,7 @@ from sqlalchemy import (
     String,
     Text,
     Time,
+    UniqueConstraint,
     create_engine,
     inspect,
     text,
@@ -40,7 +41,7 @@ SessionLocal = sessionmaker(
 Base = declarative_base()
 logger = logging.getLogger(__name__)
 
-EXPECTED_ALEMBIC_REVISION = "20260827_schema_baseline"
+EXPECTED_ALEMBIC_REVISION = "20260902_plan_lifecycle"
 
 
 class SchemaVersionError(RuntimeError):
@@ -65,11 +66,10 @@ def audit_startup_schema() -> None:
 
 
 class PlanStatus(PyEnum):
-    DRAFT = "draft"
     ACTIVE = "active"
-    COMPLETED = "completed"
     PAUSED = "paused"
-    CANCELED = "canceled"
+    COMPLETED = "completed"
+    ABANDONED = "abandoned"
 
 
 class FactCategory(PyEnum):
@@ -91,22 +91,13 @@ class EngagementStatus(PyEnum):
 class User(Base):
     __tablename__ = "users"
 
-    __table_args__ = (
-        CheckConstraint(
-            "current_state IN ("
-            "'IDLE_NEW','IDLE_ONBOARDED','IDLE_PLAN_ABORTED','IDLE_FINISHED','IDLE_DROPPED',"
-            "'ACTIVE','ACTIVE_PAUSED',"
-            "'SCHEDULE_ADJUSTMENT'"
-            ") OR current_state LIKE 'ONBOARDING:%'",
-            name="ck_users_current_state",
-        ),
-    )
-
     id = Column(Integer, primary_key=True)
     tg_id = Column(BigInteger, unique=True, nullable=False, index=True)
     username = Column(String)
     first_name = Column(String)
-    current_state = Column(String, default="IDLE_NEW", index=True)
+    # WP-01.3 compatibility storage only. Runtime lifecycle never reads or
+    # writes these columns; WP-02.1/WP-08.1 own their eventual removal.
+    current_state = Column(String, nullable=True)
     last_active_at = Column(DateTime(timezone=True), nullable=True)
     plan_end_date = Column(DateTime(timezone=True), nullable=True)
 
@@ -121,6 +112,31 @@ class User(Base):
     daily_logs = relationship("UserDailyLog", back_populates="user", cascade="all, delete-orphan")
     plan_instances = relationship("PlanInstance", back_populates="user", cascade="all, delete-orphan")
     events = relationship("UserEvent", back_populates="user", cascade="all, delete-orphan")
+    onboarding_progress = relationship(
+        "OnboardingProgress",
+        back_populates="user",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+
+class OnboardingProgress(Base):
+    """Setup progress before a plan exists; never a plan-lifecycle mirror."""
+
+    __tablename__ = "onboarding_progress"
+    __table_args__ = (
+        CheckConstraint("length(btrim(stage)) > 0", name="ck_onboarding_progress_stage"),
+    )
+
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    stage = Column(String(64), nullable=False, default="START")
+    started_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    user = relationship("User", back_populates="onboarding_progress")
 
 
 # -------------------- MEMORY --------------------
@@ -164,11 +180,9 @@ class UserProfile(Base):
     coach_persona = Column(String(20), nullable=True)
     pulse_sent_indices = Column(JSONB, nullable=True, default=list)
 
-    # ── Pause mechanics (T5.1) ─────────────────────────────────────────────
-    # is_paused: set by /pause, cleared by /resume.
-    # Scheduler skips delivery when True. Not an adaptation — no plan rewrite.
-    is_paused = Column(Boolean, nullable=False, default=False)
-    # pause_count: monotonically increasing audit counter.
+    # WP-01.3 compatibility storage only; never read/written as lifecycle.
+    is_paused = Column(Boolean, nullable=True)
+    # Legacy counter; canonical event-derived telemetry arrives in WP-01.4/07.1.
     pause_count = Column(Integer, nullable=False, default=0)
     # evening_slot_collected: True once EVENING HH:MM is stored for MEDIUM.
     # Collected exactly once on first MEDIUM plan. Never asked again.
@@ -194,6 +208,26 @@ class UserFact(Base):
 class AIPlan(Base):
     __tablename__ = "ai_plans"
 
+    __table_args__ = (
+        UniqueConstraint("user_id", "cycle_number", name="uq_ai_plans_user_cycle"),
+        CheckConstraint("cycle_number > 0", name="ck_ai_plans_cycle_number"),
+        CheckConstraint("total_days IN (7, 14)", name="ck_ai_plans_total_days"),
+        CheckConstraint("version > 0", name="ck_ai_plans_version"),
+        CheckConstraint(
+            "activated_at IS NOT NULL AND "
+            "(status <> 'abandoned' OR abandoned_at IS NOT NULL) AND "
+            "(abandoned_at IS NULL OR abandoned_at >= activated_at)",
+            name="ck_ai_plans_chronology",
+        ),
+        Index(
+            "ux_ai_plans_one_current_per_user",
+            "user_id",
+            unique=True,
+            postgresql_where=text("status IN ('active','paused')"),
+        ),
+        Index("ix_ai_plans_user_created", "user_id", text("created_at DESC")),
+    )
+
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     
@@ -212,19 +246,27 @@ class AIPlan(Base):
     goal_description = Column(Text) 
     
     # Status & Lifecycle
-    status = Column(Enum("active", "completed", "paused", "abandoned", name="plan_status_enum"), default="active")
-    activated_at = Column(DateTime(timezone=True), nullable=True)
+    status = Column(
+        Enum("active", "paused", "completed", "abandoned", name="plan_status"),
+        nullable=False,
+        default="active",
+    )
+    cycle_number = Column(Integer, nullable=False)
+    activated_at = Column(DateTime(timezone=True), nullable=False)
+    abandoned_at = Column(DateTime(timezone=True), nullable=True)
+    version = Column(Integer, nullable=False, default=1)
     start_date = Column(DateTime(timezone=True), server_default=func.now())
     end_date = Column(DateTime(timezone=True), nullable=True)
-    current_day = Column(Integer, default=1, nullable=False)
+    # WP-01.3 compatibility storage only; progress is derived from child steps.
+    current_day = Column(Integer, nullable=True)
 
     duration = Column(String(20), nullable=True)
     focus = Column(String(20), nullable=True)
     load = Column(String(20), nullable=True)   # nullable since T5.2 — v5 plans have no load concept
     preferred_time_slots = Column(JSONB, default=list, nullable=False)
-    total_days = Column(Integer, nullable=True)
+    total_days = Column(Integer, nullable=False)
     
-    current_mode = Column(String, default="standard")
+    current_mode = Column(String, nullable=True)
     milestone_status = Column(String, default="pending")
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -241,6 +283,11 @@ class AIPlan(Base):
 
 class AIPlanDay(Base):
     __tablename__ = "ai_plan_days"
+
+    __table_args__ = (
+        UniqueConstraint("plan_id", "day_number", name="uq_ai_plan_days_plan_day"),
+        CheckConstraint("day_number > 0", name="ck_ai_plan_days_day_number"),
+    )
     
     id = Column(Integer, primary_key=True)
     plan_id = Column(Integer, ForeignKey("ai_plans.id"), nullable=False, index=True)
@@ -248,7 +295,8 @@ class AIPlanDay(Base):
     day_number = Column(Integer, nullable=False) # 1, 2, 3...
     focus_theme = Column(String, nullable=True)
     
-    is_completed = Column(Boolean, default=False)
+    # WP-01.3 compatibility storage only; derived from child step_status.
+    is_completed = Column(Boolean, nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
     
     plan = relationship("AIPlan", back_populates="days")
@@ -257,6 +305,21 @@ class AIPlanDay(Base):
 
 class AIPlanStep(Base):
     __tablename__ = "ai_plan_steps"
+
+    __table_args__ = (
+        UniqueConstraint("day_id", "order_in_day", name="uq_ai_plan_steps_day_order"),
+        CheckConstraint("version >= 0", name="ck_ai_plan_steps_version"),
+        CheckConstraint(
+            "(scheduled_for IS NULL OR expires_at IS NULL OR expires_at > scheduled_for)",
+            name="ck_ai_plan_steps_schedule_chronology",
+        ),
+        CheckConstraint(
+            "version = 0 OR "
+            "(step_status IN ('completed','skipped','expired','canceled')) = "
+            "(terminal_at IS NOT NULL)",
+            name="ck_ai_plan_steps_terminal_timestamp",
+        ),
+    )
 
     id = Column(Integer, primary_key=True)
     day_id = Column(Integer, ForeignKey("ai_plan_days.id"), nullable=False, index=True)
@@ -298,17 +361,54 @@ class AIPlanStep(Base):
     # Execution State
     # step_status is the canonical lifecycle field.
     # Values: pending | delivered | completed | skipped | expired
-    # is_completed and skipped are kept for backward compatibility and are
-    # kept in sync whenever step_status is written.
-    step_status = Column(String(20), nullable=False, default="pending")
+    # Legacy booleans/timestamp remain nullable and inert until WP-08.1.
+    step_status = Column(
+        Enum(
+            "pending",
+            "delivered",
+            "completed",
+            "skipped",
+            "expired",
+            "canceled",
+            name="plan_step_status",
+        ),
+        nullable=False,
+        default="pending",
+    )
+    terminal_at = Column(DateTime(timezone=True), nullable=True)
+    version = Column(Integer, nullable=False, default=1)
     expires_at = Column(DateTime(timezone=True), nullable=True)
     tg_message_id = Column(Integer, nullable=True)  # Telegram message_id for button removal on expiry
-    is_completed = Column(Boolean, default=False)
+    is_completed = Column(Boolean, nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
-    skipped = Column(Boolean, default=False)
+    skipped = Column(Boolean, nullable=True)
     slot_type = Column(String(20), default="CORE", nullable=False)
     
     day = relationship("AIPlanDay", back_populates="steps")
+
+
+class PlanLifecycleOperation(Base):
+    """Immutable idempotency receipt; plan/step status remains lifecycle authority."""
+
+    __tablename__ = "plan_lifecycle_operations"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "source_operation_id", name="uq_plan_lifecycle_operation_source"
+        ),
+        CheckConstraint("length(btrim(operation)) > 0", name="ck_plan_lifecycle_operation_name"),
+        CheckConstraint("length(btrim(result_status)) > 0", name="ck_plan_lifecycle_result"),
+    )
+
+    id = Column(BigInteger, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    plan_id = Column(Integer, ForeignKey("ai_plans.id", ondelete="CASCADE"), nullable=False)
+    plan_step_id = Column(
+        Integer, ForeignKey("ai_plan_steps.id", ondelete="CASCADE"), nullable=True
+    )
+    source_operation_id = Column(String(160), nullable=False)
+    operation = Column(String(40), nullable=False)
+    result_status = Column(String(24), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class AIPlanVersion(Base):

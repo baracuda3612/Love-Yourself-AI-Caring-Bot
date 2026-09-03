@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 
 import logging
 import pytz
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -36,6 +38,12 @@ from app.telemetry import log_user_event
 from app.scheduler import schedule_plan_step
 from app.db import SessionLocal
 from app.plan_duration import assert_canonical_total_days
+from app.lifecycle import (
+    LifecycleTransitionError,
+    find_lifecycle_operation,
+    mark_onboarding_completed,
+    record_lifecycle_operation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +64,14 @@ class FinalizationError(RuntimeError):
     """Raised when plan finalization fails."""
 
 
+@dataclass(frozen=True)
+class PlanActivationResult:
+    """Authoritative activation result, including retry disposition."""
+
+    plan: AIPlan
+    duplicate: bool
+
+
 def validate_for_finalization(db: Session, user_id: int) -> PlanDraftRecord:
     draft = (
         db.query(PlanDraftRecord)
@@ -73,7 +89,7 @@ def validate_for_finalization(db: Session, user_id: int) -> PlanDraftRecord:
         raise InvalidDraftError("draft_invalid")
     active_plan = (
         db.query(AIPlan)
-        .filter(AIPlan.user_id == user_id, AIPlan.status == "active")
+        .filter(AIPlan.user_id == user_id, AIPlan.status.in_(["active", "paused"]))
         .first()
     )
     if active_plan is not None:
@@ -119,14 +135,6 @@ def _build_step_description(content: ContentLibrary | None) -> str:
     return ""
 
 
-def _derive_plan_end_date(plan_start: datetime, total_days: int, tz: pytz.BaseTzInfo) -> datetime | None:
-    if total_days <= 0:
-        return None
-    start_local = plan_start.astimezone(tz)
-    end_local = start_local + timedelta(days=total_days)
-    return end_local
-
-
 def _resolve_time_slot(value: str, slot_time_mapping: dict[str, time]) -> time:
     try:
         normalized = normalize_time_slot(value)
@@ -168,7 +176,8 @@ def finalize_plan(
     draft: PlanDraftRecord,
     *,
     activation_time_utc: datetime,
-) -> AIPlan:
+    source_operation_id: str,
+) -> PlanActivationResult:
     try:
         user = (
             db.query(User)
@@ -178,6 +187,29 @@ def finalize_plan(
         )
         if not user:
             raise FinalizationError("user_not_found")
+
+        existing_operation = find_lifecycle_operation(
+            db,
+            user_id,
+            source_operation_id,
+        )
+        if existing_operation is not None:
+            if existing_operation.operation != "activate":
+                raise LifecycleTransitionError(
+                    "source_operation_id already belongs to "
+                    f"{existing_operation.operation}, not activate"
+                )
+            existing_plan = (
+                db.query(AIPlan)
+                .filter(
+                    AIPlan.id == existing_operation.plan_id,
+                    AIPlan.user_id == user_id,
+                )
+                .first()
+            )
+            if existing_plan is None:
+                raise FinalizationError("activation_receipt_plan_missing")
+            return PlanActivationResult(plan=existing_plan, duplicate=True)
 
         locked_draft = (
             db.query(PlanDraftRecord)
@@ -196,7 +228,7 @@ def finalize_plan(
 
         active_plan = (
             db.query(AIPlan)
-            .filter(AIPlan.user_id == user_id, AIPlan.status == "active")
+            .filter(AIPlan.user_id == user_id, AIPlan.status.in_(["active", "paused"]))
             .with_for_update()
             .first()
         )
@@ -214,11 +246,19 @@ def finalize_plan(
             user_timezone=user.timezone,
             slot_time_mapping=slot_time_mapping,
         )
+        latest_cycle = (
+            db.query(func.max(AIPlan.cycle_number))
+            .filter(AIPlan.user_id == user_id)
+            .scalar()
+        )
         plan = AIPlan(
             user_id=user_id,
             title="Personalized Recovery Plan",
             module_id=PlanModule.BURNOUT_RECOVERY.value,
             status="active",
+            cycle_number=int(latest_cycle or 0) + 1,
+            activated_at=plan_start,
+            version=1,
             start_date=plan_start,
         )
         if plan.module_id not in {
@@ -227,10 +267,6 @@ def finalize_plan(
             PlanModule.DIGITAL_DETOX.value,
         }:
             raise FinalizationError("invalid_plan_module")
-        if hasattr(AIPlan, "activated_at"):
-            plan.activated_at = plan_start
-        if hasattr(AIPlan, "current_day"):
-            plan.current_day = 1
         if hasattr(AIPlan, "duration"):
             plan.duration = locked_draft.duration
         if hasattr(AIPlan, "focus"):
@@ -304,7 +340,6 @@ def finalize_plan(
                 missing_from_db,
             )
 
-        last_scheduled_for: datetime | None = None
         day_orders: dict[int, int] = defaultdict(int)
         for step_row in step_rows:
             day_number = int(step_row.day_number or 0)
@@ -361,28 +396,26 @@ def finalize_plan(
                     step_status="pending",
                 )
             )
-            if last_scheduled_for is None or scheduled_for > last_scheduled_for:
-                last_scheduled_for = scheduled_for
-
         locked_draft.status = "FINALIZED"
 
-        user.current_state = "ACTIVE"
-        # plan_end_date = date of last scheduled step (not total_days offset).
-        end_date = (
-            last_scheduled_for.astimezone(tz).replace(
-                hour=23, minute=59, second=59, microsecond=0
-            )
-            if last_scheduled_for
-            else _derive_plan_end_date(plan_start, locked_draft.total_days, tz)
+        # A finalized plan proves onboarding completion. No legacy user FSM or
+        # scheduled end-date mirror is written; completion is derived from the
+        # authoritative terminal step facts.
+        mark_onboarding_completed(db, user_id)
+        record_lifecycle_operation(
+            db,
+            user_id=user_id,
+            plan_id=plan.id,
+            source_operation_id=source_operation_id,
+            operation="activate",
+            result_status="active",
         )
-        user.plan_end_date = end_date
-        if end_date is not None:
-            plan.end_date = end_date
+        db.flush()
 
-        return plan
+        return PlanActivationResult(plan=plan, duplicate=False)
     except (DraftNotFoundError, InvalidDraftError, ActivePlanExistsError):
         raise
-    except (IntegrityError, ValueError) as exc:
+    except (IntegrityError, LifecycleTransitionError, ValueError) as exc:
         logger.error("Plan finalization failed for user %s: %s", user_id, exc)
         raise FinalizationError("transaction_failed") from exc
 
