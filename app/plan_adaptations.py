@@ -93,29 +93,10 @@ def _apply_reduce_load(
     effective_from: datetime,
     params: Dict[str, Any],
 ) -> Tuple[int, List[int]]:
-    step_diff_count = 0
-    skipped_step_ids: List[int] = []
-    for day in plan.days:
-        future_steps = [
-            step
-            for day_ref, step in _iter_future_steps(plan, effective_from)
-            if day_ref.id == day.id
-        ]
-        if not future_steps:
-            continue
-        target = _resolve_daily_target(params, None)
-        if target is None:
-            target = max(1, len(future_steps) - 1)
-        if len(future_steps) <= target:
-            continue
-        future_steps.sort(key=lambda step: step.order_in_day)
-        for step in future_steps[target:]:
-            step.step_status = "skipped"
-            step.skipped = True
-            step.scheduled_for = None
-            step_diff_count += 1
-            skipped_step_ids.append(step.id)
-    return step_diff_count, skipped_step_ids
+    del plan, effective_from, params
+    raise PlanAdaptationError(
+        "structural lifecycle mutation retired; use the lifecycle service"
+    )
 
 
 def _apply_shift_timing(

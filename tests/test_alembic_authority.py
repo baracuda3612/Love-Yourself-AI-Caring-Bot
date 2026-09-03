@@ -11,15 +11,21 @@ import app.db as database
 BASELINE_PATH = Path(
     "migrations/alembic/versions/20260827_physical_schema_baseline.py"
 )
+LIFECYCLE_PATH = Path(
+    "migrations/alembic/versions/20260902_plan_centric_lifecycle.py"
+)
 
 
 def test_baseline_is_the_single_authoritative_root() -> None:
     versions = sorted(Path("migrations/alembic/versions").glob("*.py"))
 
-    assert versions == [BASELINE_PATH]
+    assert versions == [BASELINE_PATH, LIFECYCLE_PATH]
     source = BASELINE_PATH.read_text(encoding="utf-8")
     assert 'revision = "20260827_schema_baseline"' in source
     assert "down_revision = None" in source
+    lifecycle_source = LIFECYCLE_PATH.read_text(encoding="utf-8")
+    assert 'revision = "20260902_plan_lifecycle"' in lifecycle_source
+    assert 'down_revision = "20260827_schema_baseline"' in lifecycle_source
 
 
 def test_baseline_owns_application_tables_but_not_scheduler_table() -> None:

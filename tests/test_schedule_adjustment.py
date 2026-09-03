@@ -274,7 +274,7 @@ async def test_paused_user_cancel_returns_to_paused(monkeypatch):
 async def test_apply_reads_profile_daily_time_slots(monkeypatch):
     profile = SimpleNamespace(daily_time_slots={"MORNING": "08:10", "DAY": "13:00", "EVENING": "20:00"})
     user = SimpleNamespace(id=1, profile=profile, timezone="Europe/Kyiv")
-    plan = SimpleNamespace(id=42, current_day=1, start_date=datetime.now(timezone.utc), status="active")
+    plan = SimpleNamespace(id=42, current_day=None, total_days=14, start_date=datetime.now(timezone.utc), status="active")
 
     memory = _DummySessionMemory(
         {
@@ -286,6 +286,7 @@ async def test_apply_reads_profile_daily_time_slots(monkeypatch):
     )
     db = _DummyDB(user)
     monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(orchestrator, "derive_current_day", lambda *_args: 1)
 
     def _fake_get_active_plan(db_arg, user_id_arg):
         assert db_arg is db
@@ -336,7 +337,7 @@ async def test_apply_no_changes_paused_returns_to_paused(monkeypatch):
 async def test_apply_with_changes_paused_stays_paused(monkeypatch):
     profile = SimpleNamespace(daily_time_slots={"MORNING": "08:10", "DAY": "13:00", "EVENING": "20:00"})
     user = SimpleNamespace(id=1, profile=profile, timezone="Europe/Kyiv")
-    plan = SimpleNamespace(id=77, current_day=1, start_date=datetime.now(timezone.utc), status="paused")
+    plan = SimpleNamespace(id=77, current_day=None, total_days=14, start_date=datetime.now(timezone.utc), status="paused")
 
     memory = _DummySessionMemory(
         {
@@ -348,6 +349,7 @@ async def test_apply_with_changes_paused_stays_paused(monkeypatch):
     )
     db = _DummyDB(user)
     monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(orchestrator, "derive_current_day", lambda *_args: 1)
     monkeypatch.setattr(orchestrator, "get_active_plan", lambda _db, _user_id: plan)
     monkeypatch.setattr(orchestrator, "log_user_event", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(orchestrator, "reschedule_plan_steps", lambda *_args, **_kwargs: None)
@@ -370,7 +372,7 @@ async def test_apply_with_changes_paused_stays_paused(monkeypatch):
 async def test_apply_with_changes_active_goes_active(monkeypatch):
     profile = SimpleNamespace(daily_time_slots={"MORNING": "08:10", "DAY": "13:00", "EVENING": "20:00"})
     user = SimpleNamespace(id=1, profile=profile, timezone="Europe/Kyiv")
-    plan = SimpleNamespace(id=88, current_day=1, start_date=datetime.now(timezone.utc), status="active")
+    plan = SimpleNamespace(id=88, current_day=None, total_days=14, start_date=datetime.now(timezone.utc), status="active")
 
     memory = _DummySessionMemory(
         {
@@ -382,6 +384,7 @@ async def test_apply_with_changes_active_goes_active(monkeypatch):
     )
     db = _DummyDB(user)
     monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(orchestrator, "derive_current_day", lambda *_args: 1)
     monkeypatch.setattr(orchestrator, "get_active_plan", lambda _db, _user_id: plan)
     monkeypatch.setattr(orchestrator, "log_user_event", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(orchestrator, "reschedule_plan_steps", lambda *_args, **_kwargs: None)
@@ -442,7 +445,9 @@ async def test_timeout_reset_callback_paused_returns_to_paused(monkeypatch):
 
     await telegram.on_sched_adj_timeout(cb)
 
-    assert user.current_state == "ACTIVE_PAUSED"
+    # WP-01.3 keeps stored-FSM compatibility callbacks inert; plan.status is
+    # already the authoritative paused fact.
+    assert user.current_state == "SCHEDULE_ADJUSTMENT"
 
 
 @pytest.mark.anyio

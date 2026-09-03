@@ -569,7 +569,9 @@ completed successfully with the application, PostgreSQL, and Redis online.
 
 **Status:** `VERIFIED` — bounded target contract and structural validation exist
 in `docs/implementation/target_schema_invariant_ledger.md`; PR #253 review
-findings were fixed through `4012874`, answered individually, and resolved.
+findings were fixed through `4012874`, answered individually, and resolved;
+founder merged PR #253 as
+`3635abb23fdef88e434cde08d635fc740dabfd3c`.
 
 **Deliverables**
 
@@ -592,6 +594,12 @@ findings were fixed through `4012874`, answered individually, and resolved.
 * deferred database work is documented rather than accidentally half-built.
 
 ### WP-01.3 — Implement the plan-centric lifecycle migration
+
+**Status:** `IN REVIEW` — plan/step authority, derived current mode,
+transactional evidence backfill, locked/idempotent mutation service, explicit
+no-overlap cutover, and disposable PostgreSQL concurrency rehearsal are
+complete on `wp/01.3-plan-centric-lifecycle`; PR #254 targets
+`implementation/pre-mvp` and independent GitHub review is pending.
 
 **Deliverables**
 
@@ -1571,9 +1579,9 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | `WP-01.2 — Define the target schema and invariant ledger` |
-| Status | `VERIFIED` |
-| Next action | Founder merges PR #253; after confirmation, fetch and synchronize the canonical branch before WP-01.3 |
+| Current package | `WP-01.3 — Implement the plan-centric lifecycle migration` |
+| Status | `IN REVIEW` |
+| Next action | Process every GitHub review thread on PR #254; founder remains the sole merge authority |
 | Current blockers | None for disposable founder-only refactoring; paid backup/restore remains deferred to Gate G1 before durable data or market launch |
 
 ### Private founder log

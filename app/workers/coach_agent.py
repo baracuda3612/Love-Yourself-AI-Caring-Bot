@@ -114,10 +114,10 @@ Do not roleplay, imitate another person or character, or switch into another voi
 ## 2.1 Internal System Map (NOT user-facing)
 
 You operate inside a stateful product system.
-Every user is in exactly one current state, provided as `current_state`.
+Every user has exactly one derived mode, provided as `current_mode`.
 
-Use `current_state` only to decide what kind of response and which tools are allowed.
-Do not infer or invent additional internal states beyond `current_state`.
+Use `current_mode` only to decide what kind of response and which tools are allowed.
+Do not infer or invent additional internal modes beyond `current_mode`.
 Never expose state names, FSM, or internal flow labels to the user.
 Do not describe state transitions to the user as system mechanics.
 
@@ -125,7 +125,7 @@ Do not describe state transitions to the user as system mechanics.
 
 ### NO ACTIVE PLAN
 
-State: `IDLE_PLAN_ABORTED`
+Mode: `NO_ACTIVE_PLAN`
 
 No 7 or 14-day sequence is currently running because the previous one
 was cancelled.
@@ -556,7 +556,7 @@ Before calling a runtime tool:
 #### Plan Creation
 
 **`create_followup_plan(plan_type)`**
-- State: `IDLE_PLAN_ABORTED`.
+- Mode: `NO_ACTIVE_PLAN`.
 - `plan_type`: `SHORT` for 7 working days, `MEDIUM` for 14 working days.
 - Use when no 7 or 14-day sequence is currently running and the user
   requests a new one.
@@ -651,7 +651,7 @@ The current product state determines which runtime tools are available.
 |---|---|
 | `ACTIVE` | `pause_plan`, `cancel_plan`, `change_day_time`, `change_evening_time`, `get_plan_status` |
 | `ACTIVE_PAUSED` | `resume_plan`, `cancel_plan`, `change_day_time`, `change_evening_time`, `get_plan_status` |
-| `IDLE_PLAN_ABORTED` | `create_followup_plan`, `record_evening_time`, `change_day_time`, `change_evening_time`, `get_plan_status` |
+| `NO_ACTIVE_PLAN` | `create_followup_plan`, `record_evening_time`, `change_day_time`, `change_evening_time`, `get_plan_status` |
 | Any other state | none |
 
 Additional tool-specific conditions still apply:
@@ -694,23 +694,20 @@ def _build_idle_finished_context(
     user_id: int,
 ) -> dict | None:
     """
-    Builds completion_context for IDLE_FINISHED state.
-    Returns None if no completed plan found or if metrics fail.
-    Called only when current_state == 'IDLE_FINISHED'.
+    Builds completion context only when the latest plan was completed.
+    Returns None when the latest cycle was abandoned or metrics fail.
+    Called only when current_mode == 'NO_ACTIVE_PLAN'.
     """
     from app.plan_completion.metrics import build_completion_metrics
     from app.db import AIPlan
 
     plan = (
         db.query(AIPlan)
-        .filter(
-            AIPlan.user_id == user_id,
-            AIPlan.status == "completed",
-        )
-        .order_by(AIPlan.end_date.desc())
+        .filter(AIPlan.user_id == user_id)
+        .order_by(AIPlan.cycle_number.desc(), AIPlan.id.desc())
         .first()
     )
-    if plan is None:
+    if plan is None or str(plan.status) != "completed":
         return None
 
     try:
@@ -738,7 +735,7 @@ def _build_idle_finished_context(
 def _context_message(payload: Dict[str, Any]) -> str:
     context = {
         "current_time": payload.get("temporal_context"),
-        "current_state": payload.get("current_state"),
+        "current_mode": payload.get("current_mode"),
     }
     completion_context = payload.get("completion_context")
     if completion_context is not None:
@@ -827,7 +824,7 @@ COACH_TOOLS: List[Dict[str, Any]] = [
         "name": "create_followup_plan",
         "description": (
             "Create a new 7- or 14-working-day sequence after the previous "
-            "sequence was cancelled. Use only in IDLE_PLAN_ABORTED after the "
+            "sequence ended. Use only in NO_ACTIVE_PLAN after the "
             "user requests a new sequence. plan_type is SHORT for 7 working "
             "days or MEDIUM for 14 working days."
         ),
@@ -949,7 +946,7 @@ _TOOL_NAMES_BY_STATE: Dict[str, set] = {
         "change_evening_time",
         "get_plan_status",
     },
-    "IDLE_PLAN_ABORTED": {
+    "NO_ACTIVE_PLAN": {
         "create_followup_plan",
         "record_evening_time",
         "change_day_time",
@@ -959,23 +956,23 @@ _TOOL_NAMES_BY_STATE: Dict[str, set] = {
 }
 
 
-def _coach_tools_for_state(current_state: Any) -> List[Dict[str, Any]]:
-    """Filter COACH_TOOLS down to what the current product state allows.
+def _coach_tools_for_state(current_mode: Any) -> List[Dict[str, Any]]:
+    """Filter COACH_TOOLS down to what the current product mode allows.
 
     Mirrors the "Tool Availability by State" table in Section 7 of
     COACH_SYSTEM_PROMPT — that table stops being the only enforcement
     point once this filter is applied before the API call.
     """
-    allowed_names = _TOOL_NAMES_BY_STATE.get(str(current_state or ""), set())
+    allowed_names = _TOOL_NAMES_BY_STATE.get(str(current_mode or ""), set())
     return [tool for tool in COACH_TOOLS if tool["name"] in allowed_names]
 
 
 async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
     context_payload = dict(payload)
 
-    # Inject completion_context for IDLE_FINISHED state
+    # A terminal completed plan can enrich NO_ACTIVE_PLAN context.
     completion_context = context_payload.get("completion_context")
-    if completion_context is None and context_payload.get("current_state") == "IDLE_FINISHED":
+    if completion_context is None and context_payload.get("current_mode") == "NO_ACTIVE_PLAN":
         user_id = context_payload.get("user_id")
         if isinstance(user_id, int):
             with SessionLocal() as db:
@@ -985,7 +982,7 @@ async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
         context_payload["completion_context"] = completion_context
 
     messages = _compose_messages(context_payload)
-    available_tools = _coach_tools_for_state(context_payload.get("current_state"))
+    available_tools = _coach_tools_for_state(context_payload.get("current_mode"))
 
     request_kwargs: Dict[str, Any] = {
         "model": settings.COACH_MODEL,

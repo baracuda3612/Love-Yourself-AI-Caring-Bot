@@ -1,11 +1,11 @@
 import asyncio
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from uuid import uuid4
 
 import logging
 
 import pytz
-from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -16,7 +16,6 @@ from app.db import (
     AIPlanStep,
     ChatHistory,
     ContentLibrary,
-    PlanInstance,
     SessionLocal,
     User,
     UserEvent,
@@ -53,9 +52,17 @@ from app.workers.mock_workers import (
     mock_onboarding_agent,
     mock_safety_agent,
 )
-from app.schemas.planner import DifficultyLevel, GeneratedPlan, StepType
-from app.plan_duration import assert_canonical_total_days
+from app.schemas.planner import GeneratedPlan
 from app.telemetry import log_user_event
+from app.lifecycle import (
+    CurrentMode,
+    LifecycleTransitionError,
+    abandon_current_plan,
+    complete_current_plan_if_ready,
+    derive_current_day,
+    derive_current_mode,
+    get_current_plan as get_authoritative_current_plan,
+)
 
 session_memory = SessionMemory(limit=20)
 logger = logging.getLogger(__name__)
@@ -172,14 +179,14 @@ async def _handle_schedule_adjustment_init(user_id: int, tool_args: Dict[str, An
     if not active_plan or not user:
         return {"user_text": "Активний план не знайдено."}
 
-    current_day = getattr(active_plan, "current_day", 1) or 1
+    current_day = derive_current_day(db, active_plan.id, active_plan.total_days or 0)
     active_tasks = _get_plan_active_tasks(active_plan.id, current_day, user, db)
     if not active_tasks:
         return {"user_text": "Немає майбутніх завдань для зміни часу."}
 
     first_slot = list(active_tasks.keys())[0]
     is_single = len(active_tasks) == 1
-    is_paused = user.current_state == "ACTIVE_PAUSED"
+    is_paused = active_plan.status == "paused"
 
     await _commit_fsm_transition(
         user_id=user_id,
@@ -292,7 +299,7 @@ async def _handle_schedule_adjustment_apply(user_id: int, tool_args: Dict[str, A
         await session_memory.clear_schedule_adjustment_context(user_id)
         return {"user_text": tool_args.get("user_text", "Нічого не змінилось.")}
 
-    current_day = getattr(active_plan, "current_day", 1) or 1
+    current_day = derive_current_day(db, active_plan.id, active_plan.total_days or 0)
     now_utc = datetime.now(timezone.utc)
     daily_time_slots = dict(resolve_daily_time_slots(user.profile))
     telemetry_changes = []
@@ -473,58 +480,25 @@ def _guard_fsm_transition(
     return normalized_signal, None
 
 
-def _plan_end_date_status(plan_end_date: Optional[datetime]) -> Optional[Tuple[datetime, datetime]]:
-    if not plan_end_date:
+def _auto_complete_plan_if_needed(
+    db: Session,
+    user: User,
+    *,
+    expected_plan_id: int | None = None,
+) -> int | None:
+    plan = get_authoritative_current_plan(db, user.id)
+    if plan is None or (
+        expected_plan_id is not None and plan.id != expected_plan_id
+    ):
         return None
-    if plan_end_date.tzinfo is None:
-        return plan_end_date, datetime.utcnow()
-    return plan_end_date.astimezone(pytz.UTC), datetime.now(pytz.UTC)
-
-
-def _auto_complete_plan_if_needed(db: Session, user: User) -> None:
-    if not user.plan_end_date:
-        return
-
-    now = datetime.now(timezone.utc)
-    plan_end_date = user.plan_end_date
-    if plan_end_date.tzinfo is None:
-        plan_end_date = plan_end_date.replace(tzinfo=timezone.utc)
-
-    if plan_end_date >= now:
-        return
-
-    active_plans = (
-        db.query(AIPlan)
-        .filter(AIPlan.user_id == user.id, AIPlan.status == "active")
-        .order_by(AIPlan.created_at.desc())
-        .limit(2)
-        .all()
+    result = complete_current_plan_if_ready(
+        db,
+        user_id=user.id,
+        plan_id=plan.id,
+        source_operation_id=f"runtime:complete:{plan.id}",
     )
-
-    if len(active_plans) > 1:
-        logger.warning(
-            "[COMPLETION] Multiple active plans found for user %s; completing latest plan id=%s",
-            user.id,
-            active_plans[0].id,
-        )
-
-    plan = active_plans[0] if active_plans else None
-
-    # IDEMPOTENCY GUARD
-    if plan is None or plan.status == "completed":
-        if user.current_state not in IDLE_STATES:
-            user.current_state = "IDLE_FINISHED"
-        user.plan_end_date = None
-        db.add(user)
-        return
-
-    plan.status = "completed"
-    plan.end_date = now
-    db.add(plan)
-
-    user.current_state = "IDLE_FINISHED"
-    user.plan_end_date = None
-    db.add(user)
+    if result is None or result.duplicate:
+        return None
 
     completion_rate = None
     adaptation_count = 0
@@ -532,10 +506,15 @@ def _auto_complete_plan_if_needed(db: Session, user: User) -> None:
     try:
         from app.plan_metrics import get_completion_rate
 
-        completion_rate = get_completion_rate(db, user.id, plan.id)
+        completion_rate = get_completion_rate(db, user.id, result.plan_id)
     except Exception as e:
         metrics_error = True
-        logger.warning("[COMPLETION] metrics failed user=%s plan=%s: %s", user.id, plan.id, e)
+        logger.warning(
+            "[COMPLETION] metrics failed user=%s plan=%s: %s",
+            user.id,
+            result.plan_id,
+            e,
+        )
 
     try:
         log_user_event(
@@ -543,7 +522,7 @@ def _auto_complete_plan_if_needed(db: Session, user: User) -> None:
             user_id=user.id,
             event_type="plan_completed",
             context={
-                "plan_id": plan.id,
+                "plan_id": result.plan_id,
                 "total_days": plan.total_days,
                 "focus": plan.focus,
                 "load": plan.load,
@@ -555,22 +534,8 @@ def _auto_complete_plan_if_needed(db: Session, user: User) -> None:
         )
     except Exception as e:
         logger.error("[COMPLETION] log event failed user=%s: %s", user.id, e)
-        db.rollback()
-        plan.status = "completed"
-        plan.end_date = now
-        user.current_state = "IDLE_FINISHED"
-        user.plan_end_date = None
-        db.add(plan)
-        db.add(user)
 
-    try:
-        asyncio.get_running_loop()
-        asyncio.create_task(send_plan_completion_message(user.id, plan.id))
-    except RuntimeError:
-        logger.warning(
-            "[COMPLETION] No running event loop, skipping message task user=%s",
-            user.id,
-        )
+    return result.plan_id
 
 
 async def send_plan_completion_message(user_id: int, plan_id: int) -> None:
@@ -702,7 +667,11 @@ def _trigger_plan_completion(user_id: int, plan_id: int) -> None:
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
             return
-        _auto_complete_plan_if_needed(db, user)
+        completed_plan_id = _auto_complete_plan_if_needed(
+            db,
+            user,
+            expected_plan_id=plan_id,
+        )
         try:
             db.commit()
         except Exception as e:
@@ -710,7 +679,12 @@ def _trigger_plan_completion(user_id: int, plan_id: int) -> None:
             logger.error("[COMPLETION_TRIGGER] db commit failed user=%s: %s", user_id, e)
             return
 
-    future = _submit_coroutine(send_plan_completion_message(user_id, plan_id))
+    if completed_plan_id is None:
+        return
+
+    future = _submit_coroutine(
+        send_plan_completion_message(user_id, completed_plan_id)
+    )
     if future:
         try:
             future.result(timeout=30)
@@ -724,16 +698,23 @@ def _auto_complete_plan_if_needed_for_user_id(user_id: int) -> None:
         if not user:
             return
 
-        _auto_complete_plan_if_needed(db, user)
+        completed_plan_id = _auto_complete_plan_if_needed(db, user)
 
         try:
             db.commit()
         except IntegrityError:
             db.rollback()
-            logger.error(
-                "[FSM] Failed to auto-complete plan for user %s (plan_end_date=%s)",
+            logger.error("[LIFECYCLE] Failed to auto-complete plan for user %s", user_id)
+            return
+
+    if completed_plan_id is not None:
+        try:
+            asyncio.get_running_loop()
+            asyncio.create_task(send_plan_completion_message(user_id, completed_plan_id))
+        except RuntimeError:
+            logger.warning(
+                "[COMPLETION] No running event loop, skipping message task user=%s",
                 user_id,
-                user.plan_end_date,
             )
 
 
@@ -742,30 +723,14 @@ def _auto_drop_plan_for_new_flow(user_id: int) -> bool:
         user: Optional[User] = db.query(User).filter(User.id == user_id).first()
         if not user:
             return False
-        if user.current_state not in {"ACTIVE", "ACTIVE_PAUSED"}:
-            return False
-
-        active_plan = (
-            db.query(AIPlan)
-            .filter(AIPlan.user_id == user_id, AIPlan.status == "active")
-            .order_by(AIPlan.created_at.desc())
-            .first()
-        )
-
-        step_ids: List[int] = []
-        if active_plan:
-            step_rows = (
-                db.query(AIPlanStep.id)
-                .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
-                .filter(AIPlanDay.plan_id == active_plan.id)
-                .all()
+        try:
+            _, step_ids = abandon_current_plan(
+                db,
+                user_id=user_id,
+                source_operation_id=f"legacy:new-flow-drop:{uuid4()}",
             )
-            step_ids = [row[0] for row in step_rows]
-            active_plan.status = "abandoned"
-            active_plan.end_date = datetime.now(timezone.utc)
-
-        user.current_state = "IDLE_DROPPED"
-        user.plan_end_date = None
+        except LifecycleTransitionError:
+            return False
 
         try:
             db.commit()
@@ -793,53 +758,17 @@ async def _commit_fsm_transition(
     db: Optional[Session] = None,
     reason: str = "",
 ) -> Optional[str]:
-    """Commit FSM transition with guard validation.
-
-    If ``db`` is provided, transition is staged into that session and caller controls commit.
-    Otherwise function opens and commits its own session for backward compatibility.
-    """
+    """Compatibility boundary: stored FSM writes are disabled by WP-01.3."""
 
     def _apply_transition(session: Session) -> Optional[str]:
         user: Optional[User] = session.query(User).filter(User.id == user_id).first()
         if not user:
             raise ValueError(f"User {user_id} not found")
 
-        previous_state = user.current_state
-        if previous_state == next_state:
-            logger.debug(
-                "[FSM] No-op transition for user %s already in %s (agent=%s)",
-                user_id,
-                next_state,
-                agent,
-            )
-            return previous_state
-
-        if not can_transition(previous_state, next_state):
-            raise ValueError(
-                f"Transition {previous_state} → {next_state} not allowed by FSM guards"
-            )
-
-        user.current_state = next_state
-        session.add(user)
-        logger.info(
-            "[FSM] User %s state transition: %s → %s (agent=%s, reason=%s)",
-            user_id,
-            previous_state,
-            next_state,
-            agent,
-            reason,
+        raise ValueError(
+            "stored FSM transition disabled by WP-01.3 "
+            f"(agent={agent}, next_state={next_state}, reason={reason})"
         )
-        log_metric(
-            "fsm_transition",
-            extra={
-                "user_id": user_id,
-                "agent": agent,
-                "from_state": previous_state,
-                "to_state": next_state,
-                "reason": reason,
-            },
-        )
-        return previous_state
 
     if db is not None:
         previous_state = _apply_transition(db)
@@ -922,120 +851,11 @@ def _validate_plan_exercise_ids(
 
 
 def _persist_generated_plan(db: Session, user: User, plan_payload: Dict[str, Any]) -> AIPlan:
-    try:
-        parsed_plan = GeneratedPlan.parse_obj(plan_payload)
-    except ValidationError as exc:
-        raise PlanAgentEnvelopeError("invalid_generated_plan_object") from exc
-
-    latest_plan = (
-        db.query(AIPlan)
-        .filter(AIPlan.user_id == user.id)
-        .order_by(AIPlan.created_at.desc())
-        .first()
+    """Reject the retired snapshot writer at the compatibility boundary."""
+    del db, user, plan_payload
+    raise PlanAgentEnvelopeError(
+        "generated_plan_object writer retired; use draft finalization"
     )
-    _validate_plan_exercise_ids(db, user, plan_payload, latest_plan)
-    if latest_plan and latest_plan.status == "active":
-        latest_plan.status = "abandoned"
-
-    plan_load = plan_payload.get("load")
-    if not plan_load:
-        logger.error("Attempted to activate plan without load")
-        raise RuntimeError("Active plan must have non-null load")
-    normalized_plan_load = str(plan_load).strip().upper()
-    if normalized_plan_load not in PLAN_LOAD_VALUES:
-        logger.error("Attempted to activate plan without load")
-        raise RuntimeError("Active plan must have non-null load")
-
-    try:
-        assert_canonical_total_days(parsed_plan.duration_days)
-    except ValueError as exc:
-        raise PlanAgentEnvelopeError("invalid_generated_plan_duration") from exc
-
-    plan_start = datetime.now(timezone.utc)
-    ai_plan = AIPlan(
-        user_id=user.id,
-        title=parsed_plan.title,
-        module_id=parsed_plan.module_id,
-        goal_description=parsed_plan.reasoning,
-        status="active",
-        load=normalized_plan_load,
-        start_date=plan_start,
-        total_days=parsed_plan.duration_days,
-    )
-    db.add(ai_plan)
-    db.flush()
-
-    logger.info(
-        "Plan %s activated with load=%s for user %s",
-        ai_plan.id,
-        ai_plan.load,
-        user.id,
-    )
-
-    daily_time_slots = resolve_daily_time_slots(user.profile)
-
-    for day in parsed_plan.schedule:
-        day_record = AIPlanDay(
-            plan_id=ai_plan.id,
-            day_number=day.day_number,
-            focus_theme=day.focus_theme,
-        )
-        db.add(day_record)
-        db.flush()
-        for index, step in enumerate(day.steps):
-            scheduled_for = compute_scheduled_for(
-                plan_start=plan_start,
-                day_number=day.day_number,
-                time_slot=step.time_slot,
-                timezone_name=user.timezone,
-                daily_time_slots=daily_time_slots,
-            )
-            step_type = step.step_type.value
-            assert step_type in {entry.value for entry in StepType}
-            difficulty = step.difficulty.value
-            assert difficulty in {entry.value for entry in DifficultyLevel}
-            db.add(
-                AIPlanStep(
-                    day_id=day_record.id,
-                    exercise_id=step.exercise_id,
-                    title=step.title,
-                    description=step.description,
-                    step_type=step_type,
-                    difficulty=difficulty,
-                    order_in_day=index,
-                    time_slot=step.time_slot,
-                    scheduled_for=scheduled_for,
-                )
-            )
-
-    db.add(
-        PlanInstance(
-            user_id=user.id,
-            blueprint_id=str(parsed_plan.module_id),
-            initial_parameters=plan_payload,
-            contract_version=str(plan_payload.get("contract_version") or PLAN_CONTRACT_VERSION),
-            schema_version=str(plan_payload.get("schema_version") or PLAN_SCHEMA_VERSION),
-        )
-    )
-
-    tz = _safe_timezone(user.timezone)
-    user.plan_end_date = _derive_plan_end_date(parsed_plan, tz)
-
-    log_metric(
-        "plan_snapshot",
-        extra={
-            "timestamp": datetime.utcnow().isoformat(),
-            "user_id": user.id,
-            "plan_summary": parsed_plan.title,
-            "plan_key_parameters": {
-                "module_id": str(parsed_plan.module_id),
-                "duration_days": parsed_plan.duration_days,
-                "schedule_days": len(parsed_plan.schedule),
-                "milestones": len(parsed_plan.milestones),
-            },
-        },
-    )
-    return ai_plan
 
 
 async def get_stm_history(user_id: int) -> List[Dict[str, str]]:
@@ -1107,16 +927,17 @@ async def get_temporal_context(user_id: int) -> Optional[str]:
 
 
 async def get_fsm_state(user_id: int) -> Optional[str]:
-    """Повертає поточний FSM-стан користувача."""
+    """Compatibility name returning the single derived current mode."""
     with SessionLocal() as db:
         user: Optional[User] = db.query(User).filter(User.id == user_id).first()
-
-    return user.current_state if user else None
+        if not user:
+            return None
+        return derive_current_mode(db, user_id).value
 
 
 async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
     stm_history = await get_stm_history(user_id)
-    fsm_state = await get_fsm_state(user_id)
+    current_mode = await get_fsm_state(user_id)
     temporal_context = await get_temporal_context(user_id)
 
     schedule_adjustment_context = await session_memory.get_schedule_adjustment_context(user_id)
@@ -1124,7 +945,7 @@ async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
     return {
         "message_text": message_text,
         "short_term_history": stm_history,
-        "current_state": fsm_state,
+        "current_mode": current_mode,
         "temporal_context": temporal_context,
         "schedule_adjustment_context": schedule_adjustment_context,
     }
@@ -1211,14 +1032,24 @@ def _build_tool_registry() -> Dict[str, Any]:
         resume_plan,
     )
     return {
-        "create_followup_plan": lambda uid, args: create_followup_plan(uid, args.get("plan_type", "SHORT")),
+        "create_followup_plan": lambda uid, args: create_followup_plan(
+            uid,
+            args.get("plan_type", "SHORT"),
+            source_operation_id=args["_source_operation_id"],
+        ),
         "record_evening_time":  lambda uid, args: record_evening_time(uid, args["hhmm"]),
         "change_day_time":      lambda uid, args: change_day_time(uid, args["hhmm"]),
         "change_evening_time":  lambda uid, args: change_evening_time(uid, args["hhmm"]),
         "get_plan_status":      lambda uid, _args: get_plan_status(uid),
-        "pause_plan":           lambda uid, _args: pause_plan(uid),
-        "resume_plan":          lambda uid, _args: resume_plan(uid),
-        "cancel_plan":          lambda uid, _args: cancel_plan(uid),
+        "pause_plan":           lambda uid, args: pause_plan(
+            uid, source_operation_id=args["_source_operation_id"]
+        ),
+        "resume_plan":          lambda uid, args: resume_plan(
+            uid, source_operation_id=args["_source_operation_id"]
+        ),
+        "cancel_plan":          lambda uid, args: cancel_plan(
+            uid, source_operation_id=args["_source_operation_id"]
+        ),
     }
 
 
@@ -1285,6 +1116,24 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
     tool_args = tool_call.get("arguments") or {}
     if not isinstance(tool_args, dict):
         tool_args = {}
+    else:
+        tool_args = dict(tool_args)
+    source_operation_id = tool_call.get("call_id") or tool_call.get("id")
+    source_required_tools = {
+        "create_followup_plan",
+        "record_evening_time",
+        "pause_plan",
+        "resume_plan",
+        "cancel_plan",
+    }
+    if tool_name in source_required_tools and not source_operation_id:
+        logger.error(
+            "[TOOL] mutation tool=%s user=%s missing stable call id",
+            tool_name,
+            user_id,
+        )
+        return "⚠️ Не вдалось виконати дію. Спробуй ще раз."
+    tool_args["_source_operation_id"] = str(source_operation_id or "")
 
     registry = _build_tool_registry()
     handler = registry.get(tool_name)
@@ -1318,7 +1167,15 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
         if pending == "collect_evening_time_for_medium":
             registry = _build_tool_registry()
             try:
-                registry["create_followup_plan"](user_id, {"plan_type": "MEDIUM"})
+                registry["create_followup_plan"](
+                    user_id,
+                    {
+                        "plan_type": "MEDIUM",
+                        "_source_operation_id": (
+                            f"{tool_args['_source_operation_id']}:followup"
+                        ),
+                    },
+                )
                 log_metric("plan_tool_executed", extra={"user_id": user_id, "tool": "create_followup_plan"})
                 await session_memory.clear_pending_action(user_id)  # only after success
                 return _TOOL_REPLY_TEMPLATES["create_followup_plan"]
@@ -1345,8 +1202,8 @@ async def handle_incoming_message(
     Main orchestrator:
     - appends message to session memory
     - auto-completes plan if needed
-    - builds user context (FSM state, history, etc.)
-    - if state is IDLE_NEW or ONBOARDING:* → calls onboarding handler, returns
+    - builds user context from one derived current mode
+    - routes ONBOARDING to the onboarding handler
     - else → calls coach_agent directly
     - handles generated_plan_object, plan_updates, FSM transition signal
     - returns reply
@@ -1376,23 +1233,15 @@ async def handle_incoming_message(
         }
 
     context_payload = await build_user_context(user_id, message_text)
-    current_state = context_payload.get("current_state")
+    current_mode = context_payload.get("current_mode")
 
-    if current_state == SCHEDULE_ADJUSTMENT:
-        await session_memory.set_schedule_adjustment_last_active(user_id)
-        await session_memory.clear_schedule_adjustment_soft_prompted(user_id)
-
-    # Inject completion_context for IDLE_FINISHED state
-    if current_state == "IDLE_FINISHED":
+    if current_mode == CurrentMode.NO_ACTIVE_PLAN.value:
         with SessionLocal() as db:
             completion_context = _build_idle_finished_context(db, user_id)
         if completion_context is not None:
             context_payload["completion_context"] = completion_context
 
-    # Onboarding path — state-based branch, not routing
-    if current_state == "IDLE_NEW" or (
-        isinstance(current_state, str) and current_state.startswith("ONBOARDING:")
-    ):
+    if current_mode == CurrentMode.ONBOARDING.value:
         onboarding_payload = {
             "user_id": user_id,
             **context_payload,
@@ -1448,47 +1297,21 @@ async def handle_incoming_message(
         if tool_result is not None:
             return await _finalize_reply(tool_result)
 
-    plan_persisted = False
     generated_plan_object = worker_result.get("generated_plan_object")
     if generated_plan_object is not None:
-        with SessionLocal() as db:
-            user: Optional[User] = db.query(User).filter(User.id == user_id).first()
-            if not user:
-                logger.warning(
-                    "[PLAN] Generated plan ignored — user %s not found (agent=coach)",
-                    user_id,
-                )
-                return await _finalize_reply(reply_text)
-            try:
-                _persist_generated_plan(db, user, generated_plan_object)
-                db.commit()
-            except (IntegrityError, PlanAgentEnvelopeError) as exc:
-                db.rollback()
-                logger.error(
-                    "[PLAN] Failed to persist generated plan for user %s (agent=coach)",
-                    user_id,
-                    exc_info=exc,
-                )
-                log_metric(
-                    "plan_validation_rejected",
-                    extra={"user_id": user_id, "agent": "coach"},
-                )
-                fallback_text = _plan_agent_fallback_envelope().get("reply_text", "")
-                return await _finalize_reply(fallback_text)
-            else:
-                logger.info(
-                    "[PLAN] Generated plan persisted for user %s (agent=coach)",
-                    user_id,
-                )
-                plan_persisted = True
-                log_metric(
-                    "plan_generated_ok",
-                    extra={"user_id": user_id, "agent": "coach"},
-                )
+        logger.warning(
+            "[LIFECYCLE_COMPAT] Ignoring retired generated_plan_object writer user=%s",
+            user_id,
+        )
 
     plan_updates = worker_result.get("plan_updates")
     transition_signal = worker_result.get("transition_signal")
-    if plan_updates and isinstance(plan_updates, dict):
+    if plan_updates:
+        logger.warning(
+            "[LIFECYCLE_COMPAT] Ignoring retired plan_updates writer user=%s",
+            user_id,
+        )
+    if False and plan_updates and isinstance(plan_updates, dict):  # WP-02.1 removes inert body
         allowed_execution_adaptations = {"pause", "resume", "PAUSE_PLAN", "RESUME_PLAN"}
         should_persist_updates = bool(generated_plan_object) or (
             plan_updates.get("adaptation_type") in allowed_execution_adaptations
@@ -1497,7 +1320,7 @@ async def handle_incoming_message(
             logger.info(
                 "[PLAN] Skipping plan updates outside allowed persistence window (user=%s, agent=coach, state=%s)",
                 user_id,
-                current_state,
+                current_mode,
             )
         elif "adaptation_type" in plan_updates:
             if plan_updates.get("adaptation_type") not in allowed_execution_adaptations:
@@ -1563,42 +1386,11 @@ async def handle_incoming_message(
                 if adaptation_result.rescheduled_step_ids:
                     reschedule_plan_steps(adaptation_result.rescheduled_step_ids)
         else:
-            with SessionLocal() as db:
-                user: Optional[User] = db.query(User).filter(User.id == user_id).first()
-                if not user:
-                    logger.warning(
-                        "[PLAN] Updates ignored — user %s not found (agent=coach)",
-                        user_id,
-                    )
-                    return await _finalize_reply(reply_text)
-                try:
-                    if "plan_end_date" in plan_updates:
-                        raw_end_date = plan_updates.get("plan_end_date")
-                        if raw_end_date:
-                            user.plan_end_date = datetime.fromisoformat(str(raw_end_date))
-                        else:
-                            user.plan_end_date = None
-                    db.commit()
-                except (ValueError, IntegrityError):
-                    db.rollback()
-                    logger.error(
-                        "[PLAN] Failed to persist updates for user %s (agent=coach)",
-                        user_id,
-                    )
-                else:
-                    logger.info(
-                        "[PLAN] User %s updated: end=%s",
-                        user_id,
-                        user.plan_end_date,
-                    )
+            logger.warning("[LIFECYCLE_COMPAT] Legacy plan_updates body is inert")
 
-    # FSM guard enforced via _guard_fsm_transition/can_transition.
-    next_state, rejection_reason = _guard_fsm_transition(
-        context_payload.get("current_state"),
-        transition_signal,
-        "coach",
-        plan_persisted=plan_persisted,
-    )
+    # Legacy transition signals are compatibility input only. The stored FSM
+    # writer is disabled; deterministic tools own lifecycle mutations.
+    next_state, rejection_reason = None, "stored_fsm_retired"
     if transition_signal is not None and next_state is None:
         logger.warning(
             "[FSM] Ignoring transition_signal for user %s: %s (reason=%s, agent=coach)",
@@ -1611,7 +1403,7 @@ async def handle_incoming_message(
             extra={
                 "user_id": user_id,
                 "agent": "coach",
-                "current_state": context_payload.get("current_state"),
+                "current_mode": context_payload.get("current_mode"),
                 "transition_signal": transition_signal,
                 "reason": rejection_reason or "invalid_state",
             },

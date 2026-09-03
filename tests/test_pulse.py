@@ -13,7 +13,6 @@ from app.plan_completion.tokens import make_report_token
 
 @dataclass
 class _Step:
-    is_completed: bool = False
     step_status: str = "pending"
 
 
@@ -21,7 +20,6 @@ class _Step:
 class _Day:
     day_number: int
     steps: list[_Step]
-    is_completed: bool = False
 
 
 class _Query:
@@ -66,72 +64,71 @@ class _DB:
         raise AssertionError(name)
 
 
-def _make_days(total=21):
+def _make_days(total=21, active_day=1):
     days = []
     for i in range(1, total + 1):
-        days.append(_Day(day_number=i, steps=[]))
+        status = "completed" if i < active_day else "pending"
+        days.append(_Day(day_number=i, steps=[_Step(step_status=status)]))
     return days
 
 
-def test_active_day_uses_plan_current_day():
-    plan = SimpleNamespace(id=1, user_id=10, total_days=21, current_day=9)
-    data = build_pulse_data(1, _DB(plan, SimpleNamespace(profile={}), _make_days(21)))
+def test_active_day_is_derived_from_step_status():
+    plan = SimpleNamespace(id=1, user_id=10, total_days=21, current_day=None)
+    data = build_pulse_data(1, _DB(plan, SimpleNamespace(profile={}), _make_days(21, 9)))
     assert data.active_day_number == 9
 
 
-def test_active_day_fallback_when_current_day_missing():
+def test_active_day_ignores_day_completion_mirror():
     plan = SimpleNamespace(id=1, user_id=10, total_days=21, current_day=None)
-    days = _make_days(21)
-    days[0].is_completed = True
-    days[1].is_completed = True
+    days = _make_days(21, 3)
     data = build_pulse_data(1, _DB(plan, SimpleNamespace(profile={}), days))
     assert data.active_day_number == 3
 
 
 def test_window_standard_day7():
     plan = SimpleNamespace(id=1, user_id=10, total_days=21, current_day=7)
-    data = build_pulse_data(1, _DB(plan, SimpleNamespace(profile={}), _make_days(21)))
+    data = build_pulse_data(1, _DB(plan, SimpleNamespace(profile={}), _make_days(21, 7)))
     assert data.week_number == 1
     assert [d.day for d in data.days if d.window == "active"] == list(range(1, 8))
 
 
 def test_window_standard_day14():
     plan = SimpleNamespace(id=1, user_id=10, total_days=21, current_day=14)
-    data = build_pulse_data(1, _DB(plan, SimpleNamespace(profile={}), _make_days(21)))
+    data = build_pulse_data(1, _DB(plan, SimpleNamespace(profile={}), _make_days(21, 14)))
     assert data.week_number == 2
     assert [d.day for d in data.days if d.window == "active"] == list(range(8, 15))
 
 
 def test_window_long_day28():
     plan = SimpleNamespace(id=1, user_id=10, total_days=90, current_day=28)
-    data = build_pulse_data(1, _DB(plan, SimpleNamespace(profile={}), _make_days(90)))
+    data = build_pulse_data(1, _DB(plan, SimpleNamespace(profile={}), _make_days(90, 28)))
     assert [d.day for d in data.days if d.window == "active"] == list(range(15, 35))
 
 
 def test_ratio_1step_day():
     days = _make_days(21)
-    days[0].steps = [_Step(is_completed=True)]
+    days[0].steps = [_Step(step_status="completed")]
     data = build_pulse_data(1, _DB(SimpleNamespace(id=1, user_id=10, total_days=21, current_day=1), SimpleNamespace(profile={}), days))
     assert data.days[0].completion_ratio == 1.0
 
 
 def test_ratio_2step_day():
     days = _make_days(21)
-    days[0].steps = [_Step(is_completed=True), _Step(is_completed=False)]
+    days[0].steps = [_Step(step_status="completed"), _Step()]
     data = build_pulse_data(1, _DB(SimpleNamespace(id=1, user_id=10, total_days=21, current_day=1), SimpleNamespace(profile={}), days))
     assert data.days[0].completion_ratio == 0.5
 
 
 def test_ratio_3step_day_partial():
     days = _make_days(21)
-    days[0].steps = [_Step(is_completed=True), _Step(is_completed=False), _Step(is_completed=False)]
+    days[0].steps = [_Step(step_status="completed"), _Step(), _Step()]
     data = build_pulse_data(1, _DB(SimpleNamespace(id=1, user_id=10, total_days=21, current_day=1), SimpleNamespace(profile={}), days))
     assert data.days[0].completion_ratio == 0.33
 
 
 def test_ratio_partial_completion():
     days = _make_days(21)
-    days[0].steps = [_Step(is_completed=True), _Step(is_completed=False)]
+    days[0].steps = [_Step(step_status="completed"), _Step()]
     data = build_pulse_data(1, _DB(SimpleNamespace(id=1, user_id=10, total_days=21, current_day=1), SimpleNamespace(profile={}), days))
     assert data.days[0].completion_ratio == 0.5
 
@@ -149,7 +146,7 @@ def test_expired_step_not_completed():
     days = _make_days(21)
     days[3].steps = [
         _Step(step_status="expired"),
-        _Step(is_completed=True),
+        _Step(step_status="completed"),
     ]
     plan = SimpleNamespace(id=1, user_id=10, total_days=21, current_day=14)
     data = build_pulse_data(1, _DB(plan, SimpleNamespace(profile={}), days))
@@ -158,14 +155,14 @@ def test_expired_step_not_completed():
 
 
 def test_is_today_by_active_day():
-    data = build_pulse_data(1, _DB(SimpleNamespace(id=1, user_id=10, total_days=21, current_day=5), SimpleNamespace(profile={}), _make_days(21)))
+    data = build_pulse_data(1, _DB(SimpleNamespace(id=1, user_id=10, total_days=21, current_day=None), SimpleNamespace(profile={}), _make_days(21, 5)))
     assert sum(1 for d in data.days if d.is_today) == 1
     assert data.days[4].is_today is True
 
 
 def test_phrase_deterministic():
     plan = SimpleNamespace(id=7, user_id=10, total_days=21, current_day=8)
-    db = _DB(plan, SimpleNamespace(profile={"persona": "empath"}), _make_days(21))
+    db = _DB(plan, SimpleNamespace(profile={"persona": "empath"}), _make_days(21, 8))
     assert build_pulse_data(7, db).phrase == build_pulse_data(7, db).phrase
 
 
@@ -182,7 +179,9 @@ async def test_no_pulse_short_plan(monkeypatch):
             if model is scheduler.AIPlan:
                 return _Query([SimpleNamespace(id=1, user_id=10, duration="SHORT", status="active", current_day=7)])
             if model is scheduler.User:
-                return _Query(SimpleNamespace(id=10, tg_id=100, timezone="Europe/Kyiv", current_state="ACTIVE"))
+                return _Query(SimpleNamespace(id=10, tg_id=100, timezone="Europe/Kyiv", is_active=True))
+            if model is scheduler.AIPlanDay:
+                return _Query(_make_days(21, 7))
             if model is scheduler.UserEvent:
                 return _Query(None)
             raise AssertionError(model)
@@ -247,6 +246,7 @@ def test_pulse_endpoint_inactive_plan(monkeypatch):
 @pytest.mark.anyio
 async def test_idempotency(monkeypatch):
     bot_calls = []
+    monkeypatch.setattr(scheduler, "derive_current_day", lambda *_args: 7)
 
     class _Bot:
         async def send_message(self, *_args, **_kwargs):
@@ -255,9 +255,11 @@ async def test_idempotency(monkeypatch):
     class _DBIdem:
         def query(self, model):
             if model is scheduler.AIPlan:
-                return _Query([SimpleNamespace(id=1, user_id=10, duration="MEDIUM", status="active", current_day=7)])
+                return _Query([SimpleNamespace(id=1, user_id=10, duration="MEDIUM", status="active", total_days=21)])
             if model is scheduler.User:
-                return _Query(SimpleNamespace(id=10, tg_id=100, timezone="Europe/Kyiv", current_state="ACTIVE"))
+                return _Query(SimpleNamespace(id=10, tg_id=100, timezone="Europe/Kyiv", is_active=True))
+            if model is scheduler.AIPlanDay:
+                return _Query(_make_days(21, 7))
             if model is scheduler.UserEvent:
                 return _Query(object())
             raise AssertionError(model)

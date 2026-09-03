@@ -82,42 +82,14 @@ def _is_step_delivered(step) -> bool:
 
 
 def maybe_advance_current_day(db: Session, plan_id: int, day_number: int) -> bool:
+    """Compatibility API returning whether calculated progress passed a day.
+
+    WP-01.3 no longer writes the legacy ``ai_plans.current_day`` mirror.
     """
-    Check whether all non-canceled scheduled steps of a day are delivered.
-    If yes, advance plan.current_day by one (capped by total_days).
-    Returns True if current_day was advanced.
-    """
-    plan = db.query(AIPlan).filter(AIPlan.id == plan_id).with_for_update().first()
+    from app.lifecycle import derive_current_day
+
+    plan = db.query(AIPlan).filter(AIPlan.id == plan_id).first()
     if not plan:
         return False
-
-    if plan.current_day != day_number:
-        return False
-
-    day = (
-        db.query(AIPlanDay)
-        .filter(AIPlanDay.plan_id == plan_id, AIPlanDay.day_number == day_number)
-        .first()
-    )
-    if not day:
-        return False
-
-    steps_to_deliver = [
-        s
-        for s in list(getattr(day, "steps", []) or [])
-        if getattr(s, "scheduled_for", None) is not None
-    ]
-    if not steps_to_deliver:
-        return False
-
-    delivered_count = sum(1 for s in steps_to_deliver if _is_step_delivered(s))
-    if delivered_count < len(steps_to_deliver):
-        return False
-
-    next_day = day_number + 1
     total_days = int(getattr(plan, "total_days", 0) or 0)
-    if next_day <= total_days:
-        plan.current_day = next_day
-        db.add(plan)
-        return True
-    return False
+    return bool(total_days and derive_current_day(db, plan_id, total_days) > day_number)

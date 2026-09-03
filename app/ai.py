@@ -56,7 +56,8 @@ def extract_tool_call(response: Any) -> dict | None:
 
     Responses API: tool calls appear as items in response.output with
     type == "function_call". Each item has .name and .arguments (JSON string).
-    Returns {"name": str, "arguments": dict} or None if no tool call present.
+    Returns the stable Responses call id with the name/arguments so mutation
+    tools can use it as their idempotency source operation.
     """
     import json
 
@@ -73,7 +74,11 @@ def extract_tool_call(response: Any) -> dict | None:
                 except (ValueError, TypeError):
                     arguments = {}
                 if name:
-                    return {"name": name, "arguments": arguments}
+                    return {
+                        "name": name,
+                        "arguments": arguments,
+                        "call_id": getattr(item, "call_id", None) or getattr(item, "id", None),
+                    }
     except Exception:
         pass
 

@@ -1,7 +1,7 @@
 """Plan creation service (T5.2).
 
 Public API:
-    create_plan(db, user_id, plan_type, day_time, evening_time) -> AIPlan
+    create_plan(..., source_operation_id=...) -> PlanActivationResult
 
 Reads active_days/work_days from user_profile internally.
 No user-facing draft confirmation step — plan goes directly to ACTIVE.
@@ -15,7 +15,14 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.db import AIPlan, PlanDraftRecord, PlanDraftStep, UserProfile
+from app.db import (
+    AIPlan,
+    PlanDraftRecord,
+    PlanDraftStep,
+    PlanLifecycleOperation,
+    User,
+    UserProfile,
+)
 from app.plan_drafts.plan_builder_v5 import PlanDraftV5, get_default_builder
 
 
@@ -32,7 +39,9 @@ def create_plan(
     plan_type: str,                  # "SHORT" | "MEDIUM"
     day_time: Optional[str] = None,  # "HH:MM"; if None, read from user_profile
     evening_time: Optional[str] = None,  # "HH:MM"; required for MEDIUM
-) -> AIPlan:
+    *,
+    source_operation_id: str,
+) -> "PlanActivationResult":
     """Build, persist, and immediately finalize a plan for user_id.
 
     active_days / work_days are read from user_profile internally.
@@ -44,7 +53,44 @@ def create_plan(
         NoCandidatesError        if the library has no candidates for a slot
         FinalizationError        on DB or scheduling failure
     """
-    from app.plan_finalization import finalize_plan
+    from app.plan_finalization import (
+        FinalizationError,
+        PlanActivationResult,
+        finalize_plan,
+    )
+
+    if not source_operation_id or len(source_operation_id) > 160:
+        raise FinalizationError("invalid source_operation_id")
+    user = (
+        db.query(User)
+        .filter(User.id == user_id)
+        .with_for_update()
+        .first()
+    )
+    if user is None:
+        raise FinalizationError("user_not_found")
+    existing_operation = (
+        db.query(PlanLifecycleOperation)
+        .filter(
+            PlanLifecycleOperation.user_id == user_id,
+            PlanLifecycleOperation.source_operation_id == source_operation_id,
+        )
+        .first()
+    )
+    if existing_operation is not None:
+        if existing_operation.operation != "activate":
+            raise FinalizationError("source_operation_conflict")
+        existing_plan = (
+            db.query(AIPlan)
+            .filter(
+                AIPlan.id == existing_operation.plan_id,
+                AIPlan.user_id == user_id,
+            )
+            .first()
+        )
+        if existing_plan is None:
+            raise FinalizationError("activation_receipt_plan_missing")
+        return PlanActivationResult(plan=existing_plan, duplicate=True)
 
     # Invariant: first plan is always SHORT (product_internal_spec.md §5).
     # No choice of type for the first plan — onboarding wires this, not the user.
@@ -90,13 +136,14 @@ def create_plan(
     draft_record = _persist_v5_draft(db, user_id, draft_v5)
     db.flush()
 
-    plan: AIPlan = finalize_plan(
+    result = finalize_plan(
         db,
         user_id,
         draft_record,
         activation_time_utc=datetime.now(timezone.utc),
+        source_operation_id=source_operation_id,
     )
-    return plan
+    return result
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────

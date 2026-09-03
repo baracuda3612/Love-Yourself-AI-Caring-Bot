@@ -103,6 +103,26 @@ def test_build_idle_finished_context_returns_none_when_plan_missing():
     assert result is None
 
 
+def test_build_idle_finished_context_ignores_older_completion_after_abandonment(
+    monkeypatch,
+):
+    latest_plan = SimpleNamespace(id=124, user_id=7, status="abandoned")
+
+    def fail_metrics(*_args):
+        raise AssertionError("abandoned latest cycle must not expose old completion context")
+
+    import app.plan_completion.metrics as metrics_mod
+
+    monkeypatch.setattr(metrics_mod, "build_completion_metrics", fail_metrics)
+
+    result = coach_agent._build_idle_finished_context(
+        _DummyDB(latest_plan),
+        user_id=7,
+    )
+
+    assert result is None
+
+
 def test_build_idle_finished_context_returns_none_on_metrics_exception(monkeypatch):
     plan = SimpleNamespace(id=123, user_id=7, status="completed", end_date=datetime.now(timezone.utc))
 
@@ -120,7 +140,7 @@ def test_build_idle_finished_context_returns_none_on_metrics_exception(monkeypat
 def test_context_message_includes_completion_context_when_present():
     payload = {
         "temporal_context": "2026-01-01T10:00:00Z",
-        "current_state": "IDLE_FINISHED",
+        "current_mode": "NO_ACTIVE_PLAN",
         "completion_context": {"total_days": 14, "completion_rate": 95},
     }
 
@@ -135,7 +155,7 @@ def test_context_message_no_profile_snapshot():
     """profile_snapshot removed in T5.8C — must not appear in context block."""
     payload = {
         "temporal_context": "2026-01-01T10:00:00Z",
-        "current_state": "IDLE_FINISHED",
+        "current_mode": "NO_ACTIVE_PLAN",
     }
     message = coach_agent._context_message(payload)
     assert "profile_snapshot" not in message
@@ -145,7 +165,7 @@ def test_context_message_no_profile_snapshot():
 def test_compose_messages_injects_english_product_map_before_runtime_context():
     messages = coach_agent._compose_messages(
         {
-            "current_state": "ACTIVE",
+            "current_mode": "ACTIVE",
             "temporal_context": "2026-01-01T10:00:00Z",
             "message_text": "Привіт",
         }
@@ -183,7 +203,7 @@ def test_compose_messages_injects_english_product_map_before_runtime_context():
             },
         ),
         (
-            "IDLE_PLAN_ABORTED",
+            "NO_ACTIVE_PLAN",
             {
                 "create_followup_plan",
                 "record_evening_time",
@@ -192,8 +212,8 @@ def test_compose_messages_injects_english_product_map_before_runtime_context():
                 "get_plan_status",
             },
         ),
-        ("IDLE_FINISHED", set()),
-        ("IDLE_ONBOARDED", set()),
+        ("NO_ACTIVE_PLAN_WITHOUT_HISTORY", set()),
+        ("ONBOARDING", set()),
         ("UNKNOWN", set()),
     ],
 )
@@ -235,7 +255,7 @@ def test_coach_tool_schemas_are_strict_and_validate_hhmm_shape():
                 "get_plan_status",
             },
         ),
-        ("IDLE_FINISHED", None),
+        ("NO_ACTIVE_PLAN_WITHOUT_HISTORY", None),
     ],
 )
 async def test_coach_agent_sends_only_tools_available_in_current_state(
@@ -257,10 +277,10 @@ async def test_coach_agent_sends_only_tools_available_in_current_state(
 
     payload = {
         "user_id": 42,
-        "current_state": state,
+        "current_mode": state,
         "message_text": "Привіт",
     }
-    if state == "IDLE_FINISHED":
+    if state == "NO_ACTIVE_PLAN_WITHOUT_HISTORY":
         payload["completion_context"] = {}
 
     await coach_agent.coach_agent(payload)
@@ -299,7 +319,7 @@ async def test_coach_agent_injects_completion_context_for_idle_finished(monkeypa
 
     monkeypatch.setattr(coach_agent, "SessionLocal", lambda: _Session())
 
-    payload = {"user_id": 42, "current_state": "IDLE_FINISHED", "message_text": "hey"}
+    payload = {"user_id": 42, "current_mode": "NO_ACTIVE_PLAN", "message_text": "hey"}
     await coach_agent.coach_agent(payload)
 
     assert captured["payload"]["completion_context"] == {"total_days": 10}
@@ -328,7 +348,7 @@ async def test_coach_agent_does_not_inject_completion_context_for_other_states(m
     monkeypatch.setattr(coach_agent, "_build_idle_finished_context", fail_if_called)
     monkeypatch.setattr(coach_agent.async_client, "responses", _Responses())
 
-    payload = {"user_id": 42, "current_state": "ACTIVE", "message_text": "hey"}
+    payload = {"user_id": 42, "current_mode": "ACTIVE", "message_text": "hey"}
     await coach_agent.coach_agent(payload)
 
     assert "completion_context" not in captured["payload"]

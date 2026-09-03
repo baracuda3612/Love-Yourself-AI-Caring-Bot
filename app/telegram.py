@@ -24,14 +24,18 @@ from app.orchestrator import (
     session_memory,
 )
 from app.plan_guards import validate_step_action
-from app.scheduler import schedule_plan_step
 from app.ux.catalog import get_trigger_message
 from app.ux.persona import get_persona
 from app.ux.task_notification import get_step_rationale
 from app.redis_client import create_fsm_storage, create_redis_client
 from app.telemetry import get_success_streak, log_user_event
-from app.logging.router_logging import log_metric
-from app.fsm.states import PLAN_CREATION_ENTRY_STATES
+from app.lifecycle import (
+    CurrentMode,
+    LifecycleTransitionError,
+    derive_current_mode,
+    ensure_onboarding_progress,
+    transition_plan_step,
+)
 
 bot = Bot(
     token=settings.BOT_TOKEN,
@@ -83,11 +87,10 @@ def _ensure_user(db, tg_user) -> tuple[User, bool]:
             tg_id=tg_user.id,
             username=tg_user.username,
             first_name=tg_user.first_name,
-            current_state="ONBOARDING:START",
         )
         db.add(user)
-        db.commit()
-        db.refresh(user)
+        db.flush()
+        ensure_onboarding_progress(db, user.id, stage="START")
         is_created = True
     else:
         user.username = tg_user.username
@@ -120,12 +123,7 @@ async def cmd_start(message: Message):
             await message.answer("Привіт! Я LoveYourself бот. Давай познайомимось.")
         else:
             await message.answer("З поверненням! Продовжуємо.")
-    logger.info(
-        "User %s started. Created: %s, State: %s",
-        user.id,
-        is_created,
-        user.current_state,
-    )
+    logger.info("User %s started. Created: %s", user.id, is_created)
 
 
 async def _handle_newplan_deeplink(message: Message, args: str) -> None:
@@ -144,7 +142,7 @@ async def _handle_newplan_deeplink(message: Message, args: str) -> None:
         if not user:
             await message.answer("Спочатку потрібно зареєструватись.")
             return
-        if user.current_state not in PLAN_CREATION_ENTRY_STATES:
+        if derive_current_mode(db, user.id) is not CurrentMode.NO_ACTIVE_PLAN:
             await message.answer(
                 "Зараз не можу розпочати новий план. "
                 "Заверши поточний або напиши — розберемось."
@@ -163,101 +161,8 @@ async def _handle_newplan_deeplink(message: Message, args: str) -> None:
 async def cmd_spawn(message: Message):
     if not message.from_user or message.from_user.id not in settings.ADMIN_IDS:
         return
-
-    parts = (message.text or "").strip().split()
-    if len(parts) != 4:
-        await message.answer("Usage: /spawn <count> <interval_seconds> <start_offset_seconds>")
-        return
-
-    try:
-        count = int(parts[1])
-        interval_seconds = int(parts[2])
-        start_offset_seconds = int(parts[3])
-    except ValueError:
-        await message.answer("Usage: /spawn <count> <interval_seconds> <start_offset_seconds>")
-        return
-
-    if count < 1:
-        await message.answer("Count must be >= 1")
-        return
-    if count > 20:
-        await message.answer("Max 20 tasks per spawn.")
-        return
-    if interval_seconds < 0 or start_offset_seconds < 0:
-        await message.answer("interval_seconds and start_offset_seconds must be >= 0")
-        return
-
-    with SessionLocal() as db:
-        user, _ = _ensure_user(db, message.from_user)
-        if user.current_state != "ACTIVE":
-            await message.answer("Spawn not allowed: user state is not ACTIVE.")
-            return
-
-        active_plan = (
-            db.query(AIPlan)
-            .filter(AIPlan.user_id == user.id, AIPlan.status == "active")
-            .order_by(AIPlan.id.desc())
-            .first()
-        )
-        if not active_plan:
-            await message.answer("Spawn not allowed: no active plan.")
-            return
-
-        plan_day = (
-            db.query(AIPlanDay)
-            .filter(AIPlanDay.plan_id == active_plan.id)
-            .order_by(AIPlanDay.day_number.asc())
-            .first()
-        )
-        if not plan_day:
-            await message.answer("Spawn not allowed: active plan has no days.")
-            return
-
-        now_utc = datetime.now(timezone.utc)
-        effective_offset = max(start_offset_seconds, 5)
-        first_run_at = now_utc + timedelta(seconds=effective_offset)
-        scheduled_at = first_run_at
-        created_steps = 0
-
-        max_order = (
-            db.query(AIPlanStep.order_in_day)
-            .filter(AIPlanStep.day_id == plan_day.id)
-            .order_by(AIPlanStep.order_in_day.desc())
-            .first()
-        )
-        next_order = (max_order[0] if max_order and max_order[0] is not None else 0) + 1
-
-        for index in range(count):
-            step = AIPlanStep(
-                day_id=plan_day.id,
-                title=f"Admin spawned task #{index + 1}",
-                description=(
-                    "This is a scheduled test task created by /spawn command."
-                ),
-                order_in_day=next_order + index,
-                scheduled_for=scheduled_at,
-            )
-            db.add(step)
-            db.flush()
-
-            if schedule_plan_step(step, user):
-                created_steps += 1
-
-            scheduled_at = scheduled_at + timedelta(seconds=interval_seconds)
-
-        db.commit()
-
-    log_metric(
-        "admin_spawn_tasks",
-        extra={"admin_tg_id": message.from_user.id, "count": count, "scheduled_jobs": created_steps},
-    )
     await message.answer(
-        "Spawned tasks.\n"
-        f"Requested: count={count}, interval_seconds={interval_seconds}, start_offset_seconds={start_offset_seconds}\n"
-        f"Effective offset: {effective_offset}s\n"
-        f"First run at (UTC): {first_run_at.isoformat()}\n"
-        f"Plan ID: {active_plan.id}\n"
-        f"Scheduled jobs: {created_steps}"
+        "Admin task spawning is disabled: active plan structure is immutable."
     )
 
 
@@ -414,9 +319,8 @@ async def on_sched_adj_timeout(callback_query: CallbackQuery):
         if cb_data == "sched_adj_timeout_reset":
             ctx = await session_memory.get_schedule_adjustment_context(user.id) or {}
             plan_was_paused = bool(ctx.get("plan_was_paused", False))
-            user.current_state = "ACTIVE_PAUSED" if plan_was_paused else "ACTIVE"
-            db.add(user)
-            db.commit()
+            # Legacy tunnel storage is inert. Plan status already preserves
+            # active/paused lifecycle truth.
             await session_memory.clear_schedule_adjustment_context(user.id)
             await session_memory.clear_schedule_adjustment_last_active(user.id)
             await session_memory.clear_schedule_adjustment_soft_prompted(user.id)
@@ -463,10 +367,21 @@ async def handle_task_completed(callback_query: CallbackQuery):
                 await callback_query.answer(error_msg)
             return
 
-        step.step_status = "completed"
-        step.is_completed = True
-        step.completed_at = datetime.now(timezone.utc)
-        step.skipped = False
+        try:
+            transition = transition_plan_step(
+                db,
+                user_id=step.day.plan.user_id,
+                step_id=step.id,
+                target_status="completed",
+                source_operation_id=f"telegram:{callback_query.id}:complete:{step.id}",
+            )
+        except LifecycleTransitionError:
+            await callback_query.answer("Завдання вже завершене")
+            return
+        if transition.duplicate:
+            db.rollback()
+            await callback_query.answer("Завдання вже завершене")
+            return
 
         log_user_event(
             db,
@@ -501,7 +416,7 @@ async def handle_task_completed(callback_query: CallbackQuery):
                 all_today = db.query(AIPlanStep).filter(
                     AIPlanStep.day_id == day.id,
                 ).all()
-                all_done = all(s.is_completed for s in all_today)
+                all_done = all(s.step_status == "completed" for s in all_today)
 
                 total_completed = db.query(UserEvent).filter(
                     UserEvent.user_id == user.id,
@@ -578,10 +493,21 @@ async def handle_task_skipped(callback_query: CallbackQuery):
                 await callback_query.answer(error_msg)
             return
 
-        step.step_status = "skipped"
-        step.skipped = True
-        step.is_completed = False
-        step.completed_at = None
+        try:
+            transition = transition_plan_step(
+                db,
+                user_id=step.day.plan.user_id,
+                step_id=step.id,
+                target_status="skipped",
+                source_operation_id=f"telegram:{callback_query.id}:skip:{step.id}",
+            )
+        except LifecycleTransitionError:
+            await callback_query.answer("Завдання вже завершене")
+            return
+        if transition.duplicate:
+            db.rollback()
+            await callback_query.answer("Завдання вже завершене")
+            return
 
         log_user_event(
             db,
@@ -648,12 +574,6 @@ async def handle_adapt_suggest(callback_query: CallbackQuery):
 
 
 async def _send_agent_response(message: Message, user_id: int, response: dict) -> None:
-    # Читаємо актуальний стан юзера один раз на початку.
-    # Orchestrator вже зробив FSM transition і commit до цього виклику.
-    with SessionLocal() as db:
-        _state_row = db.query(User.current_state).filter(User.id == user_id).first()
-        _user_state = _state_row[0] if _state_row else None
-
     if response.get("defer_plan_draft"):
         wait_text = _sanitize_message_text(PLAN_GENERATION_WAIT_MESSAGE)
         await message.answer(wait_text)

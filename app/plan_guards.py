@@ -20,9 +20,7 @@ def is_plan_active(step: AIPlanStep) -> bool:
     """
     Check if plan is in ACTIVE state (can execute tasks).
 
-    Requirements:
-    - plan.status == "active"
-    - user.current_state == "ACTIVE"
+    Requirement: the owning aggregate root is active.
 
     Returns:
         True if both conditions met.
@@ -31,12 +29,7 @@ def is_plan_active(step: AIPlanStep) -> bool:
         return False
 
     plan = step.day.plan
-    user = plan.user
-
-    if not user:
-        return False
-
-    return plan.status == "active" and user.current_state == "ACTIVE"
+    return plan.status == "active"
 
 
 def get_terminal_reason(step: AIPlanStep) -> str | None:

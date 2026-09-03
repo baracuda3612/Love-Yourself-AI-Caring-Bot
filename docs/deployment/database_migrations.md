@@ -1,12 +1,12 @@
 # Database migration and schema-authority runbook
 
-This runbook defines the WP-01.1 Alembic authority boundary. It does not turn
+This runbook defines the WP-01.1/WP-01.3 Alembic authority boundary. It does not turn
 the disposable founder testnet into production and does not satisfy Gate G1.
 
 ## Ownership
 
-Alembic owns the 17 application tables represented by revision
-`20260827_schema_baseline`. The physical baseline deliberately preserves the
+Alembic owns the 19 application tables represented by revision
+`20260902_plan_lifecycle`. The physical baseline deliberately preserves the
 inspected starting schema, including legacy columns, duplicate indexes, and
 unused enum types. Target cleanup belongs to the packages that define the new
 schema and must arrive as reviewed forward revisions.
@@ -72,10 +72,22 @@ make test-migrations
 make services-down
 ```
 
-The harness creates a uniquely named temporary database, runs `upgrade head`,
-inspects the result read-only, verifies the application-table and enum
-fingerprints, verifies that `apscheduler_jobs` was not created, then drops only
-that temporary database.
+The harness creates uniquely named temporary databases. It upgrades a seeded
+legacy schema, verifies backfill and mirror retirement, repeats `upgrade head`
+for idempotent resume, and separately proves that ambiguous current plans abort
+transactionally and can resume after evidence-based remediation. It also
+verifies application-table/enum fingerprints and that `apscheduler_jobs` was
+not created, then drops only those temporary databases.
+
+## WP-01.3 cutover boundary
+
+Do not run old and new lifecycle writers concurrently. Stop every old polling,
+worker, and scheduler process before `make migrate`; then start only the build
+whose required revision is `20260902_plan_lifecycle`. The migration uses legacy
+columns as evidence, writes the normalized plan/step facts, and clears the
+mirrors. An old binary is intentionally unable to restart because its exact
+revision check will fail. Recovery is a reviewed database restore or forward
+fix, never an unstamped downgrade or an old-binary restart.
 
 ## Restore and scheduler reconciliation
 
