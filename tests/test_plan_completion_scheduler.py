@@ -240,11 +240,13 @@ def test_trigger_plan_completion_skips_report_when_plan_is_not_ready(monkeypatch
     user = type("U", (), {"id": 1})()
     db = _DBForCompletionMessage(user=user, existing_event=None)
     monkeypatch.setattr(orchestrator, "SessionLocal", lambda: _SessionCtx(db))
-    monkeypatch.setattr(
-        orchestrator,
-        "_auto_complete_plan_if_needed",
-        lambda _db, _user: None,
-    )
+    expected_plan_ids = []
+
+    def _fake_complete(_db, _user, *, expected_plan_id=None):
+        expected_plan_ids.append(expected_plan_id)
+        return None
+
+    monkeypatch.setattr(orchestrator, "_auto_complete_plan_if_needed", _fake_complete)
 
     submitted = []
     monkeypatch.setattr(
@@ -256,6 +258,7 @@ def test_trigger_plan_completion_skips_report_when_plan_is_not_ready(monkeypatch
 
     assert db.commits == 1
     assert submitted == []
+    assert expected_plan_ids == [99]
 
 
 def test_trigger_plan_completion_reports_the_plan_that_completed(monkeypatch):
@@ -265,7 +268,9 @@ def test_trigger_plan_completion_reports_the_plan_that_completed(monkeypatch):
     monkeypatch.setattr(
         orchestrator,
         "_auto_complete_plan_if_needed",
-        lambda _db, _user: 42,
+        lambda _db, _user, *, expected_plan_id=None: (
+            42 if expected_plan_id == 99 else None
+        ),
     )
 
     submitted = []

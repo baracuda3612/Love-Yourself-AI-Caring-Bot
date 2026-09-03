@@ -480,9 +480,16 @@ def _guard_fsm_transition(
     return normalized_signal, None
 
 
-def _auto_complete_plan_if_needed(db: Session, user: User) -> int | None:
+def _auto_complete_plan_if_needed(
+    db: Session,
+    user: User,
+    *,
+    expected_plan_id: int | None = None,
+) -> int | None:
     plan = get_authoritative_current_plan(db, user.id)
-    if plan is None:
+    if plan is None or (
+        expected_plan_id is not None and plan.id != expected_plan_id
+    ):
         return None
     result = complete_current_plan_if_ready(
         db,
@@ -660,7 +667,11 @@ def _trigger_plan_completion(user_id: int, plan_id: int) -> None:
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
             return
-        completed_plan_id = _auto_complete_plan_if_needed(db, user)
+        completed_plan_id = _auto_complete_plan_if_needed(
+            db,
+            user,
+            expected_plan_id=plan_id,
+        )
         try:
             db.commit()
         except Exception as e:

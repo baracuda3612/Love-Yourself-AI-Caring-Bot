@@ -228,6 +228,34 @@ def test_auto_complete_without_active_plan_sets_idle_without_logging(monkeypatch
     assert called["value"] is False
 
 
+def test_auto_complete_stale_scheduled_plan_is_noop(monkeypatch):
+    user = type("UserStub", (), {"id": 88})()
+    current_plan = type("PlanStub", (), {"id": 42})()
+
+    monkeypatch.setattr(
+        orchestrator,
+        "get_authoritative_current_plan",
+        lambda _db, _uid: current_plan,
+    )
+
+    def fail_completion(*_args, **_kwargs):
+        raise AssertionError("stale callback must not reach lifecycle completion")
+
+    monkeypatch.setattr(
+        orchestrator,
+        "complete_current_plan_if_ready",
+        fail_completion,
+    )
+
+    completed_plan_id = orchestrator._auto_complete_plan_if_needed(
+        object(),
+        user,
+        expected_plan_id=41,
+    )
+
+    assert completed_plan_id is None
+
+
 def test_auto_complete_does_not_reapply_legacy_mirrors_after_event_failure(monkeypatch):
     user = type("UserStub", (), {})()
     user.id = 101
