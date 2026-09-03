@@ -25,7 +25,6 @@ from app.ux.rate_limit import can_send_auto_message
 from app.ux.task_notification import format_task_notification, maybe_advance_current_day
 from app.lifecycle import (
     LifecycleTransitionError,
-    complete_current_plan_if_ready,
     derive_current_day,
     transition_plan_step,
 )
@@ -858,14 +857,15 @@ def check_plan_completions() -> None:
         active_plans = db.query(AIPlan).filter(AIPlan.status == "active").all()
         for candidate_plan in active_plans:
             try:
-                completion = complete_current_plan_if_ready(
+                completed_plan_id = _auto_complete_plan_if_needed(
                     db,
-                    user_id=candidate_plan.user_id,
-                    plan_id=candidate_plan.id,
-                    source_operation_id=f"scheduler:complete:{candidate_plan.id}",
+                    candidate_plan.user,
+                    expected_plan_id=candidate_plan.id,
                 )
-                if completion and completion.status == "completed":
-                    completed_pairs.append((candidate_plan.user_id, candidate_plan.id))
+                if completed_plan_id is not None:
+                    completed_pairs.append(
+                        (candidate_plan.user_id, completed_plan_id)
+                    )
             except Exception as e:
                 logger.error("[CRON_COMPLETION] failed plan=%s: %s", candidate_plan.id, e)
 

@@ -410,8 +410,16 @@ class _DBForCron:
 
 def test_check_plan_completions_calls_auto_complete(monkeypatch):
     plans = [
-        type("P", (), {"id": 10, "user_id": 1})(),
-        type("P", (), {"id": 20, "user_id": 2})(),
+        type(
+            "P",
+            (),
+            {"id": 10, "user_id": 1, "user": type("U", (), {"id": 1})()},
+        )(),
+        type(
+            "P",
+            (),
+            {"id": 20, "user_id": 2, "user": type("U", (), {"id": 2})()},
+        )(),
     ]
 
     class _PlansQuery:
@@ -427,16 +435,16 @@ def test_check_plan_completions_calls_auto_complete(monkeypatch):
 
     calls = []
 
-    def _fake_complete(_db, **kwargs):
-        calls.append(kwargs["user_id"])
-        return type("R", (), {"status": "completed"})()
+    def _fake_complete(_db, user, *, expected_plan_id):
+        calls.append((user.id, expected_plan_id))
+        return expected_plan_id
 
-    monkeypatch.setattr(scheduler, "complete_current_plan_if_ready", _fake_complete)
+    monkeypatch.setattr(orchestrator, "_auto_complete_plan_if_needed", _fake_complete)
     monkeypatch.setattr(scheduler, "_event_loop", None)
 
     scheduler.check_plan_completions()
 
-    assert calls == [1, 2]
+    assert calls == [(1, 10), (2, 20)]
     assert db.committed is True
 
 
@@ -448,6 +456,7 @@ def test_check_plan_completions_submits_completion_messages_when_event_loop_avai
         def __init__(self, plan_id):
             self.id = plan_id
             self.user_id = 1
+            self.user = users[0]
             self.status = "active"
 
     class _PlanQuery:
@@ -482,10 +491,10 @@ def test_check_plan_completions_submits_completion_messages_when_event_loop_avai
     db = _DBForCronWithPlans(users, plan)
     monkeypatch.setattr(scheduler, "SessionLocal", lambda: _SessionCtx(db))
 
-    def _fake_complete(_db, **_kwargs):
-        return type("R", (), {"status": "completed"})()
+    def _fake_complete(_db, _user, *, expected_plan_id):
+        return expected_plan_id
 
-    monkeypatch.setattr(scheduler, "complete_current_plan_if_ready", _fake_complete)
+    monkeypatch.setattr(orchestrator, "_auto_complete_plan_if_needed", _fake_complete)
 
     submitted = []
 
