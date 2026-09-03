@@ -595,6 +595,12 @@ founder merged PR #253 as
 
 ### WP-01.3 — Implement the plan-centric lifecycle migration
 
+**Status:** `IMPLEMENTED` — plan/step authority, derived current mode,
+transactional evidence backfill, locked/idempotent mutation service, explicit
+no-overlap cutover, and disposable PostgreSQL concurrency rehearsal are
+complete on `wp/01.3-plan-centric-lifecycle`; independent GitHub review is
+pending.
+
 **Deliverables**
 
 * FD-08 plan-centric ownership and one derived `current_mode` function;
@@ -1573,9 +1579,9 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | `WP-01.2 — Define the target schema and invariant ledger` |
-| Status | `VERIFIED` |
-| Next action | Founder merges PR #253; after confirmation, fetch and synchronize the canonical branch before WP-01.3 |
+| Current package | `WP-01.3 — Implement the plan-centric lifecycle migration` |
+| Status | `IMPLEMENTED` |
+| Next action | Complete stable-diff review, push the package branch, and open the PR against `implementation/pre-mvp` |
 | Current blockers | None for disposable founder-only refactoring; paid backup/restore remains deferred to Gate G1 before durable data or market launch |
 
 ### Private founder log
