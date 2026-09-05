@@ -770,6 +770,47 @@ def _create_feedback_report_aggregate_tables(enums: dict[str, postgresql.ENUM]) 
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("source", "source_operation_id", name="uq_feedback_events_source_operation"),
     )
+    op.execute(
+        """
+        CREATE FUNCTION ly_validate_feedback_target_ownership()
+        RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF NEW.source = 'exercise_efficacy' AND NOT EXISTS (
+            SELECT 1
+            FROM ai_plan_steps s
+            JOIN ai_plan_days d ON d.id = s.day_id
+            JOIN ai_plans p ON p.id = d.plan_id
+            WHERE s.id = NEW.plan_step_id
+              AND s.step_status = 'completed'
+              AND p.user_id = NEW.user_id
+          ) THEN
+            RAISE EXCEPTION 'exercise feedback target is not a completed step owned by user';
+          END IF;
+          IF NEW.source = 'coach_quality' AND NOT EXISTS (
+            SELECT 1 FROM chat_history c
+            WHERE c.id = NEW.coach_message_id
+              AND c.user_id = NEW.user_id
+              AND c.role = 'assistant'
+          ) THEN
+            RAISE EXCEPTION 'coach feedback target is not an assistant message owned by user';
+          END IF;
+          IF NEW.source = 'product_feedback' AND NOT EXISTS (
+            SELECT 1 FROM chat_history c
+            WHERE c.id = NEW.source_message_id
+              AND c.user_id = NEW.user_id
+              AND c.role = 'user'
+          ) THEN
+            RAISE EXCEPTION 'product feedback source is not a user message owned by user';
+          END IF;
+          RETURN NEW;
+        END $$;
+        CREATE TRIGGER tr_feedback_events_validate_target_ownership
+          BEFORE INSERT OR UPDATE OF user_id, source, plan_step_id,
+            coach_message_id, source_message_id
+          ON feedback_events
+          FOR EACH ROW EXECUTE FUNCTION ly_validate_feedback_target_ownership();
+        """
+    )
     op.create_index("ix_feedback_user_time", "feedback_events", ["user_id", sa.text("created_at DESC")])
     op.create_table(
         "notice_acknowledgements",

@@ -432,6 +432,8 @@ def _assert_event_privacy_operations(target_url: str) -> None:
             assert linked.event.content_version == 1
             assert linked.event.step_id is None
             assert linked.event.context is None
+            feedback_owner_id = user.id
+            completed_step_id = step.id
 
         barrier = Barrier(2)
 
@@ -486,6 +488,28 @@ def _assert_event_privacy_operations(target_url: str) -> None:
             else:
                 raise AssertionError("source operation reuse unexpectedly changed its fact")
 
+        with Session.begin() as db:
+            user = db.execute(select(User).where(User.tg_id == 9000099)).scalar_one()
+            try:
+                write_event_operation(
+                    db,
+                    user_id=user.id,
+                    event_name="user_message",
+                    event_source="another_source",
+                    source_operation_id="migration-rehearsal:user-message:1",
+                    properties={"message_length": 12},
+                )
+            except EventOperationConflict:
+                pass
+            else:
+                raise AssertionError("aggregate conflict unexpectedly persisted an event")
+            assert db.scalar(
+                select(func.count()).select_from(UserEvent).where(
+                    UserEvent.source_operation_id
+                    == "migration-rehearsal:user-message:1"
+                )
+            ) == 1
+
         connection = psycopg2.connect(target_url)
         with connection.cursor() as cursor:
             cursor.execute("SELECT id FROM users WHERE tg_id = 9000099")
@@ -531,6 +555,79 @@ def _assert_event_privacy_operations(target_url: str) -> None:
                 assert "event property is not allow-listed" in str(exc) or (
                     "event catalogue requires plan-step linkage" in str(exc)
                 )
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO chat_history (user_id, role, text)
+                VALUES (%s, 'assistant', 'owned assistant message')
+                RETURNING id
+                """,
+                (feedback_owner_id,),
+            )
+            assistant_message_id = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                INSERT INTO chat_history (user_id, role, text)
+                VALUES (%s, 'user', 'owned user message')
+                RETURNING id
+                """,
+                (feedback_owner_id,),
+            )
+            user_message_id = cursor.fetchone()[0]
+        connection.commit()
+
+        feedback_attempts = (
+            (
+                """
+                INSERT INTO feedback_events (
+                  user_id, source, source_operation_id, plan_step_id, value
+                ) VALUES (%s, 'exercise_efficacy', 'rehearsal:cross-step', %s, 'helpful')
+                """,
+                (raw_user_id, completed_step_id),
+                "exercise feedback target is not a completed step owned by user",
+            ),
+            (
+                """
+                INSERT INTO feedback_events (
+                  user_id, source, source_operation_id, coach_message_id, value
+                ) VALUES (%s, 'coach_quality', 'rehearsal:cross-coach', %s, 'helpful')
+                """,
+                (raw_user_id, assistant_message_id),
+                "coach feedback target is not an assistant message owned by user",
+            ),
+            (
+                """
+                INSERT INTO feedback_events (
+                  user_id, source, source_operation_id, source_message_id, value
+                ) VALUES (%s, 'product_feedback', 'rehearsal:cross-product', %s, 'idea')
+                """,
+                (raw_user_id, user_message_id),
+                "product feedback source is not a user message owned by user",
+            ),
+        )
+        for statement, parameters, expected_error in feedback_attempts:
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(statement, parameters)
+                connection.commit()
+                raise AssertionError("cross-user feedback target unexpectedly persisted")
+            except psycopg2.Error as exc:
+                connection.rollback()
+                assert expected_error in str(exc)
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO feedback_events (
+                  user_id, source, source_operation_id, plan_step_id, value
+                ) VALUES (
+                  %s, 'exercise_efficacy', 'rehearsal:owned-step', %s, 'helpful'
+                )
+                """,
+                (feedback_owner_id, completed_step_id),
+            )
+        connection.commit()
 
         try:
             with connection.cursor() as cursor:

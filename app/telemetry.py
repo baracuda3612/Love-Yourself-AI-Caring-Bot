@@ -174,6 +174,23 @@ def _canonical_dimensions(dimensions: Mapping[str, Any]) -> tuple[dict[str, Any]
     return normalized, sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def _bind_aggregate_dimensions(
+    resolved_dimensions: Mapping[str, Any],
+    supplied_dimensions: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], str]:
+    """Retain resolved attribution and reject conflicting caller assertions."""
+    resolved = dict(resolved_dimensions)
+    if supplied_dimensions is not None:
+        supplied, _ = _canonical_dimensions(supplied_dimensions)
+        for key, value in supplied.items():
+            expected = resolved.get(key)
+            if key not in resolved or type(value) is not type(expected) or value != expected:
+                raise EventValidationError(
+                    "Aggregate dimensions must match resolved event attribution"
+                )
+    return _canonical_dimensions(resolved)
+
+
 def _resolve_plan_linkage(
     db: Session,
     *,
@@ -380,8 +397,8 @@ def write_event_operation(
         default_dimensions["organization_id"] = organization_id
     if deployment_id is not None:
         default_dimensions["deployment_id"] = deployment_id
-    dimensions, dimension_key = _canonical_dimensions(
-        aggregate_dimensions or default_dimensions
+    dimensions, dimension_key = _bind_aggregate_dimensions(
+        default_dimensions, aggregate_dimensions
     )
     period_start = datetime.combine(occurrence.date(), time.min, tzinfo=timezone.utc)
     period_end = period_start + timedelta(days=1)
@@ -406,81 +423,86 @@ def write_event_operation(
         )
 
     recorded_at = _utc_now()
-    event_id = db.execute(
-        pg_insert(UserEvent.__table__)
-        .values(
-            user_id=user_id,
-            event_name=event_name,
-            event_schema_version=1,
-            occurred_at=occurrence,
-            recorded_at=recorded_at,
-            event_source=event_source,
-            source_operation_id=source_operation_id,
-            environment=environment,
-            organization_id=organization_id,
-            deployment_id=deployment_id,
-            deployment_enrollment_id=deployment_enrollment_id,
-            plan_id=plan_id,
-            plan_step_id=plan_step_id,
-            exercise_id=exercise_id,
-            content_version=content_version,
-            timezone_basis=timezone_basis,
-            time_of_day_bucket=bucket,
-            properties=event_properties,
-        )
-        .on_conflict_do_nothing(
-            index_elements=["event_source", "source_operation_id", "event_name"]
-        )
-        .returning(UserEvent.event_id)
-    ).scalar_one_or_none()
-    if event_id is None:
-        duplicate = _load_duplicate(
-            db,
-            event_source=event_source,
-            source_operation_id=source_operation_id,
-            event_name=event_name,
-        )
-        if duplicate is None:
-            raise EventOperationConflict("Concurrent event receipt could not be loaded")
-        return _validate_duplicate_payload(
-            duplicate,
-            user_id=user_id,
-            plan_id=plan_id,
-            plan_step_id=plan_step_id,
-            deployment_id=deployment_id,
-            deployment_enrollment_id=deployment_enrollment_id,
-            properties=event_properties,
-            dimension_key=dimension_key,
-            aggregate_value=aggregate_value,
-        )
+    # The savepoint keeps this pair atomic even when a caller catches the
+    # conflict and later commits its surrounding authoritative transaction.
+    with db.begin_nested():
+        event_id = db.execute(
+            pg_insert(UserEvent.__table__)
+            .values(
+                user_id=user_id,
+                event_name=event_name,
+                event_schema_version=1,
+                occurred_at=occurrence,
+                recorded_at=recorded_at,
+                event_source=event_source,
+                source_operation_id=source_operation_id,
+                environment=environment,
+                organization_id=organization_id,
+                deployment_id=deployment_id,
+                deployment_enrollment_id=deployment_enrollment_id,
+                plan_id=plan_id,
+                plan_step_id=plan_step_id,
+                exercise_id=exercise_id,
+                content_version=content_version,
+                timezone_basis=timezone_basis,
+                time_of_day_bucket=bucket,
+                properties=event_properties,
+            )
+            .on_conflict_do_nothing(
+                index_elements=["event_source", "source_operation_id", "event_name"]
+            )
+            .returning(UserEvent.event_id)
+        ).scalar_one_or_none()
+        if event_id is None:
+            duplicate = _load_duplicate(
+                db,
+                event_source=event_source,
+                source_operation_id=source_operation_id,
+                event_name=event_name,
+            )
+            if duplicate is None:
+                raise EventOperationConflict(
+                    "Concurrent event receipt could not be loaded"
+                )
+            return _validate_duplicate_payload(
+                duplicate,
+                user_id=user_id,
+                plan_id=plan_id,
+                plan_step_id=plan_step_id,
+                deployment_id=deployment_id,
+                deployment_enrollment_id=deployment_enrollment_id,
+                properties=event_properties,
+                dimension_key=dimension_key,
+                aggregate_value=aggregate_value,
+            )
 
-    contribution_id = db.execute(
-        pg_insert(AggregateRecord.__table__)
-        .values(
-            record_kind="contribution",
-            metric_name=event_name,
-            metric_schema_version=1,
-            period_start=period_start,
-            period_end=period_end,
-            dimension_key=dimension_key,
-            dimensions=dimensions,
-            numeric_value=Decimal(str(aggregate_value)),
-            sample_count=1,
-            user_id=user_id,
-            source_operation_id=source_operation_id,
-            retention_until=occurrence + _CONTRIBUTION_RETENTION,
-            revision=1,
-        )
-        .on_conflict_do_nothing(
-            index_elements=["source_operation_id"],
-            index_where=AggregateRecord.record_kind == "contribution",
-        )
-        .returning(AggregateRecord.id)
-    ).scalar_one_or_none()
-    if contribution_id is None:
-        raise EventOperationConflict(
-            "source_operation_id already owns another aggregate contribution"
-        )
+        contribution_id = db.execute(
+            pg_insert(AggregateRecord.__table__)
+            .values(
+                record_kind="contribution",
+                metric_name=event_name,
+                metric_schema_version=1,
+                period_start=period_start,
+                period_end=period_end,
+                dimension_key=dimension_key,
+                dimensions=dimensions,
+                numeric_value=Decimal(str(aggregate_value)),
+                sample_count=1,
+                user_id=user_id,
+                source_operation_id=source_operation_id,
+                retention_until=occurrence + _CONTRIBUTION_RETENTION,
+                revision=1,
+            )
+            .on_conflict_do_nothing(
+                index_elements=["source_operation_id"],
+                index_where=AggregateRecord.record_kind == "contribution",
+            )
+            .returning(AggregateRecord.id)
+        ).scalar_one_or_none()
+        if contribution_id is None:
+            raise EventOperationConflict(
+                "source_operation_id already owns another aggregate contribution"
+            )
 
     db.execute(
         update(User)

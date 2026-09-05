@@ -8,7 +8,12 @@ import pytest
 from sqlalchemy import BigInteger, Integer
 
 from app import db as database
-from app.telemetry import EventValidationError, _canonical_dimensions, _validate_properties
+from app.telemetry import (
+    EventValidationError,
+    _bind_aggregate_dimensions,
+    _canonical_dimensions,
+    _validate_properties,
+)
 
 
 MIGRATION_PATH = Path(
@@ -106,6 +111,25 @@ def test_aggregate_dimension_identity_is_stable_and_order_independent() -> None:
         _canonical_dimensions({"event_name": ["task_completed"]})
 
 
+def test_custom_aggregate_dimensions_cannot_replace_resolved_attribution() -> None:
+    resolved = {
+        "event_kind": "operational",
+        "event_name": "task_delivered",
+        "environment": "testnet",
+        "deployment_id": 1,
+    }
+
+    bound, _ = _bind_aggregate_dimensions(
+        resolved,
+        {"environment": "testnet", "deployment_id": 1},
+    )
+    assert bound == resolved
+    with pytest.raises(EventValidationError, match="resolved event attribution"):
+        _bind_aggregate_dimensions(resolved, {"environment": "production"})
+    with pytest.raises(EventValidationError, match="resolved event attribution"):
+        _bind_aggregate_dimensions(resolved, {"deployment_id": 2})
+
+
 def test_event_ownership_uses_composite_foreign_keys() -> None:
     foreign_key_columns = {
         tuple(element.parent.name for element in constraint.elements)
@@ -130,6 +154,9 @@ def test_database_guards_immutable_facts_and_pinned_notice() -> None:
     assert "privacy notice version content is immutable" in source
     assert "acknowledged notice is not pinned to deployment" in source
     assert "aggregate records are immutable" in source
+    assert "exercise feedback target is not a completed step owned by user" in source
+    assert "coach feedback target is not an assistant message owned by user" in source
+    assert "product feedback source is not a user message owned by user" in source
 
 
 def test_every_live_event_write_supplies_stable_operation_and_source() -> None:
