@@ -1,12 +1,12 @@
 # Database migration and schema-authority runbook
 
-This runbook defines the WP-01.1/WP-01.3 Alembic authority boundary. It does not turn
+This runbook defines the WP-01.1/WP-01.4 Alembic authority boundary. It does not turn
 the disposable founder testnet into production and does not satisfy Gate G1.
 
 ## Ownership
 
-Alembic owns the 19 application tables represented by revision
-`20260902_plan_lifecycle`. The physical baseline deliberately preserves the
+Alembic owns the 33 application tables represented by revision
+`20260905_event_privacy`. The physical baseline deliberately preserves the
 inspected starting schema, including legacy columns, duplicate indexes, and
 unused enum types. Target cleanup belongs to the packages that define the new
 schema and must arrive as reviewed forward revisions.
@@ -88,6 +88,20 @@ columns as evidence, writes the normalized plan/step facts, and clears the
 mirrors. An old binary is intentionally unable to restart because its exact
 revision check will fail. Recovery is a reviewed database restore or forward
 fix, never an unstamped downgrade or an old-binary restart.
+
+## WP-01.4 cutover boundary
+
+The event/privacy/deployment revision uses another stop-the-world writer
+switch. Stop the WP-01.3 application, poller, workers, and scheduler before
+`make migrate`; then start only the build whose required revision is
+`20260905_event_privacy`. Legacy event columns and detached telemetry tables
+remain evidence-only, while new writes use the canonical event operation. The
+full storage/removal map is
+`docs/implementation/wp_01_4_event_compatibility_manifest.md`.
+
+The revision may be rehearsed only on local disposable/restored PostgreSQL.
+Do not launch the new build against the old Railway schema, and do not apply
+this package to Railway as part of repository verification.
 
 ## Restore and scheduler reconciliation
 

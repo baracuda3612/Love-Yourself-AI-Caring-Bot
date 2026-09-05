@@ -12,10 +12,12 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    ForeignKeyConstraint,
     Float,
     Index,
     Integer,
     JSON,
+    Numeric,
     String,
     Text,
     Time,
@@ -41,7 +43,7 @@ SessionLocal = sessionmaker(
 Base = declarative_base()
 logger = logging.getLogger(__name__)
 
-EXPECTED_ALEMBIC_REVISION = "20260902_plan_lifecycle"
+EXPECTED_ALEMBIC_REVISION = "20260905_event_privacy"
 
 
 class SchemaVersionError(RuntimeError):
@@ -98,6 +100,8 @@ class User(Base):
     # WP-01.3 compatibility storage only. Runtime lifecycle never reads or
     # writes these columns; WP-02.1/WP-08.1 own their eventual removal.
     current_state = Column(String, nullable=True)
+    first_seen_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=True)
+    first_seen_at_source = Column(String(32), server_default="created", nullable=True)
     last_active_at = Column(DateTime(timezone=True), nullable=True)
     plan_end_date = Column(DateTime(timezone=True), nullable=True)
 
@@ -112,6 +116,21 @@ class User(Base):
     daily_logs = relationship("UserDailyLog", back_populates="user", cascade="all, delete-orphan")
     plan_instances = relationship("PlanInstance", back_populates="user", cascade="all, delete-orphan")
     events = relationship("UserEvent", back_populates="user", cascade="all, delete-orphan")
+    feedback_events = relationship(
+        "FeedbackEvent", back_populates="user", cascade="all, delete-orphan"
+    )
+    notice_acknowledgements = relationship(
+        "NoticeAcknowledgement", back_populates="user", cascade="all, delete-orphan"
+    )
+    deployment_enrollments = relationship(
+        "DeploymentEnrollment", back_populates="user", cascade="all, delete-orphan"
+    )
+    aggregate_records = relationship(
+        "AggregateRecord", back_populates="user", cascade="all, delete-orphan"
+    )
+    report_access_grants = relationship(
+        "ReportAccessGrant", back_populates="user", cascade="all, delete-orphan"
+    )
     onboarding_progress = relationship(
         "OnboardingProgress",
         back_populates="user",
@@ -210,6 +229,7 @@ class AIPlan(Base):
 
     __table_args__ = (
         UniqueConstraint("user_id", "cycle_number", name="uq_ai_plans_user_cycle"),
+        UniqueConstraint("id", "user_id", name="uq_ai_plans_id_user"),
         CheckConstraint("cycle_number > 0", name="ck_ai_plans_cycle_number"),
         CheckConstraint("total_days IN (7, 14)", name="ck_ai_plans_total_days"),
         CheckConstraint("version > 0", name="ck_ai_plans_version"),
@@ -476,6 +496,9 @@ class PlanDraftStep(Base):
 # -------------------- CONTENT LIBRARY --------------------
 class ContentLibrary(Base):
     __tablename__ = "content_library"
+    __table_args__ = (
+        UniqueConstraint("id", "content_version", name="uq_content_library_identity"),
+    )
 
     id = Column(String, primary_key=True)
     content_version = Column(Integer, default=1, nullable=False)
@@ -486,6 +509,225 @@ class ContentLibrary(Base):
     logic_tags = Column(JSONB, nullable=False, default=dict)
     content_payload = Column(JSONB, nullable=False, default=dict)
     is_active = Column(Boolean, default=True, nullable=False)
+
+
+# -------------------- DEPLOYMENT / PRIVACY --------------------
+class PrivacyNoticeVersion(Base):
+    __tablename__ = "privacy_notice_versions"
+
+    id = Column(BigInteger, primary_key=True)
+    version = Column(String(64), nullable=False, unique=True)
+    published_at = Column(DateTime(timezone=True), nullable=False)
+    content_digest = Column(String(128), nullable=False)
+    content_location = Column(String(512), nullable=False)
+    is_current = Column(Boolean, nullable=False, default=False)
+    retired_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class Organization(Base):
+    __tablename__ = "organizations"
+
+    id = Column(BigInteger, primary_key=True)
+    organization_key = Column(String(96), nullable=False, unique=True)
+    display_name = Column(String(160), nullable=False)
+    commercial_metadata = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class Deployment(Base):
+    __tablename__ = "deployments"
+    __table_args__ = (
+        UniqueConstraint(
+            "id", "organization_id", name="uq_deployments_id_organization"
+        ),
+    )
+
+    id = Column(BigInteger, primary_key=True)
+    organization_id = Column(
+        BigInteger, ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False
+    )
+    deployment_key = Column(String(96), nullable=False, unique=True)
+    environment = Column(
+        Enum("testnet", "production", name="deployment_environment"), nullable=False
+    )
+    starts_at = Column(DateTime(timezone=True), nullable=True)
+    ends_at = Column(DateTime(timezone=True), nullable=True)
+    renewal_due_at = Column(DateTime(timezone=True), nullable=True)
+    enrollment_open = Column(Boolean, nullable=False, default=False)
+    delivery_enabled = Column(Boolean, nullable=False, default=False)
+    timezone_mode = Column(
+        Enum("single", "distributed", name="deployment_timezone_mode"), nullable=False
+    )
+    default_timezone = Column(String(64), nullable=True)
+    notice_version_id = Column(
+        BigInteger,
+        ForeignKey("privacy_notice_versions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    eligible_count_at_launch = Column(Integer, nullable=True)
+    champion_contact_ref = Column(String(160), nullable=True)
+    support_contact_ref = Column(String(160), nullable=True)
+    roster_reconciliation_days = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class AccessIdentity(Base):
+    __tablename__ = "access_identities"
+    __table_args__ = (
+        UniqueConstraint(
+            "identity_digest", "provider", name="uq_access_identities_digest_provider"
+        ),
+    )
+
+    id = Column(BigInteger, primary_key=True)
+    identity_digest = Column(String(128), nullable=False)
+    provider = Column(String(64), nullable=False)
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+    verification_metadata = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class DeploymentRosterVersion(Base):
+    __tablename__ = "deployment_roster_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "deployment_id", "version", name="uq_deployment_roster_versions_version"
+        ),
+        UniqueConstraint(
+            "id",
+            "deployment_id",
+            name="uq_deployment_roster_versions_id_deployment",
+        ),
+    )
+
+    id = Column(BigInteger, primary_key=True)
+    deployment_id = Column(
+        BigInteger, ForeignKey("deployments.id", ondelete="RESTRICT"), nullable=False
+    )
+    version = Column(Integer, nullable=False)
+    import_mode = Column(
+        Enum("full_snapshot", "delta", name="roster_import_mode"), nullable=False
+    )
+    source_ref = Column(String(160), nullable=False)
+    source_as_of = Column(DateTime(timezone=True), nullable=True)
+    validated_at = Column(DateTime(timezone=True), nullable=True)
+    applied_at = Column(DateTime(timezone=True), nullable=True)
+    eligible_count = Column(Integer, nullable=False)
+    invalid_count = Column(Integer, nullable=False, default=0)
+    is_current = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class DeploymentRosterEntry(Base):
+    __tablename__ = "deployment_roster_entries"
+    __table_args__ = (
+        UniqueConstraint(
+            "roster_version_id", "entry_key", name="uq_deployment_roster_entries_key"
+        ),
+    )
+
+    id = Column(BigInteger, primary_key=True)
+    roster_version_id = Column(
+        BigInteger,
+        ForeignKey("deployment_roster_versions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    access_identity_id = Column(
+        BigInteger,
+        ForeignKey("access_identities.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    entry_key = Column(String(160), nullable=False)
+    delta_action = Column(String(16), nullable=True)
+    validation_metadata = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class AccessEntitlement(Base):
+    __tablename__ = "access_entitlements"
+    __table_args__ = (
+        UniqueConstraint("id", "deployment_id", name="uq_access_entitlements_id_deployment"),
+        ForeignKeyConstraint(
+            ["granting_roster_version_id", "deployment_id"],
+            [
+                "deployment_roster_versions.id",
+                "deployment_roster_versions.deployment_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["confirming_roster_version_id", "deployment_id"],
+            [
+                "deployment_roster_versions.id",
+                "deployment_roster_versions.deployment_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+    )
+
+    id = Column(BigInteger, primary_key=True)
+    deployment_id = Column(
+        BigInteger, ForeignKey("deployments.id", ondelete="RESTRICT"), nullable=False
+    )
+    access_identity_id = Column(
+        BigInteger,
+        ForeignKey("access_identities.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    granted_at = Column(DateTime(timezone=True), nullable=False)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    source = Column(String(64), nullable=False)
+    granting_roster_version_id = Column(BigInteger, nullable=True)
+    confirming_roster_version_id = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class DeploymentInvitation(Base):
+    __tablename__ = "deployment_invitations"
+
+    id = Column(BigInteger, primary_key=True)
+    entitlement_id = Column(
+        BigInteger, ForeignKey("access_entitlements.id", ondelete="RESTRICT"), nullable=False
+    )
+    token_digest = Column(String(128), nullable=False, unique=True)
+    token_version = Column(Integer, nullable=False)
+    source_operation_id = Column(String(160), nullable=False, unique=True)
+    issued_at = Column(DateTime(timezone=True), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    redeemed_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class DeploymentEnrollment(Base):
+    __tablename__ = "deployment_enrollments"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["entitlement_id", "deployment_id"],
+            ["access_entitlements.id", "access_entitlements.deployment_id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "id", "user_id", "deployment_id", name="uq_deployment_enrollments_identity"
+        ),
+    )
+
+    id = Column(BigInteger, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    deployment_id = Column(
+        BigInteger, ForeignKey("deployments.id", ondelete="RESTRICT"), nullable=False
+    )
+    entitlement_id = Column(BigInteger, nullable=False)
+    enrolled_at = Column(DateTime(timezone=True), nullable=False)
+    ended_at = Column(DateTime(timezone=True), nullable=True)
+    ended_reason = Column(String(64), nullable=True)
+    attribution_source = Column(String(64), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    user = relationship("User", back_populates="deployment_enrollments")
 
 
 # -------------------- TELEMETRY --------------------
@@ -525,32 +767,278 @@ class PlanExecutionWindow(Base):
     events = relationship("UserEvent", back_populates="plan_execution_window")
 
 
+class EventCatalog(Base):
+    __tablename__ = "event_catalog"
+
+    event_name = Column(String(96), primary_key=True)
+    event_schema_version = Column(Integer, primary_key=True)
+    event_kind = Column(
+        Enum("user_behavior", "operational", "access_control", name="event_kind"),
+        nullable=False,
+    )
+    allowed_property_schema = Column(JSONB, nullable=False)
+    required_linkage = Column(JSONB, nullable=False)
+    activated_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    retired_at = Column(DateTime(timezone=True), nullable=True)
+
+
 class UserEvent(Base):
     __tablename__ = "user_events"
-    __table_args__ = (Index("idx_user_events_context_gin", "context", postgresql_using="gin"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "event_source",
+            "source_operation_id",
+            "event_name",
+            name="uq_user_events_source_operation",
+        ),
+        ForeignKeyConstraint(
+            ["event_name", "event_schema_version"],
+            ["event_catalog.event_name", "event_catalog.event_schema_version"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["exercise_id", "content_version"],
+            ["content_library.id", "content_library.content_version"],
+            ondelete="RESTRICT",
+            match="FULL",
+        ),
+        ForeignKeyConstraint(
+            ["deployment_id", "organization_id"],
+            ["deployments.id", "deployments.organization_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["deployment_enrollment_id", "user_id", "deployment_id"],
+            [
+                "deployment_enrollments.id",
+                "deployment_enrollments.user_id",
+                "deployment_enrollments.deployment_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["plan_id", "user_id"],
+            ["ai_plans.id", "ai_plans.user_id"],
+            ondelete="RESTRICT",
+        ),
+        Index("ix_user_events_user_time", "user_id", text("occurred_at DESC"), "event_id"),
+        Index("ix_user_events_plan_time", "plan_id", "occurred_at", "event_id"),
+        Index("ix_user_events_step_time", "plan_step_id", "occurred_at", "event_id"),
+        Index(
+            "ix_user_events_deployment_time",
+            "deployment_id",
+            "occurred_at",
+            "event_id",
+        ),
+    )
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    event_type = Column(String, nullable=False)
-    timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    event_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    event_name = Column(String(96), nullable=True)
+    event_schema_version = Column(Integer, nullable=True)
+    occurred_at = Column(DateTime(timezone=True), nullable=True)
+    recorded_at = Column(DateTime(timezone=True), nullable=True)
+    event_source = Column(String(64), nullable=True)
+    source_operation_id = Column(String(160), nullable=True)
+    environment = Column(
+        Enum("testnet", "production", name="deployment_environment"), nullable=True
+    )
+    organization_id = Column(
+        BigInteger, ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=True
+    )
+    deployment_id = Column(BigInteger, nullable=True)
+    deployment_enrollment_id = Column(BigInteger, nullable=True)
+    plan_id = Column(Integer, nullable=True)
+    plan_step_id = Column(
+        Integer, ForeignKey("ai_plan_steps.id", ondelete="RESTRICT"), nullable=True
+    )
+    exercise_id = Column(Text, nullable=True)
+    content_version = Column(Integer, nullable=True)
+    timezone_basis = Column(String(64), nullable=True)
+    time_of_day_bucket = Column(String, nullable=False)
+    properties = Column(JSONB, nullable=True)
+
+    # Inert WP-01.4 compatibility storage.  Canonical writers and readers do
+    # not use these columns; WP-08.1 removes them after deployed-use evidence.
+    event_type = Column(String, nullable=True)
+    timestamp = Column(DateTime(timezone=True), nullable=True)
     plan_execution_id = Column(
         UUID(as_uuid=True),
         ForeignKey("plan_execution_windows.id"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
-    # TECH-DEBT TD-2:
-    # step_id is Text for historical reasons and may contain:
-    # - numeric plan_step_id (new system)
-    # - UUID/content_id (legacy deliveries)
-    # Metrics must treat this column carefully.
-    # Future refactor: introduce plan_step_int (Integer, nullable) and backfill.
     step_id = Column(Text, ForeignKey("content_library.id"), nullable=True)
-    time_of_day_bucket = Column(String, nullable=False)
-    context = Column(JSONB, nullable=False, default=dict)
+    context = Column(JSONB, nullable=True)
 
     user = relationship("User", back_populates="events")
     plan_execution_window = relationship("PlanExecutionWindow", back_populates="events")
+
+
+class FeedbackEvent(Base):
+    __tablename__ = "feedback_events"
+    __table_args__ = (
+        UniqueConstraint("source", "source_operation_id", name="uq_feedback_events_source_operation"),
+        Index("ix_feedback_user_time", "user_id", text("created_at DESC")),
+    )
+
+    id = Column(BigInteger, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    source = Column(
+        Enum(
+            "exercise_efficacy",
+            "coach_quality",
+            "product_feedback",
+            name="feedback_source",
+        ),
+        nullable=False,
+    )
+    source_operation_id = Column(String(160), nullable=False)
+    plan_step_id = Column(
+        Integer, ForeignKey("ai_plan_steps.id", ondelete="RESTRICT"), nullable=True
+    )
+    coach_message_id = Column(
+        BigInteger, ForeignKey("chat_history.id", ondelete="RESTRICT"), nullable=True
+    )
+    source_message_id = Column(
+        BigInteger, ForeignKey("chat_history.id", ondelete="RESTRICT"), nullable=True
+    )
+    value = Column(String(64), nullable=False)
+    reason = Column(String(160), nullable=True)
+    category = Column(
+        Enum(
+            "bug",
+            "confusion",
+            "feature_request",
+            "content",
+            "coach",
+            "other",
+            name="feedback_category",
+        ),
+        nullable=True,
+    )
+    extracted_text = Column(Text, nullable=True)
+    context = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    user = relationship("User", back_populates="feedback_events")
+
+
+class NoticeAcknowledgement(Base):
+    __tablename__ = "notice_acknowledgements"
+    __table_args__ = (
+        UniqueConstraint("source_operation_id", name="uq_notice_ack_source_operation"),
+        UniqueConstraint(
+            "user_id", "deployment_id", "notice_version_id", name="uq_notice_ack_identity"
+        ),
+    )
+
+    id = Column(BigInteger, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    deployment_id = Column(
+        BigInteger, ForeignKey("deployments.id", ondelete="RESTRICT"), nullable=False
+    )
+    notice_version_id = Column(
+        BigInteger,
+        ForeignKey("privacy_notice_versions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    acknowledged_at = Column(DateTime(timezone=True), nullable=False)
+    source_operation_id = Column(String(160), nullable=False)
+
+    user = relationship("User", back_populates="notice_acknowledgements")
+
+
+class ReportAccessGrant(Base):
+    __tablename__ = "report_access_grants"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["plan_id", "user_id"],
+            ["ai_plans.id", "ai_plans.user_id"],
+            ondelete="CASCADE",
+        ),
+    )
+
+    id = Column(BigInteger, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    plan_id = Column(Integer, nullable=False)
+    purpose = Column(
+        Enum("completion_report", "pulse_report", name="report_grant_purpose"),
+        nullable=False,
+    )
+    token_digest = Column(String(128), nullable=False, unique=True)
+    token_version = Column(Integer, nullable=False)
+    issued_at = Column(DateTime(timezone=True), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    revocation_reason = Column(String(160), nullable=True)
+
+    user = relationship("User", back_populates="report_access_grants")
+
+
+class AggregateRecord(Base):
+    __tablename__ = "aggregate_records"
+    __table_args__ = (
+        Index(
+            "uq_aggregate_contribution_source",
+            "source_operation_id",
+            unique=True,
+            postgresql_where=text("record_kind = 'contribution'"),
+        ),
+        Index(
+            "uq_aggregate_sealed_cell_revision",
+            "metric_name",
+            "metric_schema_version",
+            "period_start",
+            "period_end",
+            "dimension_key",
+            "revision",
+            unique=True,
+            postgresql_where=text("record_kind = 'sealed_cell'"),
+        ),
+        Index(
+            "uq_aggregate_sealed_supersedes",
+            "supersedes_record_id",
+            unique=True,
+            postgresql_where=text("supersedes_record_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_aggregate_records_cell",
+            "metric_name",
+            "metric_schema_version",
+            "period_start",
+            "period_end",
+            "dimension_key",
+        ),
+    )
+
+    id = Column(BigInteger, primary_key=True)
+    record_kind = Column(
+        Enum("contribution", "sealed_cell", name="aggregate_record_kind"), nullable=False
+    )
+    metric_name = Column(String(96), nullable=False)
+    metric_schema_version = Column(Integer, nullable=False)
+    period_start = Column(DateTime(timezone=True), nullable=False)
+    period_end = Column(DateTime(timezone=True), nullable=False)
+    dimension_key = Column(String(64), nullable=False)
+    dimensions = Column(JSONB, nullable=False)
+    numeric_value = Column(Numeric(18, 6), nullable=False)
+    sample_count = Column(Integer, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
+    source_operation_id = Column(String(160), nullable=True)
+    retention_until = Column(DateTime(timezone=True), nullable=True)
+    sealed_at = Column(DateTime(timezone=True), nullable=True)
+    gate_eligible_count = Column(Integer, nullable=True)
+    gate_contributor_count = Column(Integer, nullable=True)
+    revision = Column(Integer, nullable=False, default=1)
+    supersedes_record_id = Column(
+        BigInteger, ForeignKey("aggregate_records.id", ondelete="RESTRICT"), nullable=True
+    )
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    user = relationship("User", back_populates="aggregate_records")
 
 
 class TaskStats(Base):

@@ -1,104 +1,89 @@
-"""Telemetry helpers for logging events and managing engagement status."""
+"""Canonical, allow-listed, idempotent event ingestion primitives."""
 
 from __future__ import annotations
 
-import logging
-from datetime import datetime, timedelta, timezone
-from typing import Any
-from uuid import UUID
+from dataclasses import dataclass
+from datetime import datetime, time, timedelta, timezone
+from decimal import Decimal
+from hashlib import sha256
+import json
+from typing import Any, Mapping
 
 import pytz
-from sqlalchemy import desc, func
+from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db import (
     AIPlan,
+    AIPlanDay,
+    AIPlanStep,
+    AggregateRecord,
     ContentLibrary,
-    EngagementStatus,
-    FailureSignal,
-    PlanExecutionWindow,
-    PlanInstance,
-    TaskStats,
+    Deployment,
+    DeploymentEnrollment,
+    EventCatalog,
     User,
     UserEvent,
 )
 
-EDGE_OF_DAY_BUCKETS = {"night", "morning"}
-TASK_EVENT_TYPES = {
-    "task_delivered",
-    "task_completed",
-    "task_skipped",
-    "task_ignored",
-    "task_delayed",
-}
-RESOURCE_EVENT_TYPES = {"task_viewed_resource"}
-FRICTION_EVENT_TYPES = {"task_skipped", "task_ignored", "task_delayed", "task_failed"}
+
 SKIP_STREAK_EVENT_TYPES = {"task_skipped", "task_ignored", "task_failed"}
 SKIP_STREAK_RESET_EVENT_TYPES = {"task_completed"}
-COMPLETION_EVENT_TYPES = {
-    "task_completed",
-    "task_skipped",
-    "task_ignored",
-    "task_delayed",
-    "task_failed",
+_BANNED_PROPERTY_KEYS = {
+    "description",
+    "email",
+    "error",
+    "exception",
+    "message",
+    "phone",
+    "prompt",
+    "response",
+    "text",
+    "tg_id",
+    "title",
+    "user_id",
+    "username",
+}
+_MAX_SOURCE_OPERATION_LENGTH = 160
+_MAX_PROPERTY_STRING_LENGTH = 160
+_CONTRIBUTION_RETENTION = timedelta(days=90)
+_ALLOWED_AGGREGATE_DIMENSION_KEYS = {
+    "deployment_id",
+    "environment",
+    "event_kind",
+    "event_name",
+    "organization_id",
 }
 
-logger = logging.getLogger(__name__)
+
+class EventValidationError(ValueError):
+    """Raised before persistence when an event violates the catalogue envelope."""
 
 
-def _coerce_uuid(value: str | UUID | None) -> UUID | None:
-    if value is None or isinstance(value, UUID):
-        return value
-    return UUID(str(value))
+class EventOperationConflict(RuntimeError):
+    """Raised when a source operation is reused for a different fact."""
 
 
-def _resolve_step_id(
-    step_id: str | UUID | None,
-    content_id: str | UUID | None,
-    plan_step_id: str | int | UUID | None,
-) -> str:
-    if content_id is not None:
-        return str(content_id)
-    if step_id is not None:
-        return str(step_id)
-    if plan_step_id is not None:
-        return str(plan_step_id)
-    raise ValueError("Telemetry events require a step identifier.")
-
-
-def _ensure_content_stub(db: Session, step_id: str, context: dict[str, Any]) -> None:
-    if db.get(ContentLibrary, step_id):
-        return
-    title = context.get("plan_step_title") or context.get("title")
-    description = context.get("plan_step_description") or context.get("description")
-    payload = {
-        "title": title,
-        "description": description,
-        "source": "plan_step_fallback",
-    }
-    db.add(
-        ContentLibrary(
-            id=step_id,
-            content_version=1,
-            internal_name=title or f"plan_step_{step_id}",
-            category="plan_step",
-            difficulty=1,
-            energy_cost="LOW",
-            logic_tags={},
-            content_payload=payload,
-            is_active=False,
-        )
-    )
+@dataclass(frozen=True)
+class EventWriteResult:
+    event: UserEvent
+    contribution: AggregateRecord
+    duplicate: bool
 
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _runtime_environment() -> str:
+    return "production" if settings.ENVIRONMENT == "prod" else "testnet"
+
+
 def _resolve_timezone(user: User) -> pytz.BaseTzInfo:
-    tz_name = user.timezone or "UTC"
     try:
-        return pytz.timezone(tz_name)
+        return pytz.timezone(user.timezone or "UTC")
     except pytz.UnknownTimeZoneError:
         return pytz.UTC
 
@@ -107,459 +92,481 @@ def _time_bucket(local_dt: datetime) -> str:
     hour = local_dt.hour
     if hour >= 23 or hour < 6:
         return "night"
-    if 6 <= hour < 12:
+    if hour < 12:
         return "morning"
-    if 12 <= hour < 18:
+    if hour < 18:
         return "day"
     return "evening"
 
 
-def _ensure_plan_instance(
-    db: Session,
-    user_id: int,
-    plan_instance_id: str | UUID | None = None,
-    blueprint_id: str | None = None,
-    initial_parameters: dict[str, Any] | None = None,
-    contract_version: str | None = None,
-    schema_version: str | None = None,
-) -> PlanInstance:
-    if plan_instance_id:
-        instance_id = _coerce_uuid(plan_instance_id)
-        instance = db.get(PlanInstance, instance_id)
-        if instance:
-            if instance.user_id != user_id:
-                raise ValueError("Security Violation: Instance does not belong to user")
-            return instance
-
-    instance = (
-        db.query(PlanInstance)
-        .filter(PlanInstance.user_id == user_id)
-        .order_by(desc(PlanInstance.created_at))
-        .first()
-    )
-    if instance:
-        return instance
-
-    instance = PlanInstance(
-        user_id=user_id,
-        blueprint_id=blueprint_id,
-        initial_parameters=initial_parameters or {},
-        contract_version=contract_version or "v1",
-        schema_version=schema_version or "v1",
-    )
-    db.add(instance)
-    db.flush()
-    return instance
+def _value_matches_schema(value: Any, schema_type: str) -> bool:
+    if schema_type.endswith("_or_null") and value is None:
+        return True
+    base_type = schema_type.removesuffix("_or_null")
+    if base_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if base_type == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if base_type == "boolean":
+        return isinstance(value, bool)
+    if base_type == "string":
+        return isinstance(value, str) and len(value) <= _MAX_PROPERTY_STRING_LENGTH
+    if base_type == "array":
+        return isinstance(value, list) and len(value) <= 20
+    return False
 
 
-def _ensure_execution_window(
-    db: Session,
-    instance: PlanInstance,
-    server_now: datetime,
-) -> PlanExecutionWindow:
-    window = (
-        db.query(PlanExecutionWindow)
-        .filter(
-            PlanExecutionWindow.instance_id == instance.id,
-            PlanExecutionWindow.end_date.is_(None),
+def _reject_sensitive_nested_properties(value: Any) -> None:
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            if str(key).lower() in _BANNED_PROPERTY_KEYS:
+                raise EventValidationError(f"Property {key!r} is not allowed in events")
+            _reject_sensitive_nested_properties(nested)
+        return
+    if isinstance(value, list):
+        for nested in value:
+            _reject_sensitive_nested_properties(nested)
+        return
+    if isinstance(value, str) and len(value) > _MAX_PROPERTY_STRING_LENGTH:
+        raise EventValidationError("Event property strings are bounded to 160 characters")
+    if value is not None and not isinstance(value, (str, int, float, bool)):
+        raise EventValidationError("Event properties must be JSON scalars, objects, or arrays")
+
+
+def _validate_properties(
+    properties: Mapping[str, Any], allowed_schema: Mapping[str, str]
+) -> dict[str, Any]:
+    normalized = dict(properties)
+    unexpected = set(normalized) - set(allowed_schema)
+    if unexpected:
+        raise EventValidationError(
+            "Properties are not allow-listed for this event: "
+            + ", ".join(sorted(unexpected))
         )
-        .order_by(desc(PlanExecutionWindow.start_date))
-        .first()
+    for key, value in normalized.items():
+        if key.lower() in _BANNED_PROPERTY_KEYS:
+            raise EventValidationError(f"Property {key!r} is not allowed in events")
+        if not _value_matches_schema(value, str(allowed_schema[key])):
+            raise EventValidationError(f"Property {key!r} has the wrong catalogue type")
+        _reject_sensitive_nested_properties(value)
+    return normalized
+
+
+def _canonical_dimensions(dimensions: Mapping[str, Any]) -> tuple[dict[str, Any], str]:
+    normalized = dict(dimensions)
+    unexpected = set(normalized) - _ALLOWED_AGGREGATE_DIMENSION_KEYS
+    if unexpected:
+        raise EventValidationError(
+            "Aggregate dimensions are not allow-listed: "
+            + ", ".join(sorted(unexpected))
+        )
+    if any(isinstance(value, (Mapping, list)) for value in normalized.values()):
+        raise EventValidationError("Aggregate dimensions must use coarse scalar values")
+    _reject_sensitive_nested_properties(normalized)
+    encoded = json.dumps(
+        normalized,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
     )
-    if window:
-        return window
-
-    window = PlanExecutionWindow(
-        instance_id=instance.id,
-        start_date=server_now,
-        engagement_status=EngagementStatus.ACTIVE,
-    )
-    db.add(window)
-    db.flush()
-    return window
+    if len(encoded) > 2048:
+        raise EventValidationError("Aggregate dimensions exceed the bounded envelope")
+    return normalized, sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _record_plan_resumed_event(
+def _resolve_plan_linkage(
     db: Session,
+    *,
     user_id: int,
-    window: PlanExecutionWindow,
-    bucket: str,
-    context: dict[str, Any],
-    server_now: datetime,
-) -> None:
-    db.add(
-        UserEvent(
-            event_type="plan_resumed",
-            timestamp=server_now,
+    plan_id: int | None,
+    plan_step_id: int | None,
+) -> tuple[int | None, int | None, str | None, int | None]:
+    if plan_step_id is not None:
+        row = db.execute(
+            select(AIPlanStep, AIPlanDay.plan_id, AIPlan.user_id)
+            .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+            .join(AIPlan, AIPlan.id == AIPlanDay.plan_id)
+            .where(AIPlanStep.id == plan_step_id)
+        ).first()
+        if row is None:
+            raise EventValidationError("plan_step_id does not exist")
+        step, resolved_plan_id, owner_id = row
+        if owner_id != user_id:
+            raise EventValidationError("plan_step_id does not belong to the user")
+        if plan_id is not None and plan_id != resolved_plan_id:
+            raise EventValidationError("plan_id and plan_step_id refer to different plans")
+        exercise_id = step.exercise_id
+        content_version = None
+        if exercise_id is not None:
+            content = db.get(ContentLibrary, exercise_id)
+            if content is None or content.content_version <= 0:
+                raise EventValidationError("plan step content identity is not valid")
+            content_version = content.content_version
+        return resolved_plan_id, plan_step_id, exercise_id, content_version
+
+    if plan_id is not None:
+        plan = db.get(AIPlan, plan_id)
+        if plan is None or plan.user_id != user_id:
+            raise EventValidationError("plan_id does not belong to the user")
+    return plan_id, None, None, None
+
+
+def _resolve_deployment_linkage(
+    db: Session,
+    *,
+    user_id: int,
+    deployment_id: int | None,
+    deployment_enrollment_id: int | None,
+) -> tuple[int | None, int | None, int | None, str]:
+    if deployment_enrollment_id is not None:
+        enrollment = db.get(DeploymentEnrollment, deployment_enrollment_id)
+        if enrollment is None or enrollment.user_id != user_id:
+            raise EventValidationError("deployment enrollment does not belong to the user")
+        if deployment_id is not None and deployment_id != enrollment.deployment_id:
+            raise EventValidationError("deployment and enrollment linkage disagree")
+        deployment_id = enrollment.deployment_id
+
+    organization_id = None
+    environment = _runtime_environment()
+    if deployment_id is not None:
+        deployment = db.get(Deployment, deployment_id)
+        if deployment is None:
+            raise EventValidationError("deployment_id does not exist")
+        if deployment.environment != environment:
+            raise EventValidationError("deployment belongs to another runtime environment")
+        organization_id = deployment.organization_id
+    return organization_id, deployment_id, deployment_enrollment_id, environment
+
+
+def _load_duplicate(
+    db: Session,
+    *,
+    event_source: str,
+    source_operation_id: str,
+    event_name: str,
+) -> tuple[UserEvent, AggregateRecord] | None:
+    event = db.execute(
+        select(UserEvent).where(
+            UserEvent.event_source == event_source,
+            UserEvent.source_operation_id == source_operation_id,
+            UserEvent.event_name == event_name,
+        )
+    ).scalar_one_or_none()
+    if event is None:
+        return None
+    contribution = db.execute(
+        select(AggregateRecord).where(
+            AggregateRecord.record_kind == "contribution",
+            AggregateRecord.source_operation_id == source_operation_id,
+        )
+    ).scalar_one_or_none()
+    if contribution is None:
+        raise EventOperationConflict(
+            "Existing event has no atomic aggregate contribution receipt"
+        )
+    return event, contribution
+
+
+def _validate_duplicate_payload(
+    duplicate: tuple[UserEvent, AggregateRecord],
+    *,
+    user_id: int,
+    plan_id: int | None,
+    plan_step_id: int | None,
+    deployment_id: int | None,
+    deployment_enrollment_id: int | None,
+    properties: Mapping[str, Any],
+    dimension_key: str,
+    aggregate_value: int | float | Decimal,
+) -> EventWriteResult:
+    event, contribution = duplicate
+    if (
+        event.user_id != user_id
+        or event.plan_id != plan_id
+        or event.plan_step_id != plan_step_id
+        or event.deployment_id != deployment_id
+        or event.deployment_enrollment_id != deployment_enrollment_id
+        or event.properties != dict(properties)
+        or contribution.dimension_key != dimension_key
+        or contribution.numeric_value != Decimal(str(aggregate_value))
+    ):
+        raise EventOperationConflict(
+            "source_operation_id was already used for a different fact"
+        )
+    return EventWriteResult(event=event, contribution=contribution, duplicate=True)
+
+
+def write_event_operation(
+    db: Session,
+    *,
+    user_id: int,
+    event_name: str,
+    event_source: str,
+    source_operation_id: str,
+    properties: Mapping[str, Any] | None = None,
+    occurred_at: datetime | None = None,
+    plan_id: int | None = None,
+    plan_step_id: int | None = None,
+    deployment_id: int | None = None,
+    deployment_enrollment_id: int | None = None,
+    aggregate_dimensions: Mapping[str, Any] | None = None,
+    aggregate_value: int | float | Decimal = 1,
+) -> EventWriteResult:
+    """Write one personal event and its independent contribution atomically.
+
+    The caller owns the surrounding authoritative transaction and must commit.
+    Retrying the same stable source operation returns the original pair without
+    incrementing or manufacturing another fact.
+    """
+    event_source = event_source.strip()
+    source_operation_id = source_operation_id.strip()
+    if not event_source or len(event_source) > 64:
+        raise EventValidationError("event_source must be 1-64 characters")
+    if not source_operation_id or len(source_operation_id) > _MAX_SOURCE_OPERATION_LENGTH:
+        raise EventValidationError("source_operation_id must be 1-160 characters")
+
+    user = db.get(User, user_id)
+    if user is None:
+        raise EventValidationError("user does not exist")
+    occurrence = occurred_at or _utc_now()
+    if occurrence.tzinfo is None:
+        raise EventValidationError("occurred_at must be timezone-aware")
+    occurrence = occurrence.astimezone(timezone.utc)
+
+    catalogue = db.get(EventCatalog, (event_name, 1))
+    if catalogue is None:
+        raise EventValidationError("event is not present in the allow-listed catalogue")
+    if catalogue.activated_at > occurrence or (
+        catalogue.retired_at is not None and catalogue.retired_at <= occurrence
+    ):
+        raise EventValidationError("event catalogue entry is not active at occurrence time")
+    event_properties = _validate_properties(
+        properties or {}, catalogue.allowed_property_schema
+    )
+
+    plan_id, plan_step_id, exercise_id, content_version = _resolve_plan_linkage(
+        db,
+        user_id=user_id,
+        plan_id=plan_id,
+        plan_step_id=plan_step_id,
+    )
+    required_linkage = set(catalogue.required_linkage)
+    if "plan" in required_linkage and plan_id is None:
+        raise EventValidationError("event catalogue requires plan linkage")
+    if "plan_step" in required_linkage and plan_step_id is None:
+        raise EventValidationError("event catalogue requires plan-step linkage")
+    if required_linkage - {"user", "plan", "plan_step", "deployment"}:
+        raise EventValidationError("event catalogue contains unsupported linkage")
+    organization_id, deployment_id, deployment_enrollment_id, environment = (
+        _resolve_deployment_linkage(
+            db,
             user_id=user_id,
-            plan_execution_id=window.id,
+            deployment_id=deployment_id,
+            deployment_enrollment_id=deployment_enrollment_id,
+        )
+    )
+    if "deployment" in required_linkage and deployment_id is None:
+        raise EventValidationError("event catalogue requires deployment linkage")
+    local_timezone = _resolve_timezone(user)
+    timezone_basis = getattr(local_timezone, "zone", "UTC") or "UTC"
+    bucket = _time_bucket(occurrence.astimezone(local_timezone))
+
+    default_dimensions = {
+        "event_kind": catalogue.event_kind,
+        "event_name": event_name,
+        "environment": environment,
+    }
+    if organization_id is not None:
+        default_dimensions["organization_id"] = organization_id
+    if deployment_id is not None:
+        default_dimensions["deployment_id"] = deployment_id
+    dimensions, dimension_key = _canonical_dimensions(
+        aggregate_dimensions or default_dimensions
+    )
+    period_start = datetime.combine(occurrence.date(), time.min, tzinfo=timezone.utc)
+    period_end = period_start + timedelta(days=1)
+
+    duplicate = _load_duplicate(
+        db,
+        event_source=event_source,
+        source_operation_id=source_operation_id,
+        event_name=event_name,
+    )
+    if duplicate is not None:
+        return _validate_duplicate_payload(
+            duplicate,
+            user_id=user_id,
+            plan_id=plan_id,
+            plan_step_id=plan_step_id,
+            deployment_id=deployment_id,
+            deployment_enrollment_id=deployment_enrollment_id,
+            properties=event_properties,
+            dimension_key=dimension_key,
+            aggregate_value=aggregate_value,
+        )
+
+    recorded_at = _utc_now()
+    event_id = db.execute(
+        pg_insert(UserEvent.__table__)
+        .values(
+            user_id=user_id,
+            event_name=event_name,
+            event_schema_version=1,
+            occurred_at=occurrence,
+            recorded_at=recorded_at,
+            event_source=event_source,
+            source_operation_id=source_operation_id,
+            environment=environment,
+            organization_id=organization_id,
+            deployment_id=deployment_id,
+            deployment_enrollment_id=deployment_enrollment_id,
+            plan_id=plan_id,
+            plan_step_id=plan_step_id,
+            exercise_id=exercise_id,
+            content_version=content_version,
+            timezone_basis=timezone_basis,
             time_of_day_bucket=bucket,
-            context=context,
+            properties=event_properties,
         )
-    )
-
-
-def _get_or_create_task_stats(db: Session, user_id: int, step_id: str) -> TaskStats:
-    stats = db.get(TaskStats, {"user_id": user_id, "step_id": step_id})
-    if stats:
-        return stats
-    stats = TaskStats(
-        user_id=user_id,
-        step_id=step_id,
-        attempts_total=0,
-        completed_total=0,
-        skipped_total=0,
-        avg_reaction_sec=0.0,
-        completed_edge_of_day=0,
-    )
-    db.add(stats)
-    return stats
-
-
-def _update_task_stats(
-    stats: TaskStats,
-    event_type: str,
-    bucket: str,
-    context: dict[str, Any],
-) -> None:
-    if event_type == "task_delivered":
-        stats.attempts_total += 1
-        return
-
-    if event_type == "task_completed":
-        stats.completed_total = (stats.completed_total or 0) + 1
-        if bucket in EDGE_OF_DAY_BUCKETS:
-            stats.completed_edge_of_day += 1
-        reaction = context.get("reaction_sec")
-        if reaction is not None:
-            try:
-                reaction_value = float(reaction)
-            except (TypeError, ValueError):
-                reaction_value = None
-            if reaction_value is not None and stats.completed_total > 0:
-                previous_total = stats.completed_total - 1
-                stats.avg_reaction_sec = (
-                    (stats.avg_reaction_sec * previous_total + reaction_value) / stats.completed_total
-                )
-        return
-
-    if event_type == "task_skipped":
-        stats.skipped_total += 1
-        return
-
-    if event_type == "task_delayed":
-        return
-
-
-def _maybe_create_failure_signal(
-    db: Session,
-    user_id: int,
-    window: PlanExecutionWindow,
-    step_id: str,
-    event_type: str,
-    context: dict[str, Any],
-    server_now: datetime,
-) -> None:
-    if event_type not in {"task_skipped", "task_ignored", "task_delayed"}:
-        return
-    if event_type == "task_delayed":
-        trigger_event = "delay"
-    else:
-        trigger_event = "ignore" if event_type == "task_ignored" else "skip"
-    failure_context = context.get("failure_context_tag") or context.get("skip_reason")
-    db.add(
-        FailureSignal(
+        .on_conflict_do_nothing(
+            index_elements=["event_source", "source_operation_id", "event_name"]
+        )
+        .returning(UserEvent.event_id)
+    ).scalar_one_or_none()
+    if event_id is None:
+        duplicate = _load_duplicate(
+            db,
+            event_source=event_source,
+            source_operation_id=source_operation_id,
+            event_name=event_name,
+        )
+        if duplicate is None:
+            raise EventOperationConflict("Concurrent event receipt could not be loaded")
+        return _validate_duplicate_payload(
+            duplicate,
             user_id=user_id,
-            plan_execution_id=window.id,
-            step_id=step_id,
-            trigger_event=trigger_event,
-            failure_context_tag=failure_context,
-            detected_at=server_now,
+            plan_id=plan_id,
+            plan_step_id=plan_step_id,
+            deployment_id=deployment_id,
+            deployment_enrollment_id=deployment_enrollment_id,
+            properties=event_properties,
+            dimension_key=dimension_key,
+            aggregate_value=aggregate_value,
         )
-    )
 
-
-def _maybe_increment_batch_completion(
-    db: Session,
-    window: PlanExecutionWindow,
-    server_now: datetime,
-) -> None:
-    recent_completed = (
-        db.query(UserEvent)
-        .filter(
-            UserEvent.plan_execution_id == window.id,
-            UserEvent.event_type == "task_completed",
+    contribution_id = db.execute(
+        pg_insert(AggregateRecord.__table__)
+        .values(
+            record_kind="contribution",
+            metric_name=event_name,
+            metric_schema_version=1,
+            period_start=period_start,
+            period_end=period_end,
+            dimension_key=dimension_key,
+            dimensions=dimensions,
+            numeric_value=Decimal(str(aggregate_value)),
+            sample_count=1,
+            user_id=user_id,
+            source_operation_id=source_operation_id,
+            retention_until=occurrence + _CONTRIBUTION_RETENTION,
+            revision=1,
         )
-        .order_by(desc(UserEvent.timestamp))
-        .limit(2)
-        .all()
-    )
-    if len(recent_completed) < 2:
-        return
+        .on_conflict_do_nothing(
+            index_elements=["source_operation_id"],
+            index_where=AggregateRecord.record_kind == "contribution",
+        )
+        .returning(AggregateRecord.id)
+    ).scalar_one_or_none()
+    if contribution_id is None:
+        raise EventOperationConflict(
+            "source_operation_id already owns another aggregate contribution"
+        )
 
-    oldest = recent_completed[-1].timestamp
-    if oldest and server_now - oldest <= timedelta(minutes=10):
-        window.batch_completion_count += 1
+    db.execute(
+        update(User)
+        .where(User.id == user_id, User.first_seen_at.is_(None))
+        .values(first_seen_at=occurrence, first_seen_at_source="accepted_event")
+    )
+    event = db.get(UserEvent, event_id)
+    contribution = db.get(AggregateRecord, contribution_id)
+    if event is None or contribution is None:
+        raise EventOperationConflict("Atomic event result could not be loaded")
+    return EventWriteResult(event=event, contribution=contribution, duplicate=False)
 
 
 def log_user_event(
     db: Session,
     user_id: int,
     event_type: str,
-    step_id: str | UUID | None = None,
-    content_id: str | UUID | None = None,
-    plan_step_id: str | int | UUID | None = None,
-    context: dict[str, Any] | None = None,
-    plan_instance_id: str | UUID | None = None,
+    *,
+    source_operation_id: str,
+    event_source: str,
+    plan_step_id: int | None = None,
+    plan_id: int | None = None,
+    context: Mapping[str, Any] | None = None,
+    deployment_id: int | None = None,
+    deployment_enrollment_id: int | None = None,
+    step_id: str | None = None,
+    content_id: str | None = None,
+    plan_instance_id: str | None = None,
 ) -> UserEvent:
-    server_now = _utc_now()
-    user = db.get(User, user_id)
-    if not user:
-        raise ValueError(f"User {user_id} not found")
-
-    local_dt = server_now.astimezone(_resolve_timezone(user))
-    bucket = _time_bucket(local_dt)
-
-    # TECH-DEBT TD-7:
-    # UserEvent.context is semi-structured JSON.
-    # Maintain documentation of allowed keys.
-    # Consider schema versioning if analytics complexity increases.
-    event_context = dict(context or {})
-    if content_id is not None:
-        event_context.setdefault("content_id", str(content_id))
-    event_context.setdefault("timezone_source", "user_profile")
-
-    instance = _ensure_plan_instance(db, user_id, plan_instance_id)
-    window = _ensure_execution_window(db, instance, server_now)
-
-    if window.engagement_status == EngagementStatus.DORMANT:
-        window.engagement_status = EngagementStatus.RETURNING
-        _record_plan_resumed_event(
-            db,
-            user_id,
-            window,
-            bucket,
-            event_context,
-            server_now,
+    """Compatibility name for current callers, backed only by the new operation."""
+    if step_id is not None or content_id is not None or plan_instance_id is not None:
+        raise EventValidationError(
+            "legacy step/content/plan-instance identifiers are not accepted"
         )
-
-    is_task_event = event_type in TASK_EVENT_TYPES
-
-    if is_task_event:
-        step_value = _resolve_step_id(step_id, content_id, plan_step_id)
-        if content_id is None and not db.get(ContentLibrary, step_value):
-            _ensure_content_stub(db, step_value, event_context)
-        content_lookup_id = str(content_id) if content_id is not None else step_value
-        content = db.get(ContentLibrary, content_lookup_id)
-        if content:
-            event_context.setdefault("content_version", content.content_version)
-    else:
-        step_value = step_id and str(step_id) or (plan_step_id and str(plan_step_id)) or None
-
-    if event_type == "parameter_set":
-        if event_context.get("parameter") == "load_mode":
-            window.current_load_mode = str(event_context.get("new_value") or window.current_load_mode)
-
-    if event_type == "task_completed":
-        _maybe_increment_batch_completion(db, window, server_now)
-
-    event = UserEvent(
-        event_type=event_type,
-        timestamp=server_now,
+    return write_event_operation(
+        db,
         user_id=user_id,
-        plan_execution_id=window.id,
-        step_id=step_value,
-        time_of_day_bucket=bucket,
-        context=event_context,
-    )
-    db.add(event)
-
-    if is_task_event and step_value:
-        stats = _get_or_create_task_stats(db, user_id, step_value)
-        _update_task_stats(stats, event_type, bucket, event_context)
-        if event_type in FRICTION_EVENT_TYPES:
-            stats.last_failure_reason = event_context.get("skip_reason") or stats.last_failure_reason
-            stats.history_ref = True
-            _maybe_create_failure_signal(
-                db,
-                user_id,
-                window,
-                step_value,
-                event_type,
-                event_context,
-                server_now,
-            )
-
-    return event
-
-
+        event_name=event_type,
+        event_source=event_source,
+        source_operation_id=source_operation_id,
+        properties=context,
+        plan_id=plan_id,
+        plan_step_id=plan_step_id,
+        deployment_id=deployment_id,
+        deployment_enrollment_id=deployment_enrollment_id,
+    ).event
 
 
 def get_success_streak(db: Session, user_id: int, limit: int = 60) -> int:
     events = (
-        db.query(UserEvent.event_type)
+        db.query(UserEvent.event_name)
         .filter(
             UserEvent.user_id == user_id,
-            UserEvent.event_type.in_({"task_completed", "task_skipped", "task_ignored", "task_failed"}),
+            UserEvent.event_name.in_(
+                {"task_completed", "task_skipped", "task_ignored", "task_failed"}
+            ),
         )
-        .order_by(UserEvent.timestamp.desc(), UserEvent.id.desc())
+        .order_by(UserEvent.occurred_at.desc(), UserEvent.event_id.desc())
         .limit(limit)
         .all()
     )
-
     streak = 0
-    for (event_type,) in events:
-        if event_type == "task_completed":
-            streak += 1
-        else:
+    for (event_name,) in events:
+        if event_name != "task_completed":
             break
+        streak += 1
     return streak
+
 
 def get_skip_streak(db: Session, user_id: int, limit: int) -> int:
     events = (
-        db.query(UserEvent.event_type)
+        db.query(UserEvent.event_name)
         .filter(
             UserEvent.user_id == user_id,
-            UserEvent.event_type.in_(SKIP_STREAK_EVENT_TYPES | SKIP_STREAK_RESET_EVENT_TYPES),
+            UserEvent.event_name.in_(
+                SKIP_STREAK_EVENT_TYPES | SKIP_STREAK_RESET_EVENT_TYPES
+            ),
         )
-        .order_by(UserEvent.timestamp.desc(), UserEvent.id.desc())
+        .order_by(UserEvent.occurred_at.desc(), UserEvent.event_id.desc())
         .limit(limit)
         .all()
     )
-
     skip_streak = 0
-    for (event_type,) in events:
-        if event_type in SKIP_STREAK_RESET_EVENT_TYPES:
+    for (event_name,) in events:
+        if event_name in SKIP_STREAK_RESET_EVENT_TYPES:
             break
-        if event_type in SKIP_STREAK_EVENT_TYPES:
+        if event_name in SKIP_STREAK_EVENT_TYPES:
             skip_streak += 1
-
     return skip_streak
-
-
-def get_completion_ratio(
-    db: Session,
-    user_id: int,
-    days: int = 7,
-    now: datetime | None = None,
-) -> float:
-    server_now = now or _utc_now()
-    window_start = server_now - timedelta(days=days)
-    completed_total = (
-        db.query(func.count(UserEvent.id))
-        .filter(
-            UserEvent.user_id == user_id,
-            UserEvent.timestamp >= window_start,
-            UserEvent.event_type == "task_completed",
-        )
-        .scalar()
-        or 0
-    )
-    total_attempts = (
-        db.query(func.count(UserEvent.id))
-        .filter(
-            UserEvent.user_id == user_id,
-            UserEvent.timestamp >= window_start,
-            UserEvent.event_type.in_(COMPLETION_EVENT_TYPES),
-        )
-        .scalar()
-        or 0
-    )
-
-    if total_attempts == 0:
-        return 0.0
-    return float(completed_total / total_attempts)
-
-
-def get_friction_event_count(
-    db: Session,
-    user_id: int,
-    days: int = 7,
-    now: datetime | None = None,
-) -> int:
-    server_now = now or _utc_now()
-    window_start = server_now - timedelta(days=days)
-    return int(
-        db.query(func.count(UserEvent.id))
-        .filter(
-            UserEvent.user_id == user_id,
-            UserEvent.timestamp >= window_start,
-            UserEvent.event_type.in_(FRICTION_EVENT_TYPES),
-        )
-        .scalar()
-        or 0
-    )
-
-
-def update_engagement_statuses(db: Session, now: datetime | None = None) -> int:
-    server_now = now or _utc_now()
-    updates = 0
-
-    windows = (
-        db.query(PlanExecutionWindow)
-        .filter(PlanExecutionWindow.end_date.is_(None))
-        .all()
-    )
-    for window in windows:
-        last_event_time = (
-            db.query(func.max(UserEvent.timestamp))
-            .filter(UserEvent.plan_execution_id == window.id)
-            .scalar()
-        )
-        if not last_event_time:
-            continue
-
-        gap = server_now - last_event_time
-        if gap < timedelta(hours=48):
-            new_status = EngagementStatus.ACTIVE
-        elif gap < timedelta(days=7):
-            new_status = EngagementStatus.SPORADIC
-        else:
-            new_status = EngagementStatus.DORMANT
-
-        if window.engagement_status != new_status:
-            window.engagement_status = new_status
-            updates += 1
-
-    return updates
-
-
-def update_hidden_compensation_scores(db: Session) -> int:
-    windows = (
-        db.query(PlanExecutionWindow)
-        .filter(PlanExecutionWindow.end_date.is_(None))
-        .all()
-    )
-    updated = 0
-    for window in windows:
-        completed_total = (
-            db.query(func.count(UserEvent.id))
-            .filter(
-                UserEvent.plan_execution_id == window.id,
-                UserEvent.event_type == "task_completed",
-            )
-            .scalar()
-            or 0
-        )
-        if completed_total == 0:
-            window.hidden_compensation_score = 0.0
-            updated += 1
-            continue
-
-        completed_events = db.query(func.count(UserEvent.id)).filter(
-            UserEvent.plan_execution_id == window.id,
-            UserEvent.event_type == "task_completed",
-        )
-        night_total = (
-            completed_events.filter(UserEvent.time_of_day_bucket == "night").scalar()
-            or 0
-        )
-        edge_total = (
-            completed_events.filter(UserEvent.context["is_edge_of_day"].astext == "true").scalar()
-            or 0
-        )
-        score = (night_total + edge_total + window.batch_completion_count) / completed_total
-        window.hidden_compensation_score = float(score)
-        updated += 1
-
-    return updated
