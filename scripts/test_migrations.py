@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -16,25 +17,41 @@ from uuid import uuid4
 
 import psycopg2
 from psycopg2 import sql
+from sqlalchemy import create_engine, func, select
+from sqlalchemy.orm import sessionmaker
 
 from scripts.inspect_database_schema import inspect_database
 
 
-EXPECTED_REVISION = "20260902_plan_lifecycle"
+EXPECTED_REVISION = "20260905_event_privacy"
 EXPECTED_APPLICATION_TABLES = {
+    "access_entitlements",
+    "access_identities",
+    "aggregate_records",
     "ai_plan_days",
     "ai_plan_steps",
     "ai_plan_versions",
     "ai_plans",
     "chat_history",
     "content_library",
+    "deployment_enrollments",
+    "deployment_invitations",
+    "deployment_roster_entries",
+    "deployment_roster_versions",
+    "deployments",
+    "event_catalog",
     "failure_signals",
+    "feedback_events",
+    "notice_acknowledgements",
     "onboarding_progress",
     "plan_draft_steps",
     "plan_drafts",
     "plan_execution_windows",
     "plan_instances",
     "plan_lifecycle_operations",
+    "privacy_notice_versions",
+    "organizations",
+    "report_access_grants",
     "task_stats",
     "user_daily_logs",
     "user_events",
@@ -43,20 +60,28 @@ EXPECTED_APPLICATION_TABLES = {
     "users",
 }
 EXPECTED_ENUMS = {
+    "aggregate_record_kind",
+    "deployment_environment",
+    "deployment_timezone_mode",
     "difficulty_level",
     "engagementstatus",
     "fact_category",
     "factcategory",
+    "feedback_category",
+    "feedback_source",
     "plan_module",
     "legacy_plan_status",
     "plan_status",
     "plan_status_enum",
     "plan_step_status",
     "planmodule",
+    "report_grant_purpose",
+    "roster_import_mode",
     "sender_role",
     "senderrole",
     "step_type",
     "steptype",
+    "event_kind",
 }
 
 
@@ -107,6 +132,13 @@ def _seed_legacy_rows(connection, *, duplicate_current: bool = False) -> None:
             ("ACTIVE" if duplicate_current else "IDLE_FINISHED",),
         )
         user_id = cursor.fetchone()[0]
+        if not duplicate_current:
+            cursor.execute(
+                """
+                INSERT INTO users (tg_id, current_state, timezone, is_active)
+                VALUES (9000099, 'IDLE_NEW', 'Europe/Kyiv', true)
+                """
+            )
         plan_count = 2 if duplicate_current else 1
         for plan_offset in range(plan_count):
             cursor.execute(
@@ -186,6 +218,44 @@ def _seed_legacy_rows(connection, *, duplicate_current: bool = False) -> None:
                         f"2026-08-{day_number:02d} 23:00:00+00",
                     ),
                 )
+        if not duplicate_current:
+            cursor.execute(
+                """
+                INSERT INTO plan_instances (
+                  id, user_id, initial_parameters, contract_version, schema_version,
+                  created_at
+                ) VALUES (
+                  '00000000-0000-0000-0000-000000000101', %s, '{}', 'v1', 'v1',
+                  '2026-07-31 08:00:00+00'
+                )
+                """,
+                (user_id,),
+            )
+            cursor.execute(
+                """
+                INSERT INTO plan_execution_windows (
+                  id, instance_id, engagement_status, start_date
+                ) VALUES (
+                  '00000000-0000-0000-0000-000000000102',
+                  '00000000-0000-0000-0000-000000000101', 'ACTIVE',
+                  '2026-07-31 08:00:00+00'
+                )
+                """
+            )
+            cursor.execute(
+                """
+                INSERT INTO user_events (
+                  id, event_type, timestamp, user_id, plan_execution_id, step_id,
+                  time_of_day_bucket, context
+                ) VALUES (
+                  '00000000-0000-0000-0000-000000000103', 'task_completed',
+                  '2026-07-31 08:30:00+00', %s,
+                  '00000000-0000-0000-0000-000000000102', 'migration-seed',
+                  'morning', '{"legacy": true}'
+                )
+                """,
+                (user_id,),
+            )
     connection.commit()
 
 
@@ -205,7 +275,12 @@ def _assert_seeded_backfill(connection) -> None:
         )
         assert cursor.fetchone()[0] is True
         cursor.execute(
-            "SELECT stage, completed_at FROM onboarding_progress"
+            """
+            SELECT stage, completed_at
+            FROM onboarding_progress
+            JOIN users ON users.id = onboarding_progress.user_id
+            WHERE users.tg_id = 9000001
+            """
         )
         assert cursor.fetchone() == ("COMPLETED", None)
         cursor.execute(
@@ -232,6 +307,504 @@ def _assert_seeded_backfill(connection) -> None:
             "SELECT count(*) FROM pg_indexes WHERE indexname = 'ux_ai_plans_one_current_per_user'"
         )
         assert cursor.fetchone()[0] == 1
+        cursor.execute(
+            """
+            SELECT first_seen_at, first_seen_at_source
+            FROM users WHERE tg_id = 9000001
+            """
+        )
+        assert cursor.fetchone() == (
+            datetime(2026, 7, 31, 8, 30, tzinfo=timezone.utc),
+            "legacy_event",
+        )
+        cursor.execute(
+            """
+            SELECT first_seen_at IS NULL, first_seen_at_source IS NULL
+            FROM users WHERE tg_id = 9000099
+            """
+        )
+        assert cursor.fetchone() == (True, True)
+        cursor.execute(
+            """
+            SELECT event_name IS NULL, event_schema_version IS NULL,
+                   occurred_at IS NULL, recorded_at IS NULL,
+                   event_source IS NULL, source_operation_id IS NULL,
+                   environment IS NULL, properties IS NULL,
+                   event_type, timestamp, step_id, context
+            FROM user_events
+            WHERE event_id = '00000000-0000-0000-0000-000000000103'
+            """
+        )
+        legacy = cursor.fetchone()
+        assert legacy[:8] == (True,) * 8
+        assert legacy[8:] == (
+            "task_completed",
+            datetime(2026, 7, 31, 8, 30, tzinfo=timezone.utc),
+            "migration-seed",
+            {"legacy": True},
+        )
+
+
+def _assert_event_privacy_operations(target_url: str) -> None:
+    os.environ.setdefault("BOT_TOKEN", "123456789:test-token-value")
+    os.environ.setdefault("OPENAI_API_KEY", "test-key")
+    os.environ.setdefault("ENVIRONMENT", "dev")
+    os.environ["DATABASE_URL"] = target_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+
+    from app.db import AIPlan, AIPlanDay, AIPlanStep, AggregateRecord, User, UserEvent
+    from app.telemetry import (
+        EventOperationConflict,
+        EventValidationError,
+        write_event_operation,
+    )
+
+    engine = create_engine(target_url)
+    Session = sessionmaker(bind=engine, expire_on_commit=False)
+    try:
+        with Session.begin() as db:
+            user = db.execute(select(User).where(User.tg_id == 9000099)).scalar_one()
+            first = write_event_operation(
+                db,
+                user_id=user.id,
+                event_name="user_message",
+                event_source="migration_rehearsal",
+                source_operation_id="migration-rehearsal:user-message:1",
+                properties={"message_length": 12},
+            )
+            assert first.duplicate is False
+            assert first.event.event_name == "user_message"
+            assert first.event.event_type is None
+            assert first.event.plan_execution_id is None
+            assert first.contribution.record_kind == "contribution"
+            assert first.contribution.user_id == user.id
+            first_event_id = first.event.event_id
+            first_contribution_id = first.contribution.id
+
+        with Session.begin() as db:
+            user = db.execute(select(User).where(User.tg_id == 9000099)).scalar_one()
+            retry = write_event_operation(
+                db,
+                user_id=user.id,
+                event_name="user_message",
+                event_source="migration_rehearsal",
+                source_operation_id="migration-rehearsal:user-message:1",
+                properties={"message_length": 12},
+            )
+            assert retry.duplicate is True
+            assert retry.event.event_id == first_event_id
+            assert retry.contribution.id == first_contribution_id
+            assert user.first_seen_at is not None
+            assert user.first_seen_at_source == "accepted_event"
+            assert db.scalar(
+                select(func.count()).select_from(UserEvent).where(
+                    UserEvent.source_operation_id == "migration-rehearsal:user-message:1"
+                )
+            ) == 1
+            assert db.scalar(
+                select(func.count()).select_from(AggregateRecord).where(
+                    AggregateRecord.source_operation_id
+                    == "migration-rehearsal:user-message:1"
+                )
+            ) == 1
+
+        with Session.begin() as db:
+            user = db.execute(select(User).where(User.tg_id == 9000001)).scalar_one()
+            step = db.execute(
+                select(AIPlanStep)
+                .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+                .join(AIPlan, AIPlan.id == AIPlanDay.plan_id)
+                .where(AIPlan.user_id == user.id)
+                .order_by(AIPlanStep.id)
+            ).scalars().first()
+            assert step is not None
+            linked = write_event_operation(
+                db,
+                user_id=user.id,
+                event_name="task_completed",
+                event_source="migration_rehearsal",
+                source_operation_id="migration-rehearsal:task-completed:1",
+                plan_step_id=step.id,
+                properties={"day_number": 1},
+            )
+            assert linked.event.plan_id == step.day.plan.id
+            assert linked.event.plan_step_id == step.id
+            assert linked.event.exercise_id == "migration-seed"
+            assert linked.event.content_version == 1
+            assert linked.event.step_id is None
+            assert linked.event.context is None
+            feedback_owner_id = user.id
+            completed_step_id = step.id
+
+        barrier = Barrier(2)
+
+        def _concurrent_retry() -> tuple[bool, object, int]:
+            with Session.begin() as db:
+                user = db.execute(select(User).where(User.tg_id == 9000099)).scalar_one()
+                barrier.wait(timeout=10)
+                result = write_event_operation(
+                    db,
+                    user_id=user.id,
+                    event_name="user_message",
+                    event_source="migration_rehearsal",
+                    source_operation_id="migration-rehearsal:concurrent:1",
+                    properties={"message_length": 7},
+                )
+                return result.duplicate, result.event.event_id, result.contribution.id
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            concurrent_results = list(
+                executor.map(lambda _index: _concurrent_retry(), range(2))
+            )
+        assert sorted(result[0] for result in concurrent_results) == [False, True]
+        assert len({result[1] for result in concurrent_results}) == 1
+        assert len({result[2] for result in concurrent_results}) == 1
+
+        with Session() as db:
+            user = db.execute(select(User).where(User.tg_id == 9000099)).scalar_one()
+            try:
+                write_event_operation(
+                    db,
+                    user_id=user.id,
+                    event_name="unknown_event",
+                    event_source="migration_rehearsal",
+                    source_operation_id="migration-rehearsal:unknown:1",
+                )
+            except EventValidationError:
+                db.rollback()
+            else:
+                raise AssertionError("unknown event unexpectedly passed catalogue validation")
+
+            try:
+                write_event_operation(
+                    db,
+                    user_id=user.id,
+                    event_name="user_message",
+                    event_source="migration_rehearsal",
+                    source_operation_id="migration-rehearsal:user-message:1",
+                    properties={"message_length": 99},
+                )
+            except EventOperationConflict:
+                db.rollback()
+            else:
+                raise AssertionError("source operation reuse unexpectedly changed its fact")
+
+        with Session.begin() as db:
+            user = db.execute(select(User).where(User.tg_id == 9000099)).scalar_one()
+            try:
+                write_event_operation(
+                    db,
+                    user_id=user.id,
+                    event_name="user_message",
+                    event_source="another_source",
+                    source_operation_id="migration-rehearsal:user-message:1",
+                    properties={"message_length": 12},
+                )
+            except EventOperationConflict:
+                pass
+            else:
+                raise AssertionError("aggregate conflict unexpectedly persisted an event")
+            assert db.scalar(
+                select(func.count()).select_from(UserEvent).where(
+                    UserEvent.source_operation_id
+                    == "migration-rehearsal:user-message:1"
+                )
+            ) == 1
+
+        connection = psycopg2.connect(target_url)
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT id FROM users WHERE tg_id = 9000099")
+            raw_user_id = cursor.fetchone()[0]
+        for source_operation_id, event_name, properties in (
+            (
+                "migration-rehearsal:raw-property:1",
+                "user_message",
+                '{"message_length": 1, "free_text": "must not persist"}',
+            ),
+            (
+                "migration-rehearsal:raw-linkage:1",
+                "task_completed",
+                '{"day_number": 1}',
+            ),
+        ):
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO user_events (
+                          event_id, user_id, event_name, event_schema_version,
+                          occurred_at, recorded_at, event_source,
+                          source_operation_id, environment, time_of_day_bucket,
+                          properties
+                        ) VALUES (
+                          %s, %s, %s, 1, now(), now(), 'raw_rehearsal',
+                          %s, 'testnet', 'unknown', %s::jsonb
+                        )
+                        """,
+                        (
+                            str(uuid4()),
+                            raw_user_id,
+                            event_name,
+                            source_operation_id,
+                            properties,
+                        ),
+                    )
+                connection.commit()
+                raise AssertionError("direct invalid canonical event unexpectedly persisted")
+            except psycopg2.Error as exc:
+                connection.rollback()
+                assert "event property is not allow-listed" in str(exc) or (
+                    "event catalogue requires plan-step linkage" in str(exc)
+                )
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO chat_history (user_id, role, text)
+                VALUES (%s, 'assistant', 'owned assistant message')
+                RETURNING id
+                """,
+                (feedback_owner_id,),
+            )
+            assistant_message_id = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                INSERT INTO chat_history (user_id, role, text)
+                VALUES (%s, 'user', 'owned user message')
+                RETURNING id
+                """,
+                (feedback_owner_id,),
+            )
+            user_message_id = cursor.fetchone()[0]
+        connection.commit()
+
+        feedback_attempts = (
+            (
+                """
+                INSERT INTO feedback_events (
+                  user_id, source, source_operation_id, plan_step_id, value
+                ) VALUES (%s, 'exercise_efficacy', 'rehearsal:cross-step', %s, 'helpful')
+                """,
+                (raw_user_id, completed_step_id),
+                "exercise feedback target is not a completed step owned by user",
+            ),
+            (
+                """
+                INSERT INTO feedback_events (
+                  user_id, source, source_operation_id, coach_message_id, value
+                ) VALUES (%s, 'coach_quality', 'rehearsal:cross-coach', %s, 'helpful')
+                """,
+                (raw_user_id, assistant_message_id),
+                "coach feedback target is not an assistant message owned by user",
+            ),
+            (
+                """
+                INSERT INTO feedback_events (
+                  user_id, source, source_operation_id, source_message_id, value
+                ) VALUES (%s, 'product_feedback', 'rehearsal:cross-product', %s, 'idea')
+                """,
+                (raw_user_id, user_message_id),
+                "product feedback source is not a user message owned by user",
+            ),
+        )
+        for statement, parameters, expected_error in feedback_attempts:
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(statement, parameters)
+                connection.commit()
+                raise AssertionError("cross-user feedback target unexpectedly persisted")
+            except psycopg2.Error as exc:
+                connection.rollback()
+                assert expected_error in str(exc)
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO feedback_events (
+                  user_id, source, source_operation_id, plan_step_id, value
+                ) VALUES (
+                  %s, 'exercise_efficacy', 'rehearsal:owned-step', %s, 'helpful'
+                )
+                """,
+                (feedback_owner_id, completed_step_id),
+            )
+        connection.commit()
+
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE users SET first_seen_at = first_seen_at + interval '1 second' "
+                    "WHERE tg_id = 9000099"
+                )
+            connection.commit()
+            raise AssertionError("immutable first_seen_at unexpectedly changed")
+        except psycopg2.Error as exc:
+            connection.rollback()
+            assert "first_seen_at is immutable" in str(exc)
+
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE user_events SET properties = properties "
+                    "WHERE event_id = %s",
+                    (str(first_event_id),),
+                )
+            connection.commit()
+            raise AssertionError("canonical event unexpectedly accepted an update")
+        except psycopg2.Error as exc:
+            connection.rollback()
+            assert "canonical user events are immutable" in str(exc)
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO privacy_notice_versions (
+                  version, published_at, content_digest, content_location
+                ) VALUES ('rehearsal-v1', now(), 'digest', 'internal://notice')
+                RETURNING id
+                """
+            )
+            notice_id = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                INSERT INTO organizations (organization_key, display_name)
+                VALUES ('rehearsal-org', 'Rehearsal') RETURNING id
+                """
+            )
+            organization_id = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                INSERT INTO deployments (
+                  organization_id, deployment_key, environment, timezone_mode,
+                  default_timezone, notice_version_id
+                ) VALUES (%s, 'rehearsal-deployment', 'testnet', 'single', 'UTC', %s)
+                RETURNING id
+                """,
+                (organization_id, notice_id),
+            )
+            deployment_id = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                INSERT INTO privacy_notice_versions (
+                  version, published_at, content_digest, content_location
+                ) VALUES ('rehearsal-v2', now(), 'digest-v2', 'internal://notice-v2')
+                RETURNING id
+                """
+            )
+            other_notice_id = cursor.fetchone()[0]
+        connection.commit()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE privacy_notice_versions SET content_digest = 'changed' "
+                    "WHERE id = %s",
+                    (notice_id,),
+                )
+            connection.commit()
+            raise AssertionError("privacy notice content unexpectedly changed")
+        except psycopg2.Error as exc:
+            connection.rollback()
+            assert "privacy notice version content is immutable" in str(exc)
+
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO notice_acknowledgements (
+                      user_id, deployment_id, notice_version_id,
+                      acknowledged_at, source_operation_id
+                    ) VALUES (%s, %s, %s, now(), 'rehearsal:wrong-notice')
+                    """,
+                    (raw_user_id, deployment_id, other_notice_id),
+                )
+            connection.commit()
+            raise AssertionError("un-pinned notice acknowledgement unexpectedly persisted")
+        except psycopg2.Error as exc:
+            connection.rollback()
+            assert "acknowledged notice is not pinned to deployment" in str(exc)
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO notice_acknowledgements (
+                  user_id, deployment_id, notice_version_id,
+                  acknowledged_at, source_operation_id
+                ) VALUES (%s, %s, %s, now(), 'rehearsal:valid-notice')
+                RETURNING id
+                """,
+                (raw_user_id, deployment_id, notice_id),
+            )
+            acknowledgement_id = cursor.fetchone()[0]
+        connection.commit()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE notice_acknowledgements "
+                    "SET acknowledged_at = acknowledged_at + interval '1 second' "
+                    "WHERE id = %s",
+                    (acknowledgement_id,),
+                )
+            connection.commit()
+            raise AssertionError("notice acknowledgement unexpectedly changed")
+        except psycopg2.Error as exc:
+            connection.rollback()
+            assert "notice acknowledgements are immutable" in str(exc)
+
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE deployments SET environment = 'production' WHERE id = %s",
+                    (deployment_id,),
+                )
+            connection.commit()
+            raise AssertionError("immutable deployment environment unexpectedly changed")
+        except psycopg2.Error as exc:
+            connection.rollback()
+            assert "deployment identity and environment are immutable" in str(exc)
+
+        dimension_key = sha256(b"{}").hexdigest()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO aggregate_records (
+                  record_kind, metric_name, metric_schema_version,
+                  period_start, period_end, dimension_key, dimensions,
+                  numeric_value, sample_count, sealed_at,
+                  gate_eligible_count, gate_contributor_count, revision
+                ) VALUES (
+                  'sealed_cell', 'rehearsal_metric', 1,
+                  '2026-09-01 00:00:00+00', '2026-09-02 00:00:00+00', %s,
+                  '{}', 1, 50, now(), 100, 50, 1
+                ) RETURNING id
+                """,
+                (dimension_key,),
+            )
+            sealed_id = cursor.fetchone()[0]
+        connection.commit()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE aggregate_records SET numeric_value = 2 WHERE id = %s",
+                    (sealed_id,),
+                )
+            connection.commit()
+            raise AssertionError("sealed aggregate unexpectedly changed")
+        except psycopg2.Error as exc:
+            connection.rollback()
+            assert "aggregate records are immutable" in str(exc)
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE aggregate_records SET numeric_value = 2 WHERE id = %s",
+                    (first_contribution_id,),
+                )
+            connection.commit()
+            raise AssertionError("aggregate contribution unexpectedly changed")
+        except psycopg2.Error as exc:
+            connection.rollback()
+            assert "aggregate records are immutable" in str(exc)
+        connection.close()
+    finally:
+        engine.dispose()
 
 
 def _assert_failed_upgrade_rolled_back(connection) -> None:
@@ -782,6 +1355,7 @@ def main() -> None:
         finally:
             target_connection.close()
         _assert_lifecycle_concurrency(target_url)
+        _assert_event_privacy_operations(target_url)
 
         _run_alembic(resume_target_url, "20260827_schema_baseline")
         resume_connection = psycopg2.connect(

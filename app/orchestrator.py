@@ -302,7 +302,6 @@ async def _handle_schedule_adjustment_apply(user_id: int, tool_args: Dict[str, A
     current_day = derive_current_day(db, active_plan.id, active_plan.total_days or 0)
     now_utc = datetime.now(timezone.utc)
     daily_time_slots = dict(resolve_daily_time_slots(user.profile))
-    telemetry_changes = []
     step_ids_to_reschedule: List[int] = []
 
     for old_slot, change in pending_changes.items():
@@ -315,7 +314,6 @@ async def _handle_schedule_adjustment_apply(user_id: int, tool_args: Dict[str, A
             logger.error("[SCHED_ADJ] unexpected cross-slot in pending user=%s", user_id)
             continue
 
-        old_time = daily_time_slots.get(old_slot, SLOT_DEFAULT_TIMES.get(old_slot, ""))
         daily_time_slots[new_slot] = new_time_str
 
         future_steps = (
@@ -342,16 +340,6 @@ async def _handle_schedule_adjustment_apply(user_id: int, tool_args: Dict[str, A
             db.add(step)
             step_ids_to_reschedule.append(step.id)
 
-        telemetry_changes.append(
-            {
-                "from_slot": old_slot,
-                "to_slot": new_slot,
-                "from_time": old_time,
-                "to_time": new_time_str,
-                "affected_steps": len(future_steps),
-            }
-        )
-
     profile = user.profile
     if profile is None:
         profile = UserProfile(user_id=user.id)
@@ -359,17 +347,6 @@ async def _handle_schedule_adjustment_apply(user_id: int, tool_args: Dict[str, A
         user.profile = profile
     profile.daily_time_slots = daily_time_slots
     db.add(user)
-    log_user_event(
-        db,
-        user_id=user_id,
-        event_type="schedule_adjustment",
-        context={
-            "changes": telemetry_changes,
-            "total_affected_steps": len(step_ids_to_reschedule),
-            "from_day": current_day,
-            "plan_id": active_plan.id,
-        },
-    )
     db.commit()
 
     if step_ids_to_reschedule:
@@ -521,8 +498,10 @@ def _auto_complete_plan_if_needed(
             db=db,
             user_id=user.id,
             event_type="plan_completed",
+            event_source="runtime",
+            source_operation_id=f"runtime:complete:{result.plan_id}",
+            plan_id=result.plan_id,
             context={
-                "plan_id": result.plan_id,
                 "total_days": plan.total_days,
                 "focus": plan.focus,
                 "load": plan.load,
@@ -558,8 +537,8 @@ async def send_plan_completion_message(user_id: int, plan_id: int) -> None:
 
         already_sent = db.query(UserEvent).filter(
             UserEvent.user_id == user_id,
-            UserEvent.event_type == "plan_completion_sent",
-            UserEvent.context["plan_id"].astext == str(plan_id),
+            UserEvent.event_name == "plan_completion_sent",
+            UserEvent.plan_id == plan_id,
         ).first()
         if already_sent:
             logger.info("[COMPLETION_MSG] already sent for plan=%s", plan_id)
@@ -608,7 +587,10 @@ async def send_plan_completion_message(user_id: int, plan_id: int) -> None:
                 db,
                 user_id=user_id,
                 event_type="plan_completion_sent",
-                context={"plan_id": plan_id, "outcome_tier": metrics.outcome_tier},
+                event_source="runtime",
+                source_operation_id=f"runtime:completion-report:{plan_id}",
+                plan_id=plan_id,
+                context={"outcome_tier": metrics.outcome_tier},
             )
             db.commit()
         return

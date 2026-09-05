@@ -8,7 +8,6 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from sqlalchemy.orm import Session, selectinload
 
 from app.db import AIPlan, AIPlanDay, AIPlanStep, AIPlanVersion
-from app.telemetry import log_user_event
 from app.time_slots import (
     compute_scheduled_for,
     normalize_time_slot,
@@ -212,22 +211,8 @@ def apply_plan_adaptation(
         canceled_step_ids = list(rescheduled_step_ids)
     elif adaptation_type == "pause":
         step_diff_count, canceled_step_ids = _apply_pause(plan, effective_from)
-        if plan.user:
-            log_user_event(
-                db,
-                plan.user.id,
-                "plan_paused",
-                context={"adaptation_type": adaptation_type, "effective_from": effective_from.isoformat()},
-            )
     elif adaptation_type == "resume":
         step_diff_count, rescheduled_step_ids = _apply_resume(plan, effective_from)
-        if plan.user:
-            log_user_event(
-                db,
-                plan.user.id,
-                "plan_resumed",
-                context={"adaptation_type": adaptation_type, "effective_from": effective_from.isoformat()},
-            )
 
     db.add(
         AIPlanVersion(

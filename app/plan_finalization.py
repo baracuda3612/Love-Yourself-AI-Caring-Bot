@@ -439,11 +439,10 @@ def activate_plan_side_effects(plan_id: int, user_id: int) -> None:
                 db,
                 user_id=user_id,
                 event_type="plan_activated",
-                step_id=f"plan_{plan_id}",
-                context={
-                    "plan_id": str(plan_id),
-                    "total_days": getattr(plan, "total_days", None),
-                },
+                event_source="plan_finalization",
+                source_operation_id=f"plan-activation:{plan_id}",
+                plan_id=plan_id,
+                context={"total_days": getattr(plan, "total_days", None)},
             )
             db.commit()
     except Exception as exc:

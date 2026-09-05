@@ -205,7 +205,7 @@ def test_auto_complete_marks_plan_completed_and_logs_event_with_metrics_error(mo
 
     assert completed_plan_id == 9
     assert captured["event_type"] == "plan_completed"
-    assert captured["context"]["plan_id"] == 9
+    assert captured["plan_id"] == 9
     assert captured["context"]["metrics_error"] is True
 
 

@@ -110,9 +110,9 @@ def test_timeline_statuses_done_partial_skipped_ignored():
         _Day(4, [_Step(5, scheduled_for=now)]),
     ]
     events = [
-        SimpleNamespace(event_type="task_completed", step_id="1"),
-        SimpleNamespace(event_type="task_completed", step_id="2"),
-        SimpleNamespace(event_type="task_skipped", step_id="4"),
+        SimpleNamespace(event_name="task_completed", plan_step_id=1),
+        SimpleNamespace(event_name="task_completed", plan_step_id=2),
+        SimpleNamespace(event_name="task_skipped", plan_step_id=4),
     ]
     db = _TimelineDB(plan=SimpleNamespace(id=10, user_id=1), days=days, events=events)
 
