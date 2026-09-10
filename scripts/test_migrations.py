@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import json
 import os
@@ -521,6 +521,7 @@ def _assert_event_privacy_operations(target_url: str) -> None:
 
         with Session.begin() as db:
             user = db.execute(select(User).where(User.tg_id == 9000099)).scalar_one()
+            original_occurrence = datetime.now(timezone.utc)
             original = write_event_operation(
                 db,
                 user_id=user.id,
@@ -528,6 +529,7 @@ def _assert_event_privacy_operations(target_url: str) -> None:
                 event_source="migration_rehearsal",
                 source_operation_id="migration-rehearsal:retired-retry:1",
                 properties={"parameter": "timezone", "new_value": "UTC"},
+                occurred_at=original_occurrence,
             )
             original_event_id = original.event.event_id
             original_contribution_id = original.contribution.id
@@ -550,6 +552,20 @@ def _assert_event_privacy_operations(target_url: str) -> None:
             assert retired_retry.duplicate is True
             assert retired_retry.event.event_id == original_event_id
             assert retired_retry.contribution.id == original_contribution_id
+            try:
+                write_event_operation(
+                    db,
+                    user_id=user.id,
+                    event_name="parameter_set",
+                    event_source="migration_rehearsal",
+                    source_operation_id="migration-rehearsal:retired-retry:1",
+                    properties={"parameter": "timezone", "new_value": "UTC"},
+                    occurred_at=original_occurrence + timedelta(seconds=1),
+                )
+            except EventOperationConflict:
+                pass
+            else:
+                raise AssertionError("retry unexpectedly changed explicit occurrence time")
             try:
                 write_event_operation(
                     db,
@@ -588,10 +604,10 @@ def _assert_event_privacy_operations(target_url: str) -> None:
                           event_id, user_id, event_name, event_schema_version,
                           occurred_at, recorded_at, event_source,
                           source_operation_id, environment, time_of_day_bucket,
-                          properties
+                          timezone_basis, properties
                         ) VALUES (
                           %s, %s, %s, 1, now(), now(), 'raw_rehearsal',
-                          %s, 'testnet', 'unknown', %s::jsonb
+                          %s, 'testnet', 'day', 'UTC', %s::jsonb
                         )
                         """,
                         (
@@ -640,11 +656,11 @@ def _assert_event_privacy_operations(target_url: str) -> None:
                           event_id, user_id, event_name, event_schema_version,
                           occurred_at, recorded_at, event_source,
                           source_operation_id, environment, time_of_day_bucket,
-                          plan_id, properties
+                          timezone_basis, plan_id, properties
                         ) VALUES (
                           %s, %s, 'schedule_adjustment', 1,
                           now(), now(), 'raw_rehearsal', %s,
-                          'testnet', 'unknown', %s,
+                          'testnet', 'day', 'UTC', %s,
                           jsonb_build_object('changes', %s::jsonb)
                         )
                         """,
@@ -661,6 +677,35 @@ def _assert_event_privacy_operations(target_url: str) -> None:
             except psycopg2.Error as exc:
                 connection.rollback()
                 assert "event properties violate nested privacy bounds" in str(exc)
+
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO user_events (
+                      event_id, user_id, event_name, event_schema_version,
+                      occurred_at, recorded_at, event_source,
+                      source_operation_id, environment, time_of_day_bucket,
+                      timezone_basis, plan_id, plan_step_id, properties
+                    ) VALUES (
+                      %s, %s, 'task_completed', 1, now(), now(),
+                      'raw_rehearsal', 'migration-rehearsal:raw-content-mismatch',
+                      'testnet', 'day', 'UTC', %s, %s,
+                      '{"day_number": 1}'::jsonb
+                    )
+                    """,
+                    (
+                        str(uuid4()),
+                        feedback_owner_id,
+                        owned_plan_id,
+                        completed_step_id,
+                    ),
+                )
+            connection.commit()
+            raise AssertionError("mismatched plan-step content unexpectedly persisted")
+        except psycopg2.Error as exc:
+            connection.rollback()
+            assert "event plan-step/content linkage does not match plan/user" in str(exc)
 
         with connection.cursor() as cursor:
             cursor.execute(
@@ -790,6 +835,37 @@ def _assert_event_privacy_operations(target_url: str) -> None:
             deployment_id = cursor.fetchone()[0]
             cursor.execute(
                 """
+                INSERT INTO access_identities (
+                  identity_digest, provider, verified_at
+                ) VALUES ('rehearsal-identity-digest', 'rehearsal', now())
+                RETURNING id
+                """
+            )
+            access_identity_id = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                INSERT INTO access_entitlements (
+                  deployment_id, access_identity_id, granted_at, source
+                ) VALUES (%s, %s, now() - interval '1 day', 'rehearsal')
+                RETURNING id
+                """,
+                (deployment_id, access_identity_id),
+            )
+            entitlement_id = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                INSERT INTO deployment_enrollments (
+                  user_id, deployment_id, entitlement_id,
+                  enrolled_at, attribution_source
+                ) VALUES (
+                  %s, %s, %s, now() - interval '1 day', 'rehearsal'
+                ) RETURNING id
+                """,
+                (raw_user_id, deployment_id, entitlement_id),
+            )
+            deployment_enrollment_id = cursor.fetchone()[0]
+            cursor.execute(
+                """
                 INSERT INTO privacy_notice_versions (
                   version, published_at, content_digest, content_location
                 ) VALUES ('rehearsal-v2', now(), 'digest-v2', 'internal://notice-v2')
@@ -798,6 +874,154 @@ def _assert_event_privacy_operations(target_url: str) -> None:
             )
             other_notice_id = cursor.fetchone()[0]
         connection.commit()
+
+        with Session.begin() as db:
+            user = db.execute(select(User).where(User.tg_id == 9000099)).scalar_one()
+            try:
+                write_event_operation(
+                    db,
+                    user_id=user.id,
+                    event_name="user_message",
+                    event_source="migration_rehearsal",
+                    source_operation_id="migration-rehearsal:deployment-without-enrollment",
+                    properties={"message_length": 4},
+                    deployment_id=deployment_id,
+                )
+            except EventValidationError:
+                pass
+            else:
+                raise AssertionError("deployment attribution without enrollment succeeded")
+
+            attributed = write_event_operation(
+                db,
+                user_id=user.id,
+                event_name="user_message",
+                event_source="migration_rehearsal",
+                source_operation_id="migration-rehearsal:deployment-attribution:1",
+                properties={"message_length": 4},
+                deployment_enrollment_id=deployment_enrollment_id,
+            )
+            assert attributed.event.deployment_id == deployment_id
+            assert attributed.event.deployment_enrollment_id == deployment_enrollment_id
+            assert attributed.event.organization_id == organization_id
+            attributed_event_id = attributed.event.event_id
+            attributed_contribution_id = attributed.contribution.id
+
+        for source_operation_id, environment, enrollment_id in (
+            (
+                "migration-rehearsal:raw-deployment-without-enrollment",
+                "testnet",
+                None,
+            ),
+            (
+                "migration-rehearsal:raw-deployment-wrong-environment",
+                "production",
+                deployment_enrollment_id,
+            ),
+        ):
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO user_events (
+                          event_id, user_id, event_name, event_schema_version,
+                          occurred_at, recorded_at, event_source,
+                          source_operation_id, environment, organization_id,
+                          deployment_id, deployment_enrollment_id,
+                          timezone_basis, time_of_day_bucket, properties
+                        ) VALUES (
+                          %s, %s, 'user_message', 1, now(), now(),
+                          'raw_rehearsal', %s, %s, %s, %s, %s,
+                          'UTC', 'day', '{"message_length": 4}'::jsonb
+                        )
+                        """,
+                        (
+                            str(uuid4()),
+                            raw_user_id,
+                            source_operation_id,
+                            environment,
+                            organization_id,
+                            deployment_id,
+                            enrollment_id,
+                        ),
+                    )
+                connection.commit()
+                raise AssertionError("invalid direct deployment attribution persisted")
+            except psycopg2.Error as exc:
+                connection.rollback()
+                assert "deployment" in str(exc).lower()
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE deployment_enrollments
+                SET ended_at = now(), ended_reason = 'rehearsal_complete'
+                WHERE id = %s
+                """,
+                (deployment_enrollment_id,),
+            )
+        connection.commit()
+
+        with Session.begin() as db:
+            user = db.execute(select(User).where(User.tg_id == 9000099)).scalar_one()
+            attributed_retry = write_event_operation(
+                db,
+                user_id=user.id,
+                event_name="user_message",
+                event_source="migration_rehearsal",
+                source_operation_id="migration-rehearsal:deployment-attribution:1",
+                properties={"message_length": 4},
+                deployment_enrollment_id=deployment_enrollment_id,
+            )
+            assert attributed_retry.duplicate is True
+            assert attributed_retry.event.event_id == attributed_event_id
+            assert attributed_retry.contribution.id == attributed_contribution_id
+            try:
+                write_event_operation(
+                    db,
+                    user_id=user.id,
+                    event_name="user_message",
+                    event_source="migration_rehearsal",
+                    source_operation_id="migration-rehearsal:ended-enrollment:1",
+                    properties={"message_length": 4},
+                    deployment_enrollment_id=deployment_enrollment_id,
+                )
+            except EventValidationError:
+                pass
+            else:
+                raise AssertionError("ended enrollment accepted a new event")
+
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO user_events (
+                      event_id, user_id, event_name, event_schema_version,
+                      occurred_at, recorded_at, event_source,
+                      source_operation_id, environment, organization_id,
+                      deployment_id, deployment_enrollment_id,
+                      timezone_basis, time_of_day_bucket, properties
+                    ) VALUES (
+                      %s, %s, 'user_message', 1, now(), now(),
+                      'raw_rehearsal', 'migration-rehearsal:raw-ended-enrollment',
+                      'testnet', %s, %s, %s, 'UTC', 'day',
+                      '{"message_length": 4}'::jsonb
+                    )
+                    """,
+                    (
+                        str(uuid4()),
+                        raw_user_id,
+                        organization_id,
+                        deployment_id,
+                        deployment_enrollment_id,
+                    ),
+                )
+            connection.commit()
+            raise AssertionError("direct event accepted an ended enrollment")
+        except psycopg2.Error as exc:
+            connection.rollback()
+            assert "deployment enrollment does not cover event occurrence" in str(exc)
+
         try:
             with connection.cursor() as cursor:
                 cursor.execute(

@@ -185,6 +185,9 @@ def test_database_guards_immutable_facts_and_pinned_notice() -> None:
     assert "product feedback source is not a user message owned by user" in source
     assert "CREATE FUNCTION ly_event_json_is_safe" in source
     assert "event properties violate nested privacy bounds" in source
+    assert "deployment enrollment does not cover event occurrence" in source
+    assert "event plan-step/content linkage does not match plan/user" in source
+    assert "time_of_day_bucket IN ('morning','day','evening','night')" in source
 
 
 def test_every_live_event_write_supplies_stable_operation_and_source() -> None:

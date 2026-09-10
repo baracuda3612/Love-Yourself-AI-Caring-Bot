@@ -244,15 +244,26 @@ def _resolve_deployment_linkage(
     db: Session,
     *,
     user_id: int,
+    occurred_at: datetime,
     deployment_id: int | None,
     deployment_enrollment_id: int | None,
 ) -> tuple[int | None, int | None, int | None, str]:
+    if deployment_id is not None and deployment_enrollment_id is None:
+        raise EventValidationError(
+            "deployment attribution requires deployment_enrollment_id"
+        )
     if deployment_enrollment_id is not None:
         enrollment = db.get(DeploymentEnrollment, deployment_enrollment_id)
         if enrollment is None or enrollment.user_id != user_id:
             raise EventValidationError("deployment enrollment does not belong to the user")
         if deployment_id is not None and deployment_id != enrollment.deployment_id:
             raise EventValidationError("deployment and enrollment linkage disagree")
+        if enrollment.enrolled_at > occurred_at or (
+            enrollment.ended_at is not None and enrollment.ended_at <= occurred_at
+        ):
+            raise EventValidationError(
+                "deployment enrollment does not cover the event occurrence"
+            )
         deployment_id = enrollment.deployment_id
 
     organization_id = None
@@ -263,6 +274,10 @@ def _resolve_deployment_linkage(
             raise EventValidationError("deployment_id does not exist")
         if deployment.environment != environment:
             raise EventValidationError("deployment belongs to another runtime environment")
+        if deployment.starts_at is not None and deployment.starts_at > occurred_at:
+            raise EventValidationError("deployment does not cover the event occurrence")
+        if deployment.ends_at is not None and deployment.ends_at <= occurred_at:
+            raise EventValidationError("deployment does not cover the event occurrence")
         organization_id = deployment.organization_id
     return organization_id, deployment_id, deployment_enrollment_id, environment
 
@@ -300,6 +315,7 @@ def _validate_duplicate_payload(
     duplicate: tuple[UserEvent, AggregateRecord],
     *,
     user_id: int,
+    explicit_occurred_at: datetime | None,
     plan_id: int | None,
     plan_step_id: int | None,
     deployment_id: int | None,
@@ -311,6 +327,10 @@ def _validate_duplicate_payload(
     event, contribution = duplicate
     if (
         event.user_id != user_id
+        or (
+            explicit_occurred_at is not None
+            and event.occurred_at != explicit_occurred_at
+        )
         or event.plan_id != plan_id
         or event.plan_step_id != plan_step_id
         or event.deployment_id != deployment_id
@@ -357,10 +377,28 @@ def write_event_operation(
     user = db.get(User, user_id)
     if user is None:
         raise EventValidationError("user does not exist")
-    occurrence = occurred_at or _utc_now()
-    if occurrence.tzinfo is None:
+    if occurred_at is not None and occurred_at.tzinfo is None:
         raise EventValidationError("occurred_at must be timezone-aware")
-    occurrence = occurrence.astimezone(timezone.utc)
+    explicit_occurrence = (
+        occurred_at.astimezone(timezone.utc) if occurred_at is not None else None
+    )
+
+    duplicate = _load_duplicate(
+        db,
+        event_source=event_source,
+        source_operation_id=source_operation_id,
+        event_name=event_name,
+    )
+    if duplicate is not None and explicit_occurrence is not None:
+        if duplicate[0].occurred_at != explicit_occurrence:
+            raise EventOperationConflict(
+                "source_operation_id was already used for a different fact"
+            )
+    occurrence = (
+        duplicate[0].occurred_at
+        if duplicate is not None and explicit_occurrence is None
+        else explicit_occurrence or _utc_now()
+    )
 
     catalogue = db.get(EventCatalog, (event_name, 1))
     if catalogue is None:
@@ -386,6 +424,7 @@ def write_event_operation(
         _resolve_deployment_linkage(
             db,
             user_id=user_id,
+            occurred_at=occurrence,
             deployment_id=deployment_id,
             deployment_enrollment_id=deployment_enrollment_id,
         )
@@ -411,16 +450,11 @@ def write_event_operation(
     period_start = datetime.combine(occurrence.date(), time.min, tzinfo=timezone.utc)
     period_end = period_start + timedelta(days=1)
 
-    duplicate = _load_duplicate(
-        db,
-        event_source=event_source,
-        source_operation_id=source_operation_id,
-        event_name=event_name,
-    )
     if duplicate is not None:
         return _validate_duplicate_payload(
             duplicate,
             user_id=user_id,
+            explicit_occurred_at=explicit_occurrence,
             plan_id=plan_id,
             plan_step_id=plan_step_id,
             deployment_id=deployment_id,
@@ -480,6 +514,7 @@ def write_event_operation(
             return _validate_duplicate_payload(
                 duplicate,
                 user_id=user_id,
+                explicit_occurred_at=explicit_occurrence,
                 plan_id=plan_id,
                 plan_step_id=plan_step_id,
                 deployment_id=deployment_id,

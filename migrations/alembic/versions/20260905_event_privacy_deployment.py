@@ -613,7 +613,10 @@ def _reshape_events(enums: dict[str, postgresql.ENUM]) -> None:
         "AND occurred_at IS NOT NULL AND recorded_at IS NOT NULL "
         "AND event_source IS NOT NULL AND length(btrim(event_source)) > 0 "
         "AND source_operation_id IS NOT NULL AND length(btrim(source_operation_id)) > 0 "
-        "AND environment IS NOT NULL AND properties IS NOT NULL "
+        "AND environment IS NOT NULL "
+        "AND timezone_basis IS NOT NULL AND length(btrim(timezone_basis)) > 0 "
+        "AND time_of_day_bucket IN ('morning','day','evening','night') "
+        "AND properties IS NOT NULL "
         "AND jsonb_typeof(properties) = 'object' AND recorded_at >= occurred_at)",
     )
     op.create_check_constraint(
@@ -623,9 +626,17 @@ def _reshape_events(enums: dict[str, postgresql.ENUM]) -> None:
         "(content_version IS NULL OR content_version > 0)",
     )
     op.create_check_constraint(
+        "ck_user_events_plan_content_linkage",
+        "user_events",
+        "plan_step_id IS NOT NULL OR exercise_id IS NULL",
+    )
+    op.create_check_constraint(
         "ck_user_events_deployment_identity",
         "user_events",
-        "deployment_id IS NULL OR organization_id IS NOT NULL",
+        "(deployment_id IS NULL AND deployment_enrollment_id IS NULL "
+        "AND organization_id IS NULL) OR "
+        "(deployment_id IS NOT NULL AND deployment_enrollment_id IS NOT NULL "
+        "AND organization_id IS NOT NULL)",
     )
     op.create_check_constraint(
         "ck_user_events_enrollment_identity",
@@ -755,11 +766,29 @@ def _reshape_events(enums: dict[str, postgresql.ENUM]) -> None:
             FROM ai_plan_steps s
             JOIN ai_plan_days d ON d.id = s.day_id
             JOIN ai_plans p ON p.id = d.plan_id
+            LEFT JOIN content_library c ON c.id = s.exercise_id
             WHERE s.id = NEW.plan_step_id
               AND p.id = NEW.plan_id
               AND p.user_id = NEW.user_id
+              AND s.exercise_id IS NOT DISTINCT FROM NEW.exercise_id
+              AND c.content_version IS NOT DISTINCT FROM NEW.content_version
           ) THEN
-            RAISE EXCEPTION 'event plan-step linkage does not belong to plan/user';
+            RAISE EXCEPTION 'event plan-step/content linkage does not match plan/user';
+          END IF;
+          IF NEW.deployment_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1
+            FROM deployment_enrollments e
+            JOIN deployments d ON d.id = e.deployment_id
+            WHERE e.id = NEW.deployment_enrollment_id
+              AND e.user_id = NEW.user_id
+              AND e.deployment_id = NEW.deployment_id
+              AND d.environment = NEW.environment
+              AND e.enrolled_at <= NEW.occurred_at
+              AND (e.ended_at IS NULL OR e.ended_at > NEW.occurred_at)
+              AND (d.starts_at IS NULL OR d.starts_at <= NEW.occurred_at)
+              AND (d.ends_at IS NULL OR d.ends_at > NEW.occurred_at)
+          ) THEN
+            RAISE EXCEPTION 'deployment enrollment does not cover event occurrence';
           END IF;
           RETURN NEW;
         END $$;
