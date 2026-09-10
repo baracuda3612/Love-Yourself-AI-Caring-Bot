@@ -363,6 +363,7 @@ def _assert_event_privacy_operations(target_url: str) -> None:
     from app.telemetry import (
         EventOperationConflict,
         EventValidationError,
+        _canonical_dimensions,
         write_event_operation,
     )
 
@@ -726,6 +727,15 @@ def _assert_event_privacy_operations(target_url: str) -> None:
                 (feedback_owner_id,),
             )
             user_message_id = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                INSERT INTO chat_history (user_id, role, text)
+                VALUES (%s, 'user', 'other user message')
+                RETURNING id
+                """,
+                (raw_user_id,),
+            )
+            other_user_message_id = cursor.fetchone()[0]
         connection.commit()
 
         feedback_attempts = (
@@ -766,6 +776,77 @@ def _assert_event_privacy_operations(target_url: str) -> None:
             except psycopg2.Error as exc:
                 connection.rollback()
                 assert expected_error in str(exc)
+
+        for statement, parameters in (
+            (
+                """
+                INSERT INTO feedback_events (
+                  user_id, source, source_operation_id,
+                  plan_step_id, source_message_id, value
+                ) VALUES (
+                  %s, 'exercise_efficacy', 'rehearsal:extra-exercise-target',
+                  %s, %s, 'helpful'
+                )
+                """,
+                (feedback_owner_id, completed_step_id, other_user_message_id),
+            ),
+            (
+                """
+                INSERT INTO feedback_events (
+                  user_id, source, source_operation_id,
+                  coach_message_id, source_message_id, value
+                ) VALUES (
+                  %s, 'coach_quality', 'rehearsal:extra-coach-target',
+                  %s, %s, 'helpful'
+                )
+                """,
+                (feedback_owner_id, assistant_message_id, other_user_message_id),
+            ),
+        ):
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(statement, parameters)
+                connection.commit()
+                raise AssertionError("feedback accepted a non-applicable target")
+            except psycopg2.Error as exc:
+                connection.rollback()
+                assert "ck_feedback_events_target" in str(exc)
+
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO feedback_events (
+                      user_id, source, source_operation_id,
+                      plan_step_id, value, context
+                    ) VALUES (
+                      %s, 'exercise_efficacy', 'rehearsal:unsafe-context',
+                      %s, 'helpful', '{"email": "user@example.com"}'::jsonb
+                    )
+                    """,
+                    (feedback_owner_id, completed_step_id),
+                )
+            connection.commit()
+            raise AssertionError("feedback accepted unsafe context")
+        except psycopg2.Error as exc:
+            connection.rollback()
+            assert "feedback context violates bounded privacy rules" in str(exc)
+
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO feedback_events (
+                      user_id, source, source_operation_id, plan_step_id, value
+                    ) VALUES (%s, 'exercise_efficacy', '  ', %s, 'helpful')
+                    """,
+                    (feedback_owner_id, completed_step_id),
+                )
+            connection.commit()
+            raise AssertionError("feedback accepted a blank source operation")
+        except psycopg2.Error as exc:
+            connection.rollback()
+            assert "ck_feedback_events_source_operation" in str(exc)
 
         with connection.cursor() as cursor:
             cursor.execute(
@@ -1091,7 +1172,96 @@ def _assert_event_privacy_operations(target_url: str) -> None:
             connection.rollback()
             assert "deployment identity and environment are immutable" in str(exc)
 
-        dimension_key = sha256(b"{}").hexdigest()
+        aggregate_dimensions, dimension_key = _canonical_dimensions(
+            {
+                "environment": "testnet",
+                "event_kind": "operational",
+                "event_name": "rehearsal_metric",
+            }
+        )
+        for invalid_key, invalid_dimensions in (
+            (sha256(b"{}").hexdigest(), {"email": "user@example.com"}),
+            ("0" * 64, aggregate_dimensions),
+            (sha256(b"{}").hexdigest(), {"event_name": "free text"}),
+        ):
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO aggregate_records (
+                          record_kind, metric_name, metric_schema_version,
+                          period_start, period_end, dimension_key, dimensions,
+                          numeric_value, sample_count, sealed_at,
+                          gate_eligible_count, gate_contributor_count, revision
+                        ) VALUES (
+                          'sealed_cell', 'invalid_rehearsal_metric', 1,
+                          '2026-09-01 00:00:00+00', '2026-09-02 00:00:00+00',
+                          %s, %s::jsonb, 1, 50, now(), 100, 50, 1
+                        )
+                        """,
+                        (invalid_key, json.dumps(invalid_dimensions)),
+                    )
+                connection.commit()
+                raise AssertionError("unsafe aggregate dimensions unexpectedly persisted")
+            except psycopg2.Error as exc:
+                connection.rollback()
+                assert "ck_aggregate_records_dimensions" in str(exc)
+
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO aggregate_records (
+                      record_kind, metric_name, metric_schema_version,
+                      period_start, period_end, dimension_key, dimensions,
+                      numeric_value, sample_count, sealed_at,
+                      gate_eligible_count, gate_contributor_count, revision
+                    ) VALUES (
+                      'sealed_cell', 'user@example.com', 1,
+                      '2026-09-01 00:00:00+00', '2026-09-02 00:00:00+00',
+                      %s, '{}'::jsonb, 1, 50, now(), 100, 50, 1
+                    )
+                    """,
+                    (sha256(b"{}").hexdigest(),),
+                )
+            connection.commit()
+            raise AssertionError("sealed aggregate accepted a free-text metric name")
+        except psycopg2.Error as exc:
+            connection.rollback()
+            assert "ck_aggregate_records_metric" in str(exc)
+
+        for source_operation_id, retention_until in (
+            ("  ", "2026-10-01 00:00:00+00"),
+            ("rehearsal:unbounded-retention", "2036-01-01 00:00:00+00"),
+        ):
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO aggregate_records (
+                          record_kind, metric_name, metric_schema_version,
+                          period_start, period_end, dimension_key, dimensions,
+                          numeric_value, sample_count, user_id,
+                          source_operation_id, retention_until, revision
+                        ) VALUES (
+                          'contribution', 'rehearsal_metric', 1,
+                          '2026-09-01 00:00:00+00', '2026-09-02 00:00:00+00',
+                          %s, '{}'::jsonb, 1, 1, %s, %s, %s, 1
+                        )
+                        """,
+                        (
+                            sha256(b"{}").hexdigest(),
+                            raw_user_id,
+                            source_operation_id,
+                            retention_until,
+                        ),
+                    )
+                connection.commit()
+                raise AssertionError("invalid contribution retention/identity persisted")
+            except psycopg2.Error as exc:
+                connection.rollback()
+                assert "ck_aggregate_records_kind_shape" in str(exc)
+
         with connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -1103,10 +1273,10 @@ def _assert_event_privacy_operations(target_url: str) -> None:
                 ) VALUES (
                   'sealed_cell', 'rehearsal_metric', 1,
                   '2026-09-01 00:00:00+00', '2026-09-02 00:00:00+00', %s,
-                  '{}', 1, 50, now(), 100, 50, 1
+                  %s::jsonb, 1, 50, now(), 100, 50, 1
                 ) RETURNING id
                 """,
-                (dimension_key,),
+                (dimension_key, json.dumps(aggregate_dimensions)),
             )
             sealed_id = cursor.fetchone()[0]
         connection.commit()

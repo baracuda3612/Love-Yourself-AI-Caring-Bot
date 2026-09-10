@@ -133,8 +133,14 @@ def test_aggregate_dimension_identity_is_stable_and_order_independent() -> None:
 
     with pytest.raises(EventValidationError, match="not allow-listed"):
         _canonical_dimensions({"username": "personal-identity"})
-    with pytest.raises(EventValidationError, match="coarse scalar"):
+    with pytest.raises(EventValidationError, match="catalogue identifier"):
         _canonical_dimensions({"event_name": ["task_completed"]})
+    with pytest.raises(EventValidationError, match="positive integers"):
+        _canonical_dimensions({"deployment_id": 0})
+    with pytest.raises(EventValidationError, match="approved coarse values"):
+        _canonical_dimensions({"environment": "development"})
+    with pytest.raises(EventValidationError, match="approved coarse values"):
+        _canonical_dimensions({"environment": ["testnet"]})
 
 
 def test_custom_aggregate_dimensions_cannot_replace_resolved_attribution() -> None:
@@ -188,6 +194,11 @@ def test_database_guards_immutable_facts_and_pinned_notice() -> None:
     assert "deployment enrollment does not cover event occurrence" in source
     assert "event plan-step/content linkage does not match plan/user" in source
     assert "time_of_day_bucket IN ('morning','day','evening','night')" in source
+    assert "feedback context violates bounded privacy rules" in source
+    assert "CREATE FUNCTION ly_aggregate_dimensions_are_safe" in source
+    assert "dimension_key = ly_aggregate_dimension_key(dimensions)" in source
+    assert "metric_name ~ '^[a-z0-9_]{1,96}$'" in source
+    assert "retention_until <= period_end + interval '90 days'" in source
 
 
 def test_every_live_event_write_supplies_stable_operation_and_source() -> None:

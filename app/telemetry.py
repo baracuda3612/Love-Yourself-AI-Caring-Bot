@@ -7,6 +7,7 @@ from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
 from hashlib import sha256
 import json
+import re
 from typing import Any, Mapping
 
 import pytz
@@ -58,6 +59,10 @@ _ALLOWED_AGGREGATE_DIMENSION_KEYS = {
     "event_kind",
     "event_name",
     "organization_id",
+}
+_ALLOWED_DIMENSION_ENUM_VALUES = {
+    "environment": {"testnet", "production"},
+    "event_kind": {"user_behavior", "operational", "access_control"},
 }
 
 
@@ -172,9 +177,28 @@ def _canonical_dimensions(dimensions: Mapping[str, Any]) -> tuple[dict[str, Any]
             "Aggregate dimensions are not allow-listed: "
             + ", ".join(sorted(unexpected))
         )
-    if any(isinstance(value, (Mapping, list)) for value in normalized.values()):
-        raise EventValidationError("Aggregate dimensions must use coarse scalar values")
-    _reject_sensitive_nested_properties(normalized)
+    for key, value in normalized.items():
+        if key in {"deployment_id", "organization_id"}:
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise EventValidationError(
+                    "Aggregate identity dimensions must use positive integers"
+                )
+        elif key in _ALLOWED_DIMENSION_ENUM_VALUES:
+            if (
+                not isinstance(value, str)
+                or value not in _ALLOWED_DIMENSION_ENUM_VALUES[key]
+            ):
+                raise EventValidationError(
+                    "Aggregate dimensions must use approved coarse values"
+                )
+        elif key == "event_name":
+            if (
+                not isinstance(value, str)
+                or re.fullmatch(r"[a-z0-9_]{1,96}", value) is None
+            ):
+                raise EventValidationError(
+                    "Aggregate event_name must use a bounded catalogue identifier"
+                )
     encoded = json.dumps(
         normalized,
         ensure_ascii=True,

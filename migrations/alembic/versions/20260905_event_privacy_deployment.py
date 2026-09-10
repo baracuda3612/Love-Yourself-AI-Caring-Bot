@@ -830,10 +830,16 @@ def _create_feedback_report_aggregate_tables(enums: dict[str, postgresql.ENUM]) 
         sa.Column("context", postgresql.JSONB(), server_default=sa.text("'{}'::jsonb"), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.CheckConstraint("length(btrim(value)) > 0", name="ck_feedback_events_value"),
+        sa.CheckConstraint(
+            "length(btrim(source_operation_id)) > 0",
+            name="ck_feedback_events_source_operation",
+        ),
         sa.CheckConstraint("jsonb_typeof(context) = 'object'", name="ck_feedback_events_context"),
         sa.CheckConstraint(
-            "(source = 'exercise_efficacy' AND plan_step_id IS NOT NULL AND coach_message_id IS NULL) OR "
-            "(source = 'coach_quality' AND plan_step_id IS NULL AND coach_message_id IS NOT NULL) OR "
+            "(source = 'exercise_efficacy' AND plan_step_id IS NOT NULL "
+            "AND coach_message_id IS NULL AND source_message_id IS NULL) OR "
+            "(source = 'coach_quality' AND plan_step_id IS NULL "
+            "AND coach_message_id IS NOT NULL AND source_message_id IS NULL) OR "
             "(source = 'product_feedback' AND plan_step_id IS NULL AND coach_message_id IS NULL AND source_message_id IS NOT NULL)",
             name="ck_feedback_events_target",
         ),
@@ -849,6 +855,9 @@ def _create_feedback_report_aggregate_tables(enums: dict[str, postgresql.ENUM]) 
         CREATE FUNCTION ly_validate_feedback_target_ownership()
         RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
+          IF NOT ly_event_json_is_safe(NEW.context) THEN
+            RAISE EXCEPTION 'feedback context violates bounded privacy rules';
+          END IF;
           IF NEW.source = 'exercise_efficacy' AND NOT EXISTS (
             SELECT 1
             FROM ai_plan_steps s
@@ -880,7 +889,7 @@ def _create_feedback_report_aggregate_tables(enums: dict[str, postgresql.ENUM]) 
         END $$;
         CREATE TRIGGER tr_feedback_events_validate_target_ownership
           BEFORE INSERT OR UPDATE OF user_id, source, plan_step_id,
-            coach_message_id, source_message_id
+            coach_message_id, source_message_id, context
           ON feedback_events
           FOR EACH ROW EXECUTE FUNCTION ly_validate_feedback_target_ownership();
         """
@@ -947,6 +956,68 @@ def _create_feedback_report_aggregate_tables(enums: dict[str, postgresql.ENUM]) 
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("token_digest", name="uq_report_access_grants_token_digest"),
     )
+    op.execute(
+        """
+        CREATE FUNCTION ly_aggregate_dimensions_are_safe(payload jsonb)
+        RETURNS boolean LANGUAGE plpgsql IMMUTABLE AS $$
+        DECLARE
+          item record;
+          scalar_value text;
+        BEGIN
+          IF payload IS NULL OR jsonb_typeof(payload) <> 'object' THEN
+            RETURN false;
+          END IF;
+          FOR item IN SELECT key, value FROM jsonb_each(payload)
+          LOOP
+            scalar_value := item.value #>> '{}';
+            IF item.key IN ('deployment_id', 'organization_id') THEN
+              IF jsonb_typeof(item.value) <> 'number'
+                 OR scalar_value !~ '^[1-9][0-9]*$' THEN
+                RETURN false;
+              END IF;
+            ELSIF item.key = 'environment' THEN
+              IF jsonb_typeof(item.value) <> 'string'
+                 OR scalar_value NOT IN ('testnet', 'production') THEN
+                RETURN false;
+              END IF;
+            ELSIF item.key = 'event_kind' THEN
+              IF jsonb_typeof(item.value) <> 'string'
+                 OR scalar_value NOT IN ('user_behavior', 'operational', 'access_control') THEN
+                RETURN false;
+              END IF;
+            ELSIF item.key = 'event_name' THEN
+              IF jsonb_typeof(item.value) <> 'string'
+                 OR scalar_value !~ '^[a-z0-9_]{1,96}$' THEN
+                RETURN false;
+              END IF;
+            ELSE
+              RETURN false;
+            END IF;
+          END LOOP;
+          RETURN true;
+        END $$;
+
+        CREATE FUNCTION ly_aggregate_dimension_key(payload jsonb)
+        RETURNS text LANGUAGE plpgsql IMMUTABLE AS $$
+        DECLARE
+          canonical_payload text;
+        BEGIN
+          IF payload IS NULL OR jsonb_typeof(payload) <> 'object' THEN
+            RETURN NULL;
+          END IF;
+          SELECT '{' || COALESCE(
+            string_agg(
+              to_jsonb(item.key)::text || ':' || item.value::text,
+              ',' ORDER BY item.key
+            ),
+            ''
+          ) || '}'
+          INTO canonical_payload
+          FROM jsonb_each(payload) AS item(key, value);
+          RETURN encode(sha256(convert_to(canonical_payload, 'UTF8')), 'hex');
+        END $$;
+        """
+    )
     op.create_table(
         "aggregate_records",
         sa.Column("id", sa.BigInteger(), sa.Identity(), nullable=False),
@@ -968,14 +1039,24 @@ def _create_feedback_report_aggregate_tables(enums: dict[str, postgresql.ENUM]) 
         sa.Column("revision", sa.Integer(), server_default="1", nullable=False),
         sa.Column("supersedes_record_id", sa.BigInteger(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.CheckConstraint("length(btrim(metric_name)) > 0", name="ck_aggregate_records_metric"),
+        sa.CheckConstraint(
+            "metric_name ~ '^[a-z0-9_]{1,96}$'",
+            name="ck_aggregate_records_metric",
+        ),
         sa.CheckConstraint("metric_schema_version > 0 AND revision > 0", name="ck_aggregate_records_versions"),
         sa.CheckConstraint("period_end > period_start", name="ck_aggregate_records_period"),
-        sa.CheckConstraint("length(dimension_key) = 64 AND jsonb_typeof(dimensions) = 'object'", name="ck_aggregate_records_dimensions"),
+        sa.CheckConstraint(
+            "ly_aggregate_dimensions_are_safe(dimensions) "
+            "AND dimension_key = ly_aggregate_dimension_key(dimensions)",
+            name="ck_aggregate_records_dimensions",
+        ),
         sa.CheckConstraint("sample_count >= 0", name="ck_aggregate_records_sample_count"),
         sa.CheckConstraint(
             "(record_kind = 'contribution' AND user_id IS NOT NULL AND source_operation_id IS NOT NULL "
+            "AND length(btrim(source_operation_id)) > 0 "
             "AND retention_until IS NOT NULL AND sealed_at IS NULL AND gate_eligible_count IS NULL "
+            "AND retention_until > period_start "
+            "AND retention_until <= period_end + interval '90 days' "
             "AND gate_contributor_count IS NULL AND supersedes_record_id IS NULL AND revision = 1) OR "
             "(record_kind = 'sealed_cell' AND user_id IS NULL AND source_operation_id IS NULL "
             "AND retention_until IS NULL AND sealed_at IS NOT NULL AND gate_eligible_count IS NOT NULL "
