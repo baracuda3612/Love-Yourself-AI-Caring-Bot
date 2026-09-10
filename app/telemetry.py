@@ -48,6 +48,9 @@ _BANNED_PROPERTY_KEYS = {
 }
 _MAX_SOURCE_OPERATION_LENGTH = 160
 _MAX_PROPERTY_STRING_LENGTH = 160
+_MAX_PROPERTY_CONTAINER_ITEMS = 20
+_MAX_PROPERTY_KEY_LENGTH = 64
+_MAX_PROPERTY_NESTING_DEPTH = 5
 _CONTRIBUTION_RETENTION = timedelta(days=90)
 _ALLOWED_AGGREGATE_DIMENSION_KEYS = {
     "deployment_id",
@@ -112,20 +115,29 @@ def _value_matches_schema(value: Any, schema_type: str) -> bool:
     if base_type == "string":
         return isinstance(value, str) and len(value) <= _MAX_PROPERTY_STRING_LENGTH
     if base_type == "array":
-        return isinstance(value, list) and len(value) <= 20
+        return isinstance(value, list) and len(value) <= _MAX_PROPERTY_CONTAINER_ITEMS
     return False
 
 
-def _reject_sensitive_nested_properties(value: Any) -> None:
+def _reject_sensitive_nested_properties(value: Any, *, depth: int = 0) -> None:
+    if depth > _MAX_PROPERTY_NESTING_DEPTH:
+        raise EventValidationError("Event property nesting exceeds the bounded envelope")
     if isinstance(value, Mapping):
+        if len(value) > _MAX_PROPERTY_CONTAINER_ITEMS:
+            raise EventValidationError("Event property objects are bounded to 20 items")
         for key, nested in value.items():
-            if str(key).lower() in _BANNED_PROPERTY_KEYS:
+            key_text = str(key)
+            if len(key_text) > _MAX_PROPERTY_KEY_LENGTH:
+                raise EventValidationError("Event property keys are bounded to 64 characters")
+            if key_text.lower() in _BANNED_PROPERTY_KEYS:
                 raise EventValidationError(f"Property {key!r} is not allowed in events")
-            _reject_sensitive_nested_properties(nested)
+            _reject_sensitive_nested_properties(nested, depth=depth + 1)
         return
     if isinstance(value, list):
+        if len(value) > _MAX_PROPERTY_CONTAINER_ITEMS:
+            raise EventValidationError("Event property arrays are bounded to 20 items")
         for nested in value:
-            _reject_sensitive_nested_properties(nested)
+            _reject_sensitive_nested_properties(nested, depth=depth + 1)
         return
     if isinstance(value, str) and len(value) > _MAX_PROPERTY_STRING_LENGTH:
         raise EventValidationError("Event property strings are bounded to 160 characters")
@@ -148,7 +160,7 @@ def _validate_properties(
             raise EventValidationError(f"Property {key!r} is not allowed in events")
         if not _value_matches_schema(value, str(allowed_schema[key])):
             raise EventValidationError(f"Property {key!r} has the wrong catalogue type")
-        _reject_sensitive_nested_properties(value)
+    _reject_sensitive_nested_properties(normalized)
     return normalized
 
 
@@ -353,10 +365,6 @@ def write_event_operation(
     catalogue = db.get(EventCatalog, (event_name, 1))
     if catalogue is None:
         raise EventValidationError("event is not present in the allow-listed catalogue")
-    if catalogue.activated_at > occurrence or (
-        catalogue.retired_at is not None and catalogue.retired_at <= occurrence
-    ):
-        raise EventValidationError("event catalogue entry is not active at occurrence time")
     event_properties = _validate_properties(
         properties or {}, catalogue.allowed_property_schema
     )
@@ -421,6 +429,11 @@ def write_event_operation(
             dimension_key=dimension_key,
             aggregate_value=aggregate_value,
         )
+
+    if catalogue.activated_at > occurrence or (
+        catalogue.retired_at is not None and catalogue.retired_at <= occurrence
+    ):
+        raise EventValidationError("event catalogue entry is not active at occurrence time")
 
     recorded_at = _utc_now()
     # The savepoint keeps this pair atomic even when a caller catches the

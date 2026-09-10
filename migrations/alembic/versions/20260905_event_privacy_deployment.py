@@ -643,6 +643,48 @@ def _reshape_events(enums: dict[str, postgresql.ENUM]) -> None:
     op.create_index("ix_user_events_deployment_time", "user_events", ["deployment_id", "occurred_at", "event_id"])
     op.execute(
         """
+        CREATE FUNCTION ly_event_json_is_safe(payload jsonb, nesting_depth integer DEFAULT 0)
+        RETURNS boolean LANGUAGE plpgsql IMMUTABLE AS $$
+        DECLARE
+          item record;
+          value_kind text;
+          container_size integer;
+        BEGIN
+          IF nesting_depth > 5 THEN
+            RETURN false;
+          END IF;
+          value_kind := jsonb_typeof(payload);
+          IF value_kind = 'string' THEN
+            RETURN length(payload #>> '{}') <= 160;
+          ELSIF value_kind = 'array' THEN
+            IF jsonb_array_length(payload) > 20 THEN
+              RETURN false;
+            END IF;
+            FOR item IN SELECT value FROM jsonb_array_elements(payload) AS nested(value)
+            LOOP
+              IF NOT ly_event_json_is_safe(item.value, nesting_depth + 1) THEN
+                RETURN false;
+              END IF;
+            END LOOP;
+            RETURN true;
+          ELSIF value_kind = 'object' THEN
+            SELECT count(*) INTO container_size FROM jsonb_object_keys(payload);
+            IF container_size > 20 THEN
+              RETURN false;
+            END IF;
+            FOR item IN SELECT key, value FROM jsonb_each(payload)
+            LOOP
+              IF length(item.key) > 64 OR lower(item.key) = ANY (ARRAY[
+                'description', 'email', 'error', 'exception', 'message', 'phone',
+                'prompt', 'response', 'text', 'tg_id', 'title', 'user_id', 'username'
+              ]) OR NOT ly_event_json_is_safe(item.value, nesting_depth + 1) THEN
+                RETURN false;
+              END IF;
+            END LOOP;
+            RETURN true;
+          END IF;
+          RETURN value_kind IN ('number', 'boolean', 'null');
+        END $$;
         CREATE FUNCTION ly_validate_user_event_catalogue()
         RETURNS trigger LANGUAGE plpgsql AS $$
         DECLARE
@@ -670,6 +712,9 @@ def _reshape_events(enums: dict[str, postgresql.ENUM]) -> None:
             WHERE NOT property_schema ? supplied.key
           ) THEN
             RAISE EXCEPTION 'event property is not allow-listed';
+          END IF;
+          IF NOT ly_event_json_is_safe(NEW.properties) THEN
+            RAISE EXCEPTION 'event properties violate nested privacy bounds';
           END IF;
           FOR item IN SELECT key, value FROM jsonb_each(NEW.properties)
           LOOP

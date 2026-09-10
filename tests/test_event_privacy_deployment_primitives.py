@@ -92,6 +92,32 @@ def test_properties_are_allow_listed_bounded_and_free_text_safe() -> None:
             {"message_length": "twelve"}, {"message_length": "integer"}
         )
 
+    with pytest.raises(EventValidationError, match="not allowed"):
+        _validate_properties(
+            {"changes": [{"email": "user@example.com"}]},
+            {"changes": "array"},
+        )
+    with pytest.raises(EventValidationError, match="arrays are bounded"):
+        _validate_properties(
+            {"changes": [[index for index in range(21)]]},
+            {"changes": "array"},
+        )
+    with pytest.raises(EventValidationError, match="objects are bounded"):
+        _validate_properties(
+            {"changes": [{f"field_{index}": index for index in range(21)}]},
+            {"changes": "array"},
+        )
+    with pytest.raises(EventValidationError, match="strings are bounded"):
+        _validate_properties(
+            {"changes": [{"note": "x" * 161}]},
+            {"changes": "array"},
+        )
+    with pytest.raises(EventValidationError, match="nesting exceeds"):
+        _validate_properties(
+            {"changes": [[[[[["bounded"]]]]]]},
+            {"changes": "array"},
+        )
+
 
 def test_aggregate_dimension_identity_is_stable_and_order_independent() -> None:
     first, first_key = _canonical_dimensions(
@@ -157,6 +183,8 @@ def test_database_guards_immutable_facts_and_pinned_notice() -> None:
     assert "exercise feedback target is not a completed step owned by user" in source
     assert "coach feedback target is not an assistant message owned by user" in source
     assert "product feedback source is not a user message owned by user" in source
+    assert "CREATE FUNCTION ly_event_json_is_safe" in source
+    assert "event properties violate nested privacy bounds" in source
 
 
 def test_every_live_event_write_supplies_stable_operation_and_source() -> None:

@@ -351,7 +351,15 @@ def _assert_event_privacy_operations(target_url: str) -> None:
     os.environ.setdefault("ENVIRONMENT", "dev")
     os.environ["DATABASE_URL"] = target_url.replace("postgresql://", "postgresql+psycopg2://", 1)
 
-    from app.db import AIPlan, AIPlanDay, AIPlanStep, AggregateRecord, User, UserEvent
+    from app.db import (
+        AIPlan,
+        AIPlanDay,
+        AIPlanStep,
+        AggregateRecord,
+        EventCatalog,
+        User,
+        UserEvent,
+    )
     from app.telemetry import (
         EventOperationConflict,
         EventValidationError,
@@ -434,6 +442,7 @@ def _assert_event_privacy_operations(target_url: str) -> None:
             assert linked.event.context is None
             feedback_owner_id = user.id
             completed_step_id = step.id
+            owned_plan_id = step.day.plan.id
 
         barrier = Barrier(2)
 
@@ -510,6 +519,51 @@ def _assert_event_privacy_operations(target_url: str) -> None:
                 )
             ) == 1
 
+        with Session.begin() as db:
+            user = db.execute(select(User).where(User.tg_id == 9000099)).scalar_one()
+            original = write_event_operation(
+                db,
+                user_id=user.id,
+                event_name="parameter_set",
+                event_source="migration_rehearsal",
+                source_operation_id="migration-rehearsal:retired-retry:1",
+                properties={"parameter": "timezone", "new_value": "UTC"},
+            )
+            original_event_id = original.event.event_id
+            original_contribution_id = original.contribution.id
+
+        with Session.begin() as db:
+            catalogue = db.get(EventCatalog, ("parameter_set", 1))
+            assert catalogue is not None
+            catalogue.retired_at = datetime.now(timezone.utc)
+
+        with Session.begin() as db:
+            user = db.execute(select(User).where(User.tg_id == 9000099)).scalar_one()
+            retired_retry = write_event_operation(
+                db,
+                user_id=user.id,
+                event_name="parameter_set",
+                event_source="migration_rehearsal",
+                source_operation_id="migration-rehearsal:retired-retry:1",
+                properties={"parameter": "timezone", "new_value": "UTC"},
+            )
+            assert retired_retry.duplicate is True
+            assert retired_retry.event.event_id == original_event_id
+            assert retired_retry.contribution.id == original_contribution_id
+            try:
+                write_event_operation(
+                    db,
+                    user_id=user.id,
+                    event_name="parameter_set",
+                    event_source="migration_rehearsal",
+                    source_operation_id="migration-rehearsal:retired-new:1",
+                    properties={"parameter": "timezone", "new_value": "UTC"},
+                )
+            except EventValidationError:
+                pass
+            else:
+                raise AssertionError("new operation unexpectedly used retired catalogue entry")
+
         connection = psycopg2.connect(target_url)
         with connection.cursor() as cursor:
             cursor.execute("SELECT id FROM users WHERE tg_id = 9000099")
@@ -555,6 +609,58 @@ def _assert_event_privacy_operations(target_url: str) -> None:
                 assert "event property is not allow-listed" in str(exc) or (
                     "event catalogue requires plan-step linkage" in str(exc)
                 )
+
+        for source_operation_id, properties in (
+            (
+                "migration-rehearsal:raw-nested-sensitive:1",
+                '[{"email": "user@example.com"}]',
+            ),
+            (
+                "migration-rehearsal:raw-nested-container:1",
+                "[" + json.dumps(list(range(21))) + "]",
+            ),
+            (
+                "migration-rehearsal:raw-nested-object:1",
+                json.dumps([{f"field_{index}": index for index in range(21)}]),
+            ),
+            (
+                "migration-rehearsal:raw-nested-string:1",
+                json.dumps([{"note": "x" * 161}]),
+            ),
+            (
+                "migration-rehearsal:raw-nested-depth:1",
+                '[[[[[["too-deep"]]]]]]',
+            ),
+        ):
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO user_events (
+                          event_id, user_id, event_name, event_schema_version,
+                          occurred_at, recorded_at, event_source,
+                          source_operation_id, environment, time_of_day_bucket,
+                          plan_id, properties
+                        ) VALUES (
+                          %s, %s, 'schedule_adjustment', 1,
+                          now(), now(), 'raw_rehearsal', %s,
+                          'testnet', 'unknown', %s,
+                          jsonb_build_object('changes', %s::jsonb)
+                        )
+                        """,
+                        (
+                            str(uuid4()),
+                            feedback_owner_id,
+                            source_operation_id,
+                            owned_plan_id,
+                            properties,
+                        ),
+                    )
+                connection.commit()
+                raise AssertionError("unsafe nested event properties unexpectedly persisted")
+            except psycopg2.Error as exc:
+                connection.rollback()
+                assert "event properties violate nested privacy bounds" in str(exc)
 
         with connection.cursor() as cursor:
             cursor.execute(
