@@ -675,9 +675,9 @@ WP-03.5 after the target plan builder and delivery states exist.
 
 ### WP-02.1 — Remove dead lifecycle entrances and the schedule-adjustment tunnel
 
-**Status:** `IMPLEMENTED` — bounded deletion, replacement-path regression,
-import/reachability proof, and full-suite baseline comparison passed on
-`wp/02.1-remove-dead-lifecycle-entrances`; GitHub review is pending.
+**Status:** `IN REVIEW` — bounded deletion, replacement-path regression,
+import/reachability proof, and full-suite baseline comparison passed; PR #256
+targets `implementation/pre-mvp`.
 
 Remove as complete subsystems, not isolated symbols:
 
@@ -1591,8 +1591,8 @@ block exit gate passes.
 | Field | Value |
 |---|---|
 | Current package | `WP-02.1 — Remove dead lifecycle entrances and the schedule-adjustment tunnel` |
-| Status | `IMPLEMENTED` |
-| Next action | Open the WP-02.1 PR into `implementation/pre-mvp`, then process every review thread; founder remains the sole merge authority |
+| Status | `IN REVIEW` |
+| Next action | Process every review thread on PR #256 with written evidence; founder remains the sole merge authority |
 | Current blockers | None for disposable founder-only refactoring; paid backup/restore remains deferred to Gate G1 before durable data or market launch |
 
 ### Private founder log
