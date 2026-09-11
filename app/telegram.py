@@ -1,33 +1,21 @@
 # app/telegram.py
 # Спрощена версія для роботи з новою БД та агентною архітектурою
 
-import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import Command
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.config import settings
-from app.db import AIPlan, AIPlanDay, AIPlanStep, ChatHistory, SessionLocal, User, UserEvent, UserProfile
-from app.orchestrator import (
-    PLAN_GENERATION_WAIT_MESSAGE,
-    SLOT_RANGES,
-    _build_time_select_keyboard,
-    _build_task_select_keyboard,
-    build_plan_draft_preview,
-    handle_incoming_message,
-    session_memory,
-)
+from app.db import AIPlanStep, ChatHistory, SessionLocal, User, UserEvent, UserProfile
+from app.orchestrator import handle_incoming_message
 from app.plan_guards import validate_step_action
 from app.ux.catalog import get_trigger_message
 from app.ux.persona import get_persona
 from app.ux.task_notification import get_step_rationale
-from app.redis_client import create_fsm_storage, create_redis_client
 from app.telemetry import get_success_streak, log_user_event
 from app.lifecycle import (
     CurrentMode,
@@ -41,42 +29,10 @@ bot = Bot(
     token=settings.BOT_TOKEN,
     default=DefaultBotProperties(parse_mode="HTML"),
 )
-redis_client = create_redis_client()
-storage = create_fsm_storage(redis_client) or MemoryStorage()
-dp = Dispatcher(storage=storage)
+dp = Dispatcher(disable_fsm=True)
 router = Router()
 dp.include_router(router)
 logger = logging.getLogger(__name__)
-
-_PLAN_ACTIONS = [
-    ("✅ Confirm plan", "plan_confirm", "підтвердь план"),
-    ("🔁 Regenerate", "plan_regenerate", "перегенеруй план"),
-    ("✏️ Change parameters", "plan_edit", "зміни параметри"),
-    ("🔄 Restart from scratch", "plan_restart", "почни спочатку"),
-]
-
-_SCHEDULE_ADJ_TIMEOUT_CALLBACKS = [
-    "sched_adj_timeout_reset",
-    "sched_adj_timeout_continue",
-]
-
-
-def _build_plan_action_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=label, callback_data=callback)]
-            for label, callback, _ in _PLAN_ACTIONS
-        ]
-    )
-
-
-
-
-def _plan_action_text(callback_data: str) -> str:
-    for _, callback, text in _PLAN_ACTIONS:
-        if callback == callback_data:
-            return text
-    return callback_data
 
 
 def _ensure_user(db, tg_user) -> tuple[User, bool]:
@@ -186,159 +142,11 @@ async def on_text(message: Message):
         )
         db.commit()
 
-    response = await handle_incoming_message(user.id, text, defer_plan_draft=True)
+    response = await handle_incoming_message(user.id, text)
     if not isinstance(response, dict) or "reply_text" not in response:
         raise RuntimeError("handle_incoming_message response must include reply_text")
     await _send_agent_response(message, user.id, response)
 
-
-@router.callback_query(F.data.in_([action[1] for action in _PLAN_ACTIONS]))
-async def on_plan_action(callback_query: CallbackQuery):
-    callback_text = _plan_action_text(callback_query.data or "")
-    with SessionLocal() as db:
-        user, _ = _ensure_user(db, callback_query.from_user)
-        db.add(ChatHistory(user_id=user.id, role="user", text=callback_text))
-        db.commit()
-    await callback_query.answer()
-    response = await handle_incoming_message(user.id, callback_text, defer_plan_draft=True)
-    if not isinstance(response, dict) or "reply_text" not in response:
-        raise RuntimeError("handle_incoming_message response must include reply_text")
-    if callback_query.message:
-        await _send_agent_response(callback_query.message, user.id, response)
-
-
-@router.callback_query(F.data.startswith("sched_task:"))
-async def on_sched_adj_task(callback_query: CallbackQuery):
-    value = (callback_query.data or "").removeprefix("sched_task:")
-    with SessionLocal() as db:
-        user, _ = _ensure_user(db, callback_query.from_user)
-
-    await callback_query.answer()
-    if callback_query.message:
-        await callback_query.message.edit_reply_markup(reply_markup=None)
-
-    if value == "CANCEL":
-        response = await handle_incoming_message(user.id, "скасувати зміну часу")
-        if callback_query.message:
-            await _send_agent_response(callback_query.message, user.id, response)
-        return
-
-    if value == "MULTI":
-        ctx = await session_memory.get_schedule_adjustment_context(user.id) or {}
-        all_slots = list(ctx.get("active_tasks", {}).keys())
-        await session_memory.update_schedule_adjustment_context(
-            user.id,
-            {
-                "slots_queue": all_slots,
-                "current_slot": all_slots[0] if all_slots else None,
-                "step": "time_select",
-            },
-        )
-        if callback_query.message and all_slots:
-            ctx = await session_memory.get_schedule_adjustment_context(user.id) or {}
-            active_tasks = ctx.get("active_tasks", {})
-            first_slot = all_slots[0]
-            current_time = active_tasks.get(first_slot, "")
-            keyboard = _build_time_select_keyboard(first_slot, current_time, in_multi=True)
-            await callback_query.message.answer(
-                f"Починаємо. Завдання зараз о {current_time} — вибери новий час:",
-                reply_markup=keyboard,
-            )
-        return
-
-    slot = value
-    ctx = await session_memory.get_schedule_adjustment_context(user.id) or {}
-    active_tasks = ctx.get("active_tasks", {})
-    current_time = active_tasks.get(slot, "")
-    await session_memory.update_schedule_adjustment_context(user.id, {"current_slot": slot, "step": "time_select", "slots_queue": []})
-
-    if callback_query.message:
-        keyboard = _build_time_select_keyboard(slot, current_time, in_multi=False)
-        await callback_query.message.answer(
-            f"Завдання зараз о {current_time} — вибери новий час:",
-            reply_markup=keyboard,
-        )
-
-
-@router.callback_query(F.data.startswith("sched_time:"))
-async def on_sched_adj_time(callback_query: CallbackQuery):
-    cb_data = (callback_query.data or "").removeprefix("sched_time:")
-    parts = cb_data.split(":", 1)
-    if len(parts) != 2:
-        return
-    slot, value = parts
-
-    with SessionLocal() as db:
-        user, _ = _ensure_user(db, callback_query.from_user)
-
-    await callback_query.answer()
-    if callback_query.message:
-        await callback_query.message.edit_reply_markup(reply_markup=None)
-
-    if value == "CANCEL":
-        response = await handle_incoming_message(user.id, "скасувати зміну часу")
-        if callback_query.message:
-            await _send_agent_response(callback_query.message, user.id, response)
-        return
-
-    if value == "CUSTOM":
-        await session_memory.update_schedule_adjustment_context(user.id, {"current_slot": slot, "step": "time_select"})
-        if callback_query.message:
-            slot_start = SLOT_RANGES[slot][0].strftime("%H:%M")
-            slot_end = SLOT_RANGES[slot][1].strftime("%H:%M")
-            await callback_query.message.answer(f"Введи час ({slot_start}–{slot_end}):")
-        return
-
-    if value == "ONLY_THIS":
-        await session_memory.update_schedule_adjustment_context(
-            user.id,
-            {
-                "current_slot": slot,
-                "slots_queue": [],
-                "step": "time_select",
-            },
-        )
-        ctx = await session_memory.get_schedule_adjustment_context(user.id) or {}
-        current_time = ctx.get("active_tasks", {}).get(slot, "")
-        keyboard = _build_time_select_keyboard(slot, current_time, in_multi=False)
-        if callback_query.message:
-            await callback_query.message.answer(
-                "Добре, змінюємо тільки це завдання. Вибери час:",
-                reply_markup=keyboard,
-            )
-        return
-
-    await session_memory.update_schedule_adjustment_context(user.id, {"current_slot": slot})
-    response = await handle_incoming_message(user.id, f"обираю {value}")
-    if callback_query.message:
-        await _send_agent_response(callback_query.message, user.id, response)
-
-
-@router.callback_query(F.data.in_(_SCHEDULE_ADJ_TIMEOUT_CALLBACKS))
-async def on_sched_adj_timeout(callback_query: CallbackQuery):
-    cb_data = callback_query.data or ""
-    with SessionLocal() as db:
-        user, _ = _ensure_user(db, callback_query.from_user)
-
-        if cb_data == "sched_adj_timeout_reset":
-            ctx = await session_memory.get_schedule_adjustment_context(user.id) or {}
-            plan_was_paused = bool(ctx.get("plan_was_paused", False))
-            # Legacy tunnel storage is inert. Plan status already preserves
-            # active/paused lifecycle truth.
-            await session_memory.clear_schedule_adjustment_context(user.id)
-            await session_memory.clear_schedule_adjustment_last_active(user.id)
-            await session_memory.clear_schedule_adjustment_soft_prompted(user.id)
-            await callback_query.answer()
-            if callback_query.message:
-                await callback_query.message.edit_reply_markup(reply_markup=None)
-            await bot.send_message(user.tg_id, "Повертаємось до плану. Час завдань залишається без змін. 👍")
-
-        elif cb_data == "sched_adj_timeout_continue":
-            await session_memory.set_schedule_adjustment_last_active(user.id)
-            await session_memory.clear_schedule_adjustment_soft_prompted(user.id)
-            await callback_query.answer()
-            if callback_query.message:
-                await callback_query.message.edit_reply_markup(reply_markup=None)
 
 @router.callback_query(F.data.startswith("task_complete:"))
 async def handle_task_completed(callback_query: CallbackQuery):
@@ -580,54 +388,12 @@ async def handle_adapt_suggest(callback_query: CallbackQuery):
 
 
 async def _send_agent_response(message: Message, user_id: int, response: dict) -> None:
-    if response.get("defer_plan_draft"):
-        wait_text = _sanitize_message_text(PLAN_GENERATION_WAIT_MESSAGE)
-        await message.answer(wait_text)
-        with SessionLocal() as db:
-            db.add(ChatHistory(user_id=user_id, role="assistant", text=wait_text))
-            db.commit()
-        await session_memory.append_message(user_id, "assistant", wait_text)
-
-        await asyncio.sleep(5.5)
-
-        preview_text = await build_plan_draft_preview(
-            user_id,
-            response.get("plan_draft_parameters") or {},
-        )
-        preview_text = _sanitize_message_text(preview_text)
-        if response.get("show_plan_actions"):
-            reply_markup = _build_plan_action_keyboard()
-        else:
-            reply_markup = None
-        await message.answer(preview_text, reply_markup=reply_markup)
-        with SessionLocal() as db:
-            db.add(ChatHistory(user_id=user_id, role="assistant", text=preview_text))
-            db.commit()
-        await session_memory.append_message(user_id, "assistant", preview_text)
-        return
-
     reply_text = _sanitize_message_text(response.get("reply_text"))
-    keyboard = response.get("keyboard")
-    if keyboard is not None:
-        reply_markup = keyboard
-    elif response.get("show_plan_actions"):
-        reply_markup = _build_plan_action_keyboard()
-    else:
-        reply_markup = None
-    await message.answer(reply_text, reply_markup=reply_markup)
+    await message.answer(reply_text)
 
     with SessionLocal() as db:
         db.add(ChatHistory(user_id=user_id, role="assistant", text=reply_text))
         db.commit()
-
-    followup_messages = response.get("followup_messages") or []
-    for followup in followup_messages:
-        followup_text = _sanitize_message_text(followup)
-        await message.answer(followup_text)
-        await session_memory.append_message(user_id, "assistant", followup_text)
-        with SessionLocal() as db:
-            db.add(ChatHistory(user_id=user_id, role="assistant", text=followup_text))
-            db.commit()
 
 
 __all__ = ["bot", "dp", "router"]

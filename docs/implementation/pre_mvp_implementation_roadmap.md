@@ -667,13 +667,17 @@ founder merged PR #255 as
 
 ## 8. Block 2 — Target lifecycle and runtime actions
 
-**Status:** `NOT STARTED`  
+**Status:** `IN PROGRESS`
 **Depends on:** B1 lifecycle authority  
 **Objective:** make all plan operations use one atomic lifecycle before adding
 new user-facing channels. Completion/continuation orchestration is finalized in
 WP-03.5 after the target plan builder and delivery states exist.
 
 ### WP-02.1 — Remove dead lifecycle entrances and the schedule-adjustment tunnel
+
+**Status:** `IMPLEMENTED` — bounded deletion, replacement-path regression,
+import/reachability proof, and full-suite baseline comparison passed on
+`wp/02.1-remove-dead-lifecycle-entrances`; GitHub review is pending.
 
 Remove as complete subsystems, not isolated symbols:
 
@@ -1587,8 +1591,8 @@ block exit gate passes.
 | Field | Value |
 |---|---|
 | Current package | `WP-02.1 — Remove dead lifecycle entrances and the schedule-adjustment tunnel` |
-| Status | `IN PROGRESS` |
-| Next action | Remove the bounded dead subsystems, retain import/reachability evidence, and open one PR into `implementation/pre-mvp` |
+| Status | `IMPLEMENTED` |
+| Next action | Open the WP-02.1 PR into `implementation/pre-mvp`, then process every review thread; founder remains the sole merge authority |
 | Current blockers | None for disposable founder-only refactoring; paid backup/restore remains deferred to Gate G1 before durable data or market launch |
 
 ### Private founder log

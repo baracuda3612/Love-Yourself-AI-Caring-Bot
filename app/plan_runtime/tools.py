@@ -82,57 +82,6 @@ def _existing_activation_retry(db, user_id: int, source_operation_id: str):
 # ─── Public tools ─────────────────────────────────────────────────────────────
 
 
-def create_first_plan(user_id: int, *, source_operation_id: str) -> dict:
-    """Create the first (SHORT) plan for a freshly onboarded user.
-
-    Requires completed onboarding, no plan history, and a DAY slot.
-    """
-    from app.db import AIPlan, SessionLocal  # lazy
-    from app.lifecycle import CurrentMode, derive_current_mode  # lazy
-    from app.plan_drafts.service import create_plan  # lazy
-
-    with SessionLocal() as db:
-        user, profile = _load_user_and_profile(db, user_id, lock=True)
-
-        retried_plan = _existing_activation_retry(db, user_id, source_operation_id)
-        if retried_plan is not None:
-            return {"status": "ok", "plan_type": "SHORT", "duplicate": True}
-
-        mode = derive_current_mode(db, user_id)
-        if mode is not CurrentMode.NO_ACTIVE_PLAN:
-            raise ValueError(f"create_first_plan requires completed onboarding, got {mode.value}")
-        if db.query(AIPlan.id).filter(AIPlan.user_id == user_id).first() is not None:
-            raise ValueError("create_first_plan requires empty plan history")
-
-        time_slots: dict = (profile.daily_time_slots or {}) if profile else {}
-        day_time: Optional[str] = time_slots.get("DAY")
-        if not day_time:
-            raise ValueError("day_time required for plan creation")
-
-        activation = create_plan(
-            db,
-            user_id=user_id,
-            plan_type="SHORT",
-            day_time=day_time,
-            evening_time=None,
-            source_operation_id=source_operation_id,
-        )
-
-        db.commit()
-
-    plan = activation.plan
-    if not activation.duplicate:
-        from app.plan_finalization import activate_plan_side_effects  # lazy
-        activate_plan_side_effects(plan.id, user_id)
-
-    logger.info("[plan_runtime] create_first_plan: user=%s plan_id=%s", user_id, plan.id)
-    return {
-        "status": "ok",
-        "plan_type": "SHORT",
-        "duplicate": activation.duplicate,
-    }
-
-
 def create_followup_plan(
     user_id: int,
     plan_type: str,

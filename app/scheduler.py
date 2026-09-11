@@ -49,10 +49,6 @@ _event_loop: Optional[asyncio.AbstractEventLoop] = None
 # Protects against brief server downtime without delivering stale tasks (e.g. at 23:00).
 _DELIVERY_LATE_GRACE = timedelta(hours=2)
 
-SCHEDULE_ADJ_SOFT_TIMEOUT_MIN = 15
-SCHEDULE_ADJ_HARD_TIMEOUT_MIN = 30
-
-
 def _to_utc(dt: datetime) -> datetime:
     """Safely convert datetime to UTC-aware, handling both naive and aware inputs."""
     if dt.tzinfo is None:
@@ -71,19 +67,19 @@ def init_scheduler():
         scheduler.start()
     # P1 frozen: keep send_daily_pulse() available, but disable its cron trigger.
     # scheduler.add_job("app.scheduler:send_daily_pulse", "cron", hour=9, minute=0, id="daily_pulse", replace_existing=True, max_instances=1)
-    # Remove any persisted daily_pulse job from the job store (existing deployments).
-    try:
-        scheduler.remove_job("daily_pulse")
-    except Exception:
-        pass
+    # Remove persisted jobs for retired runtime entrances. APScheduler owns its
+    # job table, so cleanup stays at the scheduler boundary rather than Alembic.
+    for retired_job_id in ("daily_pulse", "stuck_schedule_adj_check"):
+        try:
+            scheduler.remove_job(retired_job_id)
+        except Exception:
+            pass
     # Run every hour at :05 — 1 h max lag for any timezone, not just UTC+0.
     scheduler.add_job("app.scheduler:expire_overdue_steps", "cron", minute=5, id="expire_steps", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_silent_users", "cron", hour=12, minute=0, id="silent_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_ignored_tasks", "cron", hour=8, minute=0, id="ignored_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_plan_completions", "cron", hour=10, minute=30, id="plan_completion_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:send_plan_pulse_snapshots", "cron", hour=10, minute=0, id="pulse_snapshot_check", replace_existing=True, max_instances=1)
-    # The rejected SCHEDULE_ADJUSTMENT tunnel is compatibility-only and no
-    # longer scheduled. WP-02.1 removes its remaining inert code and Redis keys.
 
 
 def shutdown_scheduler():
@@ -806,45 +802,6 @@ def _maybe_schedule_plan_completion(user_id: int, plan_id: int) -> None:
         now_local.strftime("%H:%M"),
     )
 
-
-async def _send_schedule_adjustment_timeout_prompt(user: User, bot) -> None:
-    from app.session_memory import session_memory
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Повернутись", callback_data="sched_adj_timeout_reset"),
-        InlineKeyboardButton(text="🔄 Продовжую", callback_data="sched_adj_timeout_continue"),
-    ]])
-    try:
-        await bot.send_message(
-            user.tg_id,
-            "Налаштування часу зупинилось. Повернутись до плану без змін?",
-            reply_markup=keyboard,
-        )
-        await session_memory.set_schedule_adjustment_soft_prompted(user.id)
-    except Exception:
-        logger.warning("[SCHED_ADJ_TIMEOUT] Failed user=%s", user.id)
-
-
-async def _force_reset_schedule_adjustment(user: User, db) -> None:
-    from app.session_memory import session_memory
-
-    ctx = await session_memory.get_schedule_adjustment_context(user.id) or {}
-    plan_was_paused = bool(ctx.get("plan_was_paused", False))
-
-    # Known trade-off for timeout edge cases:
-    # if context is missing/expired at hard-timeout time, we fall back to ACTIVE.
-    # This avoids getting the user stuck in tunnel; preserving paused state requires context.
-    # Legacy tunnel storage is inert. The authoritative plan status already
-    # preserves whether delivery is paused.
-    await session_memory.clear_schedule_adjustment_context(user.id)
-    await session_memory.clear_schedule_adjustment_last_active(user.id)
-    await session_memory.clear_schedule_adjustment_soft_prompted(user.id)
-    logger.info("[SCHED_ADJ_TIMEOUT] Cleared inert compatibility context user=%s", user.id)
-
-
-def check_stuck_schedule_adjustments() -> None:
-    """Retained import boundary; the stored-FSM scanner is disabled by WP-01.3."""
-    logger.debug("[LIFECYCLE_COMPAT] schedule-adjustment scanner disabled")
 
 def check_plan_completions() -> None:
     """

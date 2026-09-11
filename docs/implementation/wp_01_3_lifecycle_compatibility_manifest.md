@@ -13,7 +13,7 @@ database restore/forward-fix decision, not an old-binary restart.
 
 | Legacy surface | WP-01.3 behavior | Remaining consumer | Removal owner |
 |---|---|---|---|
-| `users.current_state` | Read once to seed `onboarding_progress`, then cleared; the default is removed. The new runtime neither derives from nor writes it. | Inert ORM mapping only; the retained `SCHEDULE_ADJUSTMENT` scanner entrypoint is a no-op. | WP-02.1 removes the tunnel; WP-08.1 drops the column after deployed-use evidence. |
+| `users.current_state` | Read once to seed `onboarding_progress`, then cleared; the default is removed. The new runtime neither derives from nor writes it. | Inert ORM mapping only; WP-02.1 removed the legacy FSM module, scanner, guards, and callbacks. | WP-08.1 drops the column after deployed-use evidence. |
 | `user_profiles.is_paused` | Cleared to nullable inert storage; pause/resume reads and writes only `ai_plans.status`. | Inert ORM mapping only. | WP-08.1 after WP-02.1. |
 | `users.plan_end_date` | Cleared; completion requires all authoritative steps to be terminal. | Inert ORM mapping only. | WP-08.1. |
 | `ai_plans.end_date` | Cleared. `plan_completion_at()` calculates the last terminal step timestamp. | Inert ORM mapping only. | WP-08.1 after report readers use calculated completion. |
@@ -22,8 +22,9 @@ database restore/forward-fix decision, not an old-binary restart.
 | `ai_plan_days.is_completed`, `completed_at` | Cleared after backfill; day terminality is calculated from child `step_status`. | Inert ORM mapping. | WP-08.1. |
 | `ai_plan_steps.is_completed`, `skipped`, `completed_at` | Used only as non-contradictory backfill evidence, then cleared and stripped of defaults. New callbacks write `step_status` and `terminal_at` only. | Inert ORM mapping only. | WP-03.4 finishes delivery switch; WP-08.1 drops columns. |
 | `plan_status_enum` and legacy `plan_status` enum | `ai_plans.status` is converted to the normalized `plan_status`; the prior unused type is renamed `legacy_plan_status`. | Type objects only; no authoritative column. | WP-08.1 after rollback window. |
-| generic `generated_plan_object`, `plan_updates`, `transition_signal` writers | Inputs are explicitly ignored by the live orchestrator. Helper bodies remain inert to avoid beginning broad dead-subsystem deletion here. | No accepted worker can emit an authoritative mutation through them. | WP-02.1 removes the zombie mutation architecture. |
-| `SCHEDULE_ADJUSTMENT` stored FSM/Redis tunnel | Its periodic job is no longer registered, its scanner is a no-op, and its stored-FSM writer raises. No plan lifecycle fact is stored in Redis. | Inert callbacks/helpers only. | WP-02.1 removes the subsystem as one bounded package. |
+| generic `generated_plan_object`, `plan_updates`, `transition_signal` writers | Removed by WP-02.1 after producer-side search confirmed that workers emit only text, errors, or allowlisted deterministic tool calls. | None. | Closed by WP-02.1. |
+| `SCHEDULE_ADJUSTMENT` stored FSM/Redis tunnel | Removed by WP-02.1 as one subsystem: dispatcher, handlers, callbacks, keyboards, Redis methods, scheduler state/job helpers, and dedicated tests. | None; direct `change_day_time` and `change_evening_time` operations remain. | Closed by WP-02.1. |
+| `AIPlanVersion` adaptation snapshots | WP-02.1 removed the last runtime writer with the producerless adaptation path; storage remains physically present and inert. | ORM mapping and legacy data only. | WP-08.1 after deployed-use evidence. |
 | admin `/spawn` structural writer | Disabled because it appended steps to an active immutable aggregate outside draft finalization. | Command entrypoint returns a diagnostic message only. | WP-03.4 may add a fixture-only delivery path that does not mutate a real plan. |
 | `apscheduler_jobs` | Unchanged and outside Alembic ownership. Jobs can trigger work but never define plan or step lifecycle. | APScheduler `SQLAlchemyJobStore`. | Scheduler reconciliation work in WP-03.4; never Alembic-owned. |
 

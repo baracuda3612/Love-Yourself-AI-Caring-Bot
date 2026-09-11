@@ -361,6 +361,42 @@ async def test_send_plan_completion_message_skips_when_no_tg_id(monkeypatch):
     await orchestrator.send_plan_completion_message(1, 99)
 
 
+@pytest.mark.anyio
+async def test_send_plan_completion_message_has_no_dead_start_plan_buttons(monkeypatch):
+    user = type("U", (), {"id": 1, "tg_id": 123, "profile": None})()
+    db = _DBForCompletionMessage(user=user, existing_event=None)
+    monkeypatch.setattr(orchestrator, "SessionLocal", lambda: _SessionCtx(db))
+    monkeypatch.setattr(
+        "app.plan_completion.metrics.build_completion_metrics",
+        lambda *_args: type("Metrics", (), {"outcome_tier": "STRONG"})(),
+    )
+    monkeypatch.setattr(
+        "app.plan_completion.report.build_completion_report",
+        lambda *_args: "План завершено.",
+    )
+    monkeypatch.setattr(
+        "app.plan_completion.tokens.make_report_token",
+        lambda *_args: "report-token",
+    )
+    monkeypatch.setattr(orchestrator, "log_user_event", lambda *_args, **_kwargs: None)
+
+    sent = []
+
+    async def _fake_send(*args, **kwargs):
+        sent.append((args, kwargs))
+        return True
+
+    monkeypatch.setattr("app.scheduler._send_message_async", _fake_send)
+
+    await orchestrator.send_plan_completion_message(1, 99)
+
+    assert len(sent) == 1
+    args, kwargs = sent[0]
+    assert args[0] == 123
+    assert "start_plan:" not in args[1]
+    assert kwargs == {}
+
+
 class _ExpiredUserQuery:
     def __init__(self, users):
         self.users = users

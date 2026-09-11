@@ -125,7 +125,6 @@ def test_required_deferrals_are_explicit_and_owned() -> None:
         "content_migration",
         "sensitive_schema_removal",
         "on_demand_occurrence",
-        "schedule_adjustment",
     }
     rows = _table_rows("## Explicit deferrals and package boundaries")
     actual = {row["Deferred item"].strip("`") for row in rows}
@@ -140,7 +139,7 @@ def test_ledger_preserves_baseline_and_external_scheduler_ownership() -> None:
     assert "target design only; no DDL in WP-01.2" in source
     assert "20260827_schema_baseline" in source
     assert "`apscheduler_jobs` | `EXTERNAL` and unchanged" in source
-    assert "Complete tunnel deletion in WP-02.1" in source
+    assert "WP-02.1 removed the runtime definitions and consumers" in source
     assert "no synchronized user FSM column" in source
     assert "JSON files, plan-step text, Redis" in source
 

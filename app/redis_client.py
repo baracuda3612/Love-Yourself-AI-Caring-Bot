@@ -1,4 +1,4 @@
-"""Redis client and storage factories."""
+"""Redis client factory."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import logging
 from functools import lru_cache
 
 import redis.asyncio as redis
-from aiogram.fsm.storage.redis import DefaultKeyBuilder, RedisStorage
 
 from app.config import settings
 
@@ -30,18 +29,3 @@ def create_redis_client(url: str | None = None) -> redis.Redis | None:
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("Failed to create Redis client: %s", exc)
         return None
-
-
-def create_fsm_storage(redis_client: redis.Redis | None = None) -> RedisStorage | None:
-    """Create Redis storage for FSM if possible."""
-
-    client = redis_client or create_redis_client()
-    if client is None:
-        return None
-
-    return RedisStorage(redis=client, key_builder=DefaultKeyBuilder(with_bot_id=True))
-
-
-
-# Shared app-wide Redis client instance
-redis_client = create_redis_client()
