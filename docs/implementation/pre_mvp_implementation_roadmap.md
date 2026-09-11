@@ -532,7 +532,7 @@ production-derived migration is designed from ORM assumptions alone.
 
 ## 7. Block 1 — Recovery, migration authority, and data foundations
 
-**Status:** `NOT STARTED`  
+**Status:** `IN PROGRESS`
 **Depends on:** B0; Gate G1 before any non-disposable or production migration
 **Objective:** establish PostgreSQL as reproducible durable truth before the
 first large refactor.
@@ -595,11 +595,11 @@ founder merged PR #253 as
 
 ### WP-01.3 — Implement the plan-centric lifecycle migration
 
-**Status:** `IN REVIEW` — plan/step authority, derived current mode,
+**Status:** `VERIFIED` — plan/step authority, derived current mode,
 transactional evidence backfill, locked/idempotent mutation service, explicit
-no-overlap cutover, and disposable PostgreSQL concurrency rehearsal are
-complete on `wp/01.3-plan-centric-lifecycle`; PR #254 targets
-`implementation/pre-mvp` and independent GitHub review is pending.
+no-overlap cutover, and disposable PostgreSQL concurrency rehearsal passed;
+all review threads were answered and resolved; founder merged PR #254 as
+`285d84f571cf8f206e4eed2e511916d86e641ec0`.
 
 **Deliverables**
 
@@ -627,6 +627,11 @@ complete on `wp/01.3-plan-centric-lifecycle`; PR #254 targets
   code continues writing it as a second authority.
 
 ### WP-01.4 — Establish event, privacy, and deployment primitives
+
+**Status:** `IN REVIEW` — canonical event/privacy/deployment authorities,
+compatibility boundaries, and disposable PostgreSQL rehearsal are complete on
+`wp/01.4-event-privacy-deployment-primitives`; the PR targets
+`implementation/pre-mvp` and independent GitHub review is pending.
 
 **Deliverables**
 
@@ -1530,7 +1535,7 @@ block exit gate passes.
 - [ ] B1 — Recovery, migration authority, and data foundations
   - [x] WP-01.1 — Restore, inspect, and establish Alembic authority
   - [x] WP-01.2 — Define the target schema and invariant ledger
-  - [ ] WP-01.3 — Implement the plan-centric lifecycle migration
+  - [x] WP-01.3 — Implement the plan-centric lifecycle migration
   - [ ] WP-01.4 — Establish event, privacy, and deployment primitives
 - [ ] B2 — Target lifecycle and runtime actions
   - [ ] WP-02.1 — Remove dead lifecycle entrances and the schedule-adjustment tunnel

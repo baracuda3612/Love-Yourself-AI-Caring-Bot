@@ -184,10 +184,6 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
         if now_utc - scheduled_for > _DELIVERY_LATE_GRACE:
             return
 
-        content_id = (
-            getattr(step, "content_id", None)
-            or getattr(step, "content_library_id", None)
-        )
         plan_step_id = step.id
         plan_id = plan.id
         user_id = user.id
@@ -217,27 +213,24 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
         result = future.result(timeout=30)
         if result is None:
             delivery_error = "send_failed"
-    except Exception as exc:
-        delivery_error = str(exc)
+    except Exception:
+        delivery_error = "send_exception"
 
     with SessionLocal() as db:
         try:
             base_context = {
-                "exercise_id": step.exercise_id,
                 "day_number": step.day.day_number if step.day else None,
             }
-            if not content_id:
-                base_context.update(
-                    {
-                        "plan_step_title": step.title,
-                        "plan_step_description": step.description,
-                    }
-                )
+            base_context = {
+                key: value for key, value in base_context.items() if value is not None
+            }
             if delivery_error is None:
                 log_user_event(
                     db,
                     user_id=user_id,
                     event_type="task_delivered",
+                    event_source="scheduler",
+                    source_operation_id=f"scheduler:delivery:{plan_step_id}",
                     plan_step_id=plan_step_id,
                     context=base_context,
                 )
@@ -255,11 +248,16 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
                 if day_number is not None:
                     maybe_advance_current_day(db, plan_id, day_number)
             else:
-                error_context = {**base_context, "error": delivery_error}
+                error_context = {**base_context, "failure_code": delivery_error}
                 log_user_event(
                     db,
                     user_id=user_id,
                     event_type="task_delivery_failed",
+                    event_source="scheduler",
+                    source_operation_id=(
+                        f"scheduler:delivery-failed:{plan_step_id}:"
+                        f"{scheduled_for.isoformat()}"
+                    ),
                     plan_step_id=plan_step_id,
                     context=error_context,
                 )
@@ -462,8 +460,8 @@ def send_daily_pulse():
             sent_today_rows = (
                 db.query(UserEvent.user_id)
                 .filter(
-                    UserEvent.event_type == "pulse_sent",
-                    func.date(UserEvent.timestamp) == today_utc,
+                    UserEvent.event_name == "pulse_sent",
+                    func.date(UserEvent.occurred_at) == today_utc,
                 )
                 .all()
             )
@@ -514,6 +512,8 @@ def send_daily_pulse():
                             db,
                             user_id=user.id,
                             event_type="pulse_sent",
+                            event_source="scheduler",
+                            source_operation_id=f"scheduler:pulse:{user.id}:{today_utc}",
                             context={"persona": persona or "empath"},
                         )
                         db.commit()
@@ -541,28 +541,28 @@ def check_silent_users():
                 # Only user-initiated activity counts as engagement.
                 last_event = db.query(UserEvent).filter(
                     UserEvent.user_id == user.id,
-                    UserEvent.event_type.in_(["task_completed", "task_skipped", "user_message"]),
-                ).order_by(UserEvent.timestamp.desc()).first()
+                    UserEvent.event_name.in_(["task_completed", "task_skipped", "user_message"]),
+                ).order_by(UserEvent.occurred_at.desc()).first()
 
                 if not last_event:
                     continue
 
-                days_silent = (now - _to_utc(last_event.timestamp)).days
+                days_silent = (now - _to_utc(last_event.occurred_at)).days
                 if days_silent < 2:
                     continue
 
                 sent_today = db.query(UserEvent).filter(
                     UserEvent.user_id == user.id,
-                    UserEvent.event_type == "silent_sent",
-                    func.date(UserEvent.timestamp) == today,
+                    UserEvent.event_name == "silent_sent",
+                    func.date(UserEvent.occurred_at) == today,
                 ).first()
                 if sent_today:
                     continue
 
                 recent_silent = db.query(UserEvent).filter(
                     UserEvent.user_id == user.id,
-                    UserEvent.event_type == "silent_sent",
-                    UserEvent.timestamp >= now - timedelta(days=6),
+                    UserEvent.event_name == "silent_sent",
+                    UserEvent.occurred_at >= now - timedelta(days=6),
                 ).first()
                 if recent_silent:
                     continue
@@ -593,6 +593,8 @@ def check_silent_users():
                     db,
                     user_id=user.id,
                     event_type="silent_sent",
+                    event_source="scheduler",
+                    source_operation_id=f"scheduler:silent:{user.id}:{today}",
                     context={"trigger": trigger_id, "days_silent": days_silent},
                 )
                 db.commit()
@@ -613,29 +615,29 @@ def check_ignored_tasks():
         yesterday_end = datetime.now(pytz.UTC)
 
         delivered = db.query(UserEvent).filter(
-            UserEvent.event_type == "task_delivered",
-            UserEvent.timestamp >= yesterday_start,
-            UserEvent.timestamp < yesterday_end,
+            UserEvent.event_name == "task_delivered",
+            UserEvent.occurred_at >= yesterday_start,
+            UserEvent.occurred_at < yesterday_end,
         ).all()
 
         for event in delivered:
-            plan_step_id = event.step_id
+            plan_step_id = event.plan_step_id
             if not plan_step_id:
                 continue
 
             reacted = db.query(UserEvent).filter(
                 UserEvent.user_id == event.user_id,
-                UserEvent.step_id == str(plan_step_id),
-                UserEvent.event_type.in_(["task_completed", "task_skipped"]),
-                UserEvent.timestamp >= event.timestamp,
+                UserEvent.plan_step_id == plan_step_id,
+                UserEvent.event_name.in_(["task_completed", "task_skipped"]),
+                UserEvent.occurred_at >= event.occurred_at,
             ).first()
             if reacted:
                 continue
 
             already_logged = db.query(UserEvent).filter(
                 UserEvent.user_id == event.user_id,
-                UserEvent.step_id == str(plan_step_id),
-                UserEvent.event_type == "task_ignored",
+                UserEvent.plan_step_id == plan_step_id,
+                UserEvent.event_name == "task_ignored",
             ).first()
             if already_logged:
                 continue
@@ -644,8 +646,10 @@ def check_ignored_tasks():
                 db,
                 user_id=event.user_id,
                 event_type="task_ignored",
+                event_source="scheduler",
+                source_operation_id=f"scheduler:ignored:{plan_step_id}",
                 plan_step_id=plan_step_id,
-                context={"detected_at": "morning_check"},
+                context={"detection_source": "morning_check"},
             )
         db.commit()
 
@@ -931,9 +935,9 @@ async def check_pulse_triggers(db, bot) -> None:
             db.query(UserEvent)
             .filter(
                 UserEvent.user_id == plan.user_id,
-                UserEvent.event_type == "pulse_sent",
-                UserEvent.context["plan_id"].astext == str(plan.id),
-                UserEvent.context["active_day"].astext == str(active_day),
+                UserEvent.event_name == "pulse_sent",
+                UserEvent.plan_id == plan.id,
+                UserEvent.properties["active_day"].astext == str(active_day),
             )
             .first()
         )
@@ -961,7 +965,10 @@ async def check_pulse_triggers(db, bot) -> None:
             db,
             user_id=plan.user_id,
             event_type="pulse_sent",
-            context={"active_day": active_day, "plan_id": plan.id, "date": str(today)},
+            event_source="scheduler",
+            source_operation_id=f"scheduler:pulse-snapshot:{plan.id}:{active_day}",
+            plan_id=plan.id,
+            context={"active_day": active_day, "date": str(today)},
         )
         db.commit()
 

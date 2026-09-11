@@ -152,7 +152,7 @@ async def test_task_completed_happy_path(monkeypatch):
             "user_id": 42,
             "event_type": "task_completed",
             "plan_step_id": 101,
-            "context": {"exercise_id": "exercise-1", "day_number": 3},
+            "context": {"day_number": 3},
         }
     ]
     assert callback_query.answers[-1] == "✅ Чудово! Завдання виконано."
@@ -203,7 +203,7 @@ async def test_task_skipped_happy_path(monkeypatch):
             "user_id": 24,
             "event_type": "task_skipped",
             "plan_step_id": 202,
-            "context": {"exercise_id": "exercise-1", "day_number": 2},
+            "context": {"day_number": 2},
         }
     ]
     assert callback_query.answers[-1] == "⏭️ Завдання пропущено"

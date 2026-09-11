@@ -25,8 +25,8 @@ def can_send_auto_message(db: Session, user_id: int, event_type: str) -> bool:
     if event_type == "silent_sent":
         pulse_today = db.query(UserEvent).filter(
             UserEvent.user_id == user_id,
-            UserEvent.event_type == "pulse_sent",
-            func.date(UserEvent.timestamp) == date.today(),
+            UserEvent.event_name == "pulse_sent",
+            func.date(UserEvent.occurred_at) == date.today(),
         ).first()
         if pulse_today:
             return False

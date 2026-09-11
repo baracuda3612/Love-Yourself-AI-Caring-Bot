@@ -45,15 +45,17 @@ def get_plan_timeline(db: Session, user_id: int, plan_id: int) -> list[DayEntry]
         db.query(UserEvent)
         .filter(
             UserEvent.user_id == user_id,
-            UserEvent.event_type.in_(["task_completed", "task_skipped", "task_ignored"]),
-            UserEvent.step_id.in_([str(i) for i in plan_step_ids]),
+            UserEvent.event_name.in_(["task_completed", "task_skipped", "task_ignored"]),
+            UserEvent.plan_step_id.in_(plan_step_ids),
         )
         .all()
     ):
-        sid = int(ev.step_id)
-        if ev.event_type == "task_completed":
+        sid = ev.plan_step_id
+        if sid is None:
+            continue
+        if ev.event_name == "task_completed":
             completed_ids.add(sid)
-        elif ev.event_type == "task_skipped":
+        elif ev.event_name == "task_skipped":
             skipped_ids.add(sid)
 
     now = datetime.now(pytz.UTC)

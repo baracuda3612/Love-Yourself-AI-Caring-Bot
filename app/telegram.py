@@ -178,6 +178,10 @@ async def on_text(message: Message):
             db,
             user_id=user.id,
             event_type="user_message",
+            event_source="telegram",
+            source_operation_id=(
+                f"telegram:message:{message.chat.id}:{message.message_id}"
+            ),
             context={"message_length": len(message.text or "")},
         )
         db.commit()
@@ -387,11 +391,12 @@ async def handle_task_completed(callback_query: CallbackQuery):
             db,
             user_id=step.day.plan.user_id,
             event_type="task_completed",
+            event_source="telegram",
+            source_operation_id=(
+                f"telegram:{callback_query.id}:complete:{step.id}"
+            ),
             plan_step_id=step.id,
-            context={
-                "exercise_id": step.exercise_id,
-                "day_number": step.day.day_number,
-            },
+            context={"day_number": step.day.day_number},
         )
 
         db.commit()
@@ -420,15 +425,15 @@ async def handle_task_completed(callback_query: CallbackQuery):
 
                 total_completed = db.query(UserEvent).filter(
                     UserEvent.user_id == user.id,
-                    UserEvent.event_type == "task_completed",
+                    UserEvent.event_name == "task_completed",
                 ).count()
                 last_two = db.query(UserEvent).filter(
                     UserEvent.user_id == user.id,
-                    UserEvent.event_type.in_(["task_completed", "task_skipped"]),
-                ).order_by(UserEvent.timestamp.desc()).limit(2).all()
+                    UserEvent.event_name.in_(["task_completed", "task_skipped"]),
+                ).order_by(UserEvent.occurred_at.desc()).limit(2).all()
                 prev_event = last_two[1] if len(last_two) > 1 else None
 
-                is_comeback = prev_event and prev_event.event_type == "task_skipped"
+                is_comeback = prev_event and prev_event.event_name == "task_skipped"
                 is_first = total_completed == 1
 
                 if is_comeback:
@@ -513,11 +518,10 @@ async def handle_task_skipped(callback_query: CallbackQuery):
             db,
             user_id=step.day.plan.user_id,
             event_type="task_skipped",
+            event_source="telegram",
+            source_operation_id=f"telegram:{callback_query.id}:skip:{step.id}",
             plan_step_id=step.id,
-            context={
-                "exercise_id": step.exercise_id,
-                "day_number": step.day.day_number,
-            },
+            context={"day_number": step.day.day_number},
         )
 
         db.commit()
@@ -536,9 +540,11 @@ async def handle_task_skipped(callback_query: CallbackQuery):
                 persona = get_persona(user.profile)
                 recent_actions = db.query(UserEvent).filter(
                     UserEvent.user_id == user.id,
-                    UserEvent.event_type.in_(["task_completed", "task_skipped"]),
-                ).order_by(UserEvent.timestamp.desc()).limit(2).all()
-                two_skips = len(recent_actions) >= 2 and all(e.event_type == "task_skipped" for e in recent_actions)
+                    UserEvent.event_name.in_(["task_completed", "task_skipped"]),
+                ).order_by(UserEvent.occurred_at.desc()).limit(2).all()
+                two_skips = len(recent_actions) >= 2 and all(
+                    event.event_name == "task_skipped" for event in recent_actions
+                )
                 trigger_id = "skip_2_in_row" if two_skips else "task_skipped"
                 context = {"name": user.first_name, "exercise": step.title, "day": step.day.day_number}
                 msg = get_trigger_message(trigger_id, persona, context)
