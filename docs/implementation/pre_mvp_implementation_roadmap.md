@@ -532,7 +532,9 @@ production-derived migration is designed from ORM assumptions alone.
 
 ## 7. Block 1 — Recovery, migration authority, and data foundations
 
-**Status:** `IN PROGRESS`
+**Status:** `COMPLETE` — every package in the block is `VERIFIED`; the durable
+PostgreSQL authorities, migrations, compatibility boundaries, and disposable
+database evidence satisfy the documented block objective.
 **Depends on:** B0; Gate G1 before any non-disposable or production migration
 **Objective:** establish PostgreSQL as reproducible durable truth before the
 first large refactor.
@@ -628,10 +630,10 @@ all review threads were answered and resolved; founder merged PR #254 as
 
 ### WP-01.4 — Establish event, privacy, and deployment primitives
 
-**Status:** `IN REVIEW` — canonical event/privacy/deployment authorities,
-compatibility boundaries, and disposable PostgreSQL rehearsal are complete on
-`wp/01.4-event-privacy-deployment-primitives`; the PR targets
-`implementation/pre-mvp` and independent GitHub review is pending.
+**Status:** `VERIFIED` — focused verification, disposable PostgreSQL migration,
+idempotency, concurrency, and direct-insert rehearsal, and GitHub review passed;
+founder merged PR #255 as
+`22c72fd2e0d1c9ea3401b88be8f473bd0df3e736`.
 
 **Deliverables**
 
@@ -1532,11 +1534,11 @@ block exit gate passes.
   - [x] WP-00.2 — Establish the AI-assisted development workspace
   - [x] WP-00.3 — Make the local environment reproducible
   - [x] WP-00.4 — Secure configuration and Railway topology
-- [ ] B1 — Recovery, migration authority, and data foundations
+- [x] B1 — Recovery, migration authority, and data foundations
   - [x] WP-01.1 — Restore, inspect, and establish Alembic authority
   - [x] WP-01.2 — Define the target schema and invariant ledger
   - [x] WP-01.3 — Implement the plan-centric lifecycle migration
-  - [ ] WP-01.4 — Establish event, privacy, and deployment primitives
+  - [x] WP-01.4 — Establish event, privacy, and deployment primitives
 - [ ] B2 — Target lifecycle and runtime actions
   - [ ] WP-02.1 — Remove dead lifecycle entrances and the schedule-adjustment tunnel
   - [ ] WP-02.2 — Build the authoritative lifecycle service
@@ -1584,9 +1586,9 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | `WP-01.3 — Implement the plan-centric lifecycle migration` |
-| Status | `IN REVIEW` |
-| Next action | Process every GitHub review thread on PR #254; founder remains the sole merge authority |
+| Current package | `WP-02.1 — Remove dead lifecycle entrances and the schedule-adjustment tunnel` |
+| Status | `IN PROGRESS` |
+| Next action | Remove the bounded dead subsystems, retain import/reachability evidence, and open one PR into `implementation/pre-mvp` |
 | Current blockers | None for disposable founder-only refactoring; paid backup/restore remains deferred to Gate G1 before durable data or market launch |
 
 ### Private founder log
