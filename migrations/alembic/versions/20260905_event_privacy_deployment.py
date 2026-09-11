@@ -617,7 +617,9 @@ def _reshape_events(enums: dict[str, postgresql.ENUM]) -> None:
         "AND timezone_basis IS NOT NULL AND length(btrim(timezone_basis)) > 0 "
         "AND time_of_day_bucket IN ('morning','day','evening','night') "
         "AND properties IS NOT NULL "
-        "AND jsonb_typeof(properties) = 'object' AND recorded_at >= occurred_at)",
+        "AND jsonb_typeof(properties) = 'object' AND recorded_at >= occurred_at "
+        "AND event_type IS NULL AND timestamp IS NULL "
+        "AND plan_execution_id IS NULL AND step_id IS NULL AND context IS NULL)",
     )
     op.create_check_constraint(
         "ck_user_events_content_identity",

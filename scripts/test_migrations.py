@@ -627,6 +627,33 @@ def _assert_event_privacy_operations(target_url: str) -> None:
                     "event catalogue requires plan-step linkage" in str(exc)
                 )
 
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO user_events (
+                      event_id, user_id, event_name, event_schema_version,
+                      occurred_at, recorded_at, event_source,
+                      source_operation_id, environment, time_of_day_bucket,
+                      timezone_basis, properties, event_type, timestamp,
+                      plan_execution_id, step_id, context
+                    ) VALUES (
+                      %s, %s, 'user_message', 1, now(), now(),
+                      'raw_rehearsal', 'migration-rehearsal:mixed-envelope',
+                      'testnet', 'day', 'UTC', '{"message_length": 1}'::jsonb,
+                      'legacy_event', now(),
+                      '00000000-0000-0000-0000-000000000102',
+                      'migration-seed', '{"email": "user@example.com"}'::jsonb
+                    )
+                    """,
+                    (str(uuid4()), raw_user_id),
+                )
+            connection.commit()
+            raise AssertionError("canonical event accepted legacy payload columns")
+        except psycopg2.Error as exc:
+            connection.rollback()
+            assert "ck_user_events_canonical_envelope" in str(exc)
+
         for source_operation_id, properties in (
             (
                 "migration-rehearsal:raw-nested-sensitive:1",

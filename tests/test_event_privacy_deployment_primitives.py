@@ -194,6 +194,11 @@ def test_database_guards_immutable_facts_and_pinned_notice() -> None:
     assert "deployment enrollment does not cover event occurrence" in source
     assert "event plan-step/content linkage does not match plan/user" in source
     assert "time_of_day_bucket IN ('morning','day','evening','night')" in source
+    assert "AND event_type IS NULL AND timestamp IS NULL" in source
+    assert (
+        "AND plan_execution_id IS NULL AND step_id IS NULL AND context IS NULL"
+        in source
+    )
     assert "feedback context violates bounded privacy rules" in source
     assert "CREATE FUNCTION ly_aggregate_dimensions_are_safe" in source
     assert "dimension_key = ly_aggregate_dimension_key(dimensions)" in source
