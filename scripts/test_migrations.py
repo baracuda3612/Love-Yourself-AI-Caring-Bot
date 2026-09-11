@@ -983,6 +983,26 @@ def _assert_event_privacy_operations(target_url: str) -> None:
             other_notice_id = cursor.fetchone()[0]
         connection.commit()
 
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO deployments (
+                      organization_id, deployment_key, environment,
+                      timezone_mode, default_timezone, notice_version_id
+                    ) VALUES (
+                      %s, 'rehearsal-missing-timezone', 'testnet',
+                      'single', NULL, %s
+                    )
+                    """,
+                    (organization_id, notice_id),
+                )
+            connection.commit()
+            raise AssertionError("single-timezone deployment accepted no default")
+        except psycopg2.Error as exc:
+            connection.rollback()
+            assert "ck_deployments_timezone" in str(exc)
+
         with Session.begin() as db:
             user = db.execute(select(User).where(User.tg_id == 9000099)).scalar_one()
             try:

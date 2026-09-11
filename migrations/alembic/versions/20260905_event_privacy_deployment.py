@@ -301,7 +301,11 @@ def _create_deployment_privacy_tables(enums: dict[str, postgresql.ENUM]) -> None
         sa.CheckConstraint("starts_at IS NULL OR ends_at IS NULL OR starts_at < ends_at", name="ck_deployments_chronology"),
         sa.CheckConstraint("eligible_count_at_launch IS NULL OR eligible_count_at_launch >= 0", name="ck_deployments_eligible_count"),
         sa.CheckConstraint("roster_reconciliation_days IS NULL OR roster_reconciliation_days > 0", name="ck_deployments_reconciliation_days"),
-        sa.CheckConstraint("timezone_mode <> 'single' OR length(btrim(default_timezone)) > 0", name="ck_deployments_timezone"),
+        sa.CheckConstraint(
+            "timezone_mode <> 'single' OR (default_timezone IS NOT NULL "
+            "AND length(btrim(default_timezone)) > 0)",
+            name="ck_deployments_timezone",
+        ),
         sa.ForeignKeyConstraint(["organization_id"], ["organizations.id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(["notice_version_id"], ["privacy_notice_versions.id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),

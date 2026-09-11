@@ -192,6 +192,7 @@ def test_database_guards_immutable_facts_and_pinned_notice() -> None:
     assert "CREATE FUNCTION ly_event_json_is_safe" in source
     assert "event properties violate nested privacy bounds" in source
     assert "deployment enrollment does not cover event occurrence" in source
+    assert "timezone_mode <> 'single' OR (default_timezone IS NOT NULL" in source
     assert "event plan-step/content linkage does not match plan/user" in source
     assert "time_of_day_bucket IN ('morning','day','evening','night')" in source
     assert "AND event_type IS NULL AND timestamp IS NULL" in source
