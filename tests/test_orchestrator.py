@@ -36,38 +36,6 @@ def disable_auto_complete(monkeypatch):
 # (coach prompt + tool registration not yet implemented)
 
 
-class _FakeQuery:
-    def __init__(self, steps):
-        self._steps = steps
-
-    def join(self, *_args, **_kwargs):
-        return self
-
-    def filter(self, *_args, **_kwargs):
-        return self
-
-    def all(self):
-        return self._steps
-
-
-class _FakeDB:
-    def __init__(self, steps):
-        self._steps = steps
-
-    def query(self, *_args, **_kwargs):
-        return _FakeQuery(self._steps)
-
-
-class _FakeStep:
-    def __init__(self, difficulty):
-        self.difficulty = difficulty
-
-
-class _FakePlan:
-    def __init__(self, plan_id=1):
-        self.id = plan_id
-
-
 class _AutoCompleteQuery:
     def __init__(self, plans):
         self._plans = plans
@@ -96,24 +64,6 @@ class _AutoCompleteDB:
 
     def add(self, obj):
         self.added.append(obj)
-
-
-def test_get_avg_difficulty_mixed_enum_values():
-    db = _FakeDB([_FakeStep("EASY"), _FakeStep("MEDIUM"), _FakeStep("HARD")])
-    plan = _FakePlan()
-
-    result = orchestrator.get_avg_difficulty(db, plan)
-
-    assert result == 2
-
-
-def test_get_avg_difficulty_empty_steps_returns_default_one():
-    db = _FakeDB([])
-    plan = _FakePlan()
-
-    result = orchestrator.get_avg_difficulty(db, plan)
-
-    assert result == 1
 
 
 @pytest.mark.parametrize(
@@ -328,12 +278,3 @@ def test_auto_complete_rejects_multiple_current_plans(monkeypatch):
 
     with pytest.raises(LifecycleInvariantError, match="multiple current plans"):
         orchestrator._auto_complete_plan_if_needed(db, user)
-
-
-def test_get_avg_difficulty_unknown_value_falls_back_to_one():
-    db = _FakeDB([_FakeStep("UNKNOWN"), _FakeStep("HARD")])
-    plan = _FakePlan()
-
-    result = orchestrator.get_avg_difficulty(db, plan)
-
-    assert result == 2

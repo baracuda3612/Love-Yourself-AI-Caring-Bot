@@ -288,10 +288,11 @@ Current namespaces are migration inputs, not target exceptions:
 
 * `session:{user_id}:messages` has no TTL and must be versioned/migrated without
   treating its contents as authoritative;
-* `session:{user_id}:schedule_adjustment_*` belongs to the zombie tunnel and is
-  removed wholesale by WP-02.1; WP-01.2 does not repair it;
-* aiogram Redis FSM keys are removed with the duplicated FSM storage in
-  WP-02.1; do not flush Redis globally;
+* WP-02.1 removed the runtime definitions and consumers for
+  `session:{user_id}:schedule_adjustment_*`; any previously written TTL keys
+  are inert and expire without a global Redis flush;
+* WP-02.1 removed the unused aiogram Redis FSM storage factory; any previously
+  written FSM keys are inert and are not a lifecycle authority;
 * `session:{user_id}:pending_action` moves to the versioned namespace and keeps
   its existing one-hour TTL.
 
@@ -311,7 +312,6 @@ Current namespaces are migration inputs, not target exceptions:
 | `content_migration` | Contract only: do not import, rewrite, or activate catalogue rows in WP-01.2. | WP-03.1. |
 | `sensitive_schema_removal` | Target removal is decided, but no table is dropped without deployed-use verification and privacy deletion tests. | WP-04.2; PRIV-09/DB-10. |
 | `on_demand_occurrence` | Reserve the exact authority/constraints but create no placeholder table, event rows, or Redis state. | WP-06.1. |
-| `schedule_adjustment` | No fixes, enum widening, constraints, Redis cleanup, or tests in this package. | Complete tunnel deletion in WP-02.1. |
 
 ## Migration handoff rules
 

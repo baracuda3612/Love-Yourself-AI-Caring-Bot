@@ -34,3 +34,7 @@ grant tables are authorities for later operations, not claims of current
 runtime behavior. WP-04.1 owns access/enrollment decisions; WP-04.2 owns notice
 flow, grant validation, export, retention, and deletion; WP-03.4/WP-05.2 own
 feedback capture. No Railway schema or data is changed by this package.
+
+WP-02.1 removes the legacy `SCHEDULE_ADJUSTMENT` FSM/Redis tunnel. The canonical
+`schedule_adjustment` catalogue name is an event identity, not that retired
+state, and remains available for truthful feature instrumentation in WP-07.1.

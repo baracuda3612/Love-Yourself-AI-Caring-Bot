@@ -64,6 +64,45 @@ def test_hhmm_accepts_canonical_shape():
     tools._validate_hhmm("09:30")
 
 
+@pytest.mark.parametrize(
+    ("tool_name", "slot", "result_key"),
+    [
+        ("change_day_time", "DAY", "day_time"),
+        ("change_evening_time", "EVENING", "evening_time"),
+    ],
+)
+def test_direct_time_tools_update_authority_and_reschedule_active_steps(
+    monkeypatch,
+    tool_name,
+    slot,
+    result_key,
+):
+    user = SimpleNamespace(id=1)
+    profile = SimpleNamespace(user_id=1)
+    fake_db = _DB(user=user, profile=profile)
+    captured = {}
+    rescheduled = []
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(fake_db))
+
+    def fake_update(db, candidate_user, updates):
+        captured.update(db=db, user=candidate_user, updates=updates)
+        return [101, 202], [101]
+
+    monkeypatch.setattr("app.time_slots.update_user_time_slots", fake_update)
+    monkeypatch.setattr(
+        "app.scheduler.reschedule_plan_steps",
+        lambda step_ids: rescheduled.extend(step_ids) or len(step_ids),
+    )
+
+    result = getattr(tools, tool_name)(1, "15:30")
+
+    assert captured == {"db": fake_db, "user": user, "updates": {slot: "15:30"}}
+    assert rescheduled == [101]
+    assert result == {"status": "ok", result_key: "15:30", "rescheduled": 1}
+    assert fake_db.commits == 1
+
+
 def test_pause_passes_stable_source_operation_and_writes_no_mirror(monkeypatch):
     user = SimpleNamespace(id=1, current_state="legacy-value")
     profile = SimpleNamespace(user_id=1, is_paused=False, pause_count=4)
@@ -128,60 +167,6 @@ def test_cancel_uses_one_aggregate_operation_then_cancels_jobs(monkeypatch):
 
     assert result == {"status": "ok", "total_days": 7, "duplicate": False}
     assert canceled == [21, 22]
-    assert fake_db.commits == 1
-
-
-def test_create_first_plan_returns_committed_activation_retry_before_mode_guard(
-    monkeypatch,
-):
-    user = SimpleNamespace(id=1)
-    profile = SimpleNamespace(user_id=1)
-    plan = SimpleNamespace(id=11, total_days=7)
-    receipt = SimpleNamespace(operation="activate", plan_id=11)
-    fake_db = _DB(user=user, profile=profile, plan=plan, receipt=receipt)
-
-    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(fake_db))
-
-    result = tools.create_first_plan(1, source_operation_id="coach:activate-1")
-
-    assert result == {"status": "ok", "plan_type": "SHORT", "duplicate": True}
-    assert fake_db.commits == 0
-
-
-def test_create_first_plan_uses_derived_mode_and_runs_side_effects_once(monkeypatch):
-    user = SimpleNamespace(id=1, current_state="legacy-value")
-    profile = SimpleNamespace(user_id=1, daily_time_slots={"DAY": "13:30"})
-    created_plan = SimpleNamespace(id=21, total_days=7)
-    fake_db = _DB(user=user, profile=profile)
-    captured = {}
-    side_effects = []
-
-    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(fake_db))
-    monkeypatch.setattr(
-        lifecycle,
-        "derive_current_mode",
-        lambda *_args: lifecycle.CurrentMode.NO_ACTIVE_PLAN,
-    )
-
-    def fake_create_plan(db, **kwargs):
-        captured.update(db=db, **kwargs)
-        return SimpleNamespace(plan=created_plan, duplicate=False)
-
-    monkeypatch.setattr(plan_service, "create_plan", fake_create_plan)
-    monkeypatch.setattr(
-        plan_finalization,
-        "activate_plan_side_effects",
-        lambda plan_id, user_id: side_effects.append((plan_id, user_id)),
-    )
-
-    result = tools.create_first_plan(1, source_operation_id="coach:activate-2")
-
-    assert result == {"status": "ok", "plan_type": "SHORT", "duplicate": False}
-    assert captured["plan_type"] == "SHORT"
-    assert captured["day_time"] == "13:30"
-    assert captured["source_operation_id"] == "coach:activate-2"
-    assert side_effects == [(21, 1)]
-    assert user.current_state == "legacy-value"
     assert fake_db.commits == 1
 
 
@@ -309,8 +294,6 @@ def test_activation_retry_rejects_cross_operation_source_id():
 
 
 def test_mutation_tools_require_source_operation_id():
-    with pytest.raises(TypeError):
-        tools.create_first_plan(1)  # type: ignore[call-arg]
     with pytest.raises(TypeError):
         tools.create_followup_plan(1, "SHORT")  # type: ignore[call-arg]
     with pytest.raises(TypeError):
