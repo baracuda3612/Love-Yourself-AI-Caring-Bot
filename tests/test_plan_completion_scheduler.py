@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
 from app import orchestrator, scheduler
+from app.lifecycle import CompletionDeliveryResult, LifecycleResult
 
 
 class _SessionCtx:
@@ -212,9 +213,10 @@ class _FakeEventQuery:
 
 
 class _DBForCompletionMessage:
-    def __init__(self, user, existing_event):
+    def __init__(self, user, existing_event, plan=None):
         self.user = user
         self.existing_event = existing_event
+        self.plan = plan or type("Plan", (), {"id": 99, "status": "completed"})()
         self.commits = 0
 
     def query(self, model):
@@ -222,6 +224,8 @@ class _DBForCompletionMessage:
             return _FakeUserQuery(self.user)
         if model is orchestrator.UserEvent:
             return _FakeEventQuery(self.existing_event)
+        if model is orchestrator.AIPlan:
+            return _FakeUserQuery(self.plan)
         raise AssertionError("unexpected model")
 
     def commit(self):
@@ -268,9 +272,14 @@ def test_trigger_plan_completion_reports_the_plan_that_completed(monkeypatch):
     monkeypatch.setattr(
         orchestrator,
         "_auto_complete_plan_if_needed",
-        lambda _db, _user, *, expected_plan_id=None: (
-            42 if expected_plan_id == 99 else None
-        ),
+        lambda _db, _user, *, expected_plan_id=None: LifecycleResult(
+            user_id=1,
+            plan_id=42,
+            status="completed",
+            operation="complete",
+        )
+        if expected_plan_id == 99
+        else None,
     )
 
     submitted = []
@@ -302,28 +311,29 @@ async def test_message_entry_completion_wrapper_captures_result_before_send(monk
     monkeypatch.setattr(
         orchestrator,
         "_auto_complete_plan_if_needed",
-        lambda _db, _user: 42,
+        lambda _db, _user: LifecycleResult(
+            user_id=1,
+            plan_id=42,
+            status="completed",
+            operation="complete",
+        ),
     )
 
     sent = []
 
     async def _fake_send(user_id, plan_id):
         sent.append((user_id, plan_id))
-
-    created = []
-
-    def _fake_create_task(coro):
-        created.append(coro)
-        return None
+        return CompletionDeliveryResult(
+            user_id=user_id,
+            plan_id=plan_id,
+            succeeded=True,
+        )
 
     monkeypatch.setattr(orchestrator, "send_plan_completion_message", _fake_send)
-    monkeypatch.setattr(orchestrator.asyncio, "create_task", _fake_create_task)
 
-    orchestrator._auto_complete_plan_if_needed_for_user_id(1)
+    await orchestrator._auto_complete_plan_if_needed_for_user_id(1)
 
     assert db.commits == 1
-    assert len(created) == 1
-    await created[0]
     assert sent == [(1, 42)]
 
 
@@ -473,7 +483,12 @@ def test_check_plan_completions_calls_auto_complete(monkeypatch):
 
     def _fake_complete(_db, user, *, expected_plan_id):
         calls.append((user.id, expected_plan_id))
-        return expected_plan_id
+        return LifecycleResult(
+            user_id=user.id,
+            plan_id=expected_plan_id,
+            status="completed",
+            operation="complete",
+        )
 
     monkeypatch.setattr(orchestrator, "_auto_complete_plan_if_needed", _fake_complete)
     monkeypatch.setattr(scheduler, "_event_loop", None)
@@ -528,7 +543,12 @@ def test_check_plan_completions_submits_completion_messages_when_event_loop_avai
     monkeypatch.setattr(scheduler, "SessionLocal", lambda: _SessionCtx(db))
 
     def _fake_complete(_db, _user, *, expected_plan_id):
-        return expected_plan_id
+        return LifecycleResult(
+            user_id=1,
+            plan_id=expected_plan_id,
+            status="completed",
+            operation="complete",
+        )
 
     monkeypatch.setattr(orchestrator, "_auto_complete_plan_if_needed", _fake_complete)
 

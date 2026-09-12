@@ -12,17 +12,18 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from app.config import settings
 from app.db import AIPlanStep, ChatHistory, SessionLocal, User, UserEvent, UserProfile
 from app.orchestrator import handle_incoming_message
-from app.plan_guards import validate_step_action
 from app.ux.catalog import get_trigger_message
 from app.ux.persona import get_persona
 from app.ux.task_notification import get_step_rationale
 from app.telemetry import get_success_streak, log_user_event
 from app.lifecycle import (
     CurrentMode,
+    LifecycleEntitlementError,
+    LifecycleOwnershipError,
     LifecycleTransitionError,
     derive_current_mode,
     ensure_onboarding_progress,
-    transition_plan_step,
+    transition_owned_plan_step,
 )
 
 bot = Bot(
@@ -161,50 +162,57 @@ async def handle_task_completed(callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
 
     with SessionLocal() as db:
-        step = db.query(AIPlanStep).filter(AIPlanStep.id == step_id).first()
-        if not step:
-            await callback_query.answer("Завдання не знайдено")
-            return
-
-        if step.day.plan.user.tg_id != user_id:
+        try:
+            transition = transition_owned_plan_step(
+                db,
+                telegram_user_id=user_id,
+                step_id=step_id,
+                target_status="completed",
+                source_operation_id=f"telegram:{callback_query.id}:complete:{step_id}",
+            )
+        except LifecycleOwnershipError:
             await callback_query.answer("Це не ваше завдання")
             return
-
-        is_allowed, error_msg = validate_step_action(step)
-        if not is_allowed:
-            # Expired steps fail silently — buttons just stop responding.
-            if step.step_status in ("expired", "canceled"):
-                await callback_query.answer()
-            else:
-                await callback_query.answer(error_msg)
+        except LifecycleEntitlementError:
+            await callback_query.answer("Дія зараз недоступна")
             return
-
-        try:
-            transition = transition_plan_step(
-                db,
-                user_id=step.day.plan.user_id,
-                step_id=step.id,
-                target_status="completed",
-                source_operation_id=f"telegram:{callback_query.id}:complete:{step.id}",
-            )
-        except LifecycleTransitionError:
-            await callback_query.answer("Завдання вже завершене")
+        except LifecycleTransitionError as exc:
+            reason = str(exc)
+            if reason == "plan_step_missing":
+                await callback_query.answer("Завдання не знайдено")
+            elif reason == "plan_not_active":
+                await callback_query.answer("План зараз не активний")
+            elif "expired" in reason or "canceled" in reason:
+                await callback_query.answer()
+            elif "completed" in reason:
+                await callback_query.answer("Завдання вже виконано")
+            elif "skipped" in reason:
+                await callback_query.answer("Завдання вже пропущено")
+            else:
+                await callback_query.answer("Завдання вже завершене")
             return
         if transition.duplicate:
-            db.rollback()
-            await callback_query.answer("Завдання вже завершене")
+            # A semantic replay with a new callback ID records its own receipt
+            # even though the authoritative terminal state is unchanged.
+            db.commit()
+            if transition.status in {"expired", "canceled"}:
+                await callback_query.answer()
+            elif transition.status == "completed":
+                await callback_query.answer("Завдання вже виконано")
+            else:
+                await callback_query.answer("Завдання вже пропущено")
             return
 
         log_user_event(
             db,
-            user_id=step.day.plan.user_id,
+            user_id=int(transition.user_id),
             event_type="task_completed",
             event_source="telegram",
             source_operation_id=(
-                f"telegram:{callback_query.id}:complete:{step.id}"
+                f"telegram:{callback_query.id}:complete:{step_id}"
             ),
-            plan_step_id=step.id,
-            context={"day_number": step.day.day_number},
+            plan_step_id=step_id,
+            context={"day_number": transition.day_number},
         )
 
         db.commit()
@@ -289,47 +297,54 @@ async def handle_task_skipped(callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
 
     with SessionLocal() as db:
-        step = db.query(AIPlanStep).filter(AIPlanStep.id == step_id).first()
-        if not step:
-            await callback_query.answer("Завдання не знайдено")
-            return
-
-        if step.day.plan.user.tg_id != user_id:
+        try:
+            transition = transition_owned_plan_step(
+                db,
+                telegram_user_id=user_id,
+                step_id=step_id,
+                target_status="skipped",
+                source_operation_id=f"telegram:{callback_query.id}:skip:{step_id}",
+            )
+        except LifecycleOwnershipError:
             await callback_query.answer("Це не ваше завдання")
             return
-
-        is_allowed, error_msg = validate_step_action(step)
-        if not is_allowed:
-            if step.step_status in ("expired", "canceled"):
-                await callback_query.answer()
-            else:
-                await callback_query.answer(error_msg)
+        except LifecycleEntitlementError:
+            await callback_query.answer("Дія зараз недоступна")
             return
-
-        try:
-            transition = transition_plan_step(
-                db,
-                user_id=step.day.plan.user_id,
-                step_id=step.id,
-                target_status="skipped",
-                source_operation_id=f"telegram:{callback_query.id}:skip:{step.id}",
-            )
-        except LifecycleTransitionError:
-            await callback_query.answer("Завдання вже завершене")
+        except LifecycleTransitionError as exc:
+            reason = str(exc)
+            if reason == "plan_step_missing":
+                await callback_query.answer("Завдання не знайдено")
+            elif reason == "plan_not_active":
+                await callback_query.answer("План зараз не активний")
+            elif "expired" in reason or "canceled" in reason:
+                await callback_query.answer()
+            elif "completed" in reason:
+                await callback_query.answer("Завдання вже виконано")
+            elif "skipped" in reason:
+                await callback_query.answer("Завдання вже пропущено")
+            else:
+                await callback_query.answer("Завдання вже завершене")
             return
         if transition.duplicate:
-            db.rollback()
-            await callback_query.answer("Завдання вже завершене")
+            # Preserve the source receipt for an already-authoritative result.
+            db.commit()
+            if transition.status in {"expired", "canceled"}:
+                await callback_query.answer()
+            elif transition.status == "completed":
+                await callback_query.answer("Завдання вже виконано")
+            else:
+                await callback_query.answer("Завдання вже пропущено")
             return
 
         log_user_event(
             db,
-            user_id=step.day.plan.user_id,
+            user_id=int(transition.user_id),
             event_type="task_skipped",
             event_source="telegram",
-            source_operation_id=f"telegram:{callback_query.id}:skip:{step.id}",
-            plan_step_id=step.id,
-            context={"day_number": step.day.day_number},
+            source_operation_id=f"telegram:{callback_query.id}:skip:{step_id}",
+            plan_step_id=step_id,
+            context={"day_number": transition.day_number},
         )
 
         db.commit()

@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
 from app import orchestrator
+from app.lifecycle import LifecycleResult
 
 
 class DummyMemory:
@@ -29,7 +30,10 @@ class DummyMemory:
 
 @pytest.fixture(autouse=True)
 def disable_auto_complete(monkeypatch):
-    monkeypatch.setattr(orchestrator, "_auto_complete_plan_if_needed_for_user_id", lambda _user_id: None)
+    async def _noop(_user_id):
+        return None
+
+    monkeypatch.setattr(orchestrator, "_auto_complete_plan_if_needed_for_user_id", _noop)
 
 
 # NOTE: coach integration tests deferred to T5.8
@@ -142,18 +146,17 @@ def test_auto_complete_marks_plan_completed_and_logs_event_with_metrics_error(mo
     monkeypatch.setattr(
         orchestrator,
         "complete_current_plan_if_ready",
-        lambda _db, **_kwargs: type(
-            "Result", (), {"plan_id": 9, "duplicate": False}
-        )(),
+        lambda _db, **_kwargs: LifecycleResult(
+            user_id=77,
+            plan_id=9,
+            status="completed",
+            operation="complete",
+        ),
     )
-    def raise_no_loop():
-        raise RuntimeError("no running loop")
 
-    monkeypatch.setattr(orchestrator.asyncio, "get_running_loop", raise_no_loop)
+    completion = orchestrator._auto_complete_plan_if_needed(db, user)
 
-    completed_plan_id = orchestrator._auto_complete_plan_if_needed(db, user)
-
-    assert completed_plan_id == 9
+    assert completion is not None and completion.plan_id == 9
     assert captured["event_type"] == "plan_completed"
     assert captured["plan_id"] == 9
     assert captured["context"]["metrics_error"] is True
@@ -188,8 +191,11 @@ def test_auto_complete_stale_scheduled_plan_is_noop(monkeypatch):
         lambda _db, _uid: current_plan,
     )
 
-    def fail_completion(*_args, **_kwargs):
-        raise AssertionError("stale callback must not reach lifecycle completion")
+    called = []
+
+    def fail_completion(*_args, **kwargs):
+        called.append(kwargs["plan_id"])
+        return None
 
     monkeypatch.setattr(
         orchestrator,
@@ -204,6 +210,7 @@ def test_auto_complete_stale_scheduled_plan_is_noop(monkeypatch):
     )
 
     assert completed_plan_id is None
+    assert called == [41]
 
 
 def test_auto_complete_does_not_reapply_legacy_mirrors_after_event_failure(monkeypatch):
@@ -229,14 +236,17 @@ def test_auto_complete_does_not_reapply_legacy_mirrors_after_event_failure(monke
     monkeypatch.setattr(
         orchestrator,
         "complete_current_plan_if_ready",
-        lambda _db, **_kwargs: type(
-            "Result", (), {"plan_id": 22, "duplicate": False}
-        )(),
+        lambda _db, **_kwargs: LifecycleResult(
+            user_id=101,
+            plan_id=22,
+            status="completed",
+            operation="complete",
+        ),
     )
 
-    completed_plan_id = orchestrator._auto_complete_plan_if_needed(db, user)
+    completion = orchestrator._auto_complete_plan_if_needed(db, user)
 
-    assert completed_plan_id == 22
+    assert completion is not None and completion.plan_id == 22
     assert not hasattr(user, "current_state")
     assert not hasattr(user, "plan_end_date")
 

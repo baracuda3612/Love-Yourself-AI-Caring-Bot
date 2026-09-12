@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import (
+    AIPlan,
     ChatHistory,
     SessionLocal,
     User,
@@ -23,7 +24,9 @@ from app.workers.coach_agent import _build_idle_finished_context, coach_agent
 from app.workers.mock_workers import mock_onboarding_agent
 from app.telemetry import log_user_event
 from app.lifecycle import (
+    CompletionDeliveryResult,
     CurrentMode,
+    LifecycleResult,
     complete_current_plan_if_ready,
     derive_current_mode,
     get_current_plan as get_authoritative_current_plan,
@@ -38,20 +41,29 @@ def _auto_complete_plan_if_needed(
     user: User,
     *,
     expected_plan_id: int | None = None,
-) -> int | None:
-    plan = get_authoritative_current_plan(db, user.id)
-    if plan is None or (
-        expected_plan_id is not None and plan.id != expected_plan_id
-    ):
-        return None
+) -> LifecycleResult | None:
+    plan = None
+    if expected_plan_id is None:
+        plan = get_authoritative_current_plan(db, user.id)
+        if plan is None:
+            return None
+        expected_plan_id = plan.id
     result = complete_current_plan_if_ready(
         db,
         user_id=user.id,
-        plan_id=plan.id,
-        source_operation_id=f"runtime:complete:{plan.id}",
+        plan_id=expected_plan_id,
+        source_operation_id=f"runtime:complete:{expected_plan_id}",
     )
     if result is None or result.duplicate:
-        return None
+        return result
+    if plan is None:
+        plan = (
+            db.query(AIPlan)
+            .filter(AIPlan.id == result.plan_id, AIPlan.user_id == user.id)
+            .first()
+        )
+    if plan is None:
+        raise RuntimeError("completed_plan_missing")
 
     completion_rate = None
     adaptation_count = 0
@@ -90,13 +102,15 @@ def _auto_complete_plan_if_needed(
     except Exception as e:
         logger.error("[COMPLETION] log event failed user=%s: %s", user.id, e)
 
-    return result.plan_id
+    return result
 
 
-async def send_plan_completion_message(user_id: int, plan_id: int) -> None:
+async def send_plan_completion_message(
+    user_id: int,
+    plan_id: int,
+) -> CompletionDeliveryResult:
     """
-    Sends the completion report to the user via Telegram.
-    Fire-and-forget. Called from _auto_complete_plan_if_needed.
+    Explicitly sends the completion report after a committed transition.
     Exempt from MAX_AUTO_MESSAGES_PER_DAY — this is a lifecycle event.
     """
     from app.plan_completion.metrics import build_completion_metrics
@@ -108,7 +122,33 @@ async def send_plan_completion_message(user_id: int, plan_id: int) -> None:
         user = db.query(User).filter(User.id == user_id).first()
         if not user or not user.tg_id:
             logger.warning("[COMPLETION_MSG] user=%s not found or no tg_id", user_id)
-            return
+            return CompletionDeliveryResult(
+                user_id=user_id,
+                plan_id=plan_id,
+                succeeded=False,
+                code="user_unavailable",
+            )
+        plan = (
+            db.query(AIPlan)
+            .filter(
+                AIPlan.id == plan_id,
+                AIPlan.user_id == user_id,
+                AIPlan.status == "completed",
+            )
+            .first()
+        )
+        if plan is None:
+            logger.warning(
+                "[COMPLETION_MSG] completed plan not owned user=%s plan=%s",
+                user_id,
+                plan_id,
+            )
+            return CompletionDeliveryResult(
+                user_id=user_id,
+                plan_id=plan_id,
+                succeeded=False,
+                code="completed_plan_not_owned",
+            )
 
         already_sent = db.query(UserEvent).filter(
             UserEvent.user_id == user_id,
@@ -117,7 +157,13 @@ async def send_plan_completion_message(user_id: int, plan_id: int) -> None:
         ).first()
         if already_sent:
             logger.info("[COMPLETION_MSG] already sent for plan=%s", plan_id)
-            return
+            return CompletionDeliveryResult(
+                user_id=user_id,
+                plan_id=plan_id,
+                succeeded=True,
+                duplicate=True,
+                code="already_sent",
+            )
 
         try:
             metrics = build_completion_metrics(db, user_id, plan_id)
@@ -128,7 +174,14 @@ async def send_plan_completion_message(user_id: int, plan_id: int) -> None:
                 plan_id,
                 e,
             )
-            return
+            _schedule_completion_retry(user_id, plan_id)
+            return CompletionDeliveryResult(
+                user_id=user_id,
+                plan_id=plan_id,
+                succeeded=False,
+                retry_scheduled=True,
+                code="metrics_failed",
+            )
 
         persona = "empath"
         if user.profile:
@@ -145,20 +198,46 @@ async def send_plan_completion_message(user_id: int, plan_id: int) -> None:
     result = await _send_message_async(tg_id, report_text)
 
     if result:
-        with SessionLocal() as db:
-            log_user_event(
-                db,
-                user_id=user_id,
-                event_type="plan_completion_sent",
-                event_source="runtime",
-                source_operation_id=f"runtime:completion-report:{plan_id}",
-                plan_id=plan_id,
-                context={"outcome_tier": metrics.outcome_tier},
+        try:
+            with SessionLocal() as db:
+                log_user_event(
+                    db,
+                    user_id=user_id,
+                    event_type="plan_completion_sent",
+                    event_source="runtime",
+                    source_operation_id=f"runtime:completion-report:{plan_id}",
+                    plan_id=plan_id,
+                    context={"outcome_tier": metrics.outcome_tier},
+                )
+                db.commit()
+        except Exception:
+            logger.exception(
+                "[COMPLETION_MSG] delivery receipt failed user=%s plan=%s",
+                user_id,
+                plan_id,
             )
-            db.commit()
-        return
+            _schedule_completion_retry(user_id, plan_id)
+            return CompletionDeliveryResult(
+                user_id=user_id,
+                plan_id=plan_id,
+                succeeded=False,
+                retry_scheduled=True,
+                code="delivery_receipt_failed",
+            )
+        return CompletionDeliveryResult(
+            user_id=user_id,
+            plan_id=plan_id,
+            succeeded=True,
+        )
 
     _schedule_completion_retry(user_id, plan_id)
+    return CompletionDeliveryResult(
+        user_id=user_id,
+        plan_id=plan_id,
+        succeeded=False,
+        retry_scheduled=True,
+        code="send_failed",
+    )
 
 
 def _schedule_completion_retry(user_id: int, plan_id: int) -> None:
@@ -182,7 +261,14 @@ def _retry_completion_message(user_id: int, plan_id: int) -> None:
     future = _submit_coroutine(send_plan_completion_message(user_id, plan_id))
     if future:
         try:
-            future.result(timeout=30)
+            delivery = future.result(timeout=30)
+            if not delivery.succeeded:
+                logger.warning(
+                    "[COMPLETION_RETRY] pending user=%s plan=%s code=%s",
+                    user_id,
+                    plan_id,
+                    delivery.code,
+                )
         except Exception as e:
             logger.error("[COMPLETION_RETRY] failed user=%s: %s", user_id, e)
             _submit_coroutine(_send_failure_notice(user_id))
@@ -212,7 +298,7 @@ def _trigger_plan_completion(user_id: int, plan_id: int) -> None:
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
             return
-        completed_plan_id = _auto_complete_plan_if_needed(
+        completion = _auto_complete_plan_if_needed(
             db,
             user,
             expected_plan_id=plan_id,
@@ -224,26 +310,33 @@ def _trigger_plan_completion(user_id: int, plan_id: int) -> None:
             logger.error("[COMPLETION_TRIGGER] db commit failed user=%s: %s", user_id, e)
             return
 
-    if completed_plan_id is None:
+    if completion is None:
         return
 
     future = _submit_coroutine(
-        send_plan_completion_message(user_id, completed_plan_id)
+        send_plan_completion_message(user_id, completion.plan_id)
     )
     if future:
         try:
-            future.result(timeout=30)
+            delivery = future.result(timeout=30)
+            if not delivery.succeeded:
+                logger.warning(
+                    "[COMPLETION_TRIGGER] report pending user=%s plan=%s code=%s",
+                    user_id,
+                    completion.plan_id,
+                    delivery.code,
+                )
         except Exception as e:
             logger.error("[COMPLETION_TRIGGER] send failed user=%s: %s", user_id, e)
 
 
-def _auto_complete_plan_if_needed_for_user_id(user_id: int) -> None:
+async def _auto_complete_plan_if_needed_for_user_id(user_id: int) -> None:
     with SessionLocal() as db:
         user: Optional[User] = db.query(User).filter(User.id == user_id).first()
         if not user:
             return
 
-        completed_plan_id = _auto_complete_plan_if_needed(db, user)
+        completion = _auto_complete_plan_if_needed(db, user)
 
         try:
             db.commit()
@@ -252,14 +345,14 @@ def _auto_complete_plan_if_needed_for_user_id(user_id: int) -> None:
             logger.error("[LIFECYCLE] Failed to auto-complete plan for user %s", user_id)
             return
 
-    if completed_plan_id is not None:
-        try:
-            asyncio.get_running_loop()
-            asyncio.create_task(send_plan_completion_message(user_id, completed_plan_id))
-        except RuntimeError:
+    if completion is not None:
+        delivery = await send_plan_completion_message(user_id, completion.plan_id)
+        if not delivery.succeeded:
             logger.warning(
-                "[COMPLETION] No running event loop, skipping message task user=%s",
+                "[COMPLETION] report pending user=%s plan=%s code=%s",
                 user_id,
+                completion.plan_id,
+                delivery.code,
             )
 
 
@@ -383,9 +476,21 @@ def _build_tool_registry() -> Dict[str, Any]:
             args.get("plan_type", "SHORT"),
             source_operation_id=args["_source_operation_id"],
         ),
-        "record_evening_time":  lambda uid, args: record_evening_time(uid, args["hhmm"]),
-        "change_day_time":      lambda uid, args: change_day_time(uid, args["hhmm"]),
-        "change_evening_time":  lambda uid, args: change_evening_time(uid, args["hhmm"]),
+        "record_evening_time":  lambda uid, args: record_evening_time(
+            uid,
+            args["hhmm"],
+            source_operation_id=args["_source_operation_id"],
+        ),
+        "change_day_time":      lambda uid, args: change_day_time(
+            uid,
+            args["hhmm"],
+            source_operation_id=args["_source_operation_id"],
+        ),
+        "change_evening_time":  lambda uid, args: change_evening_time(
+            uid,
+            args["hhmm"],
+            source_operation_id=args["_source_operation_id"],
+        ),
         "get_plan_status":      lambda uid, _args: get_plan_status(uid),
         "pause_plan":           lambda uid, args: pause_plan(
             uid, source_operation_id=args["_source_operation_id"]
@@ -407,7 +512,7 @@ _TOOL_REPLY_TEMPLATES: Dict[str, str] = {
     "change_evening_time":  "✅ Вечірній час змінено.",
     "get_plan_status":      None,   # returns dynamic data — formatted below
     "pause_plan":           "⏸ План поставлено на паузу. Завдання не надходитимуть до відновлення.",
-    "resume_plan":          "▶️ План відновлено. Завдання повернуться за розкладом.",
+    "resume_plan":          "▶️ План відновлено. Майбутній розклад потребує узгодження.",
     "cancel_plan":          "🛑 Поточну серію вправ скасовано.",
 }
 
@@ -468,6 +573,8 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
     source_required_tools = {
         "create_followup_plan",
         "record_evening_time",
+        "change_day_time",
+        "change_evening_time",
         "pause_plan",
         "resume_plan",
         "cancel_plan",
@@ -500,6 +607,25 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
     # Special case: get_plan_status returns a dict to format
     if tool_name == "get_plan_status":
         return _format_plan_status(result)
+
+    if isinstance(result, dict) and result.get("status") == "error":
+        code = result.get("code")
+        if code == "activation_reconciliation_failed":
+            return (
+                "⚠️ План збережено, але його розклад не вдалося повністю "
+                "узгодити. Повтори запуск із тим самим запитом."
+            )
+        if code == "schedule_reconciliation_failed":
+            return (
+                "⚠️ Час збережено, але розклад ще не узгоджено. "
+                "Повтори цю саму дію."
+            )
+        if code == "cancel_reconciliation_failed":
+            return (
+                "⚠️ План скасовано, але очищення розкладу ще не завершене. "
+                "Повтори цю саму дію."
+            )
+        return "⚠️ Дію збережено частково. Повтори цей самий запит."
 
     # needs_evening_time soft result from create_followup_plan
     if isinstance(result, dict) and result.get("status") == "needs_evening_time":
@@ -535,6 +661,10 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
         if total_days in {7, 14}:
             return f"🛑 Поточні {total_days} днів скасовано."
 
+    if tool_name in {"change_day_time", "change_evening_time"}:
+        if result.get("jobs_reconciled") == "deferred":
+            return "✅ Час збережено. Розклад буде узгоджено під час відновлення плану."
+
     template = _TOOL_REPLY_TEMPLATES.get(tool_name, "✅ Готово.")
     return template
 
@@ -556,7 +686,7 @@ async def handle_incoming_message(
 
     await session_memory.append_message(user_id, "user", message_text)
 
-    _auto_complete_plan_if_needed_for_user_id(user_id)
+    await _auto_complete_plan_if_needed_for_user_id(user_id)
 
     async def _finalize_reply(text: str) -> Dict[str, Any]:
         await session_memory.append_message(user_id, "assistant", text)
