@@ -675,9 +675,10 @@ WP-03.5 after the target plan builder and delivery states exist.
 
 ### WP-02.1 — Remove dead lifecycle entrances and the schedule-adjustment tunnel
 
-**Status:** `IN REVIEW` — bounded deletion, replacement-path regression,
-import/reachability proof, and full-suite baseline comparison passed; PR #256
-targets `implementation/pre-mvp`.
+**Status:** `VERIFIED` — bounded deletion, replacement-path regression,
+import/reachability proof, full-suite baseline comparison, and GitHub review
+passed; founder merged PR #256 as
+`82d70bba5703a978f24c873126ab38895b545e8d`.
 
 Remove as complete subsystems, not isolated symbols:
 
@@ -701,6 +702,8 @@ Remove as complete subsystems, not isolated symbols:
 * replacement behavior exists where the target contract requires it.
 
 ### WP-02.2 — Build the authoritative lifecycle service
+
+**Status:** `IN PROGRESS`
 
 Create one backend boundary for:
 
@@ -1544,7 +1547,7 @@ block exit gate passes.
   - [x] WP-01.3 — Implement the plan-centric lifecycle migration
   - [x] WP-01.4 — Establish event, privacy, and deployment primitives
 - [ ] B2 — Target lifecycle and runtime actions
-  - [ ] WP-02.1 — Remove dead lifecycle entrances and the schedule-adjustment tunnel
+  - [x] WP-02.1 — Remove dead lifecycle entrances and the schedule-adjustment tunnel
   - [ ] WP-02.2 — Build the authoritative lifecycle service
   - [ ] WP-02.3 — Complete runtime controls and plan-format behavior
 - [ ] B3 — Content, plan generation, presentation, and scheduled delivery
@@ -1590,9 +1593,9 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | `WP-02.1 — Remove dead lifecycle entrances and the schedule-adjustment tunnel` |
-| Status | `IN REVIEW` |
-| Next action | Process every review thread on PR #256 with written evidence; founder remains the sole merge authority |
+| Current package | `WP-02.2 — Build the authoritative lifecycle service` |
+| Status | `IN PROGRESS` |
+| Next action | Implement and verify the bounded authoritative lifecycle boundary on `wp/02.2-authoritative-lifecycle-service`; founder remains the sole merge authority |
 | Current blockers | None for disposable founder-only refactoring; paid backup/restore remains deferred to Gate G1 before durable data or market launch |
 
 ### Private founder log
