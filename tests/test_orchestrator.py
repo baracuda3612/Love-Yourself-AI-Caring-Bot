@@ -17,7 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
 from app import orchestrator
-from app.lifecycle import LifecycleResult
+from app.lifecycle import LifecycleEntitlementError, LifecycleResult
 
 
 class DummyMemory:
@@ -208,6 +208,37 @@ async def test_medium_cascade_reports_reconciliation_failure_and_keeps_retry_key
     assert captured["_source_operation_id"] == "call-medium-7"
     assert memory.pending == "collect_evening_time_for_medium:call-medium-7"
     assert memory.cleared is False
+
+
+@pytest.mark.anyio
+async def test_inactive_sender_gets_access_denied_before_coach(monkeypatch):
+    memory = DummyMemory()
+    coach_called = False
+
+    async def reject_completion(_user_id):
+        raise LifecycleEntitlementError("user_not_entitled")
+
+    async def fail_coach(_payload):
+        nonlocal coach_called
+        coach_called = True
+        return {"reply_text": "should not run"}
+
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(
+        orchestrator,
+        "_auto_complete_plan_if_needed_for_user_id",
+        reject_completion,
+    )
+    monkeypatch.setattr(orchestrator, "coach_agent", fail_coach)
+
+    result = await orchestrator.handle_incoming_message(17, "Привіт")
+
+    assert result == {"reply_text": "Доступ до Love Yourself зараз неактивний."}
+    assert coach_called is False
+    assert memory.messages == [
+        (17, "user", "Привіт"),
+        (17, "assistant", "Доступ до Love Yourself зараз неактивний."),
+    ]
 
 
 def test_auto_complete_marks_plan_completed_and_logs_event_with_metrics_error(monkeypatch):

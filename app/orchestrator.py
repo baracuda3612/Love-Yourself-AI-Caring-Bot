@@ -26,6 +26,7 @@ from app.telemetry import log_user_event
 from app.lifecycle import (
     CompletionDeliveryResult,
     CurrentMode,
+    LifecycleEntitlementError,
     LifecycleResult,
     complete_current_plan_if_ready,
     derive_current_mode,
@@ -706,11 +707,14 @@ async def handle_incoming_message(
 
     await session_memory.append_message(user_id, "user", message_text)
 
-    await _auto_complete_plan_if_needed_for_user_id(user_id)
-
     async def _finalize_reply(text: str) -> Dict[str, Any]:
         await session_memory.append_message(user_id, "assistant", text)
         return {"reply_text": text}
+
+    try:
+        await _auto_complete_plan_if_needed_for_user_id(user_id)
+    except LifecycleEntitlementError:
+        return await _finalize_reply("Доступ до Love Yourself зараз неактивний.")
 
     context_payload = await build_user_context(user_id, message_text)
     current_mode = context_payload.get("current_mode")

@@ -703,7 +703,7 @@ Remove as complete subsystems, not isolated symbols:
 
 ### WP-02.2 — Build the authoritative lifecycle service
 
-**Status:** `VERIFIED` — bounded acceptance passed; both configured-review
+**Status:** `VERIFIED` — bounded acceptance passed; all configured-review
 findings were fixed with regression evidence and all threads are resolved on
 PR #257. Founder merge is pending.
 
