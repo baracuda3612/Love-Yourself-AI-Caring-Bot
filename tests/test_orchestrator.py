@@ -262,6 +262,11 @@ def test_auto_complete_marks_plan_completed_and_logs_event_with_metrics_error(mo
         captured.update(kwargs)
 
     monkeypatch.setattr(orchestrator, "log_user_event", fake_log_user_event)
+    monkeypatch.setattr(
+        orchestrator,
+        "require_lifecycle_entitlement",
+        lambda _db, _uid: None,
+    )
     monkeypatch.setattr(orchestrator, "get_authoritative_current_plan", lambda _db, _uid: latest_plan)
     monkeypatch.setattr(
         orchestrator,
@@ -293,6 +298,11 @@ def test_auto_complete_without_active_plan_sets_idle_without_logging(monkeypatch
         called["value"] = True
 
     monkeypatch.setattr(orchestrator, "log_user_event", fake_log_user_event)
+    monkeypatch.setattr(
+        orchestrator,
+        "require_lifecycle_entitlement",
+        lambda _db, _uid: None,
+    )
     monkeypatch.setattr(orchestrator, "get_authoritative_current_plan", lambda _db, _uid: None)
 
     completed_plan_id = orchestrator._auto_complete_plan_if_needed(db, user)
@@ -301,10 +311,36 @@ def test_auto_complete_without_active_plan_sets_idle_without_logging(monkeypatch
     assert called["value"] is False
 
 
+def test_auto_complete_without_plan_still_enforces_entitlement(monkeypatch):
+    user = type("UserStub", (), {"id": 89})()
+
+    def reject_inactive(_db, _user_id):
+        raise LifecycleEntitlementError("user_not_entitled")
+
+    monkeypatch.setattr(
+        orchestrator,
+        "require_lifecycle_entitlement",
+        reject_inactive,
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "get_authoritative_current_plan",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must authorize first")),
+    )
+
+    with pytest.raises(LifecycleEntitlementError, match="user_not_entitled"):
+        orchestrator._auto_complete_plan_if_needed(object(), user)
+
+
 def test_auto_complete_stale_scheduled_plan_is_noop(monkeypatch):
     user = type("UserStub", (), {"id": 88})()
     current_plan = type("PlanStub", (), {"id": 42})()
 
+    monkeypatch.setattr(
+        orchestrator,
+        "require_lifecycle_entitlement",
+        lambda _db, _uid: None,
+    )
     monkeypatch.setattr(
         orchestrator,
         "get_authoritative_current_plan",
@@ -352,6 +388,11 @@ def test_auto_complete_does_not_reapply_legacy_mirrors_after_event_failure(monke
         raise RuntimeError("boom")
 
     monkeypatch.setattr(orchestrator, "log_user_event", fake_log_user_event)
+    monkeypatch.setattr(
+        orchestrator,
+        "require_lifecycle_entitlement",
+        lambda _db, _uid: None,
+    )
     monkeypatch.setattr(orchestrator, "get_authoritative_current_plan", lambda _db, _uid: latest_plan)
     monkeypatch.setattr(
         orchestrator,
@@ -398,6 +439,11 @@ def test_auto_complete_rejects_multiple_current_plans(monkeypatch):
     db = _AutoCompleteDB([latest_plan, older_plan])
     from app.lifecycle import LifecycleInvariantError
 
+    monkeypatch.setattr(
+        orchestrator,
+        "require_lifecycle_entitlement",
+        lambda _db, _uid: None,
+    )
     monkeypatch.setattr(
         orchestrator,
         "get_authoritative_current_plan",

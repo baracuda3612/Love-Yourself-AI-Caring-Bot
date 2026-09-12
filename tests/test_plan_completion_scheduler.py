@@ -1,3 +1,4 @@
+import asyncio
 import os
 import pathlib
 import sys
@@ -355,6 +356,67 @@ async def test_send_plan_completion_message_skips_when_already_sent(monkeypatch)
     await orchestrator.send_plan_completion_message(1, 99)
 
     assert sent == []
+
+
+@pytest.mark.anyio
+async def test_completion_delivery_serializes_duplicate_in_flight_attempts(monkeypatch):
+    user = type("U", (), {"id": 1, "tg_id": 123, "profile": None})()
+    state = {"receipt": None}
+
+    class _SharedReceiptDB(_DBForCompletionMessage):
+        def query(self, model):
+            if model is orchestrator.UserEvent:
+                return _FakeEventQuery(state["receipt"])
+            return super().query(model)
+
+    monkeypatch.setattr(
+        orchestrator,
+        "SessionLocal",
+        lambda: _SessionCtx(_SharedReceiptDB(user=user, existing_event=None)),
+    )
+    monkeypatch.setattr(
+        "app.plan_completion.metrics.build_completion_metrics",
+        lambda *_args: type("Metrics", (), {"outcome_tier": "STRONG"})(),
+    )
+    monkeypatch.setattr(
+        "app.plan_completion.report.build_completion_report",
+        lambda *_args: "План завершено.",
+    )
+    monkeypatch.setattr(
+        "app.plan_completion.tokens.make_report_token",
+        lambda *_args: "report-token",
+    )
+
+    send_started = asyncio.Event()
+    release_send = asyncio.Event()
+    sends = []
+
+    async def _fake_send(*args, **kwargs):
+        sends.append((args, kwargs))
+        send_started.set()
+        await release_send.wait()
+        return True
+
+    def _record_receipt(*_args, **_kwargs):
+        state["receipt"] = object()
+
+    monkeypatch.setattr("app.scheduler._send_message_async", _fake_send)
+    monkeypatch.setattr(orchestrator, "log_user_event", _record_receipt)
+
+    first = asyncio.create_task(orchestrator.send_plan_completion_message(1, 99))
+    await send_started.wait()
+    second = asyncio.create_task(orchestrator.send_plan_completion_message(1, 99))
+    await asyncio.sleep(0)
+
+    assert len(sends) == 1
+    release_send.set()
+    first_result, second_result = await asyncio.gather(first, second)
+
+    assert len(sends) == 1
+    assert first_result.succeeded is True
+    assert second_result.succeeded is True
+    assert second_result.duplicate is True
+    assert second_result.code == "already_sent"
 
 
 @pytest.mark.anyio

@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -31,10 +32,35 @@ from app.lifecycle import (
     complete_current_plan_if_ready,
     derive_current_mode,
     get_current_plan as get_authoritative_current_plan,
+    require_lifecycle_entitlement,
 )
 
 session_memory = SessionMemory(limit=20)
 logger = logging.getLogger(__name__)
+_completion_delivery_locks: dict[tuple[int, int], tuple[asyncio.Lock, int]] = {}
+
+
+@asynccontextmanager
+async def _serialize_completion_delivery(user_id: int, plan_id: int):
+    """Serialize one plan's delivery attempts within the single runtime owner."""
+    key = (user_id, plan_id)
+    lock, waiters = _completion_delivery_locks.get(key, (asyncio.Lock(), 0))
+    _completion_delivery_locks[key] = (lock, waiters + 1)
+    acquired = False
+    try:
+        await lock.acquire()
+        acquired = True
+        yield
+    finally:
+        if acquired:
+            lock.release()
+        current = _completion_delivery_locks.get(key)
+        if current is not None and current[0] is lock:
+            remaining = current[1] - 1
+            if remaining:
+                _completion_delivery_locks[key] = (lock, remaining)
+            else:
+                del _completion_delivery_locks[key]
 
 
 def _auto_complete_plan_if_needed(
@@ -43,6 +69,7 @@ def _auto_complete_plan_if_needed(
     *,
     expected_plan_id: int | None = None,
 ) -> LifecycleResult | None:
+    require_lifecycle_entitlement(db, user.id)
     plan = None
     if expected_plan_id is None:
         plan = get_authoritative_current_plan(db, user.id)
@@ -114,6 +141,14 @@ async def send_plan_completion_message(
     Explicitly sends the completion report after a committed transition.
     Exempt from MAX_AUTO_MESSAGES_PER_DAY — this is a lifecycle event.
     """
+    async with _serialize_completion_delivery(user_id, plan_id):
+        return await _send_plan_completion_message_once(user_id, plan_id)
+
+
+async def _send_plan_completion_message_once(
+    user_id: int,
+    plan_id: int,
+) -> CompletionDeliveryResult:
     from app.plan_completion.metrics import build_completion_metrics
     from app.plan_completion.report import build_completion_report
     from app.plan_completion.tokens import make_report_token

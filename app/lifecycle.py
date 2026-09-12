@@ -356,6 +356,11 @@ def _lock_user(
     return user
 
 
+def require_lifecycle_entitlement(db: Session, user_id: int) -> None:
+    """Re-read and enforce the current runtime entitlement under the user lock."""
+    _lock_user(db, user_id)
+
+
 def _lock_telegram_actor(db: Session, telegram_user_id: int) -> User:
     user = (
         db.query(User)
@@ -615,6 +620,14 @@ def abandon_current_plan(
             existing,
             expected_operation="abandon",
         )
+        abandoned_plan = (
+            db.query(AIPlan)
+            .filter(AIPlan.id == existing.plan_id, AIPlan.user_id == user_id)
+            .populate_existing()
+            .first()
+        )
+        if abandoned_plan is None:
+            raise LifecycleInvariantError("abandon_receipt_plan_missing")
         canceled_ids = tuple(
             step_id
             for (step_id,) in (
@@ -631,6 +644,7 @@ def abandon_current_plan(
         return (
             replace(
                 duplicate,
+                plan_type=_plan_type(abandoned_plan),
                 effects=(
                     ExternalEffect(
                         kind="cancel_step_jobs",

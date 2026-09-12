@@ -7,6 +7,7 @@ it may not re-decide ownership, aggregate state, or mutation outcome outside
 
 | Live surface or retired entrance | Authoritative method | Preserved contract | External work or later owner |
 |---|---|---|---|
+| Ordinary text lifecycle preflight | `require_lifecycle_entitlement()` | Re-reads the current runtime entitlement under the user lock even when no current plan exists, so an inactive sender cannot reach onboarding or Coach through the no-plan path. | Full identity, enrollment, and access UX remains WP-04.1. |
 | Coach current-plan status | `read_lifecycle_status()` | Re-reads the enabled user and current plan, then derives mode, current day, completed work, remaining work, and remaining deliveries. | Presentation stays in the runtime tool; no mutation. |
 | Coach follow-up activation | `activate_plan()` | Locks the entitled user, enforces no-current-plan/history rules, creates one SHORT/MEDIUM aggregate, and replays the same receipt to the same plan. | `reconcile_plan_schedule` runs after commit. Target generation remains WP-03.2; deterministic onboarding remains WP-04.3. |
 | Former public `plan_drafts.service.create_plan()` entrance | `activate_plan()` | The builder/finalizer survives only as `create_plan_for_lifecycle()`, an internal helper called by the service. | It emits no Telegram message and performs no scheduler call. |
@@ -19,7 +20,7 @@ it may not re-decide ownership, aggregate state, or mutation outcome outside
 | Coach day/evening change and `/user/time-slots` | `change_delivery_time()` | Validates the owned lifecycle context, persists the slot and future step times, records a receipt, and does not overwrite a later value on replay. | Active jobs reconcile after commit; paused reconciliation and semantic collection UX remain WP-02.3. API authentication/enrollment remains WP-04.1. |
 | Medium-plan evening preference collection | `record_evening_time_preference()` | Records the collected preference and its replay result under the same entitlement/receipt boundary. | Plan-aware collection UX and semantic validation remain WP-02.3. |
 | Plan-format request | `request_plan_format_switch()` | Validates the enabled owner, current plan, source ID, and target format, but returns `applied=False`. | Actual format-switch behavior belongs to WP-02.3. |
-| Runtime/cron completion detection | `complete_current_plan_if_ready()` | Completes only the exact active owned aggregate when every child is terminal; replay exposes the same completion-report intent. | Completion report delivery is explicit. Durable obligation and automatic same-format successor remain WP-03.5. |
+| Runtime/cron completion detection | `complete_current_plan_if_ready()` | Completes only the exact active owned aggregate when every child is terminal; replay exposes the same completion-report intent. Concurrent report attempts for one plan serialize within the approved single runtime owner and re-check the sent receipt before delivery. | Completion report delivery is explicit. Cross-runtime durable obligation and automatic same-format successor remain WP-03.5. |
 | Continuation hand-off | `prepare_continuation()` | Validates the exact owned completed source plan and returns its format plus stable operation identity. | No successor is created before WP-03.5. |
 
 ## Enforcement evidence

@@ -50,6 +50,56 @@ def test_entitlement_is_checked_on_the_locked_authoritative_user():
     assert db.query_result.locked is True
 
 
+def test_abandon_replay_restores_authoritative_plan_type(monkeypatch):
+    receipt = SimpleNamespace(
+        user_id=7,
+        plan_id=14,
+        plan_step_id=None,
+        operation="abandon",
+        result_status="abandoned",
+    )
+    plan = SimpleNamespace(id=14, user_id=7, total_days=14)
+
+    class _CanceledStepsQuery:
+        def join(self, *_args):
+            return self
+
+        def filter(self, *_args):
+            return self
+
+        def order_by(self, *_args):
+            return self
+
+        def all(self):
+            return [(31,), (32,)]
+
+    class _ReplayDB:
+        def query(self, model):
+            if model is lifecycle.AIPlan:
+                return _OneQuery(plan)
+            if model is lifecycle.AIPlanStep.id:
+                return _CanceledStepsQuery()
+            raise AssertionError(f"unexpected model: {model}")
+
+    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args: object())
+    monkeypatch.setattr(
+        lifecycle,
+        "find_lifecycle_operation",
+        lambda *_args: receipt,
+    )
+
+    result, canceled_ids = lifecycle.abandon_current_plan(
+        _ReplayDB(),
+        user_id=7,
+        source_operation_id="coach:cancel:14",
+    )
+
+    assert result.duplicate is True
+    assert result.plan_type == "MEDIUM"
+    assert result.effects[0].target_ids == (31, 32)
+    assert canceled_ids == [31, 32]
+
+
 def test_owned_step_transition_resolves_actor_inside_the_service(monkeypatch):
     actor = SimpleNamespace(id=17, is_active=True)
     captured = {}
@@ -303,6 +353,7 @@ def test_compatibility_manifest_maps_every_required_service_surface():
     ).read_text(encoding="utf-8")
 
     for method in (
+        "require_lifecycle_entitlement()",
         "read_lifecycle_status()",
         "activate_plan()",
         "transition_owned_plan_step()",
