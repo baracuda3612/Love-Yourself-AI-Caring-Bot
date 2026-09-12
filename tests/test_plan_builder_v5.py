@@ -8,7 +8,7 @@ Critical invariants verified:
   4. MEDIUM requires both DAY and EVENING steps for every active day.
   5. MEDIUM requires an existing valid EVENING HH:MM; no silent default.
   6. mechanic on each step is a snapshot matching the exercise's mechanic.
-  7. Pause is not an adaptation and does not rewrite the plan (see test_plan_pause.py).
+  7. Pause is not an adaptation and does not rewrite the plan; lifecycle owns it.
   8. No new adaptation records while ADAPTATIONS_ENABLED=False (guarded elsewhere).
 """
 

@@ -1482,6 +1482,7 @@ def _assert_lifecycle_concurrency(target_url: str) -> None:
 
     from app.db import AIPlanDay, AIPlanStep, PlanDraftRecord
     from app.lifecycle import (
+        LifecycleOwnershipError,
         LifecycleTransitionError,
         abandon_current_plan,
         complete_current_plan_if_ready,
@@ -1657,6 +1658,24 @@ def _assert_lifecycle_concurrency(target_url: str) -> None:
             )
             assert retry.duplicate is True
         with Session.begin() as session:
+            semantic_retry = transition_plan_step(
+                session,
+                user_id=user_id,
+                step_id=step_id,
+                target_status=winning_status,
+                source_operation_id="terminal-repeat-existing-result",
+            )
+            assert semantic_retry.duplicate is True
+        with Session.begin() as session:
+            replayed_semantic_retry = transition_plan_step(
+                session,
+                user_id=user_id,
+                step_id=step_id,
+                target_status=winning_status,
+                source_operation_id="terminal-repeat-existing-result",
+            )
+            assert replayed_semantic_retry.duplicate is True
+        with Session.begin() as session:
             try:
                 transition_plan_step(
                     session,
@@ -1669,6 +1688,19 @@ def _assert_lifecycle_concurrency(target_url: str) -> None:
                 assert "already belongs to plan step" in str(exc)
             else:
                 raise AssertionError("cross-step source reuse unexpectedly accepted")
+        with Session.begin() as session:
+            try:
+                transition_plan_step(
+                    session,
+                    user_id=completed_user_id,
+                    step_id=step_ids[1],
+                    target_status="completed",
+                    source_operation_id="wrong-owner-terminal-attempt",
+                )
+            except LifecycleOwnershipError as exc:
+                assert str(exc) == "plan_step_not_owned"
+            else:
+                raise AssertionError("cross-owner step transition unexpectedly accepted")
 
         with Session.begin() as session:
             abandoned, canceled_ids = abandon_current_plan(
@@ -1685,7 +1717,8 @@ def _assert_lifecycle_concurrency(target_url: str) -> None:
                 source_operation_id="abandon-plan",
             )
             assert abandoned_retry.duplicate is True
-            assert canceled_ids == []
+            assert len(canceled_ids) == 6
+            assert abandoned_retry.effects[0].target_ids == tuple(canceled_ids)
 
         with Session.begin() as session:
             stale_completion = complete_current_plan_if_ready(
@@ -1723,7 +1756,7 @@ def _assert_lifecycle_concurrency(target_url: str) -> None:
                     "completed_user_id": completed_user_id,
                 },
             ).scalar_one()
-            assert receipt_count == 6
+            assert receipt_count == 7
             plan_row = verification.execute(
                 text(
                     "SELECT status::text, abandoned_at IS NOT NULL FROM ai_plans "

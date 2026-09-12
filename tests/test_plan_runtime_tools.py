@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
 from app import db as database
-from app import lifecycle, plan_pause
-from app import plan_finalization
-from app.plan_drafts import service as plan_service
+from app import lifecycle, lifecycle_reconciliation
 from app.plan_runtime import tools
 
 
@@ -81,25 +80,62 @@ def test_direct_time_tools_update_authority_and_reschedule_active_steps(
     profile = SimpleNamespace(user_id=1)
     fake_db = _DB(user=user, profile=profile)
     captured = {}
-    rescheduled = []
 
     monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(fake_db))
 
-    def fake_update(db, candidate_user, updates):
-        captured.update(db=db, user=candidate_user, updates=updates)
-        return [101, 202], [101]
+    def fake_change(db, **kwargs):
+        captured.update(db=db, **kwargs)
+        return lifecycle.LifecycleResult(
+            user_id=1,
+            plan_id=11,
+            status="15:30",
+            operation=f"change_{slot.lower()}_time",
+            effects=(
+                lifecycle.ExternalEffect(
+                    kind="reconcile_plan_schedule",
+                    target_ids=(101,),
+                ),
+            ),
+        )
 
-    monkeypatch.setattr("app.time_slots.update_user_time_slots", fake_update)
+    monkeypatch.setattr(lifecycle, "change_delivery_time", fake_change)
     monkeypatch.setattr(
-        "app.scheduler.reschedule_plan_steps",
-        lambda step_ids: rescheduled.extend(step_ids) or len(step_ids),
+        lifecycle_reconciliation,
+        "reconcile_scheduler_effects",
+        lambda result: replace(
+            result,
+            effects=(
+                replace(
+                    result.effects[0],
+                    state=lifecycle.ExternalEffectState.SUCCEEDED,
+                    attempted=1,
+                    succeeded=1,
+                ),
+            ),
+        ),
     )
 
-    result = getattr(tools, tool_name)(1, "15:30")
+    result = getattr(tools, tool_name)(
+        1,
+        "15:30",
+        source_operation_id="coach:time-1",
+    )
 
-    assert captured == {"db": fake_db, "user": user, "updates": {slot: "15:30"}}
-    assert rescheduled == [101]
-    assert result == {"status": "ok", result_key: "15:30", "rescheduled": 1}
+    assert captured == {
+        "db": fake_db,
+        "user_id": 1,
+        "slot": slot,
+        "hhmm": "15:30",
+        "source_operation_id": "coach:time-1",
+    }
+    assert result == {
+        "status": "ok",
+        result_key: "15:30",
+        "saved": True,
+        "jobs_reconciled": "succeeded",
+        "rescheduled": 1,
+        "duplicate": False,
+    }
     assert fake_db.commits == 1
 
 
@@ -111,17 +147,38 @@ def test_pause_passes_stable_source_operation_and_writes_no_mirror(monkeypatch):
 
     monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(fake_db))
 
-    def fake_pause(db, user_id, *, source_operation_id):
+    def fake_transition(db, *, user_id, operation, source_operation_id):
         captured.update(
-            db=db, user_id=user_id, source_operation_id=source_operation_id
+            db=db,
+            user_id=user_id,
+            operation=operation,
+            source_operation_id=source_operation_id,
         )
-        return SimpleNamespace(duplicate=False)
+        return lifecycle.LifecycleResult(
+            user_id=user_id,
+            plan_id=10,
+            status="paused",
+            operation=operation,
+            effects=(
+                lifecycle.ExternalEffect(
+                    kind="pause_schedule_reconciliation",
+                    state=lifecycle.ExternalEffectState.DEFERRED,
+                ),
+            ),
+        )
 
-    monkeypatch.setattr(plan_pause, "pause_plan", fake_pause)
+    monkeypatch.setattr(lifecycle, "transition_current_plan", fake_transition)
     result = tools.pause_plan(1, source_operation_id="coach:call-1")
 
-    assert result == {"status": "ok", "duplicate": False}
+    assert result == {
+        "status": "ok",
+        "plan_id": 10,
+        "plan_status": "paused",
+        "schedule_reconciliation": "deferred",
+        "duplicate": False,
+    }
     assert captured["source_operation_id"] == "coach:call-1"
+    assert captured["operation"] == "pause"
     assert user.current_state == "legacy-value"
     assert profile.is_paused is False
     assert profile.pause_count == 4
@@ -136,14 +193,32 @@ def test_resume_passes_stable_source_operation(monkeypatch):
 
     monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(fake_db))
 
-    def fake_resume(db, user_id, *, source_operation_id):
+    def fake_transition(db, *, user_id, operation, source_operation_id):
         captured["source_operation_id"] = source_operation_id
-        return SimpleNamespace(duplicate=True)
+        return lifecycle.LifecycleResult(
+            user_id=user_id,
+            plan_id=10,
+            status="active",
+            operation=operation,
+            duplicate=True,
+            effects=(
+                lifecycle.ExternalEffect(
+                    kind="resume_schedule_reconciliation",
+                    state=lifecycle.ExternalEffectState.DEFERRED,
+                ),
+            ),
+        )
 
-    monkeypatch.setattr(plan_pause, "resume_plan", fake_resume)
+    monkeypatch.setattr(lifecycle, "transition_current_plan", fake_transition)
     result = tools.resume_plan(1, source_operation_id="coach:call-2")
 
-    assert result == {"status": "ok", "duplicate": True}
+    assert result == {
+        "status": "ok",
+        "plan_id": 10,
+        "plan_status": "active",
+        "schedule_reconciliation": "deferred",
+        "duplicate": True,
+    }
     assert captured["source_operation_id"] == "coach:call-2"
 
 
@@ -152,21 +227,51 @@ def test_cancel_uses_one_aggregate_operation_then_cancels_jobs(monkeypatch):
     profile = SimpleNamespace(user_id=1)
     plan = SimpleNamespace(id=11, total_days=7)
     fake_db = _DB(user=user, profile=profile, plan=plan)
-    canceled = []
-
     monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(fake_db))
     monkeypatch.setattr(
         lifecycle,
         "abandon_current_plan",
-        lambda db, **kwargs: (SimpleNamespace(duplicate=False), [21, 22]),
+        lambda db, **kwargs: (
+            lifecycle.LifecycleResult(
+                user_id=1,
+                plan_id=11,
+                status="abandoned",
+                operation="abandon",
+                plan_type="SHORT",
+                effects=(
+                    lifecycle.ExternalEffect(
+                        kind="cancel_step_jobs",
+                        target_ids=(21, 22),
+                    ),
+                ),
+            ),
+            [21, 22],
+        ),
     )
     monkeypatch.setattr(
-        "app.scheduler.cancel_plan_step_jobs", lambda ids: canceled.extend(ids)
+        lifecycle_reconciliation,
+        "reconcile_scheduler_effects",
+        lambda result: replace(
+            result,
+            effects=(
+                replace(
+                    result.effects[0],
+                    state=lifecycle.ExternalEffectState.SUCCEEDED,
+                    attempted=2,
+                    succeeded=2,
+                ),
+            ),
+        ),
     )
     result = tools.cancel_plan(1, source_operation_id="telegram:cancel-1")
 
-    assert result == {"status": "ok", "total_days": 7, "duplicate": False}
-    assert canceled == [21, 22]
+    assert result == {
+        "status": "ok",
+        "plan_id": 11,
+        "total_days": 7,
+        "jobs_reconciled": True,
+        "duplicate": False,
+    }
     assert fake_db.commits == 1
 
 
@@ -181,12 +286,6 @@ def test_create_followup_medium_requires_collected_evening_slot(monkeypatch):
     fake_db = _DB(user=user, profile=profile, plan=historical_plan)
 
     monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(fake_db))
-    monkeypatch.setattr(
-        lifecycle,
-        "derive_current_mode",
-        lambda *_args: lifecycle.CurrentMode.NO_ACTIVE_PLAN,
-    )
-
     result = tools.create_followup_plan(
         1,
         "MEDIUM",
@@ -205,27 +304,43 @@ def test_create_followup_passes_source_and_derived_prerequisites(monkeypatch):
         evening_slot_collected=True,
     )
     historical_plan = SimpleNamespace(id=10, total_days=7)
-    created_plan = SimpleNamespace(id=22, total_days=14)
     fake_db = _DB(user=user, profile=profile, plan=historical_plan)
     captured = {}
-    side_effects = []
 
     monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(fake_db))
-    monkeypatch.setattr(
-        lifecycle,
-        "derive_current_mode",
-        lambda *_args: lifecycle.CurrentMode.NO_ACTIVE_PLAN,
-    )
 
-    def fake_create_plan(db, **kwargs):
+    def fake_activate(db, **kwargs):
         captured.update(db=db, **kwargs)
-        return SimpleNamespace(plan=created_plan, duplicate=False)
+        return lifecycle.LifecycleResult(
+            user_id=1,
+            plan_id=22,
+            status="active",
+            operation="activate",
+            plan_type="MEDIUM",
+            effects=(
+                lifecycle.ExternalEffect(
+                    kind="reconcile_plan_schedule",
+                    target_ids=(31, 32),
+                ),
+            ),
+            details={"total_days": 14},
+        )
 
-    monkeypatch.setattr(plan_service, "create_plan", fake_create_plan)
+    monkeypatch.setattr(lifecycle, "activate_plan", fake_activate)
     monkeypatch.setattr(
-        plan_finalization,
-        "activate_plan_side_effects",
-        lambda plan_id, user_id: side_effects.append((plan_id, user_id)),
+        lifecycle_reconciliation,
+        "reconcile_scheduler_effects",
+        lambda result: replace(
+            result,
+            effects=(
+                replace(
+                    result.effects[0],
+                    state=lifecycle.ExternalEffectState.SUCCEEDED,
+                    attempted=2,
+                    succeeded=2,
+                ),
+            ),
+        ),
     )
 
     result = tools.create_followup_plan(
@@ -234,12 +349,72 @@ def test_create_followup_passes_source_and_derived_prerequisites(monkeypatch):
         source_operation_id="coach:activate-4",
     )
 
-    assert result == {"status": "ok", "plan_type": "MEDIUM", "duplicate": False}
+    assert result == {
+        "status": "ok",
+        "plan_id": 22,
+        "plan_type": "MEDIUM",
+        "jobs_reconciled": True,
+        "duplicate": False,
+    }
     assert captured["plan_type"] == "MEDIUM"
     assert captured["evening_time"] == "20:30"
     assert captured["source_operation_id"] == "coach:activate-4"
-    assert side_effects == [(22, 1)]
+    assert captured["require_plan_history"] is True
     assert fake_db.commits == 1
+
+
+def test_activation_reconciliation_failure_is_returned_as_error(monkeypatch):
+    profile = SimpleNamespace(
+        user_id=1,
+        daily_time_slots={"DAY": "14:00"},
+        evening_slot_collected=False,
+    )
+    fake_db = _DB(user=SimpleNamespace(id=1), profile=profile)
+    decision = lifecycle.LifecycleResult(
+        user_id=1,
+        plan_id=22,
+        status="active",
+        operation="activate",
+        plan_type="SHORT",
+        effects=(
+            lifecycle.ExternalEffect(
+                kind="reconcile_plan_schedule",
+                target_ids=(31,),
+            ),
+        ),
+        details={"total_days": 7},
+    )
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(fake_db))
+    monkeypatch.setattr(lifecycle, "activate_plan", lambda *a, **k: decision)
+    monkeypatch.setattr(
+        lifecycle_reconciliation,
+        "reconcile_scheduler_effects",
+        lambda result: replace(
+            result,
+            effects=(
+                replace(
+                    result.effects[0],
+                    state=lifecycle.ExternalEffectState.FAILED,
+                    attempted=1,
+                    error_code="scheduler_reconciliation_failed",
+                ),
+            ),
+        ),
+    )
+
+    assert tools.create_followup_plan(
+        1,
+        "SHORT",
+        source_operation_id="coach:activate:failed",
+    ) == {
+        "status": "error",
+        "code": "activation_reconciliation_failed",
+        "plan_id": 22,
+        "plan_type": "SHORT",
+        "persisted": True,
+        "jobs_reconciled": False,
+        "duplicate": False,
+    }
 
 
 def test_get_plan_status_uses_derived_mode_day_and_step_status(monkeypatch):
@@ -263,34 +438,40 @@ def test_get_plan_status_uses_derived_mode_day_and_step_status(monkeypatch):
     monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(fake_db))
     monkeypatch.setattr(
         lifecycle,
-        "derive_current_mode",
-        lambda *_args: lifecycle.CurrentMode.ACTIVE_PAUSED,
+        "read_lifecycle_status",
+        lambda *_args: lifecycle.LifecycleStatus(
+            user_id=1,
+            current_mode=lifecycle.CurrentMode.ACTIVE_PAUSED,
+            plan_id=31,
+            plan_status="paused",
+            plan_type="SHORT",
+            days_total=7,
+            current_day=3,
+            days_completed=2,
+            delivery_days_remaining=0,
+            steps_total=3,
+            steps_completed=1,
+            steps_remaining=1,
+            deliveries_remaining=1,
+        ),
     )
-    monkeypatch.setattr(lifecycle, "derive_current_day", lambda *_args: 3)
 
     assert tools.get_plan_status(1) == {
         "state": "ACTIVE_PAUSED",
         "current_mode": "ACTIVE_PAUSED",
         "plan_active": True,
+        "plan_id": 31,
+        "plan_type": "SHORT",
         "days_total": 7,
         "current_day": 3,
         "days_completed": 2,
-        "days_remaining": 5,
+        "days_remaining": 0,
         "steps_total": 3,
         "steps_completed": 1,
+        "steps_remaining": 1,
+        "deliveries_remaining": 1,
         "completion_rate": 33,
     }
-
-
-def test_activation_retry_rejects_cross_operation_source_id():
-    fake_db = _DB(
-        user=SimpleNamespace(id=1),
-        profile=SimpleNamespace(user_id=1),
-        receipt=SimpleNamespace(operation="pause", plan_id=11),
-    )
-
-    with pytest.raises(ValueError, match="already belongs to pause"):
-        tools._existing_activation_retry(fake_db, 1, "coach:shared-1")
 
 
 def test_mutation_tools_require_source_operation_id():
@@ -302,3 +483,9 @@ def test_mutation_tools_require_source_operation_id():
         tools.resume_plan(1)  # type: ignore[call-arg]
     with pytest.raises(TypeError):
         tools.cancel_plan(1)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        tools.record_evening_time(1, "20:30")  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        tools.change_day_time(1, "09:30")  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        tools.change_evening_time(1, "20:30")  # type: ignore[call-arg]

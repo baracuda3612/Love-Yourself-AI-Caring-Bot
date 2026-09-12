@@ -29,7 +29,7 @@ import pytz
 
 from app.active_days import consecutive_active_days_gap, resolve_timezone, step_expires_at
 from app.plan_completion.metrics import _compute_best_streak_by_date, _compute_current_streak
-from app.plan_guards import validate_step_action, is_step_terminal
+from app.lifecycle import TERMINAL_STEP_STATUSES
 
 
 # ---------------------------------------------------------------------------
@@ -193,55 +193,13 @@ class TestCompletionRateExcludesFuture:
         assert rate == 0.5
 
 
-# ---------------------------------------------------------------------------
-# Test 3: Expired guard blocks action + correct message
-# ---------------------------------------------------------------------------
-
-
-class TestExpiredStepGuard:
-    def test_expired_step_is_terminal(self):
-        step = _StubStep(step_status="expired")
-        assert is_step_terminal(step) is True
-
-    def test_expired_step_action_blocked_silently(self):
-        """Expired steps fail silently — empty error message so UI can answer()."""
-        step = _StubStep(step_status="expired")
-        allowed, msg = validate_step_action(step)
-        assert allowed is False
-        assert msg == ""  # caller does callback_query.answer() with no text
-
-    def test_completed_step_action_blocked(self):
-        step = _StubStep(step_status="completed")
-        allowed, msg = validate_step_action(step)
-        assert allowed is False
-        assert "виконано" in msg
-
-    def test_skipped_step_action_blocked(self):
-        step = _StubStep(step_status="skipped")
-        allowed, msg = validate_step_action(step)
-        assert allowed is False
-        assert "пропущено" in msg
-
-    def test_pending_step_action_allowed(self):
-        step = _StubStep(step_status="pending")
-        allowed, msg = validate_step_action(step)
-        assert allowed is True
-        assert msg == ""
-
-    def test_delivered_step_action_allowed(self):
-        """Delivered step is not yet terminal — user can still act on it."""
-        step = _StubStep(step_status="delivered")
-        allowed, msg = validate_step_action(step)
-        assert allowed is True
-        assert msg == ""
-
-    def test_canceled_step_is_terminal_and_silent(self):
-        """Canceled (by adaptation) steps are terminal and fail silently."""
-        step = _StubStep(step_status="canceled")
-        assert is_step_terminal(step) is True
-        allowed, msg = validate_step_action(step)
-        assert allowed is False
-        assert msg == ""
+def test_terminal_step_statuses_are_owned_by_lifecycle_boundary():
+    assert set(TERMINAL_STEP_STATUSES) == {
+        "completed",
+        "skipped",
+        "expired",
+        "canceled",
+    }
 
 
 # ---------------------------------------------------------------------------
