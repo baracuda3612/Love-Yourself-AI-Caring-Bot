@@ -28,6 +28,22 @@ class DummyMemory:
         self.messages.append((user_id, role, text))
 
 
+class PendingActionMemory:
+    def __init__(self, pending=None) -> None:
+        self.pending = pending
+        self.cleared = False
+
+    async def set_pending_action(self, _user_id, value):
+        self.pending = value
+
+    async def get_pending_action(self, _user_id):
+        return self.pending
+
+    async def clear_pending_action(self, _user_id):
+        self.pending = None
+        self.cleared = True
+
+
 @pytest.fixture(autouse=True)
 def disable_auto_complete(monkeypatch):
     async def _noop(_user_id):
@@ -119,6 +135,79 @@ async def test_mutation_tool_rejects_missing_stable_call_id(monkeypatch):
 
     assert result == "⚠️ Не вдалось виконати дію. Спробуй ще раз."
     assert called == []
+
+
+@pytest.mark.anyio
+async def test_medium_evening_collection_preserves_activation_source(monkeypatch):
+    memory = PendingActionMemory()
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "create_followup_plan": lambda *_args, **_kwargs: {
+                "status": "needs_evening_time"
+            }
+        },
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "create_followup_plan",
+            "arguments": {"plan_type": "MEDIUM"},
+            "call_id": "call-medium-7",
+        },
+    )
+
+    assert response.startswith("О котрій")
+    assert memory.pending == "collect_evening_time_for_medium:call-medium-7"
+
+
+@pytest.mark.anyio
+async def test_medium_cascade_reports_reconciliation_failure_and_keeps_retry_key(
+    monkeypatch,
+):
+    memory = PendingActionMemory(
+        "collect_evening_time_for_medium:call-medium-7"
+    )
+    captured = {}
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+
+    def followup(_user_id, args):
+        captured.update(args)
+        return {
+            "status": "error",
+            "code": "activation_reconciliation_failed",
+            "persisted": True,
+            "jobs_reconciled": False,
+        }
+
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "record_evening_time": lambda *_args, **_kwargs: {"status": "ok"},
+            "create_followup_plan": followup,
+        },
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "record_evening_time",
+            "arguments": {"hhmm": "20:30"},
+            "call_id": "call-evening-7",
+        },
+    )
+
+    assert "План збережено" in response
+    assert "розклад" in response
+    assert captured["_source_operation_id"] == "call-medium-7"
+    assert memory.pending == "collect_evening_time_for_medium:call-medium-7"
+    assert memory.cleared is False
 
 
 def test_auto_complete_marks_plan_completed_and_logs_event_with_metrics_error(monkeypatch):

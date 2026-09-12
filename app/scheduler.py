@@ -381,7 +381,21 @@ def reconcile_plan_step_jobs(step_ids: list[int]) -> SchedulerReconciliation:
             try:
                 schedule_plan_step(step, user)
                 job_id = _generate_step_job_id(step)
-                if scheduler.get_job(job_id) is None:
+                job = scheduler.get_job(job_id)
+                expected_run_date = (
+                    _to_utc(step.scheduled_for)
+                    if step.scheduled_for is not None
+                    else None
+                )
+                actual_run_date = getattr(job, "next_run_time", None)
+                if actual_run_date is not None:
+                    actual_run_date = _to_utc(actual_run_date)
+                if job is None or actual_run_date != expected_run_date:
+                    if job is not None:
+                        try:
+                            scheduler.remove_job(job_id)
+                        except Exception:
+                            pass
                     failed.append(step_id)
                     continue
             except Exception:

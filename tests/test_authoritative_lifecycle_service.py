@@ -111,6 +111,63 @@ def test_reconciliation_failure_is_not_success(monkeypatch):
     assert reconciled.effects[0].succeeded == 1
 
 
+def test_scheduler_reconciliation_removes_job_with_stale_run_date(monkeypatch):
+    expected = datetime(2026, 9, 12, 10, tzinfo=timezone.utc)
+    stale = datetime(2026, 9, 12, 14, tzinfo=timezone.utc)
+    step = SimpleNamespace(
+        id=10,
+        day_id=30,
+        day=SimpleNamespace(plan_id=20),
+        scheduled_for=expected,
+    )
+    plan = SimpleNamespace(status="active")
+    user = SimpleNamespace(is_active=True)
+
+    class _RowsQuery:
+        def join(self, *_args):
+            return self
+
+        def filter(self, *_args):
+            return self
+
+        def all(self):
+            return [(step, step.day, plan, user)]
+
+    class _RowsDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def query(self, *_args):
+            return _RowsQuery()
+
+    class _Scheduler:
+        def __init__(self):
+            self.job = SimpleNamespace(next_run_time=stale)
+            self.removed = []
+
+        def get_job(self, _job_id):
+            return self.job
+
+        def remove_job(self, job_id):
+            self.removed.append(job_id)
+            self.job = None
+
+    fake_scheduler = _Scheduler()
+    monkeypatch.setattr(scheduler, "SessionLocal", _RowsDB)
+    monkeypatch.setattr(scheduler, "scheduler", fake_scheduler)
+    monkeypatch.setattr(scheduler, "schedule_plan_step", lambda *_args: False)
+
+    result = scheduler.reconcile_plan_step_jobs([10])
+
+    assert result.attempted == 1
+    assert result.succeeded == 0
+    assert result.failed_ids == (10,)
+    assert fake_scheduler.removed == ["plan_20_day_30_step_10"]
+
+
 def test_deferred_resume_semantics_are_structured_not_claimed_as_reconciled():
     result = lifecycle.LifecycleResult(
         user_id=3,

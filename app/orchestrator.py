@@ -629,25 +629,45 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
 
     # needs_evening_time soft result from create_followup_plan
     if isinstance(result, dict) and result.get("status") == "needs_evening_time":
-        await session_memory.set_pending_action(user_id, "collect_evening_time_for_medium")
+        await session_memory.set_pending_action(
+            user_id,
+            f"collect_evening_time_for_medium:{source_operation_id}",
+        )
         return "О котрій зручно отримувати вечірній момент? Напиши час у форматі 20:30"
 
     # After record_evening_time: if pending_action is collect_evening_time_for_medium,
     # deterministically create the MEDIUM plan — no second LLM round-trip.
     if tool_name == "record_evening_time" and result.get("status") == "ok":
         pending = await session_memory.get_pending_action(user_id)
-        if pending == "collect_evening_time_for_medium":
+        pending_prefix = "collect_evening_time_for_medium"
+        if pending == pending_prefix or str(pending).startswith(f"{pending_prefix}:"):
+            activation_source_id = (
+                str(pending).split(":", 1)[1]
+                if str(pending).startswith(f"{pending_prefix}:")
+                else f"{tool_args['_source_operation_id']}:followup"
+            )
             registry = _build_tool_registry()
             try:
-                registry["create_followup_plan"](
+                activation = registry["create_followup_plan"](
                     user_id,
                     {
                         "plan_type": "MEDIUM",
-                        "_source_operation_id": (
-                            f"{tool_args['_source_operation_id']}:followup"
-                        ),
+                        "_source_operation_id": activation_source_id,
                     },
                 )
+                if not isinstance(activation, dict) or activation.get("status") != "ok":
+                    if (
+                        isinstance(activation, dict)
+                        and activation.get("code") == "activation_reconciliation_failed"
+                    ):
+                        return (
+                            "⚠️ План збережено, але його розклад не вдалося "
+                            "повністю узгодити. Повтори введення часу."
+                        )
+                    return (
+                        "⚠️ Час збережено, але план не вдалось запустити. "
+                        "Спробуй ще раз."
+                    )
                 log_metric("plan_tool_executed", extra={"user_id": user_id, "tool": "create_followup_plan"})
                 await session_memory.clear_pending_action(user_id)  # only after success
                 return _TOOL_REPLY_TEMPLATES["create_followup_plan"]
