@@ -703,8 +703,8 @@ Remove as complete subsystems, not isolated symbols:
 
 ### WP-02.2 — Build the authoritative lifecycle service
 
-**Status:** `IMPLEMENTED` — bounded code, migration/concurrency rehearsal,
-focused acceptance, and full-suite baseline comparison pass; PR review pending.
+**Status:** `IN REVIEW` — bounded acceptance passed; PR #257 targets
+`implementation/pre-mvp`.
 
 Create one backend boundary for:
 
@@ -1595,8 +1595,8 @@ block exit gate passes.
 | Field | Value |
 |---|---|
 | Current package | `WP-02.2 — Build the authoritative lifecycle service` |
-| Status | `IMPLEMENTED` |
-| Next action | Freeze and push the accepted WP-02.2 diff, open one PR into `implementation/pre-mvp`, and disposition configured review findings; founder remains the sole merge authority |
+| Status | `IN REVIEW` |
+| Next action | Inspect the configured review on PR #257 and disposition every credible thread with evidence; founder remains the sole merge authority |
 | Current blockers | None for disposable founder-only refactoring; paid backup/restore remains deferred to Gate G1 before durable data or market launch |
 
 ### Private founder log
