@@ -656,6 +656,14 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
                 "⚠️ Час збережено, але розклад ще не узгоджено. "
                 "Повтори цю саму дію."
             )
+        if code == "superseded":
+            authoritative_time = result.get("day_time") or result.get(
+                "evening_time"
+            )
+            return (
+                "⚠️ Цей запит на зміну часу вже застарів. "
+                f"Актуальний час: {authoritative_time}."
+            )
         if code == "cancel_reconciliation_failed":
             return (
                 "⚠️ План скасовано, але очищення розкладу ще не завершене. "

@@ -188,6 +188,16 @@ def change_day_time(
             raise ValueError(str(exc)) from exc
         db.commit()
 
+    if result.code == "superseded":
+        return {
+            "status": "error",
+            "code": "superseded",
+            "day_time": result.details.get("authoritative_value"),
+            "requested_day_time": hhmm,
+            "saved": False,
+            "jobs_reconciled": False,
+            "duplicate": result.duplicate,
+        }
     result = reconcile_scheduler_effects(result)
     effect = result.effects[0]
     if not result.external_effects_succeeded:
@@ -243,6 +253,16 @@ def change_evening_time(
             raise ValueError(str(exc)) from exc
         db.commit()
 
+    if result.code == "superseded":
+        return {
+            "status": "error",
+            "code": "superseded",
+            "evening_time": result.details.get("authoritative_value"),
+            "requested_evening_time": hhmm,
+            "saved": False,
+            "jobs_reconciled": False,
+            "duplicate": result.duplicate,
+        }
     result = reconcile_scheduler_effects(result)
     effect = result.effects[0]
     if not result.external_effects_succeeded:

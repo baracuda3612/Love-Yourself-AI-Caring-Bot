@@ -8,6 +8,7 @@ separately.  Persistence code never sends an ambient message.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
@@ -159,6 +160,7 @@ class ContinuationInterfaceResult:
     plan_type: str
     source_operation_id: str
     status: str = "deferred_to_wp_03_5"
+    duplicate: bool = False
 
 
 @dataclass(frozen=True)
@@ -469,6 +471,17 @@ def _duplicate_operation_result(
     return _operation_result(receipt)
 
 
+def _activation_receipt_status(
+    plan_type: str,
+    day_time: str,
+    evening_time: str | None,
+) -> str:
+    """Fit the immutable activation request identity in the existing receipt."""
+    material = f"{plan_type}|{day_time}|{evening_time or '-'}"
+    digest = hashlib.sha256(material.encode()).hexdigest()[:16]
+    return f"active:{digest}"
+
+
 def activate_plan(
     db: Session,
     *,
@@ -480,8 +493,35 @@ def activate_plan(
     require_plan_history: bool = False,
 ) -> LifecycleResult:
     """Create one plan under the lifecycle lock and expose schedule work."""
-    _lock_user(db, user_id)
+    user = _lock_user(db, user_id)
+    profile = getattr(user, "profile", None)
+    time_slots: dict[str, str] = (
+        dict(profile.daily_time_slots or {}) if profile is not None else {}
+    )
+    resolved_day_time = day_time or time_slots.get("DAY", "14:00")
+    resolved_evening_time = (
+        evening_time
+        if plan_type == "MEDIUM" and evening_time is not None
+        else (
+            time_slots.get("EVENING")
+            if plan_type == "MEDIUM"
+            and profile is not None
+            and profile.evening_slot_collected
+            else None
+        )
+    )
+    receipt_status = _activation_receipt_status(
+        plan_type,
+        resolved_day_time,
+        resolved_evening_time,
+    )
     existing = find_lifecycle_operation(db, user_id, source_operation_id)
+    if existing is not None:
+        _duplicate_operation_result(
+            existing,
+            expected_operation="activate",
+            expected_result_status=receipt_status,
+        )
     if existing is None and require_plan_history:
         if derive_current_mode(db, user_id) is not CurrentMode.NO_ACTIVE_PLAN:
             raise LifecycleTransitionError(
@@ -495,9 +535,10 @@ def activate_plan(
         db,
         user_id=user_id,
         plan_type=plan_type,
-        day_time=day_time,
-        evening_time=evening_time,
+        day_time=resolved_day_time,
+        evening_time=resolved_evening_time,
         source_operation_id=source_operation_id,
+        activation_receipt_status=receipt_status,
     )
     plan = activation.plan
     step_ids = tuple(
@@ -521,7 +562,7 @@ def activate_plan(
     return LifecycleResult(
         user_id=user_id,
         plan_id=plan.id,
-        status=str(plan.status),
+        status="active",
         operation="activate",
         duplicate=activation.duplicate,
         plan_type=_plan_type(plan),
@@ -901,18 +942,29 @@ def expire_plan_step(
         occurred_at=occurred_at,
     )
     if not result.duplicate:
-        from app.telemetry import write_event_operation
+        from app.telemetry import EventChronologyError, write_event_operation
 
-        write_event_operation(
-            db,
-            user_id=user_id,
-            event_name="task_ignored",
-            event_source="scheduler",
-            source_operation_id=source_operation_id,
-            plan_step_id=step_id,
-            occurred_at=occurred_at,
-            properties={"detection_source": "local_expiry"},
-        )
+        try:
+            write_event_operation(
+                db,
+                user_id=user_id,
+                event_name="task_ignored",
+                event_source="scheduler",
+                source_operation_id=source_operation_id,
+                plan_step_id=step_id,
+                occurred_at=occurred_at,
+                properties={"detection_source": "local_expiry"},
+            )
+        except EventChronologyError as exc:
+            if exc.code != "event_catalog_not_yet_active":
+                raise
+            return replace(
+                result,
+                details={
+                    **result.details,
+                    "ignored_event": "not_recorded_pre_catalog",
+                },
+            )
     return result
 
 
@@ -1047,6 +1099,33 @@ def _pending_step_ids(db: Session, plan_id: int) -> tuple[int, ...]:
     )
 
 
+def _schedulable_pending_step_ids(db: Session, plan_id: int) -> tuple[int, ...]:
+    """Rebuild only scheduler-valid replay targets from current persisted facts."""
+    now_utc = datetime.now(timezone.utc)
+    rows = (
+        db.query(AIPlanStep.id, AIPlanStep.scheduled_for)
+        .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+        .filter(
+            AIPlanDay.plan_id == plan_id,
+            AIPlanStep.step_status == "pending",
+        )
+        .order_by(AIPlanStep.id)
+        .all()
+    )
+    schedulable: list[int] = []
+    for step_id, scheduled_for in rows:
+        if scheduled_for is None:
+            continue
+        scheduled_utc = (
+            scheduled_for.replace(tzinfo=timezone.utc)
+            if scheduled_for.tzinfo is None
+            else scheduled_for.astimezone(timezone.utc)
+        )
+        if scheduled_utc > now_utc:
+            schedulable.append(step_id)
+    return tuple(schedulable)
+
+
 def change_delivery_time(
     db: Session,
     *,
@@ -1082,7 +1161,7 @@ def change_delivery_time(
         current_value = resolve_daily_time_slots(user.profile).get(normalized_slot)
         still_authoritative = current_value == hhmm
         active_ids = (
-            _pending_step_ids(db, context_plan.id)
+            _schedulable_pending_step_ids(db, context_plan.id)
             if still_authoritative and str(context_plan.status) == "active"
             else ()
         )
@@ -1099,6 +1178,7 @@ def change_delivery_time(
             duplicate,
             plan_type=_plan_type(context_plan),
             code="replayed" if still_authoritative else "superseded",
+            applied=still_authoritative,
             effects=(
                 ExternalEffect(
                     kind="reconcile_plan_schedule",
@@ -1239,9 +1319,39 @@ def request_plan_format_switch(
     if not source_operation_id or len(source_operation_id) > 160:
         raise LifecycleTransitionError("invalid_source_operation_id")
     _lock_user(db, user_id)
+    existing = find_lifecycle_operation(db, user_id, source_operation_id)
+    if existing is not None and existing.operation != "switch_plan_format":
+        _duplicate_operation_result(
+            existing,
+            expected_operation="switch_plan_format",
+        )
     plan = get_current_plan(db, user_id, lock=True)
     if plan is None:
         raise LifecycleTransitionError("current_plan_missing")
+    if existing is not None:
+        duplicate = _duplicate_operation_result(
+            existing,
+            expected_operation="switch_plan_format",
+            expected_plan_id=plan.id,
+            expected_result_status=target_plan_type,
+        )
+        return replace(
+            duplicate,
+            status=str(plan.status),
+            code="deferred_to_wp_02_3",
+            applied=False,
+            plan_type=_plan_type(plan),
+            details={"target_plan_type": target_plan_type},
+        )
+    record_lifecycle_operation(
+        db,
+        user_id=user_id,
+        plan_id=plan.id,
+        source_operation_id=source_operation_id,
+        operation="switch_plan_format",
+        result_status=target_plan_type,
+    )
+    db.flush()
     return LifecycleResult(
         user_id=user_id,
         plan_id=plan.id,
@@ -1265,6 +1375,12 @@ def prepare_continuation(
     if not source_operation_id or len(source_operation_id) > 160:
         raise LifecycleTransitionError("invalid_source_operation_id")
     _lock_user(db, user_id)
+    existing = find_lifecycle_operation(db, user_id, source_operation_id)
+    if existing is not None and existing.operation != "prepare_continuation":
+        _duplicate_operation_result(
+            existing,
+            expected_operation="prepare_continuation",
+        )
     plan = (
         db.query(AIPlan)
         .filter(AIPlan.id == completed_plan_id, AIPlan.user_id == user_id)
@@ -1278,11 +1394,32 @@ def prepare_continuation(
         raise LifecycleTransitionError("plan_missing")
     if str(plan.status) != "completed":
         raise LifecycleTransitionError("continuation_requires_completed_plan")
+    plan_type = _plan_type(plan)
+    if existing is not None:
+        _duplicate_operation_result(
+            existing,
+            expected_operation="prepare_continuation",
+            expected_plan_id=completed_plan_id,
+            expected_result_status=plan_type,
+        )
+        duplicate = True
+    else:
+        record_lifecycle_operation(
+            db,
+            user_id=user_id,
+            plan_id=completed_plan_id,
+            source_operation_id=source_operation_id,
+            operation="prepare_continuation",
+            result_status=plan_type,
+        )
+        db.flush()
+        duplicate = False
     return ContinuationInterfaceResult(
         user_id=user_id,
         completed_plan_id=plan.id,
-        plan_type=_plan_type(plan),
+        plan_type=plan_type,
         source_operation_id=source_operation_id,
+        duplicate=duplicate,
     )
 
 

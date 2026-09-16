@@ -42,6 +42,7 @@ def create_plan_for_lifecycle(
     evening_time: Optional[str] = None,  # "HH:MM"; required for MEDIUM
     *,
     source_operation_id: str,
+    activation_receipt_status: str,
 ) -> "PlanActivationResult":
     """Build, persist, and immediately finalize a plan for user_id.
 
@@ -143,6 +144,7 @@ def create_plan_for_lifecycle(
         draft_record,
         activation_time_utc=datetime.now(timezone.utc),
         source_operation_id=source_operation_id,
+        activation_receipt_status=activation_receipt_status,
     )
     return result
 

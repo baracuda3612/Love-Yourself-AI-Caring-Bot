@@ -124,7 +124,28 @@ def set_user_time_slots(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         db.commit()
 
-    outcomes = [reconcile_scheduler_effects(decision) for decision in decisions]
+    superseded = [
+        decision for decision in decisions if decision.code == "superseded"
+    ]
+    outcomes = [
+        reconcile_scheduler_effects(decision)
+        for decision in decisions
+        if decision.code != "superseded"
+    ]
+    if superseded:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "superseded_time_change",
+                "saved": False,
+                "authoritative_values": {
+                    str(decision.details["slot"]): decision.details.get(
+                        "authoritative_value"
+                    )
+                    for decision in superseded
+                },
+            },
+        )
     if not all(outcome.external_effects_succeeded for outcome in outcomes):
         raise HTTPException(
             status_code=503,

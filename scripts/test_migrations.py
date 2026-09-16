@@ -1484,6 +1484,7 @@ def _assert_lifecycle_concurrency(target_url: str) -> None:
     from app.lifecycle import (
         LifecycleOwnershipError,
         LifecycleTransitionError,
+        _activation_receipt_status,
         abandon_current_plan,
         complete_current_plan_if_ready,
         transition_current_plan,
@@ -1534,6 +1535,11 @@ def _assert_lifecycle_concurrency(target_url: str) -> None:
                     draft,
                     activation_time_utc=datetime(2026, 9, 1, 9, tzinfo=timezone.utc),
                     source_operation_id="concurrent-activation",
+                    activation_receipt_status=_activation_receipt_status(
+                        "SHORT",
+                        "14:00",
+                        None,
+                    ),
                 )
                 session.commit()
                 return activation.plan.id, activation.duplicate

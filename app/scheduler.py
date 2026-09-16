@@ -18,7 +18,7 @@ from app.active_days import resolve_timezone, step_expires_at
 from app.plan_completion.tokens import make_report_token
 from app.db import AIPlan, AIPlanDay, AIPlanStep, SessionLocal, User, UserEvent
 from app.ai import async_client
-from app.telemetry import log_user_event
+from app.telemetry import EventValidationError, log_user_event
 from app.ux.catalog import get_trigger_message
 from app.ux.persona import get_persona
 from app.ux.pulse_prompt import generate_pulse_message
@@ -781,14 +781,15 @@ def expire_overdue_steps() -> None:
                 continue
 
             try:
-                expire_plan_step(
-                    db,
-                    user_id=step.day.plan.user_id,
-                    step_id=step.id,
-                    source_operation_id=f"scheduler:expiry:{step.id}:{step.expires_at.isoformat()}",
-                    occurred_at=step.expires_at,
-                )
-            except LifecycleTransitionError:
+                with db.begin_nested():
+                    expire_plan_step(
+                        db,
+                        user_id=step.day.plan.user_id,
+                        step_id=step.id,
+                        source_operation_id=f"scheduler:expiry:{step.id}:{step.expires_at.isoformat()}",
+                        occurred_at=step.expires_at,
+                    )
+            except (LifecycleTransitionError, EventValidationError):
                 continue
             count += 1
 

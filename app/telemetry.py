@@ -70,6 +70,14 @@ class EventValidationError(ValueError):
     """Raised before persistence when an event violates the catalogue envelope."""
 
 
+class EventChronologyError(EventValidationError):
+    """An otherwise valid event falls outside its catalogue activation window."""
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
 class EventOperationConflict(RuntimeError):
     """Raised when a source operation is reused for a different fact."""
 
@@ -488,10 +496,10 @@ def write_event_operation(
             aggregate_value=aggregate_value,
         )
 
-    if catalogue.activated_at > occurrence or (
-        catalogue.retired_at is not None and catalogue.retired_at <= occurrence
-    ):
-        raise EventValidationError("event catalogue entry is not active at occurrence time")
+    if catalogue.activated_at > occurrence:
+        raise EventChronologyError("event_catalog_not_yet_active")
+    if catalogue.retired_at is not None and catalogue.retired_at <= occurrence:
+        raise EventChronologyError("event_catalog_already_retired")
 
     recorded_at = _utc_now()
     # The savepoint keeps this pair atomic even when a caller catches the

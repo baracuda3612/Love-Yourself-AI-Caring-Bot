@@ -703,9 +703,9 @@ Remove as complete subsystems, not isolated symbols:
 
 ### WP-02.2 — Build the authoritative lifecycle service
 
-**Status:** `VERIFIED` — bounded acceptance passed; all configured-review
-findings were fixed with regression evidence and all threads are resolved on
-PR #257. Founder merge is pending.
+**Status:** `IMPLEMENTED` — remediation acceptance passed after `60876d7`;
+final fresh-context local re-review and configured GitHub review for the new
+candidate SHA are pending. Founder merge is pending.
 
 Create one backend boundary for:
 

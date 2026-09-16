@@ -174,6 +174,7 @@ def finalize_plan(
     *,
     activation_time_utc: datetime,
     source_operation_id: str,
+    activation_receipt_status: str,
 ) -> PlanActivationResult:
     try:
         user = (
@@ -405,7 +406,7 @@ def finalize_plan(
             plan_id=plan.id,
             source_operation_id=source_operation_id,
             operation="activate",
-            result_status="active",
+            result_status=activation_receipt_status,
         )
         db.flush()
 

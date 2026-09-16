@@ -211,6 +211,37 @@ async def test_medium_cascade_reports_reconciliation_failure_and_keeps_retry_key
 
 
 @pytest.mark.anyio
+async def test_superseded_time_change_does_not_return_success_copy(monkeypatch):
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "change_day_time": lambda *_args, **_kwargs: {
+                "status": "error",
+                "code": "superseded",
+                "day_time": "16:45",
+                "requested_day_time": "15:30",
+                "saved": False,
+            },
+        },
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "change_day_time",
+            "arguments": {"hhmm": "15:30"},
+            "call_id": "call-time-7",
+        },
+    )
+
+    assert response == (
+        "⚠️ Цей запит на зміну часу вже застарів. Актуальний час: 16:45."
+    )
+
+
+@pytest.mark.anyio
 async def test_inactive_sender_gets_access_denied_before_coach(monkeypatch):
     memory = DummyMemory()
     coach_called = False

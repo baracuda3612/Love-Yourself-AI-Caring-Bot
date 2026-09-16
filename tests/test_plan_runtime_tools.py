@@ -139,6 +139,72 @@ def test_direct_time_tools_update_authority_and_reschedule_active_steps(
     assert fake_db.commits == 1
 
 
+@pytest.mark.parametrize(
+    ("tool_name", "slot", "result_key"),
+    [
+        ("change_day_time", "DAY", "day_time"),
+        ("change_evening_time", "EVENING", "evening_time"),
+    ],
+)
+def test_time_tools_report_superseded_replays_without_reconciliation(
+    monkeypatch,
+    tool_name,
+    slot,
+    result_key,
+):
+    fake_db = _DB(
+        user=SimpleNamespace(id=1),
+        profile=SimpleNamespace(user_id=1),
+    )
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(fake_db))
+    monkeypatch.setattr(
+        lifecycle,
+        "change_delivery_time",
+        lambda *_args, **_kwargs: lifecycle.LifecycleResult(
+            user_id=1,
+            plan_id=11,
+            status="15:30",
+            operation=f"change_{slot.lower()}_time",
+            duplicate=True,
+            code="superseded",
+            applied=False,
+            effects=(
+                lifecycle.ExternalEffect(
+                    kind="reconcile_plan_schedule",
+                    state=lifecycle.ExternalEffectState.NOT_REQUIRED,
+                ),
+            ),
+            details={
+                "slot": slot,
+                "value": "15:30",
+                "authoritative_value": "16:45",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        lifecycle_reconciliation,
+        "reconcile_scheduler_effects",
+        lambda _result: pytest.fail("superseded replay must not reconcile"),
+    )
+
+    result = getattr(tools, tool_name)(
+        1,
+        "15:30",
+        source_operation_id="coach:time-1",
+    )
+
+    assert result == {
+        "status": "error",
+        "code": "superseded",
+        result_key: "16:45",
+        f"requested_{result_key}": "15:30",
+        "saved": False,
+        "jobs_reconciled": False,
+        "duplicate": True,
+    }
+    assert fake_db.commits == 1
+
+
 def test_pause_passes_stable_source_operation_and_writes_no_mirror(monkeypatch):
     user = SimpleNamespace(id=1, current_state="legacy-value")
     profile = SimpleNamespace(user_id=1, is_paused=False, pause_count=4)
