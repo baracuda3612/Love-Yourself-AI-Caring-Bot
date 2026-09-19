@@ -18,7 +18,7 @@ from app.active_days import resolve_timezone, step_expires_at
 from app.plan_completion.tokens import make_report_token
 from app.db import AIPlan, AIPlanDay, AIPlanStep, SessionLocal, User, UserEvent
 from app.ai import async_client
-from app.telemetry import EventValidationError, log_user_event
+from app.telemetry import log_user_event
 from app.ux.catalog import get_trigger_message
 from app.ux.persona import get_persona
 from app.ux.pulse_prompt import generate_pulse_message
@@ -410,20 +410,41 @@ def reconcile_plan_step_jobs(step_ids: list[int]) -> SchedulerReconciliation:
 
 
 def reconcile_plan_schedule(plan_id: int) -> SchedulerReconciliation:
-    """Make deterministic jobs exactly match one authoritative active plan."""
+    """Make jobs exact while fencing newer lifecycle decisions on the user row."""
     with SessionLocal() as db:
-        plan = (
+        initial_plan = (
             db.query(AIPlan)
             .filter(AIPlan.id == int(plan_id))
             .first()
         )
-        if plan is None:
+        if initial_plan is None:
             return SchedulerReconciliation(
                 attempted=1,
                 succeeded=0,
                 failed_ids=(int(plan_id),),
             )
-        user = db.query(User).filter(User.id == plan.user_id).first()
+        # Every authoritative plan/time/cancel mutation takes this same row
+        # lock.  Hold it across the external proof so an older reconciler
+        # cannot write after a newer committed decision and report success.
+        user = (
+            db.query(User)
+            .filter(User.id == initial_plan.user_id)
+            .populate_existing()
+            .with_for_update()
+            .first()
+        )
+        plan = (
+            db.query(AIPlan)
+            .filter(AIPlan.id == int(plan_id))
+            .populate_existing()
+            .first()
+        )
+        if plan is None or user is None:
+            return SchedulerReconciliation(
+                attempted=1,
+                succeeded=0,
+                failed_ids=(int(plan_id),),
+            )
         rows = (
             db.query(AIPlanStep)
             .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
@@ -819,53 +840,87 @@ def expire_overdue_steps() -> None:
 
     now_utc = datetime.now(pytz.UTC)
 
-    with SessionLocal() as db:
-        candidates = (
-            db.query(AIPlanStep)
-            .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
-            .join(AIPlan, AIPlan.id == AIPlanDay.plan_id)
-            .join(User, User.id == AIPlan.user_id)
-            .filter(
-                AIPlanStep.step_status.in_(["pending", "delivered"]),
-                or_(
-                    AIPlanStep.expires_at.is_(None),
-                    AIPlanStep.expires_at < now_utc,
-                ),
+    with SessionLocal() as scan_db:
+        candidate_ids = [
+            step_id
+            for (step_id,) in (
+                scan_db.query(AIPlanStep.id)
+                .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+                .join(AIPlan, AIPlan.id == AIPlanDay.plan_id)
+                .join(User, User.id == AIPlan.user_id)
+                .filter(
+                    AIPlanStep.step_status.in_(["pending", "delivered"]),
+                    or_(
+                        AIPlanStep.expires_at.is_(None),
+                        AIPlanStep.expires_at < now_utc,
+                    ),
+                )
+                .order_by(AIPlanStep.id)
+                .all()
             )
-            .all()
-        )
+        ]
 
-        repaired = 0
-        count = 0
-        for step in candidates:
+    repaired = 0
+    count = 0
+    failed_ids: list[int] = []
+    for step_id in candidate_ids:
+        with SessionLocal() as candidate_db:
+            step = (
+                candidate_db.query(AIPlanStep)
+                .filter(AIPlanStep.id == step_id)
+                .first()
+            )
+            if step is None:
+                continue
+            repaired_candidate = False
             if step.expires_at is None and step.scheduled_for is not None:
-                user_tz = resolve_timezone(getattr(step.day.plan.user, "timezone", None))
+                user_tz = resolve_timezone(
+                    getattr(step.day.plan.user, "timezone", None)
+                )
                 step.expires_at = step_expires_at(step.scheduled_for, user_tz)
-                repaired += 1
+                repaired_candidate = True
 
             if step.expires_at is None or step.expires_at >= now_utc:
+                if repaired_candidate:
+                    candidate_db.commit()
+                    repaired += 1
                 continue
 
             try:
-                with db.begin_nested():
-                    expire_plan_step(
-                        db,
-                        user_id=step.day.plan.user_id,
-                        step_id=step.id,
-                        source_operation_id=f"scheduler:expiry:{step.id}:{step.expires_at.isoformat()}",
-                        occurred_at=step.expires_at,
-                    )
-            except (LifecycleTransitionError, EventValidationError):
+                expire_plan_step(
+                    candidate_db,
+                    user_id=step.day.plan.user_id,
+                    step_id=step.id,
+                    source_operation_id=(
+                        f"scheduler:expiry:{step.id}:{step.expires_at.isoformat()}"
+                    ),
+                    occurred_at=step.expires_at,
+                )
+                candidate_db.commit()
+            except LifecycleTransitionError:
+                candidate_db.rollback()
                 continue
+            except Exception:
+                candidate_db.rollback()
+                failed_ids.append(step_id)
+                logger.exception(
+                    "[EXPIRE] Candidate failed step=%s; continuing sweep",
+                    step_id,
+                )
+                continue
+            repaired += int(repaired_candidate)
             count += 1
 
-        if count or repaired:
-            db.commit()
-            logger.info(
-                "[EXPIRE] Marked %d steps as expired, repaired %d missing expires_at values.",
-                count,
-                repaired,
-            )
+    if count or repaired:
+        logger.info(
+            "[EXPIRE] Marked %d steps as expired, repaired %d missing expires_at values.",
+            count,
+            repaired,
+        )
+    if failed_ids:
+        logger.error("[EXPIRE] Candidate failures for step ids: %s", failed_ids)
+
+    with SessionLocal() as db:
         pending_keyboard_ids = [
             step_id
             for (step_id,) in (

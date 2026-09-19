@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from contextlib import nullcontext
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -539,6 +540,144 @@ def test_plan_schedule_reconciliation_removes_past_job_and_repairs_future(
     assert fake_scheduler.removed == ["plan_20_day_30_step_10"]
 
 
+@pytest.mark.parametrize("new_decision", ["time_change", "cancel"])
+def test_plan_schedule_reconciliation_fences_newer_lifecycle_decision(
+    monkeypatch, new_decision
+):
+    time_a = datetime(2030, 1, 1, 14, tzinfo=timezone.utc)
+    time_b = datetime(2030, 1, 1, 15, tzinfo=timezone.utc)
+    shared = {"status": "active", "scheduled_for": time_a}
+    user_lock = threading.Lock()
+    first_scheduler_write = threading.Event()
+    release_first = threading.Event()
+    mutation_waiting = threading.Event()
+    schedule_calls = 0
+
+    class _Query:
+        def __init__(self, session, model):
+            self.session = session
+            self.model = model
+            self.lock = False
+
+        def join(self, *_args):
+            return self
+
+        def filter(self, *_args):
+            return self
+
+        def order_by(self, *_args):
+            return self
+
+        def populate_existing(self):
+            return self
+
+        def with_for_update(self):
+            self.lock = True
+            return self
+
+        def first(self):
+            if self.model is scheduler.User:
+                assert self.lock is True
+                user_lock.acquire()
+                self.session.holds_user_lock = True
+                return SimpleNamespace(id=3, is_active=True)
+            if self.model is scheduler.AIPlan:
+                return SimpleNamespace(
+                    id=20,
+                    user_id=3,
+                    status=shared["status"],
+                )
+            raise AssertionError(self.model)
+
+        def all(self):
+            assert self.model is scheduler.AIPlanStep
+            return [
+                SimpleNamespace(
+                    id=11,
+                    day_id=30,
+                    day=SimpleNamespace(plan_id=20),
+                    scheduled_for=shared["scheduled_for"],
+                    step_status="pending",
+                )
+            ]
+
+    class _Session:
+        def __init__(self):
+            self.holds_user_lock = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            if self.holds_user_lock:
+                self.holds_user_lock = False
+                user_lock.release()
+            return False
+
+        def query(self, model):
+            return _Query(self, model)
+
+    class _Scheduler:
+        def __init__(self):
+            self.jobs = {}
+
+        def get_job(self, job_id):
+            return self.jobs.get(job_id)
+
+        def remove_job(self, job_id):
+            self.jobs.pop(job_id, None)
+
+    fake_scheduler = _Scheduler()
+    monkeypatch.setattr(scheduler, "SessionLocal", _Session)
+    monkeypatch.setattr(scheduler, "scheduler", fake_scheduler)
+
+    def _schedule(step, _user):
+        nonlocal schedule_calls
+        schedule_calls += 1
+        if schedule_calls == 1:
+            first_scheduler_write.set()
+            assert release_first.wait(timeout=2)
+        fake_scheduler.jobs[scheduler._generate_step_job_id(step)] = SimpleNamespace(
+            next_run_time=step.scheduled_for
+        )
+
+    monkeypatch.setattr(scheduler, "schedule_plan_step", _schedule)
+    results = []
+
+    first = threading.Thread(
+        target=lambda: results.append(scheduler.reconcile_plan_schedule(20))
+    )
+    first.start()
+    assert first_scheduler_write.wait(timeout=2)
+
+    def _newer_decision_and_reconciliation():
+        mutation_waiting.set()
+        with user_lock:
+            if new_decision == "time_change":
+                shared["scheduled_for"] = time_b
+            else:
+                shared["status"] = "abandoned"
+        results.append(scheduler.reconcile_plan_schedule(20))
+
+    second = threading.Thread(target=_newer_decision_and_reconciliation)
+    second.start()
+    assert mutation_waiting.wait(timeout=2)
+    assert shared["scheduled_for"] == time_a
+    assert shared["status"] == "active"
+    release_first.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert all(result.failed_ids == () for result in results)
+
+    job_id = "plan_20_day_30_step_11"
+    if new_decision == "time_change":
+        assert fake_scheduler.get_job(job_id).next_run_time == time_b
+    else:
+        assert fake_scheduler.get_job(job_id) is None
+
+
 def test_deferred_resume_semantics_are_structured_not_claimed_as_reconciled():
     result = lifecycle.LifecycleResult(
         user_id=3,
@@ -683,7 +822,7 @@ def test_expected_telemetry_rejection_preserves_authoritative_expiry(
     assert outcome.details["ignored_event_reason"] == error.code
 
 
-def test_expiry_sweep_isolates_event_validation_failure(monkeypatch):
+def test_expiry_sweep_isolates_unexpected_candidate_failure(monkeypatch, caplog):
     past = datetime(2026, 8, 1, 20, 59, 59, tzinfo=timezone.utc)
 
     def _step(step_id):
@@ -699,7 +838,7 @@ def test_expiry_sweep_isolates_event_validation_failure(monkeypatch):
             ),
         )
 
-    candidates = [_step(1), _step(2)]
+    steps = {step_id: _step(step_id) for step_id in (1, 2, 3)}
 
     class _CandidatesQuery:
         def join(self, *_args):
@@ -708,8 +847,11 @@ def test_expiry_sweep_isolates_event_validation_failure(monkeypatch):
         def filter(self, *_args):
             return self
 
+        def order_by(self, *_args):
+            return self
+
         def all(self):
-            return candidates
+            return [(1,), (2,), (3,)]
 
     class _KeyboardQuery:
         def filter(self, *_args):
@@ -718,11 +860,21 @@ def test_expiry_sweep_isolates_event_validation_failure(monkeypatch):
         def all(self):
             return []
 
-    class _ExpiryDB:
-        def __init__(self):
-            self.query_count = 0
+    class _ScanDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def query(self, _model):
+            return _CandidatesQuery()
+
+    class _CandidateDB:
+        def __init__(self, step):
+            self.step = step
             self.commits = 0
-            self.savepoints = 0
+            self.rollbacks = 0
 
         def __enter__(self):
             return self
@@ -731,25 +883,34 @@ def test_expiry_sweep_isolates_event_validation_failure(monkeypatch):
             return False
 
         def query(self, _model):
-            self.query_count += 1
-            return _CandidatesQuery() if self.query_count == 1 else _KeyboardQuery()
-
-        def begin_nested(self):
-            self.savepoints += 1
-            from contextlib import nullcontext
-
-            return nullcontext()
+            return _OneQuery(self.step)
 
         def commit(self):
             self.commits += 1
 
-    db = _ExpiryDB()
+        def rollback(self):
+            self.rollbacks += 1
+
+    class _KeyboardDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def query(self, _model):
+            return _KeyboardQuery()
+
+    candidate_dbs = {step_id: _CandidateDB(step) for step_id, step in steps.items()}
+    sessions = iter(
+        [_ScanDB(), candidate_dbs[1], candidate_dbs[2], candidate_dbs[3], _KeyboardDB()]
+    )
     attempted = []
 
     def _expire(_db, *, step_id, **_kwargs):
         attempted.append(step_id)
-        if step_id == 1:
-            raise telemetry.EventValidationError("invalid legacy event")
+        if step_id == 2:
+            raise RuntimeError("unexpected event storage failure")
         return lifecycle.LifecycleResult(
             user_id=1,
             plan_id=2,
@@ -758,7 +919,7 @@ def test_expiry_sweep_isolates_event_validation_failure(monkeypatch):
             operation="step_expired",
         )
 
-    monkeypatch.setattr(scheduler, "SessionLocal", lambda: db)
+    monkeypatch.setattr(scheduler, "SessionLocal", lambda: next(sessions))
     monkeypatch.setattr(scheduler, "expire_plan_step", _expire)
     monkeypatch.setattr(
         scheduler,
@@ -768,9 +929,11 @@ def test_expiry_sweep_isolates_event_validation_failure(monkeypatch):
 
     scheduler.expire_overdue_steps()
 
-    assert attempted == [1, 2]
-    assert db.savepoints == 2
-    assert db.commits == 1
+    assert attempted == [1, 2, 3]
+    assert candidate_dbs[1].commits == 1
+    assert candidate_dbs[2].rollbacks == 1
+    assert candidate_dbs[3].commits == 1
+    assert "Candidate failed step=2; continuing sweep" in caplog.text
 
 
 def test_time_change_replay_reconciles_only_currently_schedulable_steps(monkeypatch):
