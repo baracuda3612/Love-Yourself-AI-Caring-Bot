@@ -1,12 +1,12 @@
 """
 Plan runtime tools — callable by Coach agent.
 
-Each function is self-contained: opens its own DB session, enforces invariants,
-commits FSM transition when needed. Returns a plain dict result.
+Each function opens its own DB session, delegates persisted decisions to the
+authoritative lifecycle service, commits, and then reconciles explicit external
+effects when the WP-02.2 contract owns them. Returns a plain dict result.
 
-All DB / external imports are lazy (inside function bodies) — mirrors the
-pattern in app/plan_pause.py so unit tests can stub those modules before
-importing this module.
+All DB / external imports are lazy (inside function bodies) so tests can stub
+the authoritative lifecycle and reconciliation boundaries.
 
 Tool registration in Coach prompt is T5.7.
 """
@@ -44,41 +44,6 @@ def _load_user_and_profile(db, user_id: int, *, lock: bool = False):
     return user, profile
 
 
-def _get_active_plan(db, user_id: int):
-    """Return the active or paused plan for user_id, or None."""
-    from app.db import AIPlan  # lazy
-
-    return (
-        db.query(AIPlan)
-        .filter(AIPlan.user_id == user_id, AIPlan.status.in_(["active", "paused"]))
-        .one_or_none()
-    )
-
-
-def _existing_activation_retry(db, user_id: int, source_operation_id: str):
-    """Return the plan for a committed activation retry, or None."""
-    from app.db import AIPlan  # lazy
-    from app.lifecycle import find_lifecycle_operation  # lazy
-
-    receipt = find_lifecycle_operation(db, user_id, source_operation_id)
-    if receipt is None:
-        return None
-    if receipt.operation != "activate":
-        raise ValueError(
-            "source_operation_id already belongs to "
-            f"{receipt.operation}, not activate"
-        )
-    plan = (
-        db.query(AIPlan)
-        .filter(AIPlan.id == receipt.plan_id, AIPlan.user_id == user_id)
-        .first()
-    )
-    if plan is None:
-        raise ValueError("activation_receipt_plan_missing")
-    return plan
-
-
-
 # ─── Public tools ─────────────────────────────────────────────────────────────
 
 
@@ -99,27 +64,16 @@ def create_followup_plan(
     if plan_type not in {"SHORT", "MEDIUM"}:
         raise ValueError(f"plan_type must be 'SHORT' or 'MEDIUM', got {plan_type!r}")
 
-    from app.db import AIPlan, SessionLocal  # lazy
-    from app.lifecycle import CurrentMode, derive_current_mode  # lazy
-    from app.plan_drafts.service import create_plan  # lazy
+    from app.db import SessionLocal  # lazy
+    from app.lifecycle import (  # lazy
+        LifecycleTransitionError,
+        activate_plan,
+        recover_current_plan_activation,
+    )
+    from app.lifecycle_reconciliation import reconcile_scheduler_effects  # lazy
 
     with SessionLocal() as db:
-        user, profile = _load_user_and_profile(db, user_id, lock=True)
-
-        retried_plan = _existing_activation_retry(db, user_id, source_operation_id)
-        if retried_plan is not None:
-            retried_type = "MEDIUM" if retried_plan.total_days == 14 else "SHORT"
-            return {
-                "status": "ok",
-                "plan_type": retried_type,
-                "duplicate": True,
-            }
-
-        mode = derive_current_mode(db, user_id)
-        if mode is not CurrentMode.NO_ACTIVE_PLAN:
-            raise ValueError(f"create_followup_plan requires NO_ACTIVE_PLAN, got {mode.value}")
-        if db.query(AIPlan.id).filter(AIPlan.user_id == user_id).first() is None:
-            raise ValueError("create_followup_plan requires plan history")
+        _, profile = _load_user_and_profile(db, user_id, lock=True)
 
         time_slots: dict = (profile.daily_time_slots or {}) if profile else {}
         day_time: Optional[str] = time_slots.get("DAY") or "14:00"
@@ -130,61 +84,116 @@ def create_followup_plan(
                 return {"status": "needs_evening_time"}
             evening_time = time_slots.get("EVENING")
 
-        activation = create_plan(
-            db,
-            user_id=user_id,
-            plan_type=plan_type,
-            day_time=day_time,
-            evening_time=evening_time,
-            source_operation_id=source_operation_id,
-        )
+        try:
+            activation = activate_plan(
+                db,
+                user_id=user_id,
+                plan_type=plan_type,
+                day_time=day_time,
+                evening_time=evening_time,
+                source_operation_id=source_operation_id,
+                require_plan_history=True,
+            )
+        except LifecycleTransitionError as exc:
+            if str(exc) != "followup_activation_requires_no_active_plan":
+                raise ValueError(str(exc)) from exc
+            try:
+                activation = recover_current_plan_activation(
+                    db,
+                    user_id=user_id,
+                    plan_type=plan_type,
+                )
+            except LifecycleTransitionError as recovery_exc:
+                raise ValueError(str(recovery_exc)) from recovery_exc
 
         db.commit()
 
-    plan = activation.plan
-    if not activation.duplicate:
-        from app.plan_finalization import activate_plan_side_effects  # lazy
-        activate_plan_side_effects(plan.id, user_id)
+    activation = reconcile_scheduler_effects(activation)
+    if not activation.external_effects_succeeded:
+        return {
+            "status": "error",
+            "code": "activation_reconciliation_failed",
+            "plan_id": activation.plan_id,
+            "plan_type": activation.plan_type,
+            "persisted": True,
+            "jobs_reconciled": False,
+            "duplicate": activation.duplicate,
+        }
 
     logger.info(
         "[plan_runtime] create_followup_plan: user=%s plan_id=%s type=%s",
-        user_id, plan.id, plan_type,
+        user_id, activation.plan_id, activation.plan_type,
     )
-    return {
+    response = {
         "status": "ok",
-        "plan_type": plan_type,
+        "plan_id": activation.plan_id,
+        "plan_type": activation.plan_type,
+        "jobs_reconciled": True,
         "duplicate": activation.duplicate,
     }
+    if activation.code == "recovered_existing_plan":
+        response["recovered"] = True
+    return response
 
 
-def record_evening_time(user_id: int, hhmm: str) -> dict:
+def record_evening_time(
+    user_id: int,
+    hhmm: str,
+    *,
+    source_operation_id: str,
+) -> dict:
     """Persist the user's chosen evening delivery time and mark slot as collected.
 
     Used before creating a MEDIUM plan for the first time.
     """
     _validate_hhmm(hhmm)
 
-    from app.db import SessionLocal, UserProfile  # lazy
+    from app.db import SessionLocal  # lazy
+    from app.lifecycle import (  # lazy
+        LifecycleTransitionError,
+        record_evening_time_preference,
+    )
 
     with SessionLocal() as db:
-        user, profile = _load_user_and_profile(db, user_id)
-
-        if profile is None:
-            profile = UserProfile(user_id=user_id)
-            db.add(profile)
-
-        time_slots: dict = dict(profile.daily_time_slots or {})
-        time_slots["EVENING"] = hhmm
-        profile.daily_time_slots = time_slots
-        profile.evening_slot_collected = True
-        db.add(profile)
+        try:
+            result = record_evening_time_preference(
+                db,
+                user_id=user_id,
+                hhmm=hhmm,
+                source_operation_id=source_operation_id,
+            )
+        except LifecycleTransitionError as exc:
+            raise ValueError(str(exc)) from exc
         db.commit()
 
+    if result.code == "superseded":
+        return {
+            "status": "error",
+            "code": "superseded",
+            "evening_time": result.details.get("authoritative_value"),
+            "requested_evening_time": hhmm,
+            "saved": False,
+            "applied": False,
+            "duplicate": result.duplicate,
+        }
     logger.info("[plan_runtime] record_evening_time: user=%s hhmm=%s", user_id, hhmm)
-    return {"status": "ok", "evening_time": hhmm}
+    return {
+        "status": "ok",
+        "evening_time": result.details.get(
+            "authoritative_value", result.details.get("value")
+        ),
+        "saved": True,
+        "applied": result.applied,
+        "duplicate": result.duplicate,
+    }
 
 
-def change_day_time(user_id: int, hhmm: str) -> dict:
+def change_day_time(
+    user_id: int,
+    hhmm: str,
+    *,
+    source_operation_id: str,
+) -> dict:
     """Change the DAY slot delivery time and reschedule pending/delivered steps.
 
     Updates profile.daily_time_slots["DAY"], rewrites scheduled_for on all
@@ -193,26 +202,63 @@ def change_day_time(user_id: int, hhmm: str) -> dict:
     _validate_hhmm(hhmm)
 
     from app.db import SessionLocal  # lazy
-    from app.time_slots import TimeSlotError, update_user_time_slots  # lazy
-    from app.scheduler import reschedule_plan_steps  # lazy
+    from app.lifecycle import LifecycleTransitionError, change_delivery_time  # lazy
+    from app.lifecycle_reconciliation import reconcile_scheduler_effects  # lazy
 
     with SessionLocal() as db:
-        user, _ = _load_user_and_profile(db, user_id)
         try:
-            _, active_ids = update_user_time_slots(db, user, {"DAY": hhmm})
-        except TimeSlotError as exc:
+            result = change_delivery_time(
+                db,
+                user_id=user_id,
+                slot="DAY",
+                hhmm=hhmm,
+                source_operation_id=source_operation_id,
+            )
+        except LifecycleTransitionError as exc:
             raise ValueError(str(exc)) from exc
         db.commit()
 
-    rescheduled = reschedule_plan_steps(active_ids) if active_ids else 0
+    if result.code == "superseded":
+        return {
+            "status": "error",
+            "code": "superseded",
+            "day_time": result.details.get("authoritative_value"),
+            "requested_day_time": hhmm,
+            "saved": False,
+            "jobs_reconciled": False,
+            "duplicate": result.duplicate,
+        }
+    result = reconcile_scheduler_effects(result)
+    effect = result.effects[0]
+    if effect.state.value == "failed":
+        return {
+            "status": "error",
+            "code": "schedule_reconciliation_failed",
+            "day_time": hhmm,
+            "saved": True,
+            "jobs_reconciled": False,
+            "duplicate": result.duplicate,
+        }
     logger.info(
         "[plan_runtime] change_day_time: user=%s hhmm=%s rescheduled=%d",
-        user_id, hhmm, rescheduled,
+        user_id, hhmm, effect.succeeded,
     )
-    return {"status": "ok", "day_time": hhmm, "rescheduled": rescheduled}
+    return {
+        "status": "ok",
+        "day_time": hhmm,
+        "saved": True,
+        "jobs_reconciled": effect.state.value,
+        "rescheduled": effect.succeeded,
+        "duplicate": result.duplicate,
+    }
 
 
-def change_evening_time(user_id: int, hhmm: str) -> dict:
+def change_evening_time(
+    user_id: int,
+    hhmm: str,
+    *,
+    source_operation_id: str,
+) -> dict:
     """Change the EVENING slot delivery time and reschedule pending/delivered steps.
 
     Updates profile.daily_time_slots["EVENING"], rewrites scheduled_for on all
@@ -221,37 +267,66 @@ def change_evening_time(user_id: int, hhmm: str) -> dict:
     _validate_hhmm(hhmm)
 
     from app.db import SessionLocal  # lazy
-    from app.time_slots import TimeSlotError, update_user_time_slots  # lazy
-    from app.scheduler import reschedule_plan_steps  # lazy
+    from app.lifecycle import LifecycleTransitionError, change_delivery_time  # lazy
+    from app.lifecycle_reconciliation import reconcile_scheduler_effects  # lazy
 
     with SessionLocal() as db:
-        user, _ = _load_user_and_profile(db, user_id)
         try:
-            _, active_ids = update_user_time_slots(db, user, {"EVENING": hhmm})
-        except TimeSlotError as exc:
+            result = change_delivery_time(
+                db,
+                user_id=user_id,
+                slot="EVENING",
+                hhmm=hhmm,
+                source_operation_id=source_operation_id,
+            )
+        except LifecycleTransitionError as exc:
             raise ValueError(str(exc)) from exc
         db.commit()
 
-    rescheduled = reschedule_plan_steps(active_ids) if active_ids else 0
+    if result.code == "superseded":
+        return {
+            "status": "error",
+            "code": "superseded",
+            "evening_time": result.details.get("authoritative_value"),
+            "requested_evening_time": hhmm,
+            "saved": False,
+            "jobs_reconciled": False,
+            "duplicate": result.duplicate,
+        }
+    result = reconcile_scheduler_effects(result)
+    effect = result.effects[0]
+    if effect.state.value == "failed":
+        return {
+            "status": "error",
+            "code": "schedule_reconciliation_failed",
+            "evening_time": hhmm,
+            "saved": True,
+            "jobs_reconciled": False,
+            "duplicate": result.duplicate,
+        }
     logger.info(
         "[plan_runtime] change_evening_time: user=%s hhmm=%s rescheduled=%d",
-        user_id, hhmm, rescheduled,
+        user_id, hhmm, effect.succeeded,
     )
-    return {"status": "ok", "evening_time": hhmm, "rescheduled": rescheduled}
+    return {
+        "status": "ok",
+        "evening_time": hhmm,
+        "saved": True,
+        "jobs_reconciled": effect.state.value,
+        "rescheduled": effect.succeeded,
+        "duplicate": result.duplicate,
+    }
 
 
 def cancel_plan(user_id: int, *, source_operation_id: str) -> dict:
     """Atomically abandon the current plan and cancel its open steps."""
     from app.db import SessionLocal  # lazy
     from app.lifecycle import LifecycleTransitionError, abandon_current_plan  # lazy
-    from app.scheduler import cancel_plan_step_jobs  # lazy
+    from app.lifecycle_reconciliation import reconcile_scheduler_effects  # lazy
 
     with SessionLocal() as db:
-        _load_user_and_profile(db, user_id)
-        plan = _get_active_plan(db, user_id)
-        total_days = int(plan.total_days) if plan and plan.total_days is not None else None
         try:
-            result, step_ids = abandon_current_plan(
+            result, _ = abandon_current_plan(
                 db,
                 user_id=user_id,
                 source_operation_id=source_operation_id,
@@ -260,55 +335,50 @@ def cancel_plan(user_id: int, *, source_operation_id: str) -> dict:
             raise ValueError(str(exc)) from exc
         db.commit()
 
-    if step_ids:
-        cancel_plan_step_jobs(step_ids)
+    result = reconcile_scheduler_effects(result)
+    if not result.external_effects_succeeded:
+        return {
+            "status": "error",
+            "code": "cancel_reconciliation_failed",
+            "plan_id": result.plan_id,
+            "plan_status": result.status,
+            "persisted": True,
+            "jobs_reconciled": False,
+            "duplicate": result.duplicate,
+        }
 
-    logger.info("[plan_runtime] cancel_plan: user=%s step_ids_canceled=%d", user_id, len(step_ids))
-    return {"status": "ok", "total_days": total_days, "duplicate": result.duplicate}
+    effect = result.effects[0]
+    logger.info(
+        "[plan_runtime] cancel_plan: user=%s step_jobs_reconciled=%d",
+        user_id,
+        effect.succeeded,
+    )
+    total_days = 14 if result.plan_type == "MEDIUM" else 7
+    return {
+        "status": "ok",
+        "plan_id": result.plan_id,
+        "total_days": total_days,
+        "jobs_reconciled": True,
+        "duplicate": result.duplicate,
+    }
 
 
 def get_plan_status(user_id: int) -> dict:
     """Return the one derived current mode and current-plan summary."""
     from app.db import SessionLocal  # lazy
-    from app.lifecycle import derive_current_day, derive_current_mode  # lazy
+    from app.lifecycle import (  # lazy
+        LifecycleInvariantError,
+        LifecycleTransitionError,
+        read_lifecycle_status,
+    )
 
     with SessionLocal() as db:
-        user, _ = _load_user_and_profile(db, user_id)
-        plan = _get_active_plan(db, user_id)
-        mode = derive_current_mode(db, user_id).value
+        try:
+            status = read_lifecycle_status(db, user_id)
+        except (LifecycleInvariantError, LifecycleTransitionError) as exc:
+            raise ValueError(str(exc)) from exc
 
-        if plan is None:
-            return {"state": mode, "current_mode": mode, "plan_active": False}
-
-        days_total = max(0, int(plan.total_days or 0))
-        current_day = derive_current_day(db, plan.id, days_total) if days_total else 1
-        days_completed = max(0, current_day - 1)
-        days_remaining = max(0, days_total - current_day + 1)
-
-        eligible_steps = [
-            step
-            for day in list(getattr(plan, "days", []) or [])
-            for step in list(getattr(day, "steps", []) or [])
-            if getattr(step, "step_status", None) != "canceled"
-        ]
-        steps_total = len(eligible_steps)
-        steps_completed = sum(
-            1 for step in eligible_steps if getattr(step, "step_status", None) == "completed"
-        )
-        completion_rate = round((steps_completed / steps_total) * 100) if steps_total else 0
-
-        return {
-            "state": mode,
-            "current_mode": mode,
-            "plan_active": True,
-            "days_total": days_total,
-            "current_day": current_day,
-            "days_completed": days_completed,
-            "days_remaining": days_remaining,
-            "steps_total": steps_total,
-            "steps_completed": steps_completed,
-            "completion_rate": completion_rate,
-        }
+    return status.to_runtime_payload()
 
 
 def pause_plan(user_id: int, *, source_operation_id: str) -> dict:
@@ -317,24 +387,28 @@ def pause_plan(user_id: int, *, source_operation_id: str) -> dict:
     Delegates to the plan-centric aggregate operation.
     """
     from app.db import SessionLocal  # lazy
-    from app.plan_pause import (  # lazy
-        PlanAlreadyPausedError,
-        PlanNotActiveError,
-        pause_plan as _pause_plan,
-    )
+    from app.lifecycle import LifecycleTransitionError, transition_current_plan  # lazy
 
     with SessionLocal() as db:
-        _load_user_and_profile(db, user_id)
         try:
-            result = _pause_plan(
-                db, user_id, source_operation_id=source_operation_id
+            result = transition_current_plan(
+                db,
+                user_id=user_id,
+                operation="pause",
+                source_operation_id=source_operation_id,
             )
-        except (PlanNotActiveError, PlanAlreadyPausedError) as exc:
+        except LifecycleTransitionError as exc:
             raise ValueError(str(exc)) from exc
         db.commit()
 
     logger.info("[plan_runtime] pause_plan: user=%s", user_id)
-    return {"status": "ok", "duplicate": result.duplicate}
+    return {
+        "status": "ok",
+        "plan_id": result.plan_id,
+        "plan_status": result.status,
+        "schedule_reconciliation": result.effects[0].state.value,
+        "duplicate": result.duplicate,
+    }
 
 
 def resume_plan(user_id: int, *, source_operation_id: str) -> dict:
@@ -343,17 +417,25 @@ def resume_plan(user_id: int, *, source_operation_id: str) -> dict:
     Delegates to the plan-centric aggregate operation.
     """
     from app.db import SessionLocal  # lazy
-    from app.plan_pause import PlanNotPausedError, resume_plan as _resume_plan  # lazy
+    from app.lifecycle import LifecycleTransitionError, transition_current_plan  # lazy
 
     with SessionLocal() as db:
-        _load_user_and_profile(db, user_id)
         try:
-            result = _resume_plan(
-                db, user_id, source_operation_id=source_operation_id
+            result = transition_current_plan(
+                db,
+                user_id=user_id,
+                operation="resume",
+                source_operation_id=source_operation_id,
             )
-        except PlanNotPausedError as exc:
+        except LifecycleTransitionError as exc:
             raise ValueError(str(exc)) from exc
         db.commit()
 
     logger.info("[plan_runtime] resume_plan: user=%s", user_id)
-    return {"status": "ok", "duplicate": result.duplicate}
+    return {
+        "status": "ok",
+        "plan_id": result.plan_id,
+        "plan_status": result.status,
+        "schedule_reconciliation": result.effects[0].state.value,
+        "duplicate": result.duplicate,
+    }

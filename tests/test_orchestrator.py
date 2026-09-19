@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
 from app import orchestrator
+from app.lifecycle import LifecycleEntitlementError, LifecycleResult
 
 
 class DummyMemory:
@@ -27,9 +28,28 @@ class DummyMemory:
         self.messages.append((user_id, role, text))
 
 
+class PendingActionMemory:
+    def __init__(self, pending=None) -> None:
+        self.pending = pending
+        self.cleared = False
+
+    async def set_pending_action(self, _user_id, value):
+        self.pending = value
+
+    async def get_pending_action(self, _user_id):
+        return self.pending
+
+    async def clear_pending_action(self, _user_id):
+        self.pending = None
+        self.cleared = True
+
+
 @pytest.fixture(autouse=True)
 def disable_auto_complete(monkeypatch):
-    monkeypatch.setattr(orchestrator, "_auto_complete_plan_if_needed_for_user_id", lambda _user_id: None)
+    async def _noop(_user_id):
+        return None
+
+    monkeypatch.setattr(orchestrator, "_auto_complete_plan_if_needed_for_user_id", _noop)
 
 
 # NOTE: coach integration tests deferred to T5.8
@@ -117,6 +137,203 @@ async def test_mutation_tool_rejects_missing_stable_call_id(monkeypatch):
     assert called == []
 
 
+@pytest.mark.anyio
+async def test_medium_evening_collection_preserves_activation_source(monkeypatch):
+    memory = PendingActionMemory()
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "create_followup_plan": lambda *_args, **_kwargs: {
+                "status": "needs_evening_time"
+            }
+        },
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "create_followup_plan",
+            "arguments": {"plan_type": "MEDIUM"},
+            "call_id": "call-medium-7",
+        },
+    )
+
+    assert response.startswith("О котрій")
+    assert memory.pending == "collect_evening_time_for_medium:call-medium-7"
+
+
+@pytest.mark.anyio
+async def test_medium_cascade_reports_reconciliation_failure_and_keeps_retry_key(
+    monkeypatch,
+):
+    memory = PendingActionMemory(
+        "collect_evening_time_for_medium:call-medium-7"
+    )
+    captured = {}
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+
+    def followup(_user_id, args):
+        captured.update(args)
+        return {
+            "status": "error",
+            "code": "activation_reconciliation_failed",
+            "persisted": True,
+            "jobs_reconciled": False,
+        }
+
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "record_evening_time": lambda *_args, **_kwargs: {"status": "ok"},
+            "create_followup_plan": followup,
+        },
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "record_evening_time",
+            "arguments": {"hhmm": "20:30"},
+            "call_id": "call-evening-7",
+        },
+    )
+
+    assert "План збережено" in response
+    assert "розклад" in response
+    assert captured["_source_operation_id"] == "call-medium-7"
+    assert memory.pending == "collect_evening_time_for_medium:call-medium-7"
+    assert memory.cleared is False
+
+
+@pytest.mark.anyio
+async def test_superseded_time_change_does_not_return_success_copy(monkeypatch):
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "change_day_time": lambda *_args, **_kwargs: {
+                "status": "error",
+                "code": "superseded",
+                "day_time": "16:45",
+                "requested_day_time": "15:30",
+                "saved": False,
+            },
+        },
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "change_day_time",
+            "arguments": {"hhmm": "15:30"},
+            "call_id": "call-time-7",
+        },
+    )
+
+    assert response == (
+        "⚠️ Цей запит на зміну часу вже застарів. Актуальний час: 16:45."
+    )
+
+
+@pytest.mark.anyio
+async def test_paused_time_copy_does_not_promise_resume_reconciliation(monkeypatch):
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "change_evening_time": lambda *_args, **_kwargs: {
+                "status": "ok",
+                "evening_time": "20:30",
+                "saved": True,
+                "jobs_reconciled": "deferred",
+            },
+        },
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "change_evening_time",
+            "arguments": {"hhmm": "20:30"},
+            "call_id": "call-time-paused",
+        },
+    )
+
+    assert "під час відновлення" not in response
+    assert "зараз не змінено" in response
+
+
+@pytest.mark.anyio
+async def test_superseded_evening_preference_blocks_activation_cascade(monkeypatch):
+    memory = PendingActionMemory("collect_evening_time_for_medium:activation-1")
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+    cascaded = []
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "record_evening_time": lambda *_args, **_kwargs: {
+                "status": "error",
+                "code": "superseded",
+                "evening_time": "21:15",
+                "requested_evening_time": "20:30",
+            },
+            "create_followup_plan": lambda *_args, **_kwargs: cascaded.append(True),
+        },
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "record_evening_time",
+            "arguments": {"hhmm": "20:30"},
+            "call_id": "evening-old",
+        },
+    )
+
+    assert "застарів" in response
+    assert cascaded == []
+
+
+@pytest.mark.anyio
+async def test_inactive_sender_gets_access_denied_before_coach(monkeypatch):
+    memory = DummyMemory()
+    coach_called = False
+
+    async def reject_completion(_user_id):
+        raise LifecycleEntitlementError("user_not_entitled")
+
+    async def fail_coach(_payload):
+        nonlocal coach_called
+        coach_called = True
+        return {"reply_text": "should not run"}
+
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(
+        orchestrator,
+        "_auto_complete_plan_if_needed_for_user_id",
+        reject_completion,
+    )
+    monkeypatch.setattr(orchestrator, "coach_agent", fail_coach)
+
+    result = await orchestrator.handle_incoming_message(17, "Привіт")
+
+    assert result == {"reply_text": "Доступ до Love Yourself зараз неактивний."}
+    assert coach_called is False
+    assert memory.messages == [
+        (17, "user", "Привіт"),
+        (17, "assistant", "Доступ до Love Yourself зараз неактивний."),
+    ]
+
+
 def test_auto_complete_marks_plan_completed_and_logs_event_with_metrics_error(monkeypatch):
     user = type("UserStub", (), {})()
     user.id = 77
@@ -138,22 +355,26 @@ def test_auto_complete_marks_plan_completed_and_logs_event_with_metrics_error(mo
         captured.update(kwargs)
 
     monkeypatch.setattr(orchestrator, "log_user_event", fake_log_user_event)
+    monkeypatch.setattr(
+        orchestrator,
+        "require_lifecycle_entitlement",
+        lambda _db, _uid: None,
+    )
     monkeypatch.setattr(orchestrator, "get_authoritative_current_plan", lambda _db, _uid: latest_plan)
     monkeypatch.setattr(
         orchestrator,
         "complete_current_plan_if_ready",
-        lambda _db, **_kwargs: type(
-            "Result", (), {"plan_id": 9, "duplicate": False}
-        )(),
+        lambda _db, **_kwargs: LifecycleResult(
+            user_id=77,
+            plan_id=9,
+            status="completed",
+            operation="complete",
+        ),
     )
-    def raise_no_loop():
-        raise RuntimeError("no running loop")
 
-    monkeypatch.setattr(orchestrator.asyncio, "get_running_loop", raise_no_loop)
+    completion = orchestrator._auto_complete_plan_if_needed(db, user)
 
-    completed_plan_id = orchestrator._auto_complete_plan_if_needed(db, user)
-
-    assert completed_plan_id == 9
+    assert completion is not None and completion.plan_id == 9
     assert captured["event_type"] == "plan_completed"
     assert captured["plan_id"] == 9
     assert captured["context"]["metrics_error"] is True
@@ -170,6 +391,11 @@ def test_auto_complete_without_active_plan_sets_idle_without_logging(monkeypatch
         called["value"] = True
 
     monkeypatch.setattr(orchestrator, "log_user_event", fake_log_user_event)
+    monkeypatch.setattr(
+        orchestrator,
+        "require_lifecycle_entitlement",
+        lambda _db, _uid: None,
+    )
     monkeypatch.setattr(orchestrator, "get_authoritative_current_plan", lambda _db, _uid: None)
 
     completed_plan_id = orchestrator._auto_complete_plan_if_needed(db, user)
@@ -178,18 +404,47 @@ def test_auto_complete_without_active_plan_sets_idle_without_logging(monkeypatch
     assert called["value"] is False
 
 
+def test_auto_complete_without_plan_still_enforces_entitlement(monkeypatch):
+    user = type("UserStub", (), {"id": 89})()
+
+    def reject_inactive(_db, _user_id):
+        raise LifecycleEntitlementError("user_not_entitled")
+
+    monkeypatch.setattr(
+        orchestrator,
+        "require_lifecycle_entitlement",
+        reject_inactive,
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "get_authoritative_current_plan",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must authorize first")),
+    )
+
+    with pytest.raises(LifecycleEntitlementError, match="user_not_entitled"):
+        orchestrator._auto_complete_plan_if_needed(object(), user)
+
+
 def test_auto_complete_stale_scheduled_plan_is_noop(monkeypatch):
     user = type("UserStub", (), {"id": 88})()
     current_plan = type("PlanStub", (), {"id": 42})()
 
     monkeypatch.setattr(
         orchestrator,
+        "require_lifecycle_entitlement",
+        lambda _db, _uid: None,
+    )
+    monkeypatch.setattr(
+        orchestrator,
         "get_authoritative_current_plan",
         lambda _db, _uid: current_plan,
     )
 
-    def fail_completion(*_args, **_kwargs):
-        raise AssertionError("stale callback must not reach lifecycle completion")
+    called = []
+
+    def fail_completion(*_args, **kwargs):
+        called.append(kwargs["plan_id"])
+        return None
 
     monkeypatch.setattr(
         orchestrator,
@@ -204,6 +459,7 @@ def test_auto_complete_stale_scheduled_plan_is_noop(monkeypatch):
     )
 
     assert completed_plan_id is None
+    assert called == [41]
 
 
 def test_auto_complete_does_not_reapply_legacy_mirrors_after_event_failure(monkeypatch):
@@ -225,18 +481,26 @@ def test_auto_complete_does_not_reapply_legacy_mirrors_after_event_failure(monke
         raise RuntimeError("boom")
 
     monkeypatch.setattr(orchestrator, "log_user_event", fake_log_user_event)
+    monkeypatch.setattr(
+        orchestrator,
+        "require_lifecycle_entitlement",
+        lambda _db, _uid: None,
+    )
     monkeypatch.setattr(orchestrator, "get_authoritative_current_plan", lambda _db, _uid: latest_plan)
     monkeypatch.setattr(
         orchestrator,
         "complete_current_plan_if_ready",
-        lambda _db, **_kwargs: type(
-            "Result", (), {"plan_id": 22, "duplicate": False}
-        )(),
+        lambda _db, **_kwargs: LifecycleResult(
+            user_id=101,
+            plan_id=22,
+            status="completed",
+            operation="complete",
+        ),
     )
 
-    completed_plan_id = orchestrator._auto_complete_plan_if_needed(db, user)
+    completion = orchestrator._auto_complete_plan_if_needed(db, user)
 
-    assert completed_plan_id == 22
+    assert completion is not None and completion.plan_id == 22
     assert not hasattr(user, "current_state")
     assert not hasattr(user, "plan_end_date")
 
@@ -268,6 +532,11 @@ def test_auto_complete_rejects_multiple_current_plans(monkeypatch):
     db = _AutoCompleteDB([latest_plan, older_plan])
     from app.lifecycle import LifecycleInvariantError
 
+    monkeypatch.setattr(
+        orchestrator,
+        "require_lifecycle_entitlement",
+        lambda _db, _uid: None,
+    )
     monkeypatch.setattr(
         orchestrator,
         "get_authoritative_current_plan",

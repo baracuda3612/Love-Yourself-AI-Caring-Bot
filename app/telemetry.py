@@ -70,6 +70,22 @@ class EventValidationError(ValueError):
     """Raised before persistence when an event violates the catalogue envelope."""
 
 
+class EventChronologyError(EventValidationError):
+    """An otherwise valid event falls outside its catalogue activation window."""
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
+class EventLinkageCompatibilityError(EventValidationError):
+    """Expected telemetry gap for supported legacy/JSON-only plan content."""
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
 class EventOperationConflict(RuntimeError):
     """Raised when a source operation is reused for a different fact."""
 
@@ -253,7 +269,9 @@ def _resolve_plan_linkage(
         if exercise_id is not None:
             content = db.get(ContentLibrary, exercise_id)
             if content is None or content.content_version <= 0:
-                raise EventValidationError("plan step content identity is not valid")
+                raise EventLinkageCompatibilityError(
+                    "plan_step_content_identity_unavailable"
+                )
             content_version = content.content_version
         return resolved_plan_id, plan_step_id, exercise_id, content_version
 
@@ -488,10 +506,10 @@ def write_event_operation(
             aggregate_value=aggregate_value,
         )
 
-    if catalogue.activated_at > occurrence or (
-        catalogue.retired_at is not None and catalogue.retired_at <= occurrence
-    ):
-        raise EventValidationError("event catalogue entry is not active at occurrence time")
+    if catalogue.activated_at > occurrence:
+        raise EventChronologyError("event_catalog_not_yet_active")
+    if catalogue.retired_at is not None and catalogue.retired_at <= occurrence:
+        raise EventChronologyError("event_catalog_already_retired")
 
     recorded_at = _utc_now()
     # The savepoint keeps this pair atomic even when a caller catches the

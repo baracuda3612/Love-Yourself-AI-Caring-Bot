@@ -2,7 +2,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Dict
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -15,8 +15,12 @@ from app.plan_completion.pulse import build_pulse_data
 from app.plan_completion.report import _pick_observation, build_completion_report
 from app.plan_completion.timeline import get_plan_timeline
 from app.plan_completion.tokens import verify_report_token
-from app.scheduler import cancel_plan_step_jobs, reschedule_plan_steps
-from app.time_slots import TimeSlotError, update_user_time_slots
+from app.lifecycle import (
+    LifecycleInvariantError,
+    LifecycleTransitionError,
+    change_delivery_time,
+)
+from app.lifecycle_reconciliation import reconcile_scheduler_effects
 
 app = FastAPI()
 try:
@@ -96,23 +100,79 @@ class TimeSlotsPayload(BaseModel):
 def set_user_time_slots(
     payload: TimeSlotsPayload,
     user_id: int = Query(..., description="User ID to update"),
-) -> Dict[str, int]:
+    idempotency_key: str = Header(
+        ...,
+        alias="Idempotency-Key",
+        min_length=1,
+        max_length=128,
+    ),
+) -> Dict[str, int | bool | str]:
     with SessionLocal() as db:
-        user = db.query(User).filter(User.id == user_id).first()
-        if not user:
-            raise HTTPException(status_code=404, detail="user_not_found")
+        decisions = []
         try:
-            updated_step_ids, active_step_ids = update_user_time_slots(
-                db, user, payload.to_dict()
-            )
-        except TimeSlotError as exc:
+            for slot, hhmm in payload.to_dict().items():
+                decisions.append(
+                    change_delivery_time(
+                        db,
+                        user_id=user_id,
+                        slot=slot,
+                        hhmm=hhmm,
+                        source_operation_id=f"{idempotency_key}:{slot.lower()}",
+                    )
+                )
+        except (LifecycleInvariantError, LifecycleTransitionError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         db.commit()
 
-    cancel_plan_step_jobs(active_step_ids)
-    reschedule_plan_steps(active_step_ids)
+    superseded = [
+        decision for decision in decisions if decision.code == "superseded"
+    ]
+    outcomes = [
+        reconcile_scheduler_effects(decision)
+        for decision in decisions
+        if decision.code != "superseded"
+    ]
+    if superseded:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "superseded_time_change",
+                "saved": False,
+                "authoritative_values": {
+                    str(decision.details["slot"]): decision.details.get(
+                        "authoritative_value"
+                    )
+                    for decision in superseded
+                },
+            },
+        )
+    effect_states = {
+        effect.state.value
+        for outcome in outcomes
+        for effect in outcome.effects
+    }
+    if "failed" in effect_states:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "schedule_reconciliation_failed",
+                "saved": True,
+                "retry_with_same_idempotency_key": True,
+            },
+        )
+    updated_step_ids = {
+        step_id
+        for outcome in outcomes
+        for step_id in outcome.details.get("updated_step_ids", ())
+    }
 
-    return {"updated_steps": len(updated_step_ids)}
+    return {
+        "updated_steps": len(updated_step_ids),
+        "jobs_reconciled": "deferred" not in effect_states,
+        "schedule_state": (
+            "deferred" if "deferred" in effect_states else "reconciled"
+        ),
+    }
 
 
 @app.get("/report/{token}", response_class=HTMLResponse)

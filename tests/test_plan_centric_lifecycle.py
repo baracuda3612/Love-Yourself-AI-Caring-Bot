@@ -88,7 +88,7 @@ def test_runtime_has_no_legacy_lifecycle_attribute_reads():
         "skipped",
     }
     for path in Path("app").rglob("*.py"):
-        if path == Path("app/db.py"):
+        if path in {Path("app/db.py"), Path("app/lifecycle.py")}:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         violations = [

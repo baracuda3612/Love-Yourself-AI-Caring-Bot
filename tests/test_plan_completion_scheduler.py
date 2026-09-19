@@ -1,3 +1,4 @@
+import asyncio
 import os
 import pathlib
 import sys
@@ -18,6 +19,7 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
 from app import orchestrator, scheduler
+from app.lifecycle import CompletionDeliveryResult, LifecycleResult
 
 
 class _SessionCtx:
@@ -212,9 +214,10 @@ class _FakeEventQuery:
 
 
 class _DBForCompletionMessage:
-    def __init__(self, user, existing_event):
+    def __init__(self, user, existing_event, plan=None):
         self.user = user
         self.existing_event = existing_event
+        self.plan = plan or type("Plan", (), {"id": 99, "status": "completed"})()
         self.commits = 0
 
     def query(self, model):
@@ -222,6 +225,8 @@ class _DBForCompletionMessage:
             return _FakeUserQuery(self.user)
         if model is orchestrator.UserEvent:
             return _FakeEventQuery(self.existing_event)
+        if model is orchestrator.AIPlan:
+            return _FakeUserQuery(self.plan)
         raise AssertionError("unexpected model")
 
     def commit(self):
@@ -268,9 +273,14 @@ def test_trigger_plan_completion_reports_the_plan_that_completed(monkeypatch):
     monkeypatch.setattr(
         orchestrator,
         "_auto_complete_plan_if_needed",
-        lambda _db, _user, *, expected_plan_id=None: (
-            42 if expected_plan_id == 99 else None
-        ),
+        lambda _db, _user, *, expected_plan_id=None: LifecycleResult(
+            user_id=1,
+            plan_id=42,
+            status="completed",
+            operation="complete",
+        )
+        if expected_plan_id == 99
+        else None,
     )
 
     submitted = []
@@ -302,28 +312,29 @@ async def test_message_entry_completion_wrapper_captures_result_before_send(monk
     monkeypatch.setattr(
         orchestrator,
         "_auto_complete_plan_if_needed",
-        lambda _db, _user: 42,
+        lambda _db, _user: LifecycleResult(
+            user_id=1,
+            plan_id=42,
+            status="completed",
+            operation="complete",
+        ),
     )
 
     sent = []
 
     async def _fake_send(user_id, plan_id):
         sent.append((user_id, plan_id))
-
-    created = []
-
-    def _fake_create_task(coro):
-        created.append(coro)
-        return None
+        return CompletionDeliveryResult(
+            user_id=user_id,
+            plan_id=plan_id,
+            succeeded=True,
+        )
 
     monkeypatch.setattr(orchestrator, "send_plan_completion_message", _fake_send)
-    monkeypatch.setattr(orchestrator.asyncio, "create_task", _fake_create_task)
 
-    orchestrator._auto_complete_plan_if_needed_for_user_id(1)
+    await orchestrator._auto_complete_plan_if_needed_for_user_id(1)
 
     assert db.commits == 1
-    assert len(created) == 1
-    await created[0]
     assert sent == [(1, 42)]
 
 
@@ -345,6 +356,118 @@ async def test_send_plan_completion_message_skips_when_already_sent(monkeypatch)
     await orchestrator.send_plan_completion_message(1, 99)
 
     assert sent == []
+
+
+@pytest.mark.anyio
+async def test_completion_delivery_serializes_duplicate_in_flight_attempts(monkeypatch):
+    user = type("U", (), {"id": 1, "tg_id": 123, "profile": None})()
+    state = {"receipt": None}
+
+    class _SharedReceiptDB(_DBForCompletionMessage):
+        def query(self, model):
+            if model is orchestrator.UserEvent:
+                return _FakeEventQuery(state["receipt"])
+            return super().query(model)
+
+    monkeypatch.setattr(
+        orchestrator,
+        "SessionLocal",
+        lambda: _SessionCtx(_SharedReceiptDB(user=user, existing_event=None)),
+    )
+    monkeypatch.setattr(
+        "app.plan_completion.metrics.build_completion_metrics",
+        lambda *_args: type("Metrics", (), {"outcome_tier": "STRONG"})(),
+    )
+    monkeypatch.setattr(
+        "app.plan_completion.report.build_completion_report",
+        lambda *_args: "План завершено.",
+    )
+    monkeypatch.setattr(
+        "app.plan_completion.tokens.make_report_token",
+        lambda *_args: "report-token",
+    )
+
+    send_started = asyncio.Event()
+    release_send = asyncio.Event()
+    sends = []
+
+    async def _fake_send(*args, **kwargs):
+        sends.append((args, kwargs))
+        send_started.set()
+        await release_send.wait()
+        return True
+
+    def _record_receipt(*_args, **_kwargs):
+        state["receipt"] = object()
+
+    monkeypatch.setattr("app.scheduler._send_message_async", _fake_send)
+    monkeypatch.setattr(orchestrator, "log_user_event", _record_receipt)
+
+    first = asyncio.create_task(orchestrator.send_plan_completion_message(1, 99))
+    await send_started.wait()
+    second = asyncio.create_task(orchestrator.send_plan_completion_message(1, 99))
+    await asyncio.sleep(0)
+
+    assert len(sends) == 1
+    release_send.set()
+    first_result, second_result = await asyncio.gather(first, second)
+
+    assert len(sends) == 1
+    assert first_result.succeeded is True
+    assert second_result.succeeded is True
+    assert second_result.duplicate is True
+    assert second_result.code == "already_sent"
+
+
+@pytest.mark.anyio
+async def test_completion_receipt_retry_does_not_resend_known_success(monkeypatch):
+    user = type("U", (), {"id": 1, "tg_id": 123, "profile": None})()
+    db = _DBForCompletionMessage(user=user, existing_event=None)
+    monkeypatch.setattr(orchestrator, "SessionLocal", lambda: _SessionCtx(db))
+    monkeypatch.setattr(
+        "app.plan_completion.metrics.build_completion_metrics",
+        lambda *_args: type("Metrics", (), {"outcome_tier": "STRONG"})(),
+    )
+    monkeypatch.setattr(
+        "app.plan_completion.report.build_completion_report",
+        lambda *_args: "План завершено.",
+    )
+    monkeypatch.setattr(
+        "app.plan_completion.tokens.make_report_token",
+        lambda *_args: "report-token",
+    )
+    sends = []
+
+    async def _fake_send(*args, **kwargs):
+        sends.append((args, kwargs))
+        return True
+
+    receipt_attempts = []
+
+    def _record_receipt(*_args, **_kwargs):
+        receipt_attempts.append(True)
+        if len(receipt_attempts) == 1:
+            raise RuntimeError("receipt commit unavailable")
+
+    scheduled = []
+    monkeypatch.setattr("app.scheduler._send_message_async", _fake_send)
+    monkeypatch.setattr(orchestrator, "log_user_event", _record_receipt)
+    monkeypatch.setattr(
+        orchestrator,
+        "_schedule_completion_receipt_retry",
+        lambda user_id, plan_id: scheduled.append((user_id, plan_id)),
+    )
+    orchestrator._completion_known_sends.clear()
+
+    first = await orchestrator.send_plan_completion_message(1, 99)
+    second = await orchestrator.send_plan_completion_message(1, 99)
+
+    assert first.code == "delivery_receipt_failed"
+    assert second.succeeded is True
+    assert len(sends) == 1
+    assert len(receipt_attempts) == 2
+    assert scheduled == [(1, 99)]
+    assert (1, 99) not in orchestrator._completion_known_sends
 
 
 @pytest.mark.anyio
@@ -473,7 +596,12 @@ def test_check_plan_completions_calls_auto_complete(monkeypatch):
 
     def _fake_complete(_db, user, *, expected_plan_id):
         calls.append((user.id, expected_plan_id))
-        return expected_plan_id
+        return LifecycleResult(
+            user_id=user.id,
+            plan_id=expected_plan_id,
+            status="completed",
+            operation="complete",
+        )
 
     monkeypatch.setattr(orchestrator, "_auto_complete_plan_if_needed", _fake_complete)
     monkeypatch.setattr(scheduler, "_event_loop", None)
@@ -528,7 +656,12 @@ def test_check_plan_completions_submits_completion_messages_when_event_loop_avai
     monkeypatch.setattr(scheduler, "SessionLocal", lambda: _SessionCtx(db))
 
     def _fake_complete(_db, _user, *, expected_plan_id):
-        return expected_plan_id
+        return LifecycleResult(
+            user_id=1,
+            plan_id=expected_plan_id,
+            status="completed",
+            operation="complete",
+        )
 
     monkeypatch.setattr(orchestrator, "_auto_complete_plan_if_needed", _fake_complete)
 

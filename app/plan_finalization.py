@@ -10,7 +10,7 @@ import logging
 import pytz
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
 from app.db import (
     AIPlan,
@@ -34,9 +34,6 @@ from app.active_days import (
     next_active_date,
     step_expires_at,
 )
-from app.telemetry import log_user_event
-from app.scheduler import schedule_plan_step
-from app.db import SessionLocal
 from app.plan_duration import assert_canonical_total_days
 from app.lifecycle import (
     LifecycleTransitionError,
@@ -177,6 +174,7 @@ def finalize_plan(
     *,
     activation_time_utc: datetime,
     source_operation_id: str,
+    activation_receipt_status: str,
 ) -> PlanActivationResult:
     try:
         user = (
@@ -408,7 +406,7 @@ def finalize_plan(
             plan_id=plan.id,
             source_operation_id=source_operation_id,
             operation="activate",
-            result_status="active",
+            result_status=activation_receipt_status,
         )
         db.flush()
 
@@ -418,32 +416,3 @@ def finalize_plan(
     except (IntegrityError, LifecycleTransitionError, ValueError) as exc:
         logger.error("Plan finalization failed for user %s: %s", user_id, exc)
         raise FinalizationError("transaction_failed") from exc
-
-
-def activate_plan_side_effects(plan_id: int, user_id: int) -> None:
-    try:
-        with SessionLocal() as db:
-            plan = (
-                db.query(AIPlan)
-                .options(selectinload(AIPlan.days).selectinload(AIPlanDay.steps), selectinload(AIPlan.user))
-                .filter(AIPlan.id == plan_id, AIPlan.user_id == user_id)
-                .first()
-            )
-            if not plan or not plan.user:
-                logger.warning("Plan %s side effects skipped (missing plan/user).", plan_id)
-                return
-            for day in plan.days:
-                for step in day.steps:
-                    schedule_plan_step(step, plan.user)
-            log_user_event(
-                db,
-                user_id=user_id,
-                event_type="plan_activated",
-                event_source="plan_finalization",
-                source_operation_id=f"plan-activation:{plan_id}",
-                plan_id=plan_id,
-                context={"total_days": getattr(plan, "total_days", None)},
-            )
-            db.commit()
-    except Exception as exc:
-        logger.error("Plan activation side effects failed for plan %s: %s", plan_id, exc)

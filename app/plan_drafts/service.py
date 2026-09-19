@@ -1,7 +1,8 @@
-"""Plan creation service (T5.2).
+"""Internal plan builder/finalizer used by the authoritative lifecycle service.
 
-Public API:
-    create_plan(..., source_operation_id=...) -> PlanActivationResult
+Runtime callers must enter through ``app.lifecycle.activate_plan``. This module
+only materializes the draft and delegates the locked aggregate write to the
+finalization helper; it is not a second lifecycle entrance.
 
 Reads active_days/work_days from user_profile internally.
 No user-facing draft confirmation step — plan goes directly to ACTIVE.
@@ -33,7 +34,7 @@ _PLAN_TYPE_TOTAL_DAYS = {
 }
 
 
-def create_plan(
+def create_plan_for_lifecycle(
     db: Session,
     user_id: int,
     plan_type: str,                  # "SHORT" | "MEDIUM"
@@ -41,6 +42,7 @@ def create_plan(
     evening_time: Optional[str] = None,  # "HH:MM"; required for MEDIUM
     *,
     source_operation_id: str,
+    activation_receipt_status: str,
 ) -> "PlanActivationResult":
     """Build, persist, and immediately finalize a plan for user_id.
 
@@ -120,7 +122,7 @@ def create_plan(
         else:
             raise MissingEveningSlotError(
                 "MEDIUM plan requires evening_time; "
-                "evening_slot_collected is False — collect it before calling create_plan()"
+                "evening_slot_collected is False — collect it before activation"
             )
     else:
         resolved_evening = None
@@ -142,6 +144,7 @@ def create_plan(
         draft_record,
         activation_time_utc=datetime.now(timezone.utc),
         source_operation_id=source_operation_id,
+        activation_receipt_status=activation_receipt_status,
     )
     return result
 
@@ -217,4 +220,4 @@ def _has_previous_plan(db: Session, user_id: int) -> bool:
     return db.query(AIPlan).filter(AIPlan.user_id == user_id).first() is not None
 
 
-__all__ = ["create_plan"]
+__all__ = ["create_plan_for_lifecycle"]

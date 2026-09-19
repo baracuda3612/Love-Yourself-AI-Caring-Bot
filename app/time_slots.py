@@ -45,6 +45,14 @@ def _parse_time(value: str) -> time:
     return time(hour=hour, minute=minute)
 
 
+def canonicalize_hhmm(value: str) -> str:
+    """Return the one persisted/receipt representation for an accepted time."""
+    if not isinstance(value, str):
+        raise TimeSlotError("invalid_time_format")
+    parsed = _parse_time(value.strip())
+    return f"{parsed.hour:02d}:{parsed.minute:02d}"
+
+
 def map_time_to_slot(hhmm: str) -> str:
     """Maps a HH:MM string to the internal slot enum: MORNING / DAY / EVENING."""
     t = _parse_time(hhmm)
@@ -70,8 +78,7 @@ def normalize_daily_time_slots(raw: Any, *, require_all: bool) -> Dict[str, str]
         slot = normalize_time_slot(key)
         if not isinstance(value, str):
             raise TimeSlotError("daily_time_slots_invalid")
-        parsed = _parse_time(value.strip())
-        normalized[slot] = f"{parsed.hour:02d}:{parsed.minute:02d}"
+        normalized[slot] = canonicalize_hhmm(value)
     if require_all and any(slot not in normalized for slot in TIME_SLOTS):
         raise TimeSlotError("daily_time_slots_missing")
     for slot in TIME_SLOTS:
@@ -157,7 +164,7 @@ def iter_future_steps(
 ) -> Iterable[tuple[AIPlanDay, AIPlanStep]]:
     for day in plan.days:
         for step in day.steps:
-            if step.step_status in ("completed", "skipped", "expired"):
+            if step.step_status in ("completed", "skipped", "expired", "canceled"):
                 continue
             anchor = resolve_step_anchor(
                 plan_start=plan.start_date or effective_from,
@@ -234,8 +241,7 @@ def update_user_time_slots(
         slot = normalize_time_slot(key)
         if not isinstance(value, str):
             raise TimeSlotError("daily_time_slots_invalid")
-        parsed = _parse_time(value.strip())
-        partial[slot] = f"{parsed.hour:02d}:{parsed.minute:02d}"
+        partial[slot] = canonicalize_hhmm(value)
 
     profile = user.profile
     if not profile:
@@ -258,3 +264,26 @@ def update_user_time_slots(
         .all()
     )
     return recompute_future_steps(user, plans, normalized)
+
+
+def update_user_time_slot_preferences(
+    db: Session,
+    user: User,
+    raw_time_slots: Dict[str, str],
+) -> Dict[str, str]:
+    """Update profile defaults without mutating a current plan's schedule."""
+    if not isinstance(raw_time_slots, dict):
+        raise TimeSlotError("daily_time_slots_invalid")
+    partial = {
+        normalize_time_slot(key): canonicalize_hhmm(value)
+        for key, value in raw_time_slots.items()
+    }
+    profile = user.profile
+    if not profile:
+        profile = UserProfile(user_id=user.id)
+        db.add(profile)
+        user.profile = profile
+    normalized = resolve_daily_time_slots(profile)
+    normalized.update(partial)
+    profile.daily_time_slots = normalized
+    return normalized

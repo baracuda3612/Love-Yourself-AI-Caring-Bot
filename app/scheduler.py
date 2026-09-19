@@ -1,5 +1,6 @@
 # app/scheduler.py
 import asyncio
+from dataclasses import dataclass
 import logging
 from math import ceil
 from datetime import datetime, timedelta, timezone
@@ -26,6 +27,7 @@ from app.ux.task_notification import format_task_notification, maybe_advance_cur
 from app.lifecycle import (
     LifecycleTransitionError,
     derive_current_day,
+    expire_plan_step,
     transition_plan_step,
 )
 
@@ -69,7 +71,11 @@ def init_scheduler():
     # scheduler.add_job("app.scheduler:send_daily_pulse", "cron", hour=9, minute=0, id="daily_pulse", replace_existing=True, max_instances=1)
     # Remove persisted jobs for retired runtime entrances. APScheduler owns its
     # job table, so cleanup stays at the scheduler boundary rather than Alembic.
-    for retired_job_id in ("daily_pulse", "stuck_schedule_adj_check"):
+    for retired_job_id in (
+        "daily_pulse",
+        "stuck_schedule_adj_check",
+        "ignored_check",
+    ):
         try:
             scheduler.remove_job(retired_job_id)
         except Exception:
@@ -77,7 +83,6 @@ def init_scheduler():
     # Run every hour at :05 — 1 h max lag for any timezone, not just UTC+0.
     scheduler.add_job("app.scheduler:expire_overdue_steps", "cron", minute=5, id="expire_steps", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_silent_users", "cron", hour=12, minute=0, id="silent_check", replace_existing=True, max_instances=1)
-    scheduler.add_job("app.scheduler:check_ignored_tasks", "cron", hour=8, minute=0, id="ignored_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_plan_completions", "cron", hour=10, minute=30, id="plan_completion_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:send_plan_pulse_snapshots", "cron", hour=10, minute=0, id="pulse_snapshot_check", replace_existing=True, max_instances=1)
 
@@ -340,48 +345,201 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
     return new_job_id_assigned
 
 
-def cancel_plan_step_jobs(step_ids: list[int]) -> int:
-    if not step_ids:
-        return 0
-    removed = 0
-    with SessionLocal() as db:
-        steps = (
-            db.query(AIPlanStep)
-            .filter(AIPlanStep.id.in_(step_ids))
-            .all()
-        )
-        for step in steps:
-            job_id = getattr(step, "job_id", None) or _generate_step_job_id(step)
-            try:
-                scheduler.remove_job(job_id)
-            except Exception:
-                continue
-            else:
-                removed += 1
-    return removed
+@dataclass(frozen=True)
+class SchedulerReconciliation:
+    attempted: int
+    succeeded: int
+    failed_ids: tuple[int, ...] = ()
 
 
-def reschedule_plan_steps(step_ids: list[int]) -> int:
+def reconcile_plan_step_jobs(step_ids: list[int]) -> SchedulerReconciliation:
+    """Idempotently ensure that every named active step has a scheduler job."""
     if not step_ids:
-        return 0
-    created = 0
+        return SchedulerReconciliation(attempted=0, succeeded=0)
+    ordered_ids = tuple(dict.fromkeys(int(step_id) for step_id in step_ids))
     with SessionLocal() as db:
-        steps = (
+        rows = (
             db.query(AIPlanStep, AIPlanDay, AIPlan, User)
             .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
             .join(AIPlan, AIPlan.id == AIPlanDay.plan_id)
             .join(User, User.id == AIPlan.user_id)
-            .filter(AIPlanStep.id.in_(step_ids))
+            .filter(AIPlanStep.id.in_(ordered_ids))
             .all()
         )
-        for step, _, plan, user in steps:
-            if plan.status != "active":
+        by_id = {step.id: (step, plan, user) for step, _, plan, user in rows}
+        failed: list[int] = []
+        succeeded = 0
+        for step_id in ordered_ids:
+            row = by_id.get(step_id)
+            if row is None:
+                failed.append(step_id)
                 continue
-            if schedule_plan_step(step, user):
-                created += 1
-        if created > 0:
-            db.commit()
-    return created
+            step, plan, user = row
+            if str(plan.status) != "active" or getattr(user, "is_active", False) is not True:
+                failed.append(step_id)
+                continue
+            try:
+                schedule_plan_step(step, user)
+                job_id = _generate_step_job_id(step)
+                job = scheduler.get_job(job_id)
+                expected_run_date = (
+                    _to_utc(step.scheduled_for)
+                    if step.scheduled_for is not None
+                    else None
+                )
+                actual_run_date = getattr(job, "next_run_time", None)
+                if actual_run_date is not None:
+                    actual_run_date = _to_utc(actual_run_date)
+                if job is None or actual_run_date != expected_run_date:
+                    if job is not None:
+                        try:
+                            scheduler.remove_job(job_id)
+                        except Exception:
+                            pass
+                    failed.append(step_id)
+                    continue
+            except Exception:
+                failed.append(step_id)
+                continue
+            succeeded += 1
+    return SchedulerReconciliation(
+        attempted=len(ordered_ids),
+        succeeded=succeeded,
+        failed_ids=tuple(failed),
+    )
+
+
+def reconcile_plan_schedule(plan_id: int) -> SchedulerReconciliation:
+    """Make jobs exact while fencing newer lifecycle decisions on the user row."""
+    with SessionLocal() as db:
+        initial_plan = (
+            db.query(AIPlan)
+            .filter(AIPlan.id == int(plan_id))
+            .first()
+        )
+        if initial_plan is None:
+            return SchedulerReconciliation(
+                attempted=1,
+                succeeded=0,
+                failed_ids=(int(plan_id),),
+            )
+        # Every authoritative plan/time/cancel mutation takes this same row
+        # lock.  Hold it across the external proof so an older reconciler
+        # cannot write after a newer committed decision and report success.
+        user = (
+            db.query(User)
+            .filter(User.id == initial_plan.user_id)
+            .populate_existing()
+            .with_for_update()
+            .first()
+        )
+        plan = (
+            db.query(AIPlan)
+            .filter(AIPlan.id == int(plan_id))
+            .populate_existing()
+            .first()
+        )
+        if plan is None or user is None:
+            return SchedulerReconciliation(
+                attempted=1,
+                succeeded=0,
+                failed_ids=(int(plan_id),),
+            )
+        rows = (
+            db.query(AIPlanStep)
+            .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+            .filter(AIPlanDay.plan_id == plan.id)
+            .order_by(AIPlanStep.id)
+            .all()
+        )
+        now_utc = datetime.now(pytz.UTC)
+        failed: list[int] = []
+        succeeded = 0
+        for step in rows:
+            job_id = _generate_step_job_id(step)
+            scheduled_for = (
+                _to_utc(step.scheduled_for)
+                if step.scheduled_for is not None
+                else None
+            )
+            should_exist = (
+                str(plan.status) == "active"
+                and user is not None
+                and getattr(user, "is_active", False) is True
+                and str(step.step_status) == "pending"
+                and scheduled_for is not None
+                and scheduled_for > now_utc
+            )
+            try:
+                if should_exist:
+                    schedule_plan_step(step, user)
+                    job = scheduler.get_job(job_id)
+                    actual = getattr(job, "next_run_time", None)
+                    if actual is not None:
+                        actual = _to_utc(actual)
+                    if job is None or actual != scheduled_for:
+                        raise RuntimeError("scheduler_job_not_exact")
+                else:
+                    job = scheduler.get_job(job_id)
+                    if job is not None:
+                        scheduler.remove_job(job_id)
+                    if scheduler.get_job(job_id) is not None:
+                        raise RuntimeError("obsolete_scheduler_job_present")
+            except Exception:
+                failed.append(int(step.id))
+                continue
+            succeeded += 1
+    return SchedulerReconciliation(
+        attempted=len(rows),
+        succeeded=succeeded,
+        failed_ids=tuple(failed),
+    )
+
+
+def reconcile_cancel_plan_step_jobs(step_ids: list[int]) -> SchedulerReconciliation:
+    """Idempotently prove that every named step job is absent."""
+    if not step_ids:
+        return SchedulerReconciliation(attempted=0, succeeded=0)
+    ordered_ids = tuple(dict.fromkeys(int(step_id) for step_id in step_ids))
+    with SessionLocal() as db:
+        steps = db.query(AIPlanStep).filter(AIPlanStep.id.in_(ordered_ids)).all()
+        by_id = {step.id: step for step in steps}
+        failed: list[int] = []
+        succeeded = 0
+        for step_id in ordered_ids:
+            step = by_id.get(step_id)
+            if step is None:
+                failed.append(step_id)
+                continue
+            job_id = _generate_step_job_id(step)
+            try:
+                scheduler.remove_job(job_id)
+            except Exception:
+                pass
+            try:
+                still_present = scheduler.get_job(job_id) is not None
+            except Exception:
+                failed.append(step_id)
+                continue
+            if still_present:
+                failed.append(step_id)
+                continue
+            succeeded += 1
+    return SchedulerReconciliation(
+        attempted=len(ordered_ids),
+        succeeded=succeeded,
+        failed_ids=tuple(failed),
+    )
+
+
+def cancel_plan_step_jobs(step_ids: list[int]) -> int:
+    """Compatibility count backed by the authoritative reconciliation result."""
+    return reconcile_cancel_plan_step_jobs(step_ids).succeeded
+
+
+def reschedule_plan_steps(step_ids: list[int]) -> int:
+    """Compatibility count backed by the authoritative reconciliation result."""
+    return reconcile_plan_step_jobs(step_ids).succeeded
 
 
 async def schedule_daily_loop():
@@ -531,9 +689,8 @@ def check_silent_users():
 
         for user in active_users:
             try:
-                # NOTE:
-                # task_ignored is system-generated by check_ignored_tasks()
-                # and must NOT count as user activity for silence detection.
+                # task_ignored is generated by the authoritative expiry
+                # transition and must not count as user activity.
                 # Only user-initiated activity counts as engagement.
                 last_event = db.query(UserEvent).filter(
                     UserEvent.user_id == user.id,
@@ -598,57 +755,70 @@ def check_silent_users():
                 logger.error("[SILENT] user_id=%s", user.id, exc_info=True)
 
 
-def check_ignored_tasks():
-    """
-    Runs at 8:00 UTC.
-    Finds delivered steps in the last day without reaction and logs task_ignored telemetry only.
-    """
+def reconcile_expired_step_keyboards(
+    step_ids: list[int],
+) -> SchedulerReconciliation:
+    """Retry keyboard removal until ``tg_message_id`` is cleared in PostgreSQL."""
+    if not step_ids:
+        return SchedulerReconciliation(attempted=0, succeeded=0)
+    ordered_ids = tuple(dict.fromkeys(int(step_id) for step_id in step_ids))
     with SessionLocal() as db:
-        # TECH-DEBT TD-6:
-        # This logic uses sliding 24h window, not calendar-day semantics.
-        # Refactor if strict day-based behavior is required.
-        yesterday_start = datetime.now(pytz.UTC) - timedelta(days=1)
-        yesterday_end = datetime.now(pytz.UTC)
-
-        delivered = db.query(UserEvent).filter(
-            UserEvent.event_name == "task_delivered",
-            UserEvent.occurred_at >= yesterday_start,
-            UserEvent.occurred_at < yesterday_end,
-        ).all()
-
-        for event in delivered:
-            plan_step_id = event.plan_step_id
-            if not plan_step_id:
-                continue
-
-            reacted = db.query(UserEvent).filter(
-                UserEvent.user_id == event.user_id,
-                UserEvent.plan_step_id == plan_step_id,
-                UserEvent.event_name.in_(["task_completed", "task_skipped"]),
-                UserEvent.occurred_at >= event.occurred_at,
-            ).first()
-            if reacted:
-                continue
-
-            already_logged = db.query(UserEvent).filter(
-                UserEvent.user_id == event.user_id,
-                UserEvent.plan_step_id == plan_step_id,
-                UserEvent.event_name == "task_ignored",
-            ).first()
-            if already_logged:
-                continue
-
-            log_user_event(
-                db,
-                user_id=event.user_id,
-                event_type="task_ignored",
-                event_source="scheduler",
-                source_operation_id=f"scheduler:ignored:{plan_step_id}",
-                plan_step_id=plan_step_id,
-                context={"detection_source": "morning_check"},
+        rows = (
+            db.query(AIPlanStep.id, AIPlanStep.tg_message_id, User.tg_id)
+            .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+            .join(AIPlan, AIPlan.id == AIPlanDay.plan_id)
+            .join(User, User.id == AIPlan.user_id)
+            .filter(
+                AIPlanStep.id.in_(ordered_ids),
+                AIPlanStep.step_status == "expired",
             )
-        db.commit()
+            .all()
+        )
+    by_id = {step_id: (message_id, tg_id) for step_id, message_id, tg_id in rows}
+    succeeded_ids: list[int] = []
+    failed_ids: list[int] = []
+    for step_id in ordered_ids:
+        message_id, tg_id = by_id.get(step_id, (None, None))
+        if message_id is None:
+            succeeded_ids.append(step_id)
+            continue
+        if tg_id is None:
+            failed_ids.append(step_id)
+            continue
 
+        async def _remove_keyboard(chat_id: int, telegram_message_id: int):
+            from app.telegram import bot as tg_bot
+
+            return await tg_bot.edit_message_reply_markup(
+                chat_id=chat_id,
+                message_id=telegram_message_id,
+                reply_markup=None,
+            )
+
+        future = _submit_coroutine(_remove_keyboard(tg_id, message_id))
+        if future is None:
+            failed_ids.append(step_id)
+            continue
+        try:
+            future.result(timeout=30)
+        except Exception:
+            failed_ids.append(step_id)
+            continue
+        with SessionLocal() as db:
+            current = db.query(AIPlanStep).filter(AIPlanStep.id == step_id).first()
+            if current is None:
+                failed_ids.append(step_id)
+                continue
+            if current.tg_message_id == message_id:
+                current.tg_message_id = None
+                db.commit()
+        succeeded_ids.append(step_id)
+
+    return SchedulerReconciliation(
+        attempted=len(ordered_ids),
+        succeeded=len(succeeded_ids),
+        failed_ids=tuple(failed_ids),
+    )
 
 
 def expire_overdue_steps() -> None:
@@ -670,82 +840,105 @@ def expire_overdue_steps() -> None:
 
     now_utc = datetime.now(pytz.UTC)
 
-    with SessionLocal() as db:
-        candidates = (
-            db.query(AIPlanStep)
-            .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
-            .join(AIPlan, AIPlan.id == AIPlanDay.plan_id)
-            .join(User, User.id == AIPlan.user_id)
-            .filter(
-                AIPlanStep.step_status.in_(["pending", "delivered"]),
-                or_(
-                    AIPlanStep.expires_at.is_(None),
-                    AIPlanStep.expires_at < now_utc,
-                ),
+    with SessionLocal() as scan_db:
+        candidate_ids = [
+            step_id
+            for (step_id,) in (
+                scan_db.query(AIPlanStep.id)
+                .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+                .join(AIPlan, AIPlan.id == AIPlanDay.plan_id)
+                .join(User, User.id == AIPlan.user_id)
+                .filter(
+                    AIPlanStep.step_status.in_(["pending", "delivered"]),
+                    or_(
+                        AIPlanStep.expires_at.is_(None),
+                        AIPlanStep.expires_at < now_utc,
+                    ),
+                )
+                .order_by(AIPlanStep.id)
+                .all()
             )
-            .all()
-        )
+        ]
 
-        to_clear: list[tuple[int, int]] = []  # (tg_id, tg_message_id)
-        repaired = 0
-        count = 0
-        for step in candidates:
+    repaired = 0
+    count = 0
+    failed_ids: list[int] = []
+    for step_id in candidate_ids:
+        with SessionLocal() as candidate_db:
+            step = (
+                candidate_db.query(AIPlanStep)
+                .filter(AIPlanStep.id == step_id)
+                .first()
+            )
+            if step is None:
+                continue
+            repaired_candidate = False
             if step.expires_at is None and step.scheduled_for is not None:
-                user_tz = resolve_timezone(getattr(step.day.plan.user, "timezone", None))
+                user_tz = resolve_timezone(
+                    getattr(step.day.plan.user, "timezone", None)
+                )
                 step.expires_at = step_expires_at(step.scheduled_for, user_tz)
-                repaired += 1
+                repaired_candidate = True
 
             if step.expires_at is None or step.expires_at >= now_utc:
+                if repaired_candidate:
+                    candidate_db.commit()
+                    repaired += 1
                 continue
 
             try:
-                transition_plan_step(
-                    db,
+                expire_plan_step(
+                    candidate_db,
                     user_id=step.day.plan.user_id,
                     step_id=step.id,
-                    target_status="expired",
-                    source_operation_id=f"scheduler:expiry:{step.id}:{step.expires_at.isoformat()}",
+                    source_operation_id=(
+                        f"scheduler:expiry:{step.id}:{step.expires_at.isoformat()}"
+                    ),
                     occurred_at=step.expires_at,
                 )
+                candidate_db.commit()
             except LifecycleTransitionError:
+                candidate_db.rollback()
                 continue
+            except Exception:
+                candidate_db.rollback()
+                failed_ids.append(step_id)
+                logger.exception(
+                    "[EXPIRE] Candidate failed step=%s; continuing sweep",
+                    step_id,
+                )
+                continue
+            repaired += int(repaired_candidate)
             count += 1
-            if step.tg_message_id:
-                try:
-                    tg_id = step.day.plan.user.tg_id
-                    if tg_id:
-                        to_clear.append((tg_id, step.tg_message_id))
-                except Exception:
-                    pass
 
-        if count or repaired:
-            db.commit()
-            logger.info(
-                "[EXPIRE] Marked %d steps as expired, repaired %d missing expires_at values.",
-                count,
-                repaired,
+    if count or repaired:
+        logger.info(
+            "[EXPIRE] Marked %d steps as expired, repaired %d missing expires_at values.",
+            count,
+            repaired,
+        )
+    if failed_ids:
+        logger.error("[EXPIRE] Candidate failures for step ids: %s", failed_ids)
+
+    with SessionLocal() as db:
+        pending_keyboard_ids = [
+            step_id
+            for (step_id,) in (
+                db.query(AIPlanStep.id)
+                .filter(
+                    AIPlanStep.step_status == "expired",
+                    AIPlanStep.tg_message_id.isnot(None),
+                )
+                .all()
             )
+        ]
 
-    # Remove inline keyboards outside the DB session (no DB lock needed).
-    if to_clear:
-        async def _remove_keyboards():
-            from app.telegram import bot as tg_bot
-            for chat_id, message_id in to_clear:
-                try:
-                    await tg_bot.edit_message_reply_markup(
-                        chat_id=chat_id,
-                        message_id=message_id,
-                        reply_markup=None,
-                    )
-                except Exception:
-                    pass  # message already deleted / too old — ignore
-
-        future = _submit_coroutine(_remove_keyboards())
-        if future:
-            try:
-                future.result(timeout=30)
-            except Exception as exc:
-                logger.warning("[EXPIRE] Failed to remove keyboards: %s", exc)
+    reconciliation = reconcile_expired_step_keyboards(pending_keyboard_ids)
+    if reconciliation.failed_ids:
+        logger.warning(
+            "[EXPIRE] Keyboard reconciliation pending for step ids: %s",
+            reconciliation.failed_ids,
+        )
 
 
 def _maybe_schedule_plan_completion(user_id: int, plan_id: int) -> None:
@@ -818,14 +1011,14 @@ def check_plan_completions() -> None:
         active_plans = db.query(AIPlan).filter(AIPlan.status == "active").all()
         for candidate_plan in active_plans:
             try:
-                completed_plan_id = _auto_complete_plan_if_needed(
+                completion = _auto_complete_plan_if_needed(
                     db,
                     candidate_plan.user,
                     expected_plan_id=candidate_plan.id,
                 )
-                if completed_plan_id is not None:
+                if completion is not None:
                     completed_pairs.append(
-                        (candidate_plan.user_id, completed_plan_id)
+                        (candidate_plan.user_id, completion.plan_id)
                     )
             except Exception as e:
                 logger.error("[CRON_COMPLETION] failed plan=%s: %s", candidate_plan.id, e)

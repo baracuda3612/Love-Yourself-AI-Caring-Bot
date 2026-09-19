@@ -11,13 +11,29 @@ os.environ.setdefault(
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
 from app import telegram
+from app.lifecycle import (
+    LifecycleEntitlementError,
+    LifecycleOwnershipError,
+    LifecycleResult,
+    LifecycleTransitionError,
+)
 
 
 class DummyUser:
-    def __init__(self, tg_id: int, user_id: int, current_state: str = "ACTIVE") -> None:
+    def __init__(
+        self,
+        tg_id: int,
+        user_id: int,
+        current_state: str = "ACTIVE",
+        *,
+        is_active: bool = True,
+    ) -> None:
         self.tg_id = tg_id
         self.id = user_id
         self.current_state = current_state
+        self.is_active = is_active
+        self.profile = None
+        self.first_name = "Test"
 
 
 class DummyPlan:
@@ -46,9 +62,22 @@ class DummyStep:
         self.id = step_id
         self.day = day
         self.exercise_id = exercise_id
-        self.is_completed = is_completed
-        self.skipped = skipped
-        self.completed_at = completed_at
+        self.step_status = (
+            "completed" if is_completed else "skipped" if skipped else "pending"
+        )
+        self.terminal_at = completed_at
+
+    @property
+    def is_completed(self) -> bool:
+        return self.step_status == "completed"
+
+    @property
+    def skipped(self) -> bool:
+        return self.step_status == "skipped"
+
+    @property
+    def completed_at(self) -> datetime | None:
+        return self.terminal_at if self.step_status == "completed" else None
 
 
 class DummyMessage:
@@ -59,7 +88,7 @@ class DummyMessage:
     async def edit_reply_markup(self, reply_markup=None):
         self.edited_reply_markup = reply_markup
 
-    async def answer(self, text: str):
+    async def answer(self, text: str, **_kwargs):
         self.answers.append(text)
 
 
@@ -74,6 +103,7 @@ class DummyCallbackQuery:
         self.from_user = DummyFromUser(user_id)
         self.message = message
         self.answers = []
+        self.id = f"callback-{data}"
 
     async def answer(self, text: str | None = None):
         self.answers.append(text)
@@ -106,6 +136,57 @@ class FakeSession:
 
     def commit(self):
         self.committed = True
+
+    def rollback(self):
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _authoritative_step_boundary(monkeypatch):
+    def transition(
+        db,
+        *,
+        telegram_user_id,
+        step_id,
+        target_status,
+        source_operation_id,
+    ):
+        step = db.step
+        if step is None or step.id != step_id:
+            raise LifecycleTransitionError("plan_step_missing")
+        owner = step.day.plan.user
+        if owner.tg_id != telegram_user_id:
+            raise LifecycleOwnershipError("plan_step_not_owned")
+        if owner.is_active is not True:
+            raise LifecycleEntitlementError("user_not_entitled")
+        if step.day.plan.status != "active":
+            raise LifecycleTransitionError("plan_not_active")
+        if step.step_status in {"completed", "skipped", "expired", "canceled"}:
+            if step.step_status != target_status:
+                raise LifecycleTransitionError(
+                    f"terminal step already won with {step.step_status}"
+                )
+            return LifecycleResult(
+                user_id=owner.id,
+                plan_id=1,
+                step_id=step.id,
+                status=step.step_status,
+                operation=f"step_{target_status}",
+                duplicate=True,
+                day_number=step.day.day_number,
+            )
+        step.step_status = target_status
+        step.terminal_at = datetime.now(timezone.utc)
+        return LifecycleResult(
+            user_id=owner.id,
+            plan_id=1,
+            step_id=step.id,
+            status=target_status,
+            operation=f"step_{target_status}",
+            day_number=step.day.day_number,
+        )
+
+    monkeypatch.setattr(telegram, "transition_owned_plan_step", transition)
 
 
 @pytest.mark.anyio
@@ -157,7 +238,7 @@ async def test_task_completed_happy_path(monkeypatch):
     ]
     assert callback_query.answers[-1] == "✅ Чудово! Завдання виконано."
     assert message.edited_reply_markup is None
-    assert message.answers[-1] == "✅ Завдання відмічено як виконане."
+    assert message.answers[-1] == "✅ Виконано!"
 
 
 @pytest.mark.anyio
@@ -208,7 +289,7 @@ async def test_task_skipped_happy_path(monkeypatch):
     ]
     assert callback_query.answers[-1] == "⏭️ Завдання пропущено"
     assert message.edited_reply_markup is None
-    assert message.answers[-1] == "⏭️ Завдання відмічено як пропущене."
+    assert message.answers[-1] == "⏭️ Пропущено"
 
 
 @pytest.mark.anyio
@@ -266,7 +347,7 @@ async def test_already_completed(monkeypatch):
     await telegram.handle_task_completed(callback_query)
 
     assert callback_query.answers[-1] == "Завдання вже виконано"
-    assert fake_session.committed is False
+    assert fake_session.committed is True
     assert logged_events == []
 
 
@@ -303,8 +384,8 @@ async def test_cannot_complete_when_plan_paused(monkeypatch):
 
 @pytest.mark.anyio
 async def test_cannot_complete_when_user_not_active(monkeypatch):
-    """User not in ACTIVE state → no state changes."""
-    user = DummyUser(tg_id=123, user_id=42, current_state="ACTIVE_PAUSED")
+    """Inactive current entitlement blocks the transition."""
+    user = DummyUser(tg_id=123, user_id=42, is_active=False)
     plan = DummyPlan(user=user, status="active")
     day = DummyDay(plan=plan, day_number=1)
     step = DummyStep(step_id=101, day=day)
@@ -329,7 +410,7 @@ async def test_cannot_complete_when_user_not_active(monkeypatch):
     assert step.is_completed is False
     assert fake_session.committed is False
     assert logged_events == []
-    assert callback_query.answers[-1] == "План зараз не активний"
+    assert callback_query.answers[-1] == "Дія зараз недоступна"
 
 
 @pytest.mark.anyio
