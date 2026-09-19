@@ -420,6 +420,57 @@ async def test_completion_delivery_serializes_duplicate_in_flight_attempts(monke
 
 
 @pytest.mark.anyio
+async def test_completion_receipt_retry_does_not_resend_known_success(monkeypatch):
+    user = type("U", (), {"id": 1, "tg_id": 123, "profile": None})()
+    db = _DBForCompletionMessage(user=user, existing_event=None)
+    monkeypatch.setattr(orchestrator, "SessionLocal", lambda: _SessionCtx(db))
+    monkeypatch.setattr(
+        "app.plan_completion.metrics.build_completion_metrics",
+        lambda *_args: type("Metrics", (), {"outcome_tier": "STRONG"})(),
+    )
+    monkeypatch.setattr(
+        "app.plan_completion.report.build_completion_report",
+        lambda *_args: "План завершено.",
+    )
+    monkeypatch.setattr(
+        "app.plan_completion.tokens.make_report_token",
+        lambda *_args: "report-token",
+    )
+    sends = []
+
+    async def _fake_send(*args, **kwargs):
+        sends.append((args, kwargs))
+        return True
+
+    receipt_attempts = []
+
+    def _record_receipt(*_args, **_kwargs):
+        receipt_attempts.append(True)
+        if len(receipt_attempts) == 1:
+            raise RuntimeError("receipt commit unavailable")
+
+    scheduled = []
+    monkeypatch.setattr("app.scheduler._send_message_async", _fake_send)
+    monkeypatch.setattr(orchestrator, "log_user_event", _record_receipt)
+    monkeypatch.setattr(
+        orchestrator,
+        "_schedule_completion_receipt_retry",
+        lambda user_id, plan_id: scheduled.append((user_id, plan_id)),
+    )
+    orchestrator._completion_known_sends.clear()
+
+    first = await orchestrator.send_plan_completion_message(1, 99)
+    second = await orchestrator.send_plan_completion_message(1, 99)
+
+    assert first.code == "delivery_receipt_failed"
+    assert second.succeeded is True
+    assert len(sends) == 1
+    assert len(receipt_attempts) == 2
+    assert scheduled == [(1, 99)]
+    assert (1, 99) not in orchestrator._completion_known_sends
+
+
+@pytest.mark.anyio
 async def test_send_plan_completion_message_skips_when_no_tg_id(monkeypatch):
     user = type("U", (), {"id": 1, "tg_id": None, "profile": None})()
     db = _DBForCompletionMessage(user=user, existing_event=None)

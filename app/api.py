@@ -106,7 +106,7 @@ def set_user_time_slots(
         min_length=1,
         max_length=128,
     ),
-) -> Dict[str, int | bool]:
+) -> Dict[str, int | bool | str]:
     with SessionLocal() as db:
         decisions = []
         try:
@@ -146,7 +146,12 @@ def set_user_time_slots(
                 },
             },
         )
-    if not all(outcome.external_effects_succeeded for outcome in outcomes):
+    effect_states = {
+        effect.state.value
+        for outcome in outcomes
+        for effect in outcome.effects
+    }
+    if "failed" in effect_states:
         raise HTTPException(
             status_code=503,
             detail={
@@ -163,7 +168,10 @@ def set_user_time_slots(
 
     return {
         "updated_steps": len(updated_step_ids),
-        "jobs_reconciled": True,
+        "jobs_reconciled": "deferred" not in effect_states,
+        "schedule_state": (
+            "deferred" if "deferred" in effect_states else "reconciled"
+        ),
     }
 
 

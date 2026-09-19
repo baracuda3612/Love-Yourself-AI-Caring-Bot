@@ -242,6 +242,68 @@ async def test_superseded_time_change_does_not_return_success_copy(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_paused_time_copy_does_not_promise_resume_reconciliation(monkeypatch):
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "change_evening_time": lambda *_args, **_kwargs: {
+                "status": "ok",
+                "evening_time": "20:30",
+                "saved": True,
+                "jobs_reconciled": "deferred",
+            },
+        },
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "change_evening_time",
+            "arguments": {"hhmm": "20:30"},
+            "call_id": "call-time-paused",
+        },
+    )
+
+    assert "під час відновлення" not in response
+    assert "зараз не змінено" in response
+
+
+@pytest.mark.anyio
+async def test_superseded_evening_preference_blocks_activation_cascade(monkeypatch):
+    memory = PendingActionMemory("collect_evening_time_for_medium:activation-1")
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+    cascaded = []
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "record_evening_time": lambda *_args, **_kwargs: {
+                "status": "error",
+                "code": "superseded",
+                "evening_time": "21:15",
+                "requested_evening_time": "20:30",
+            },
+            "create_followup_plan": lambda *_args, **_kwargs: cascaded.append(True),
+        },
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "record_evening_time",
+            "arguments": {"hhmm": "20:30"},
+            "call_id": "evening-old",
+        },
+    )
+
+    assert "застарів" in response
+    assert cascaded == []
+
+
+@pytest.mark.anyio
 async def test_inactive_sender_gets_access_denied_before_coach(monkeypatch):
     memory = DummyMemory()
     coach_called = False

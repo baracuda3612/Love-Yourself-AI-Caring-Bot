@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timezone
-import hashlib
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,8 +16,7 @@ def _activation_receipt_status(
     day_time: str,
     evening_time: str | None,
 ) -> str:
-    material = f"{plan_type}|{day_time}|{evening_time or '-'}"
-    return f"active:{hashlib.sha256(material.encode()).hexdigest()[:16]}"
+    return lifecycle._activation_receipt_status(plan_type, day_time, evening_time)
 
 
 class _OneQuery:
@@ -143,8 +142,8 @@ def test_activation_replay_rejects_material_argument_drift(monkeypatch):
 
     class _ReplayDB:
         def query(self, model):
-            if model is lifecycle.AIPlanStep.id:
-                return _StepIdsQuery()
+            if model is lifecycle.AIPlan:
+                return _OneQuery(plan)
             raise AssertionError(f"unexpected model: {model}")
 
     monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args: user)
@@ -207,8 +206,8 @@ def test_activation_exact_replay_returns_recorded_outcome_not_mutable_status(
 
     class _ReplayDB:
         def query(self, model):
-            if model is lifecycle.AIPlanStep.id:
-                return _StepIdsQuery()
+            if model is lifecycle.AIPlan:
+                return _OneQuery(plan)
             raise AssertionError(f"unexpected model: {model}")
 
     monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args: user)
@@ -235,6 +234,108 @@ def test_activation_exact_replay_returns_recorded_outcome_not_mutable_status(
     assert result.plan_id == 14
     assert result.status == "active"
     assert result.effects[0].state is lifecycle.ExternalEffectState.NOT_REQUIRED
+
+
+@pytest.mark.parametrize("legacy_status", ["active", "active:0123456789abcdef"])
+def test_activation_legacy_receipt_replays_without_second_plan(
+    monkeypatch, legacy_status
+):
+    receipt = SimpleNamespace(
+        user_id=7,
+        plan_id=14,
+        plan_step_id=None,
+        operation="activate",
+        result_status=legacy_status,
+    )
+    plan = SimpleNamespace(id=14, user_id=7, status="active", total_days=7)
+    user = SimpleNamespace(id=7, is_active=True, profile=None)
+
+    class _ReplayDB:
+        def query(self, model):
+            assert model is lifecycle.AIPlan
+            return _OneQuery(plan)
+
+    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args: user)
+    monkeypatch.setattr(lifecycle, "find_lifecycle_operation", lambda *_args: receipt)
+
+    replay = lifecycle.activate_plan(
+        _ReplayDB(),
+        user_id=7,
+        plan_type="SHORT",
+        day_time="15:00",
+        evening_time=None,
+        source_operation_id="legacy-activation",
+    )
+
+    assert replay.duplicate is True
+    assert replay.code == "legacy_replayed"
+    assert replay.plan_id == 14
+    assert replay.effects[0].target_ids == (14,)
+
+
+def test_activation_omitted_argument_receipt_ignores_later_preference_change(
+    monkeypatch,
+):
+    receipt = SimpleNamespace(
+        user_id=7,
+        plan_id=14,
+        plan_step_id=None,
+        operation="activate",
+        result_status=_activation_receipt_status("SHORT", None, None),
+    )
+    plan = SimpleNamespace(id=14, user_id=7, status="active", total_days=7)
+    user = SimpleNamespace(
+        id=7,
+        is_active=True,
+        profile=SimpleNamespace(
+            daily_time_slots={"DAY": "17:45"},
+            evening_slot_collected=False,
+        ),
+    )
+
+    class _ReplayDB:
+        def query(self, model):
+            assert model is lifecycle.AIPlan
+            return _OneQuery(plan)
+
+    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args: user)
+    monkeypatch.setattr(lifecycle, "find_lifecycle_operation", lambda *_args: receipt)
+
+    replay = lifecycle.activate_plan(
+        _ReplayDB(),
+        user_id=7,
+        plan_type="SHORT",
+        day_time="",
+        evening_time=None,
+        source_operation_id="omitted-activation",
+    )
+
+    assert replay.code == "replayed"
+    assert replay.plan_id == 14
+
+
+def test_activation_recovery_targets_recorded_current_plan(monkeypatch):
+    plan = SimpleNamespace(id=14, user_id=7, status="active", total_days=7)
+    receipt = SimpleNamespace(plan_id=14)
+
+    class _ReceiptQuery(_OneQuery):
+        def order_by(self, *_args):
+            return self
+
+    class _DB:
+        def query(self, model):
+            assert model is lifecycle.PlanLifecycleOperation
+            return _ReceiptQuery(receipt)
+
+    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args: object())
+    monkeypatch.setattr(lifecycle, "get_current_plan", lambda *_args, **_kwargs: plan)
+
+    recovered = lifecycle.recover_current_plan_activation(
+        _DB(), user_id=7, plan_type="SHORT"
+    )
+
+    assert recovered.code == "recovered_existing_plan"
+    assert recovered.effects[0].target_ids == (14,)
 
 
 def test_owned_step_transition_resolves_actor_inside_the_service(monkeypatch):
@@ -282,8 +383,8 @@ def test_reconciliation_failure_is_not_success(monkeypatch):
     )
     monkeypatch.setattr(
         scheduler,
-        "reconcile_plan_step_jobs",
-        lambda _ids: scheduler.SchedulerReconciliation(
+        "reconcile_plan_schedule",
+        lambda _plan_id: scheduler.SchedulerReconciliation(
             attempted=2,
             succeeded=1,
             failed_ids=(11,),
@@ -352,6 +453,89 @@ def test_scheduler_reconciliation_removes_job_with_stale_run_date(monkeypatch):
     assert result.attempted == 1
     assert result.succeeded == 0
     assert result.failed_ids == (10,)
+
+
+def test_plan_schedule_reconciliation_removes_past_job_and_repairs_future(
+    monkeypatch,
+):
+    past = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    future = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    day = SimpleNamespace(plan_id=20)
+    past_step = SimpleNamespace(
+        id=10,
+        day_id=30,
+        day=day,
+        scheduled_for=past,
+        step_status="pending",
+    )
+    future_step = SimpleNamespace(
+        id=11,
+        day_id=30,
+        day=day,
+        scheduled_for=future,
+        step_status="pending",
+    )
+    plan = SimpleNamespace(id=20, user_id=3, status="active")
+    user = SimpleNamespace(id=3, is_active=True)
+
+    class _StepsQuery:
+        def join(self, *_args):
+            return self
+
+        def filter(self, *_args):
+            return self
+
+        def order_by(self, *_args):
+            return self
+
+        def all(self):
+            return [past_step, future_step]
+
+    class _DB:
+        def query(self, model):
+            if model is scheduler.AIPlan:
+                return _OneQuery(plan)
+            if model is scheduler.User:
+                return _OneQuery(user)
+            if model is scheduler.AIPlanStep:
+                return _StepsQuery()
+            raise AssertionError(model)
+
+    class _Scheduler:
+        def __init__(self):
+            self.removed = []
+            self.jobs = {
+                scheduler._generate_step_job_id(past_step): SimpleNamespace(
+                    next_run_time=future
+                )
+            }
+
+        def get_job(self, job_id):
+            return self.jobs.get(job_id)
+
+        def remove_job(self, job_id):
+            self.removed.append(job_id)
+            self.jobs.pop(job_id, None)
+
+    fake_scheduler = _Scheduler()
+    monkeypatch.setattr(scheduler, "SessionLocal", lambda: nullcontext(_DB()))
+    monkeypatch.setattr(scheduler, "scheduler", fake_scheduler)
+
+    def _schedule(step, _user):
+        fake_scheduler.jobs[scheduler._generate_step_job_id(step)] = SimpleNamespace(
+            next_run_time=step.scheduled_for
+        )
+
+    monkeypatch.setattr(scheduler, "schedule_plan_step", _schedule)
+
+    result = scheduler.reconcile_plan_schedule(20)
+
+    assert result.failed_ids == ()
+    assert fake_scheduler.get_job(scheduler._generate_step_job_id(past_step)) is None
+    assert (
+        fake_scheduler.get_job(scheduler._generate_step_job_id(future_step)).next_run_time
+        == future
+    )
     assert fake_scheduler.removed == ["plan_20_day_30_step_10"]
 
 
@@ -454,7 +638,49 @@ def test_legacy_pre_catalog_expiry_does_not_invent_ignored_event(monkeypatch):
     )
 
     assert outcome.status == "expired"
-    assert outcome.details == {"ignored_event": "not_recorded_pre_catalog"}
+    assert outcome.details == {
+        "ignored_event": "telemetry_not_recorded",
+        "ignored_event_reason": "event_catalog_not_yet_active",
+    }
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        telemetry.EventChronologyError("event_catalog_already_retired"),
+        telemetry.EventLinkageCompatibilityError(
+            "plan_step_content_identity_unavailable"
+        ),
+    ],
+)
+def test_expected_telemetry_rejection_preserves_authoritative_expiry(
+    monkeypatch, error
+):
+    result = lifecycle.LifecycleResult(
+        user_id=1,
+        plan_id=2,
+        step_id=3,
+        status="expired",
+        operation="step_expired",
+    )
+    monkeypatch.setattr(lifecycle, "transition_plan_step", lambda *a, **k: result)
+    monkeypatch.setattr(
+        telemetry,
+        "write_event_operation",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
+    )
+
+    outcome = lifecycle.expire_plan_step(
+        object(),
+        user_id=1,
+        step_id=3,
+        source_operation_id="scheduler:expiry:3:compat",
+        occurred_at=datetime.now(timezone.utc),
+    )
+
+    assert outcome.status == "expired"
+    assert outcome.details["ignored_event"] == "telemetry_not_recorded"
+    assert outcome.details["ignored_event_reason"] == error.code
 
 
 def test_expiry_sweep_isolates_event_validation_failure(monkeypatch):
@@ -612,7 +838,78 @@ def test_time_change_replay_reconciles_only_currently_schedulable_steps(monkeypa
     )
 
     assert replay.code == "replayed"
-    assert replay.effects[0].target_ids == (2,)
+    assert replay.effects[0].target_ids == (14,)
+
+
+def test_time_change_replay_canonicalizes_accepted_noncanonical_value(monkeypatch):
+    receipt = SimpleNamespace(
+        user_id=7,
+        plan_id=14,
+        plan_step_id=None,
+        operation="change_morning_time",
+        result_status="09:00",
+    )
+    plan = SimpleNamespace(id=14, user_id=7, status="active", total_days=7)
+    user = SimpleNamespace(
+        id=7,
+        profile=SimpleNamespace(daily_time_slots={"MORNING": "09:00"}),
+    )
+
+    class _DB:
+        def query(self, model):
+            assert model is lifecycle.AIPlan
+            return _OneQuery(plan)
+
+    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args: user)
+    monkeypatch.setattr(lifecycle, "find_lifecycle_operation", lambda *_args: receipt)
+
+    replay = lifecycle.change_delivery_time(
+        _DB(),
+        user_id=7,
+        slot="MORNING",
+        hhmm="9:00",
+        source_operation_id="api:morning",
+    )
+
+    assert replay.code == "replayed"
+    assert replay.status == "09:00"
+    assert replay.details["value"] == "09:00"
+
+
+def test_evening_preference_is_profile_only_for_active_plan(monkeypatch):
+    user = SimpleNamespace(
+        id=7,
+        profile=SimpleNamespace(
+            daily_time_slots={"EVENING": "20:00"},
+            evening_slot_collected=False,
+        ),
+    )
+    plan = SimpleNamespace(id=14, user_id=7, status="active", total_days=14)
+    calls = []
+
+    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args: user)
+    monkeypatch.setattr(lifecycle, "find_lifecycle_operation", lambda *_args: None)
+    monkeypatch.setattr(lifecycle, "_lifecycle_context_plan", lambda *_args: plan)
+    monkeypatch.setattr(lifecycle, "record_lifecycle_operation", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "app.time_slots.update_user_time_slot_preferences",
+        lambda _db, _user, values: calls.append(values) or values,
+    )
+
+    class _DB:
+        def flush(self):
+            return None
+
+    result = lifecycle.record_evening_time_preference(
+        _DB(),
+        user_id=7,
+        hhmm="20:30",
+        source_operation_id="coach:evening",
+    )
+
+    assert calls == [{"EVENING": "20:30"}]
+    assert result.effects == ()
+    assert user.profile.evening_slot_collected is True
 
 
 def test_plan_format_and_continuation_interfaces_do_not_implement_deferred_work(
@@ -804,7 +1101,10 @@ def test_deferred_interface_exact_replays_return_existing_reservations(monkeypat
     )
     assert switch.duplicate is True
     assert switch.applied is False
-    assert switch.details == {"target_plan_type": "MEDIUM"}
+    assert switch.details == {
+        "target_plan_type": "MEDIUM",
+        "current_disposition": "recorded_plan_current",
+    }
 
     class _CompletedDB:
         def query(self, _model):
@@ -823,6 +1123,38 @@ def test_deferred_interface_exact_replays_return_existing_reservations(monkeypat
     )
     assert continuation.duplicate is True
     assert continuation.completed_plan_id == 20
+
+
+def test_format_receipt_replays_recorded_plan_after_progression(monkeypatch):
+    recorded = SimpleNamespace(id=21, status="completed", total_days=7)
+    current = SimpleNamespace(id=22, status="active", total_days=14)
+    receipt = SimpleNamespace(
+        user_id=1,
+        plan_id=21,
+        plan_step_id=None,
+        operation="switch_plan_format",
+        result_status="MEDIUM",
+    )
+
+    class _DB:
+        def query(self, model):
+            assert model is lifecycle.AIPlan
+            return _OneQuery(recorded)
+
+    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(lifecycle, "get_current_plan", lambda *_args, **_kwargs: current)
+    monkeypatch.setattr(lifecycle, "find_lifecycle_operation", lambda *_args: receipt)
+
+    replay = lifecycle.request_plan_format_switch(
+        _DB(),
+        user_id=1,
+        target_plan_type="MEDIUM",
+        source_operation_id="coach:switch:old-plan",
+    )
+
+    assert replay.plan_id == 21
+    assert replay.status == "completed"
+    assert replay.details["current_disposition"] == "another_plan_current"
 
 
 def test_live_runtime_has_no_competing_lifecycle_guard_or_ambient_activation_helper():

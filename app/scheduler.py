@@ -409,6 +409,72 @@ def reconcile_plan_step_jobs(step_ids: list[int]) -> SchedulerReconciliation:
     )
 
 
+def reconcile_plan_schedule(plan_id: int) -> SchedulerReconciliation:
+    """Make deterministic jobs exactly match one authoritative active plan."""
+    with SessionLocal() as db:
+        plan = (
+            db.query(AIPlan)
+            .filter(AIPlan.id == int(plan_id))
+            .first()
+        )
+        if plan is None:
+            return SchedulerReconciliation(
+                attempted=1,
+                succeeded=0,
+                failed_ids=(int(plan_id),),
+            )
+        user = db.query(User).filter(User.id == plan.user_id).first()
+        rows = (
+            db.query(AIPlanStep)
+            .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+            .filter(AIPlanDay.plan_id == plan.id)
+            .order_by(AIPlanStep.id)
+            .all()
+        )
+        now_utc = datetime.now(pytz.UTC)
+        failed: list[int] = []
+        succeeded = 0
+        for step in rows:
+            job_id = _generate_step_job_id(step)
+            scheduled_for = (
+                _to_utc(step.scheduled_for)
+                if step.scheduled_for is not None
+                else None
+            )
+            should_exist = (
+                str(plan.status) == "active"
+                and user is not None
+                and getattr(user, "is_active", False) is True
+                and str(step.step_status) == "pending"
+                and scheduled_for is not None
+                and scheduled_for > now_utc
+            )
+            try:
+                if should_exist:
+                    schedule_plan_step(step, user)
+                    job = scheduler.get_job(job_id)
+                    actual = getattr(job, "next_run_time", None)
+                    if actual is not None:
+                        actual = _to_utc(actual)
+                    if job is None or actual != scheduled_for:
+                        raise RuntimeError("scheduler_job_not_exact")
+                else:
+                    job = scheduler.get_job(job_id)
+                    if job is not None:
+                        scheduler.remove_job(job_id)
+                    if scheduler.get_job(job_id) is not None:
+                        raise RuntimeError("obsolete_scheduler_job_present")
+            except Exception:
+                failed.append(int(step.id))
+                continue
+            succeeded += 1
+    return SchedulerReconciliation(
+        attempted=len(rows),
+        succeeded=succeeded,
+        failed_ids=tuple(failed),
+    )
+
+
 def reconcile_cancel_plan_step_jobs(step_ids: list[int]) -> SchedulerReconciliation:
     """Idempotently prove that every named step job is absent."""
     if not step_ids:

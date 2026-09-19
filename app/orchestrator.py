@@ -38,6 +38,7 @@ from app.lifecycle import (
 session_memory = SessionMemory(limit=20)
 logger = logging.getLogger(__name__)
 _completion_delivery_locks: dict[tuple[int, int], tuple[asyncio.Lock, int]] = {}
+_completion_known_sends: dict[tuple[int, int], str] = {}
 
 
 @asynccontextmanager
@@ -142,7 +143,53 @@ async def send_plan_completion_message(
     Exempt from MAX_AUTO_MESSAGES_PER_DAY — this is a lifecycle event.
     """
     async with _serialize_completion_delivery(user_id, plan_id):
+        outcome_tier = _completion_known_sends.get((user_id, plan_id))
+        if outcome_tier is not None:
+            return _persist_completion_delivery_receipt(
+                user_id,
+                plan_id,
+                outcome_tier,
+            )
         return await _send_plan_completion_message_once(user_id, plan_id)
+
+
+def _persist_completion_delivery_receipt(
+    user_id: int,
+    plan_id: int,
+    outcome_tier: str,
+) -> CompletionDeliveryResult:
+    try:
+        with SessionLocal() as db:
+            log_user_event(
+                db,
+                user_id=user_id,
+                event_type="plan_completion_sent",
+                event_source="runtime",
+                source_operation_id=f"runtime:completion-report:{plan_id}",
+                plan_id=plan_id,
+                context={"outcome_tier": outcome_tier},
+            )
+            db.commit()
+    except Exception:
+        logger.exception(
+            "[COMPLETION_MSG] delivery receipt failed user=%s plan=%s",
+            user_id,
+            plan_id,
+        )
+        _schedule_completion_receipt_retry(user_id, plan_id)
+        return CompletionDeliveryResult(
+            user_id=user_id,
+            plan_id=plan_id,
+            succeeded=False,
+            retry_scheduled=True,
+            code="delivery_receipt_failed",
+        )
+    _completion_known_sends.pop((user_id, plan_id), None)
+    return CompletionDeliveryResult(
+        user_id=user_id,
+        plan_id=plan_id,
+        succeeded=True,
+    )
 
 
 async def _send_plan_completion_message_once(
@@ -192,6 +239,7 @@ async def _send_plan_completion_message_once(
             UserEvent.plan_id == plan_id,
         ).first()
         if already_sent:
+            _completion_known_sends.pop((user_id, plan_id), None)
             logger.info("[COMPLETION_MSG] already sent for plan=%s", plan_id)
             return CompletionDeliveryResult(
                 user_id=user_id,
@@ -234,36 +282,11 @@ async def _send_plan_completion_message_once(
     result = await _send_message_async(tg_id, report_text)
 
     if result:
-        try:
-            with SessionLocal() as db:
-                log_user_event(
-                    db,
-                    user_id=user_id,
-                    event_type="plan_completion_sent",
-                    event_source="runtime",
-                    source_operation_id=f"runtime:completion-report:{plan_id}",
-                    plan_id=plan_id,
-                    context={"outcome_tier": metrics.outcome_tier},
-                )
-                db.commit()
-        except Exception:
-            logger.exception(
-                "[COMPLETION_MSG] delivery receipt failed user=%s plan=%s",
-                user_id,
-                plan_id,
-            )
-            _schedule_completion_retry(user_id, plan_id)
-            return CompletionDeliveryResult(
-                user_id=user_id,
-                plan_id=plan_id,
-                succeeded=False,
-                retry_scheduled=True,
-                code="delivery_receipt_failed",
-            )
-        return CompletionDeliveryResult(
-            user_id=user_id,
-            plan_id=plan_id,
-            succeeded=True,
+        _completion_known_sends[(user_id, plan_id)] = metrics.outcome_tier
+        return _persist_completion_delivery_receipt(
+            user_id,
+            plan_id,
+            metrics.outcome_tier,
         )
 
     _schedule_completion_retry(user_id, plan_id)
@@ -288,6 +311,31 @@ def _schedule_completion_retry(user_id: int, plan_id: int) -> None:
         replace_existing=True,
     )
     logger.info("[COMPLETION_MSG] retry scheduled user=%s plan=%s", user_id, plan_id)
+
+
+def _schedule_completion_receipt_retry(user_id: int, plan_id: int) -> None:
+    from app.scheduler import scheduler
+
+    scheduler.add_job(
+        "app.orchestrator:_retry_completion_receipt",
+        "date",
+        run_date=datetime.now(timezone.utc) + timedelta(minutes=30),
+        args=[user_id, plan_id],
+        id=f"completion_receipt_retry_{plan_id}",
+        replace_existing=True,
+    )
+
+
+def _retry_completion_receipt(user_id: int, plan_id: int) -> None:
+    outcome_tier = _completion_known_sends.get((user_id, plan_id))
+    if outcome_tier is None:
+        logger.warning(
+            "[COMPLETION_RECEIPT_RETRY] known send unavailable user=%s plan=%s",
+            user_id,
+            plan_id,
+        )
+        return
+    _persist_completion_delivery_receipt(user_id, plan_id, outcome_tier)
 
 
 def _retry_completion_message(user_id: int, plan_id: int) -> None:
@@ -727,7 +775,13 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
 
     if tool_name in {"change_day_time", "change_evening_time"}:
         if result.get("jobs_reconciled") == "deferred":
-            return "✅ Час збережено. Розклад буде узгоджено під час відновлення плану."
+            return (
+                "✅ Час збережено для майбутнього розкладу. "
+                "Розклад призупиненого плану зараз не змінено."
+            )
+
+    if tool_name == "create_followup_plan" and result.get("recovered"):
+        return "✅ Збережений план знайдено, його розклад узгоджено."
 
     template = _TOOL_REPLY_TEMPLATES.get(tool_name, "✅ Готово.")
     return template

@@ -44,7 +44,7 @@ def reconcile_scheduler_effects(result: LifecycleResult) -> LifecycleResult:
     """Execute retry-safe scheduler effects and return their truthful outcome."""
     from app.scheduler import (
         reconcile_cancel_plan_step_jobs,
-        reconcile_plan_step_jobs,
+        reconcile_plan_schedule,
     )
 
     outcomes: list[ExternalEffect] = []
@@ -54,7 +54,7 @@ def reconcile_scheduler_effects(result: LifecycleResult) -> LifecycleResult:
             continue
         try:
             if effect.kind == "reconcile_plan_schedule":
-                reconciliation = reconcile_plan_step_jobs(list(effect.target_ids))
+                reconciliation = reconcile_plan_schedule(result.plan_id)
             elif effect.kind == "cancel_step_jobs":
                 reconciliation = reconcile_cancel_plan_step_jobs(
                     list(effect.target_ids)

@@ -65,7 +65,11 @@ def create_followup_plan(
         raise ValueError(f"plan_type must be 'SHORT' or 'MEDIUM', got {plan_type!r}")
 
     from app.db import SessionLocal  # lazy
-    from app.lifecycle import LifecycleTransitionError, activate_plan  # lazy
+    from app.lifecycle import (  # lazy
+        LifecycleTransitionError,
+        activate_plan,
+        recover_current_plan_activation,
+    )
     from app.lifecycle_reconciliation import reconcile_scheduler_effects  # lazy
 
     with SessionLocal() as db:
@@ -91,7 +95,16 @@ def create_followup_plan(
                 require_plan_history=True,
             )
         except LifecycleTransitionError as exc:
-            raise ValueError(str(exc)) from exc
+            if str(exc) != "followup_activation_requires_no_active_plan":
+                raise ValueError(str(exc)) from exc
+            try:
+                activation = recover_current_plan_activation(
+                    db,
+                    user_id=user_id,
+                    plan_type=plan_type,
+                )
+            except LifecycleTransitionError as recovery_exc:
+                raise ValueError(str(recovery_exc)) from recovery_exc
 
         db.commit()
 
@@ -111,13 +124,16 @@ def create_followup_plan(
         "[plan_runtime] create_followup_plan: user=%s plan_id=%s type=%s",
         user_id, activation.plan_id, activation.plan_type,
     )
-    return {
+    response = {
         "status": "ok",
         "plan_id": activation.plan_id,
         "plan_type": activation.plan_type,
         "jobs_reconciled": True,
         "duplicate": activation.duplicate,
     }
+    if activation.code == "recovered_existing_plan":
+        response["recovered"] = True
+    return response
 
 
 def record_evening_time(
@@ -150,10 +166,24 @@ def record_evening_time(
             raise ValueError(str(exc)) from exc
         db.commit()
 
+    if result.code == "superseded":
+        return {
+            "status": "error",
+            "code": "superseded",
+            "evening_time": result.details.get("authoritative_value"),
+            "requested_evening_time": hhmm,
+            "saved": False,
+            "applied": False,
+            "duplicate": result.duplicate,
+        }
     logger.info("[plan_runtime] record_evening_time: user=%s hhmm=%s", user_id, hhmm)
     return {
         "status": "ok",
-        "evening_time": hhmm,
+        "evening_time": result.details.get(
+            "authoritative_value", result.details.get("value")
+        ),
+        "saved": True,
+        "applied": result.applied,
         "duplicate": result.duplicate,
     }
 
@@ -200,7 +230,7 @@ def change_day_time(
         }
     result = reconcile_scheduler_effects(result)
     effect = result.effects[0]
-    if not result.external_effects_succeeded:
+    if effect.state.value == "failed":
         return {
             "status": "error",
             "code": "schedule_reconciliation_failed",
@@ -265,7 +295,7 @@ def change_evening_time(
         }
     result = reconcile_scheduler_effects(result)
     effect = result.effects[0]
-    if not result.external_effects_succeeded:
+    if effect.state.value == "failed":
         return {
             "status": "error",
             "code": "schedule_reconciliation_failed",

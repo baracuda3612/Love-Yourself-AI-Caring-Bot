@@ -473,13 +473,78 @@ def _duplicate_operation_result(
 
 def _activation_receipt_status(
     plan_type: str,
-    day_time: str,
+    day_time: str | None,
     evening_time: str | None,
 ) -> str:
-    """Fit the immutable activation request identity in the existing receipt."""
-    material = f"{plan_type}|{day_time}|{evening_time or '-'}"
-    digest = hashlib.sha256(material.encode()).hexdigest()[:16]
-    return f"active:{digest}"
+    """Bind canonical submitted material, including omitted arguments."""
+    from app.time_slots import TimeSlotError, canonicalize_hhmm
+
+    try:
+        canonical_day = canonicalize_hhmm(day_time) if day_time else "<omitted>"
+        canonical_evening = (
+            canonicalize_hhmm(evening_time) if evening_time else "<omitted>"
+        )
+    except TimeSlotError as exc:
+        raise LifecycleTransitionError(str(exc)) from exc
+    material = f"{plan_type.strip().upper()}|{canonical_day}|{canonical_evening}"
+    digest = hashlib.sha256(material.encode()).hexdigest()[:20]
+    return f"a1:{digest}"
+
+
+def _activation_receipt_is_legacy(result_status: str) -> bool:
+    return result_status == "active" or result_status.startswith("active:")
+
+
+def _plan_schedule_effect(plan: AIPlan) -> ExternalEffect:
+    return ExternalEffect(
+        kind="reconcile_plan_schedule",
+        target_ids=(int(plan.id),),
+        state=(
+            ExternalEffectState.PENDING
+            if str(plan.status) == "active"
+            else ExternalEffectState.NOT_REQUIRED
+        ),
+    )
+
+
+def _activation_replay_result(
+    db: Session,
+    *,
+    user_id: int,
+    receipt: PlanLifecycleOperation,
+    receipt_status: str,
+) -> LifecycleResult:
+    if receipt.operation != "activate":
+        _duplicate_operation_result(receipt, expected_operation="activate")
+    if not _activation_receipt_is_legacy(receipt.result_status):
+        _duplicate_operation_result(
+            receipt,
+            expected_operation="activate",
+            expected_result_status=receipt_status,
+        )
+    plan = (
+        db.query(AIPlan)
+        .filter(AIPlan.id == receipt.plan_id, AIPlan.user_id == user_id)
+        .populate_existing()
+        .first()
+    )
+    if plan is None:
+        raise LifecycleInvariantError("activation_receipt_plan_missing")
+    return LifecycleResult(
+        user_id=user_id,
+        plan_id=plan.id,
+        status="active",
+        operation="activate",
+        duplicate=True,
+        code=(
+            "legacy_replayed"
+            if _activation_receipt_is_legacy(receipt.result_status)
+            else "replayed"
+        ),
+        plan_type=_plan_type(plan),
+        effects=(_plan_schedule_effect(plan),),
+        details={"total_days": int(plan.total_days)},
+    )
 
 
 def activate_plan(
@@ -512,15 +577,16 @@ def activate_plan(
     )
     receipt_status = _activation_receipt_status(
         plan_type,
-        resolved_day_time,
-        resolved_evening_time,
+        day_time,
+        evening_time,
     )
     existing = find_lifecycle_operation(db, user_id, source_operation_id)
     if existing is not None:
-        _duplicate_operation_result(
-            existing,
-            expected_operation="activate",
-            expected_result_status=receipt_status,
+        return _activation_replay_result(
+            db,
+            user_id=user_id,
+            receipt=existing,
+            receipt_status=receipt_status,
         )
     if existing is None and require_plan_history:
         if derive_current_mode(db, user_id) is not CurrentMode.NO_ACTIVE_PLAN:
@@ -541,24 +607,6 @@ def activate_plan(
         activation_receipt_status=receipt_status,
     )
     plan = activation.plan
-    step_ids = tuple(
-        step_id
-        for (step_id,) in (
-            db.query(AIPlanStep.id)
-            .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
-            .filter(
-                AIPlanDay.plan_id == plan.id,
-                AIPlanStep.step_status == "pending",
-            )
-            .order_by(AIPlanStep.id)
-            .all()
-        )
-    )
-    effect_state = (
-        ExternalEffectState.PENDING
-        if str(plan.status) == "active" and step_ids
-        else ExternalEffectState.NOT_REQUIRED
-    )
     return LifecycleResult(
         user_id=user_id,
         plan_id=plan.id,
@@ -566,13 +614,43 @@ def activate_plan(
         operation="activate",
         duplicate=activation.duplicate,
         plan_type=_plan_type(plan),
-        effects=(
-            ExternalEffect(
-                kind="reconcile_plan_schedule",
-                target_ids=step_ids,
-                state=effect_state,
-            ),
-        ),
+        effects=(_plan_schedule_effect(plan),),
+        details={"total_days": int(plan.total_days)},
+    )
+
+
+def recover_current_plan_activation(
+    db: Session,
+    *,
+    user_id: int,
+    plan_type: str,
+) -> LifecycleResult:
+    """Recover the recorded current activation independently of a Coach call id."""
+    _lock_user(db, user_id)
+    plan = get_current_plan(db, user_id, lock=True)
+    if plan is None or _plan_type(plan) != plan_type:
+        raise LifecycleTransitionError("recoverable_activation_missing")
+    receipt = (
+        db.query(PlanLifecycleOperation)
+        .filter(
+            PlanLifecycleOperation.user_id == user_id,
+            PlanLifecycleOperation.plan_id == plan.id,
+            PlanLifecycleOperation.operation == "activate",
+        )
+        .order_by(PlanLifecycleOperation.id.asc())
+        .first()
+    )
+    if receipt is None:
+        raise LifecycleTransitionError("recoverable_activation_receipt_missing")
+    return LifecycleResult(
+        user_id=user_id,
+        plan_id=plan.id,
+        status=str(plan.status),
+        operation="activate",
+        duplicate=True,
+        code="recovered_existing_plan",
+        plan_type=_plan_type(plan),
+        effects=(_plan_schedule_effect(plan),),
         details={"total_days": int(plan.total_days)},
     )
 
@@ -942,7 +1020,11 @@ def expire_plan_step(
         occurred_at=occurred_at,
     )
     if not result.duplicate:
-        from app.telemetry import EventChronologyError, write_event_operation
+        from app.telemetry import (
+            EventChronologyError,
+            EventLinkageCompatibilityError,
+            write_event_operation,
+        )
 
         try:
             write_event_operation(
@@ -955,14 +1037,13 @@ def expire_plan_step(
                 occurred_at=occurred_at,
                 properties={"detection_source": "local_expiry"},
             )
-        except EventChronologyError as exc:
-            if exc.code != "event_catalog_not_yet_active":
-                raise
+        except (EventChronologyError, EventLinkageCompatibilityError) as exc:
             return replace(
                 result,
                 details={
                     **result.details,
-                    "ignored_event": "not_recorded_pre_catalog",
+                    "ignored_event": "telemetry_not_recorded",
+                    "ignored_event_reason": getattr(exc, "code", str(exc)),
                 },
             )
     return result
@@ -1083,49 +1164,6 @@ def _lifecycle_context_plan(db: Session, user_id: int) -> AIPlan:
     return latest
 
 
-def _pending_step_ids(db: Session, plan_id: int) -> tuple[int, ...]:
-    return tuple(
-        step_id
-        for (step_id,) in (
-            db.query(AIPlanStep.id)
-            .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
-            .filter(
-                AIPlanDay.plan_id == plan_id,
-                AIPlanStep.step_status == "pending",
-            )
-            .order_by(AIPlanStep.id)
-            .all()
-        )
-    )
-
-
-def _schedulable_pending_step_ids(db: Session, plan_id: int) -> tuple[int, ...]:
-    """Rebuild only scheduler-valid replay targets from current persisted facts."""
-    now_utc = datetime.now(timezone.utc)
-    rows = (
-        db.query(AIPlanStep.id, AIPlanStep.scheduled_for)
-        .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
-        .filter(
-            AIPlanDay.plan_id == plan_id,
-            AIPlanStep.step_status == "pending",
-        )
-        .order_by(AIPlanStep.id)
-        .all()
-    )
-    schedulable: list[int] = []
-    for step_id, scheduled_for in rows:
-        if scheduled_for is None:
-            continue
-        scheduled_utc = (
-            scheduled_for.replace(tzinfo=timezone.utc)
-            if scheduled_for.tzinfo is None
-            else scheduled_for.astimezone(timezone.utc)
-        )
-        if scheduled_utc > now_utc:
-            schedulable.append(step_id)
-    return tuple(schedulable)
-
-
 def change_delivery_time(
     db: Session,
     *,
@@ -1135,9 +1173,15 @@ def change_delivery_time(
     source_operation_id: str,
 ) -> LifecycleResult:
     """Persist one time change and expose post-commit scheduler reconciliation."""
+    from app.time_slots import TimeSlotError, canonicalize_hhmm
+
     normalized_slot = str(slot).strip().upper()
     if normalized_slot not in {"MORNING", "DAY", "EVENING"}:
         raise LifecycleTransitionError("unsupported_delivery_slot")
+    try:
+        canonical_hhmm = canonicalize_hhmm(hhmm)
+    except TimeSlotError as exc:
+        raise LifecycleTransitionError(str(exc)) from exc
     operation = f"change_{normalized_slot.lower()}_time"
     user = _lock_user(db, user_id)
 
@@ -1146,7 +1190,7 @@ def change_delivery_time(
         duplicate = _duplicate_operation_result(
             existing,
             expected_operation=operation,
-            expected_result_status=hhmm,
+            expected_result_status=canonical_hhmm,
         )
         context_plan = (
             db.query(AIPlan)
@@ -1159,15 +1203,10 @@ def change_delivery_time(
         from app.time_slots import resolve_daily_time_slots
 
         current_value = resolve_daily_time_slots(user.profile).get(normalized_slot)
-        still_authoritative = current_value == hhmm
-        active_ids = (
-            _schedulable_pending_step_ids(db, context_plan.id)
-            if still_authoritative and str(context_plan.status) == "active"
-            else ()
-        )
+        still_authoritative = current_value == canonical_hhmm
         state = (
             ExternalEffectState.PENDING
-            if active_ids
+            if still_authoritative and str(context_plan.status) == "active"
             else (
                 ExternalEffectState.DEFERRED
                 if still_authoritative and str(context_plan.status) == "paused"
@@ -1182,42 +1221,40 @@ def change_delivery_time(
             effects=(
                 ExternalEffect(
                     kind="reconcile_plan_schedule",
-                    target_ids=active_ids,
+                    target_ids=(context_plan.id,),
                     state=state,
                 ),
             ),
             details={
                 "slot": normalized_slot,
-                "value": hhmm,
+                "value": canonical_hhmm,
                 "authoritative_value": current_value,
             },
         )
 
     context_plan = _lifecycle_context_plan(db, user_id)
-    from app.time_slots import TimeSlotError, update_user_time_slots
+    from app.time_slots import update_user_time_slots
 
     try:
-        updated_ids, active_ids = update_user_time_slots(
+        updated_ids, _active_ids = update_user_time_slots(
             db,
             user,
-            {normalized_slot: hhmm},
+            {normalized_slot: canonical_hhmm},
         )
     except TimeSlotError as exc:
         raise LifecycleTransitionError(str(exc)) from exc
-    pending_ids = set(_pending_step_ids(db, context_plan.id))
-    active_ids = [step_id for step_id in active_ids if step_id in pending_ids]
     record_lifecycle_operation(
         db,
         user_id=user_id,
         plan_id=context_plan.id,
         source_operation_id=source_operation_id,
         operation=operation,
-        result_status=hhmm,
+        result_status=canonical_hhmm,
     )
     db.flush()
     state = (
         ExternalEffectState.PENDING
-        if active_ids
+        if str(context_plan.status) == "active"
         else (
             ExternalEffectState.DEFERRED
             if str(context_plan.status) == "paused"
@@ -1227,19 +1264,19 @@ def change_delivery_time(
     return LifecycleResult(
         user_id=user_id,
         plan_id=context_plan.id,
-        status=hhmm,
+        status=canonical_hhmm,
         operation=operation,
         plan_type=_plan_type(context_plan),
         effects=(
             ExternalEffect(
                 kind="reconcile_plan_schedule",
-                target_ids=tuple(active_ids),
+                target_ids=(context_plan.id,),
                 state=state,
             ),
         ),
         details={
             "slot": normalized_slot,
-            "value": hhmm,
+            "value": canonical_hhmm,
             "updated_step_ids": tuple(updated_ids),
         },
     )
@@ -1253,23 +1290,30 @@ def record_evening_time_preference(
     source_operation_id: str,
 ) -> LifecycleResult:
     """Idempotently persist the collected MEDIUM-plan evening preference."""
+    from app.time_slots import TimeSlotError, canonicalize_hhmm
+
     operation = "record_evening_time"
+    try:
+        canonical_hhmm = canonicalize_hhmm(hhmm)
+    except TimeSlotError as exc:
+        raise LifecycleTransitionError(str(exc)) from exc
     user = _lock_user(db, user_id)
     existing = find_lifecycle_operation(db, user_id, source_operation_id)
     if existing is not None:
         duplicate = _duplicate_operation_result(
             existing,
             expected_operation=operation,
-            expected_result_status=hhmm,
+            expected_result_status=canonical_hhmm,
         )
         from app.time_slots import resolve_daily_time_slots
 
         current_value = resolve_daily_time_slots(user.profile).get("EVENING")
         return replace(
             duplicate,
-            code="replayed" if current_value == hhmm else "superseded",
+            code="replayed" if current_value == canonical_hhmm else "superseded",
+            applied=current_value == canonical_hhmm,
             details={
-                "value": hhmm,
+                "value": canonical_hhmm,
                 "authoritative_value": current_value,
                 "collected": bool(
                     user.profile and user.profile.evening_slot_collected
@@ -1278,10 +1322,10 @@ def record_evening_time_preference(
         )
 
     context_plan = _lifecycle_context_plan(db, user_id)
-    from app.time_slots import TimeSlotError, update_user_time_slots
+    from app.time_slots import update_user_time_slot_preferences
 
     try:
-        update_user_time_slots(db, user, {"EVENING": hhmm})
+        update_user_time_slot_preferences(db, user, {"EVENING": canonical_hhmm})
     except TimeSlotError as exc:
         raise LifecycleTransitionError(str(exc)) from exc
     if user.profile is None:
@@ -1293,16 +1337,16 @@ def record_evening_time_preference(
         plan_id=context_plan.id,
         source_operation_id=source_operation_id,
         operation=operation,
-        result_status=hhmm,
+        result_status=canonical_hhmm,
     )
     db.flush()
     return LifecycleResult(
         user_id=user_id,
         plan_id=context_plan.id,
-        status=hhmm,
+        status=canonical_hhmm,
         operation=operation,
         plan_type=_plan_type(context_plan),
-        details={"value": hhmm, "collected": True},
+        details={"value": canonical_hhmm, "collected": True},
     )
 
 
@@ -1320,29 +1364,45 @@ def request_plan_format_switch(
         raise LifecycleTransitionError("invalid_source_operation_id")
     _lock_user(db, user_id)
     existing = find_lifecycle_operation(db, user_id, source_operation_id)
-    if existing is not None and existing.operation != "switch_plan_format":
-        _duplicate_operation_result(
-            existing,
-            expected_operation="switch_plan_format",
-        )
-    plan = get_current_plan(db, user_id, lock=True)
-    if plan is None:
-        raise LifecycleTransitionError("current_plan_missing")
     if existing is not None:
         duplicate = _duplicate_operation_result(
             existing,
             expected_operation="switch_plan_format",
-            expected_plan_id=plan.id,
             expected_result_status=target_plan_type,
         )
+        current = get_current_plan(db, user_id, lock=True)
+        plan = (
+            current
+            if current is not None and current.id == existing.plan_id
+            else (
+                db.query(AIPlan)
+                .filter(AIPlan.id == existing.plan_id, AIPlan.user_id == user_id)
+                .populate_existing()
+                .first()
+            )
+        )
+        if plan is None:
+            raise LifecycleInvariantError("format_receipt_plan_missing")
         return replace(
             duplicate,
             status=str(plan.status),
             code="deferred_to_wp_02_3",
             applied=False,
             plan_type=_plan_type(plan),
-            details={"target_plan_type": target_plan_type},
+            details={
+                "target_plan_type": target_plan_type,
+                "current_disposition": (
+                    "recorded_plan_current"
+                    if current is not None and current.id == plan.id
+                    else "another_plan_current"
+                    if current is not None
+                    else "no_current_plan"
+                ),
+            },
         )
+    plan = get_current_plan(db, user_id, lock=True)
+    if plan is None:
+        raise LifecycleTransitionError("current_plan_missing")
     record_lifecycle_operation(
         db,
         user_id=user_id,

@@ -73,3 +73,38 @@ def test_time_slot_api_reports_superseded_values_without_reconciliation(monkeypa
         },
     }
     assert db.commits == 1
+
+
+def test_paused_time_slot_api_reports_saved_but_deferred(monkeypatch):
+    db = _DB()
+    monkeypatch.setattr(api, "SessionLocal", lambda: nullcontext(db))
+
+    def _deferred(_db, *, user_id, slot, hhmm, source_operation_id):
+        return lifecycle.LifecycleResult(
+            user_id=user_id,
+            plan_id=11,
+            status=hhmm,
+            operation=f"change_{slot.lower()}_time",
+            effects=(
+                lifecycle.ExternalEffect(
+                    kind="reconcile_plan_schedule",
+                    target_ids=(11,),
+                    state=lifecycle.ExternalEffectState.DEFERRED,
+                ),
+            ),
+            details={"slot": slot, "value": hhmm, "updated_step_ids": ()},
+        )
+
+    monkeypatch.setattr(api, "change_delivery_time", _deferred)
+
+    outcome = api.set_user_time_slots(
+        api.TimeSlotsPayload(MORNING="09:00", DAY="14:00", EVENING="20:30"),
+        user_id=1,
+        idempotency_key="paused-1",
+    )
+
+    assert outcome == {
+        "updated_steps": 0,
+        "jobs_reconciled": False,
+        "schedule_state": "deferred",
+    }

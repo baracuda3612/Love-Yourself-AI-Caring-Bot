@@ -205,6 +205,44 @@ def test_time_tools_report_superseded_replays_without_reconciliation(
     assert fake_db.commits == 1
 
 
+def test_evening_preference_superseded_replay_is_not_success(monkeypatch):
+    fake_db = _DB(
+        user=SimpleNamespace(id=1),
+        profile=SimpleNamespace(user_id=1),
+    )
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(fake_db))
+    monkeypatch.setattr(
+        lifecycle,
+        "record_evening_time_preference",
+        lambda *_args, **_kwargs: lifecycle.LifecycleResult(
+            user_id=1,
+            plan_id=11,
+            status="20:30",
+            operation="record_evening_time",
+            duplicate=True,
+            code="superseded",
+            applied=False,
+            details={"value": "20:30", "authoritative_value": "21:15"},
+        ),
+    )
+
+    result = tools.record_evening_time(
+        1,
+        "20:30",
+        source_operation_id="coach:evening-old",
+    )
+
+    assert result == {
+        "status": "error",
+        "code": "superseded",
+        "evening_time": "21:15",
+        "requested_evening_time": "20:30",
+        "saved": False,
+        "applied": False,
+        "duplicate": True,
+    }
+
+
 def test_pause_passes_stable_source_operation_and_writes_no_mirror(monkeypatch):
     user = SimpleNamespace(id=1, current_state="legacy-value")
     profile = SimpleNamespace(user_id=1, is_paused=False, pause_count=4)

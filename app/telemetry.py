@@ -78,6 +78,14 @@ class EventChronologyError(EventValidationError):
         super().__init__(code)
 
 
+class EventLinkageCompatibilityError(EventValidationError):
+    """Expected telemetry gap for supported legacy/JSON-only plan content."""
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
 class EventOperationConflict(RuntimeError):
     """Raised when a source operation is reused for a different fact."""
 
@@ -261,7 +269,9 @@ def _resolve_plan_linkage(
         if exercise_id is not None:
             content = db.get(ContentLibrary, exercise_id)
             if content is None or content.content_version <= 0:
-                raise EventValidationError("plan step content identity is not valid")
+                raise EventLinkageCompatibilityError(
+                    "plan_step_content_identity_unavailable"
+                )
             content_version = content.content_version
         return resolved_plan_id, plan_step_id, exercise_id, content_version
 
