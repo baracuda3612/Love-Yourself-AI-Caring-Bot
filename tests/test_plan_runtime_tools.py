@@ -441,7 +441,7 @@ def test_switch_recovery_waits_for_first_evening_without_new_intent(monkeypatch)
     monkeypatch.setattr(lifecycle, "recover_plan_format_switch", recover)
 
     result = tools.recover_plan_format_switch(
-        1, "MEDIUM", source_operation_id="switch:pending"
+        1, "MEDIUM", "20:30", source_operation_id="switch:pending"
     )
 
     assert result == {

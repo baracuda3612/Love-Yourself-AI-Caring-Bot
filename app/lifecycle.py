@@ -1891,15 +1891,24 @@ def recover_plan_format_switch(
     *,
     user_id: int,
     target_plan_type: str,
+    expected_evening_time: str | None,
     source_operation_id: str,
 ) -> LifecycleResult:
     """Replay only a previously reserved format switch; never create intent."""
+    from app.time_slots import TimeSlotError, canonicalize_hhmm
+
     normalized_target = str(target_plan_type).strip().upper()
     if normalized_target not in {"SHORT", "MEDIUM"}:
         raise LifecycleTransitionError("unsupported_plan_type")
     if not source_operation_id or len(source_operation_id) > 160:
         raise LifecycleTransitionError("invalid_source_operation_id")
-    _lock_user(db, user_id)
+    canonical_expected_evening: str | None = None
+    if normalized_target == "MEDIUM":
+        try:
+            canonical_expected_evening = canonicalize_hhmm(expected_evening_time)
+        except TimeSlotError as exc:
+            raise LifecycleTransitionError(str(exc)) from exc
+    user = _lock_user(db, user_id)
     existing = find_lifecycle_operation(db, user_id, source_operation_id)
     if existing is None:
         raise LifecycleTransitionError("switch_recovery_receipt_missing")
@@ -1908,6 +1917,25 @@ def recover_plan_format_switch(
         expected_operation="switch_plan_format",
         expected_result_status=normalized_target,
     )
+    profile = getattr(user, "profile", None)
+    if normalized_target == "MEDIUM" and bool(
+        profile and profile.evening_slot_collected
+    ):
+        raw_slots = (
+            profile.daily_time_slots
+            if isinstance(profile.daily_time_slots, dict)
+            else {}
+        )
+        try:
+            saved_evening = canonicalize_hhmm(raw_slots.get("EVENING"))
+        except TimeSlotError as exc:
+            raise LifecycleTransitionError(
+                "switch_recovery_saved_evening_time_invalid"
+            ) from exc
+        if saved_evening != canonical_expected_evening:
+            raise LifecycleTransitionError(
+                "switch_recovery_evening_time_mismatch"
+            )
     return switch_plan_format(
         db,
         user_id=user_id,

@@ -235,6 +235,7 @@ def switch_plan_format(
 def recover_plan_format_switch(
     user_id: int,
     plan_type: str,
+    hhmm: str,
     *,
     source_operation_id: str,
 ) -> dict:
@@ -242,6 +243,7 @@ def recover_plan_format_switch(
     normalized = str(plan_type).strip().upper()
     if normalized not in {"SHORT", "MEDIUM"}:
         raise ValueError(f"plan_type must be 'SHORT' or 'MEDIUM', got {plan_type!r}")
+    _validate_hhmm(hhmm)
 
     from app.db import SessionLocal
     from app.lifecycle import (
@@ -255,6 +257,7 @@ def recover_plan_format_switch(
                 db,
                 user_id=user_id,
                 target_plan_type=normalized,
+                expected_evening_time=hhmm,
                 source_operation_id=source_operation_id,
             )
         except LifecycleTransitionError as exc:

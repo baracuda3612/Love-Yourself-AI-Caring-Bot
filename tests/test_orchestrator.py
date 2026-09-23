@@ -401,6 +401,138 @@ async def test_switch_evening_cascade_reports_persisted_partial_and_retries_rece
 
 
 @pytest.mark.anyio
+async def test_switch_recovery_rejects_invalid_fresh_time_before_builder(monkeypatch):
+    memory = PendingActionMemory("collect_evening_time_for_switch:switch-invalid")
+    user = SimpleNamespace(
+        id=7,
+        profile=SimpleNamespace(
+            daily_time_slots={"DAY": "14:00", "EVENING": "20:30"},
+            evening_slot_collected=True,
+        ),
+    )
+    receipt = SimpleNamespace(
+        user_id=7,
+        plan_id=11,
+        plan_step_id=None,
+        operation="switch_plan_format",
+        result_status="MEDIUM",
+    )
+    switch_calls = []
+
+    class RecoveryDB:
+        def commit(self):
+            return None
+
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(RecoveryDB()))
+    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args: user)
+    monkeypatch.setattr(
+        lifecycle,
+        "find_lifecycle_operation",
+        lambda *_args, **_kwargs: receipt,
+    )
+
+    def would_build(_db, **kwargs):
+        switch_calls.append(kwargs["source_operation_id"])
+        return LifecycleResult(
+            user_id=7,
+            plan_id=12,
+            status="active",
+            operation="switch_plan_format",
+            plan_type="MEDIUM",
+        )
+
+    monkeypatch.setattr(lifecycle, "switch_plan_format", would_build)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {"record_evening_time": lambda *_args, **_kwargs: pytest.fail(
+            "invalid recovery input must fail before the time mutation"
+        )},
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "record_evening_time",
+            "arguments": {"hhmm": "99:99"},
+            "call_id": "evening-invalid-8",
+        },
+    )
+
+    assert "неправильно" in response
+    assert switch_calls == []
+    assert memory.pending == "collect_evening_time_for_switch:switch-invalid"
+
+
+@pytest.mark.anyio
+async def test_switch_recovery_rejects_different_fresh_time_before_replay(monkeypatch):
+    memory = PendingActionMemory("collect_evening_time_for_switch:switch-different")
+    user = SimpleNamespace(
+        id=7,
+        profile=SimpleNamespace(
+            daily_time_slots={"DAY": "14:00", "EVENING": "20:30"},
+            evening_slot_collected=True,
+        ),
+    )
+    receipt = SimpleNamespace(
+        user_id=7,
+        plan_id=11,
+        plan_step_id=None,
+        operation="switch_plan_format",
+        result_status="MEDIUM",
+    )
+    replay_calls = []
+
+    class RecoveryDB:
+        def commit(self):
+            return None
+
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(RecoveryDB()))
+    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args: user)
+    monkeypatch.setattr(
+        lifecycle,
+        "find_lifecycle_operation",
+        lambda *_args, **_kwargs: receipt,
+    )
+
+    def would_replay(_db, **kwargs):
+        replay_calls.append(kwargs["source_operation_id"])
+        return LifecycleResult(
+            user_id=7,
+            plan_id=12,
+            status="active",
+            operation="switch_plan_format",
+            duplicate=True,
+            code="replayed",
+            plan_type="MEDIUM",
+        )
+
+    monkeypatch.setattr(lifecycle, "switch_plan_format", would_replay)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {"record_evening_time": lambda *_args, **_kwargs: pytest.fail(
+            "mismatched recovery input must fail before the time mutation"
+        )},
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "record_evening_time",
+            "arguments": {"hhmm": "21:00"},
+            "call_id": "evening-different-8",
+        },
+    )
+
+    assert "не збігається" in response
+    assert replay_calls == []
+    assert memory.pending == "collect_evening_time_for_switch:switch-different"
+
+
+@pytest.mark.anyio
 async def test_switch_recovery_rejects_unrelated_pending_source(monkeypatch):
     memory = PendingActionMemory("collect_evening_time_for_switch:missing-source")
     evening_calls = []

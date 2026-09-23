@@ -168,6 +168,7 @@ def test_switch_collects_evening_then_replaces_one_current_plan_atomically(pg_se
             db,
             user_id=user.id,
             target_plan_type="MEDIUM",
+            expected_evening_time="20:30",
             source_operation_id="wp023:unrelated-switch",
         )
     assert source.status == "active"
@@ -214,10 +215,27 @@ def test_switch_collects_evening_then_replaces_one_current_plan_atomically(pg_se
     assert {effect.kind for effect in switched.effects} == {
         "cancel_step_jobs", "remove_step_keyboards", "reconcile_plan_schedule"
     }
+    with pytest.raises(
+        lifecycle.LifecycleTransitionError,
+        match="switch_recovery_evening_time_mismatch",
+    ):
+        lifecycle.recover_plan_format_switch(
+            db,
+            user_id=user.id,
+            target_plan_type="MEDIUM",
+            expected_evening_time="21:00",
+            source_operation_id="wp023:switch",
+        )
+    assert db.query(AIPlan).filter(
+        AIPlan.user_id == user.id,
+        AIPlan.status.in_(("active", "paused")),
+    ).count() == 1
+
     replay = lifecycle.recover_plan_format_switch(
         db,
         user_id=user.id,
         target_plan_type="MEDIUM",
+        expected_evening_time="20:30",
         source_operation_id="wp023:switch",
     )
     assert replay.duplicate is True

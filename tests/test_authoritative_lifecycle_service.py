@@ -1403,7 +1403,69 @@ def test_switch_recovery_requires_matching_durable_intent(monkeypatch):
             object(),
             user_id=1,
             target_plan_type="MEDIUM",
+            expected_evening_time="20:30",
             source_operation_id="missing-switch",
+        )
+
+
+def test_switch_recovery_rejects_invalid_evening_before_lock(monkeypatch):
+    monkeypatch.setattr(
+        lifecycle,
+        "_lock_user",
+        lambda *_args: pytest.fail("invalid recovery time must fail before lock"),
+    )
+
+    with pytest.raises(
+        lifecycle.LifecycleTransitionError,
+        match="invalid_time_",
+    ):
+        lifecycle.recover_plan_format_switch(
+            object(),
+            user_id=1,
+            target_plan_type="MEDIUM",
+            expected_evening_time="99:99",
+            source_operation_id="coach:switch:1",
+        )
+
+
+def test_switch_recovery_rejects_evening_mismatch_before_switch(monkeypatch):
+    user = SimpleNamespace(
+        profile=SimpleNamespace(
+            daily_time_slots={"DAY": "14:00", "EVENING": "20:30"},
+            evening_slot_collected=True,
+        )
+    )
+    receipt = SimpleNamespace(
+        user_id=1,
+        plan_id=21,
+        plan_step_id=None,
+        operation="switch_plan_format",
+        result_status="MEDIUM",
+    )
+    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args: user)
+    monkeypatch.setattr(
+        lifecycle,
+        "find_lifecycle_operation",
+        lambda *_args, **_kwargs: receipt,
+    )
+    monkeypatch.setattr(
+        lifecycle,
+        "switch_plan_format",
+        lambda *_args, **_kwargs: pytest.fail(
+            "mismatched recovery time must not enter the switch"
+        ),
+    )
+
+    with pytest.raises(
+        lifecycle.LifecycleTransitionError,
+        match="switch_recovery_evening_time_mismatch",
+    ):
+        lifecycle.recover_plan_format_switch(
+            object(),
+            user_id=1,
+            target_plan_type="MEDIUM",
+            expected_evening_time="21:00",
+            source_operation_id="coach:switch:1",
         )
 
 
@@ -1442,6 +1504,7 @@ def test_switch_recovery_replays_only_the_matching_recorded_source(monkeypatch):
         object(),
         user_id=1,
         target_plan_type="MEDIUM",
+        expected_evening_time="20:30",
         source_operation_id="coach:switch:1",
     )
 
@@ -1497,6 +1560,7 @@ def test_format_receipt_replays_recorded_plan_after_progression(monkeypatch):
         _DB(),
         user_id=1,
         target_plan_type="MEDIUM",
+        expected_evening_time="20:30",
         source_operation_id="coach:switch:old-plan",
     )
 

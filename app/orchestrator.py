@@ -566,13 +566,18 @@ async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
 _PLAN_TOOL_REGISTRY: Dict[str, Any] = {}
 
 
-def _recover_retained_switch(user_id: int, source_operation_id: str) -> dict:
+def _recover_retained_switch(
+    user_id: int,
+    source_operation_id: str,
+    hhmm: str,
+) -> dict:
     """Use the internal receipt-gated recovery entrance, not a Coach tool."""
     from app.plan_runtime.tools import recover_plan_format_switch
 
     return recover_plan_format_switch(
         user_id,
         "MEDIUM",
+        hhmm,
         source_operation_id=source_operation_id,
     )
 
@@ -748,13 +753,26 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
     ):
         retained_source = tool_args["_evening_collection_source_id"]
         try:
-            recovery = _recover_retained_switch(user_id, retained_source)
+            recovery = _recover_retained_switch(
+                user_id,
+                retained_source,
+                str(tool_args.get("hhmm") or ""),
+            )
         except ValueError as exc:
+            raw_error = str(exc)
             logger.warning(
                 "[TOOL] retained switch recovery user=%s failed: %s",
                 user_id,
                 exc,
             )
+            if "Invalid time format" in raw_error:
+                return _humanize_tool_error(tool_name, raw_error)
+            if raw_error == "switch_recovery_evening_time_mismatch":
+                return (
+                    "⚠️ Цей час не збігається з уже збереженим. Для "
+                    "відновлення введи попередній вечірній час; змінити його "
+                    "можна після узгодження розкладу."
+                )
             await session_memory.clear_pending_action(user_id)
             return "⚠️ Попередній запит на зміну формату вже недійсний."
         except Exception as exc:
