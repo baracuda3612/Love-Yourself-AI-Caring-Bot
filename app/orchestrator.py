@@ -566,6 +566,17 @@ async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
 _PLAN_TOOL_REGISTRY: Dict[str, Any] = {}
 
 
+def _recover_retained_switch(user_id: int, source_operation_id: str) -> dict:
+    """Use the internal receipt-gated recovery entrance, not a Coach tool."""
+    from app.plan_runtime.tools import recover_plan_format_switch
+
+    return recover_plan_format_switch(
+        user_id,
+        "MEDIUM",
+        source_operation_id=source_operation_id,
+    )
+
+
 def _build_tool_registry() -> Dict[str, Any]:
     """Lazy-build the tool registry so imports stay at call time."""
     from app.plan_runtime.tools import (
@@ -730,6 +741,49 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
     if handler is None:
         logger.warning("[TOOL] Unknown tool_call name=%r for user=%s — skipping", tool_name, user_id)
         return None
+
+    if (
+        tool_name == "record_evening_time"
+        and tool_args.get("_evening_collection_context") == "switch"
+    ):
+        retained_source = tool_args["_evening_collection_source_id"]
+        try:
+            recovery = _recover_retained_switch(user_id, retained_source)
+        except ValueError as exc:
+            logger.warning(
+                "[TOOL] retained switch recovery user=%s failed: %s",
+                user_id,
+                exc,
+            )
+            await session_memory.clear_pending_action(user_id)
+            return "⚠️ Попередній запит на зміну формату вже недійсний."
+        except Exception as exc:
+            logger.error(
+                "[TOOL] retained switch recovery user=%s error: %s",
+                user_id,
+                exc,
+                exc_info=True,
+            )
+            return "⚠️ Не вдалось перевірити розклад. Спробуй ще раз."
+        if recovery.get("status") != "not_ready":
+            log_metric(
+                "plan_tool_executed",
+                extra={"user_id": user_id, "tool": "recover_plan_format_switch"},
+            )
+            if recovery.get("status") == "ok":
+                await session_memory.clear_pending_action(user_id)
+                return _TOOL_REPLY_TEMPLATES["switch_plan_format"]
+            if (
+                recovery.get("code") == "switch_reconciliation_failed"
+                and recovery.get("persisted") is True
+            ):
+                return (
+                    "⚠️ Новий 14-денний план уже збережено, але його "
+                    "розклад ще не узгоджено. Повтори введення того "
+                    "самого часу — новий план вдруге не створиться."
+                )
+            await session_memory.clear_pending_action(user_id)
+            return "⚠️ Цей запит уже застарів; поточний стан плану змінився."
 
     try:
         result = handler(user_id, tool_args)

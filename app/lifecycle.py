@@ -1886,6 +1886,36 @@ def request_plan_format_switch(
     )
 
 
+def recover_plan_format_switch(
+    db: Session,
+    *,
+    user_id: int,
+    target_plan_type: str,
+    source_operation_id: str,
+) -> LifecycleResult:
+    """Replay only a previously reserved format switch; never create intent."""
+    normalized_target = str(target_plan_type).strip().upper()
+    if normalized_target not in {"SHORT", "MEDIUM"}:
+        raise LifecycleTransitionError("unsupported_plan_type")
+    if not source_operation_id or len(source_operation_id) > 160:
+        raise LifecycleTransitionError("invalid_source_operation_id")
+    _lock_user(db, user_id)
+    existing = find_lifecycle_operation(db, user_id, source_operation_id)
+    if existing is None:
+        raise LifecycleTransitionError("switch_recovery_receipt_missing")
+    _duplicate_operation_result(
+        existing,
+        expected_operation="switch_plan_format",
+        expected_result_status=normalized_target,
+    )
+    return switch_plan_format(
+        db,
+        user_id=user_id,
+        target_plan_type=normalized_target,
+        source_operation_id=source_operation_id,
+    )
+
+
 def prepare_continuation(
     db: Session,
     *,

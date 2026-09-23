@@ -419,6 +419,41 @@ def test_switch_tool_reconciles_source_and_replacement_after_commit(monkeypatch)
     assert result["plan_id"] == 12
 
 
+def test_switch_recovery_waits_for_first_evening_without_new_intent(monkeypatch):
+    fake_db = _DB(user=SimpleNamespace(id=1), profile=SimpleNamespace(user_id=1))
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(fake_db))
+    captured = {}
+
+    def recover(_db, **kwargs):
+        captured.update(kwargs)
+        return lifecycle.LifecycleResult(
+            user_id=1,
+            plan_id=11,
+            status="active",
+            operation="switch_plan_format",
+            duplicate=True,
+            code="needs_evening_time",
+            applied=False,
+            plan_type="SHORT",
+            details={"target_plan_type": "MEDIUM"},
+        )
+
+    monkeypatch.setattr(lifecycle, "recover_plan_format_switch", recover)
+
+    result = tools.recover_plan_format_switch(
+        1, "MEDIUM", source_operation_id="switch:pending"
+    )
+
+    assert result == {
+        "status": "not_ready",
+        "target_plan_type": "MEDIUM",
+        "duplicate": True,
+        "disposition": "deferred",
+    }
+    assert captured["source_operation_id"] == "switch:pending"
+    assert fake_db.commits == 1
+
+
 def test_cancel_uses_one_aggregate_operation_then_cancels_jobs(monkeypatch):
     user = SimpleNamespace(id=1)
     profile = SimpleNamespace(user_id=1)

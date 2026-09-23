@@ -159,37 +159,13 @@ def create_followup_plan(
     return response
 
 
-def switch_plan_format(
-    user_id: int,
-    plan_type: str,
-    *,
-    source_operation_id: str,
-) -> dict:
-    """Atomically replace the current 7/14-day sequence with the other format."""
-    normalized = str(plan_type).strip().upper()
-    if normalized not in {"SHORT", "MEDIUM"}:
-        raise ValueError(f"plan_type must be 'SHORT' or 'MEDIUM', got {plan_type!r}")
-
-    from app.db import SessionLocal
-    from app.lifecycle import LifecycleTransitionError, switch_plan_format as decide
+def _finish_plan_format_result(result, *, pending_status: str) -> dict:
     from app.lifecycle_reconciliation import reconcile_scheduler_effects
-
-    with SessionLocal() as db:
-        try:
-            result = decide(
-                db,
-                user_id=user_id,
-                target_plan_type=normalized,
-                source_operation_id=source_operation_id,
-            )
-        except LifecycleTransitionError as exc:
-            raise ValueError(str(exc)) from exc
-        db.commit()
 
     if result.code == "needs_evening_time":
         return {
-            "status": "needs_evening_time",
-            "target_plan_type": normalized,
+            "status": pending_status,
+            "target_plan_type": result.details.get("target_plan_type"),
             "duplicate": result.duplicate,
             "disposition": "deferred",
         }
@@ -225,6 +201,67 @@ def switch_plan_format(
         "duplicate": result.duplicate,
         "disposition": "replayed" if result.duplicate else "applied",
     }
+
+
+def switch_plan_format(
+    user_id: int,
+    plan_type: str,
+    *,
+    source_operation_id: str,
+) -> dict:
+    """Atomically replace the current 7/14-day sequence with the other format."""
+    normalized = str(plan_type).strip().upper()
+    if normalized not in {"SHORT", "MEDIUM"}:
+        raise ValueError(f"plan_type must be 'SHORT' or 'MEDIUM', got {plan_type!r}")
+
+    from app.db import SessionLocal
+    from app.lifecycle import LifecycleTransitionError, switch_plan_format as decide
+
+    with SessionLocal() as db:
+        try:
+            result = decide(
+                db,
+                user_id=user_id,
+                target_plan_type=normalized,
+                source_operation_id=source_operation_id,
+            )
+        except LifecycleTransitionError as exc:
+            raise ValueError(str(exc)) from exc
+        db.commit()
+
+    return _finish_plan_format_result(result, pending_status="needs_evening_time")
+
+
+def recover_plan_format_switch(
+    user_id: int,
+    plan_type: str,
+    *,
+    source_operation_id: str,
+) -> dict:
+    """Resume only a durable switch intent or committed switch receipt."""
+    normalized = str(plan_type).strip().upper()
+    if normalized not in {"SHORT", "MEDIUM"}:
+        raise ValueError(f"plan_type must be 'SHORT' or 'MEDIUM', got {plan_type!r}")
+
+    from app.db import SessionLocal
+    from app.lifecycle import (
+        LifecycleTransitionError,
+        recover_plan_format_switch as decide,
+    )
+
+    with SessionLocal() as db:
+        try:
+            result = decide(
+                db,
+                user_id=user_id,
+                target_plan_type=normalized,
+                source_operation_id=source_operation_id,
+            )
+        except LifecycleTransitionError as exc:
+            raise ValueError(str(exc)) from exc
+        db.commit()
+
+    return _finish_plan_format_result(result, pending_status="not_ready")
 
 
 def record_evening_time(

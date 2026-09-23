@@ -1380,6 +1380,76 @@ def test_deferred_interface_exact_replays_return_existing_reservations(monkeypat
     assert continuation.completed_plan_id == 20
 
 
+def test_switch_recovery_requires_matching_durable_intent(monkeypatch):
+    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args: object())
+    monkeypatch.setattr(
+        lifecycle,
+        "find_lifecycle_operation",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        lifecycle,
+        "switch_plan_format",
+        lambda *_args, **_kwargs: pytest.fail(
+            "missing recovery receipt must not create a switch"
+        ),
+    )
+
+    with pytest.raises(
+        lifecycle.LifecycleTransitionError,
+        match="switch_recovery_receipt_missing",
+    ):
+        lifecycle.recover_plan_format_switch(
+            object(),
+            user_id=1,
+            target_plan_type="MEDIUM",
+            source_operation_id="missing-switch",
+        )
+
+
+def test_switch_recovery_replays_only_the_matching_recorded_source(monkeypatch):
+    receipt = SimpleNamespace(
+        user_id=1,
+        plan_id=21,
+        plan_step_id=None,
+        operation="switch_plan_format",
+        result_status="MEDIUM",
+    )
+    captured = {}
+    expected = lifecycle.LifecycleResult(
+        user_id=1,
+        plan_id=23,
+        status="active",
+        operation="switch_plan_format",
+        duplicate=True,
+        code="replayed",
+        plan_type="MEDIUM",
+    )
+    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args: object())
+    monkeypatch.setattr(
+        lifecycle,
+        "find_lifecycle_operation",
+        lambda *_args, **_kwargs: receipt,
+    )
+
+    def replay(db, **kwargs):
+        captured.update(db=db, **kwargs)
+        return expected
+
+    monkeypatch.setattr(lifecycle, "switch_plan_format", replay)
+
+    result = lifecycle.recover_plan_format_switch(
+        object(),
+        user_id=1,
+        target_plan_type="MEDIUM",
+        source_operation_id="coach:switch:1",
+    )
+
+    assert result is expected
+    assert captured["source_operation_id"] == "coach:switch:1"
+    assert captured["target_plan_type"] == "MEDIUM"
+
+
 def test_format_receipt_replays_recorded_plan_after_progression(monkeypatch):
     recorded = SimpleNamespace(id=21, status="abandoned", total_days=7)
     replacement = SimpleNamespace(id=23, status="completed", total_days=14)
@@ -1423,7 +1493,7 @@ def test_format_receipt_replays_recorded_plan_after_progression(monkeypatch):
     monkeypatch.setattr(lifecycle, "get_current_plan", lambda *_args, **_kwargs: current)
     monkeypatch.setattr(lifecycle, "find_lifecycle_operation", lambda *_args: receipt)
 
-    replay = lifecycle.request_plan_format_switch(
+    replay = lifecycle.recover_plan_format_switch(
         _DB(),
         user_id=1,
         target_plan_type="MEDIUM",

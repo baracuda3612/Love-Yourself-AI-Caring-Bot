@@ -1,7 +1,9 @@
 import os
 import pathlib
 import sys
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,7 +18,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
-from app import orchestrator
+from app import db as database
+from app import lifecycle, orchestrator
 from app.lifecycle import LifecycleEntitlementError, LifecycleResult
 
 
@@ -208,7 +211,6 @@ async def test_medium_cascade_reports_reconciliation_failure_and_keeps_retry_key
     captured = {}
     monkeypatch.setattr(orchestrator, "session_memory", memory)
     monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
-
     def followup(_user_id, args):
         captured.update(args)
         return {
@@ -251,6 +253,11 @@ async def test_switch_evening_cascade_reuses_original_source_and_clears_pending(
     captured = {}
     monkeypatch.setattr(orchestrator, "session_memory", memory)
     monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_recover_retained_switch",
+        lambda *_args, **_kwargs: {"status": "not_ready"},
+    )
 
     def switch(_user_id, args):
         captured.update(args)
@@ -286,36 +293,81 @@ async def test_switch_evening_cascade_reports_persisted_partial_and_retries_rece
 ):
     memory = PendingActionMemory("collect_evening_time_for_switch:switch-7")
     switch_calls = []
+    recovery_calls = []
+    evening_calls = []
     monkeypatch.setattr(orchestrator, "session_memory", memory)
     monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
 
-    switch_results = iter((
-        {
+    recovery_results = iter((
+        LifecycleResult(
+            user_id=7,
+            plan_id=11,
+            status="active",
+            operation="switch_plan_format",
+            duplicate=True,
+            code="needs_evening_time",
+            applied=False,
+            plan_type="SHORT",
+            details={"target_plan_type": "MEDIUM"},
+        ),
+        LifecycleResult(
+            user_id=7,
+            plan_id=12,
+            status="active",
+            operation="switch_plan_format",
+            duplicate=True,
+            code="replayed",
+            plan_type="MEDIUM",
+            details={"source_plan_id": 11},
+        ),
+    ))
+    receipt = SimpleNamespace(
+        user_id=7,
+        plan_id=11,
+        plan_step_id=None,
+        operation="switch_plan_format",
+        result_status="MEDIUM",
+    )
+
+    class RecoveryDB:
+        def commit(self):
+            return None
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(RecoveryDB()))
+    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args: object())
+    monkeypatch.setattr(
+        lifecycle,
+        "find_lifecycle_operation",
+        lambda *_args, **_kwargs: receipt,
+    )
+
+    def switch(_user_id, args):
+        switch_calls.append(args["_source_operation_id"])
+        return {
             "status": "error",
             "code": "switch_reconciliation_failed",
             "persisted": True,
             "plan_id": 12,
             "source_plan_id": 11,
             "duplicate": False,
-        },
-        {
-            "status": "ok",
-            "plan_id": 12,
-            "source_plan_id": 11,
-            "duplicate": True,
-            "disposition": "replayed",
-        },
-    ))
+        }
 
-    def switch(_user_id, args):
-        switch_calls.append(args["_source_operation_id"])
-        return next(switch_results)
+    def recover(_db, **kwargs):
+        recovery_calls.append(kwargs["source_operation_id"])
+        return next(recovery_results)
 
+    def record_evening(_user_id, args):
+        evening_calls.append(args["_source_operation_id"])
+        if args["_source_operation_id"] != "evening-7":
+            raise ValueError("switch_evening_collection_requires_short_plan")
+        return {"status": "ok"}
+
+    monkeypatch.setattr(lifecycle, "switch_plan_format", recover)
     monkeypatch.setattr(
         orchestrator,
         "_build_tool_registry",
         lambda: {
-            "record_evening_time": lambda *_args, **_kwargs: {"status": "ok"},
+            "record_evening_time": record_evening,
             "switch_plan_format": switch,
         },
     )
@@ -338,11 +390,47 @@ async def test_switch_evening_cascade_reports_persisted_partial_and_retries_rece
         {
             "name": "record_evening_time",
             "arguments": {"hhmm": "20:30"},
-            "call_id": "evening-7",
+            "call_id": "evening-8",
         },
     )
     assert "Формат змінено" in second
-    assert switch_calls == ["switch-7", "switch-7"]
+    assert switch_calls == ["switch-7"]
+    assert recovery_calls == ["switch-7", "switch-7"]
+    assert evening_calls == ["evening-7"]
+    assert memory.cleared is True
+
+
+@pytest.mark.anyio
+async def test_switch_recovery_rejects_unrelated_pending_source(monkeypatch):
+    memory = PendingActionMemory("collect_evening_time_for_switch:missing-source")
+    evening_calls = []
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(
+        orchestrator,
+        "_recover_retained_switch",
+        lambda *_args, **_kwargs: (
+            (_ for _ in ()).throw(ValueError("switch_recovery_receipt_missing"))
+        ),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "record_evening_time": lambda *_args, **_kwargs: evening_calls.append(True),
+        },
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "record_evening_time",
+            "arguments": {"hhmm": "20:30"},
+            "call_id": "evening-unrelated",
+        },
+    )
+
+    assert "недійсний" in response
+    assert evening_calls == []
     assert memory.cleared is True
 
 

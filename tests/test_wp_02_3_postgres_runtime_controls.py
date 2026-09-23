@@ -160,6 +160,18 @@ def test_switch_collects_evening_then_replaces_one_current_plan_atomically(pg_se
     db = pg_session
     user, profile, source, source_steps = _seed_current_plan(db)
     _seed_disposable_builder_library(db)
+    with pytest.raises(
+        lifecycle.LifecycleTransitionError,
+        match="switch_recovery_receipt_missing",
+    ):
+        lifecycle.recover_plan_format_switch(
+            db,
+            user_id=user.id,
+            target_plan_type="MEDIUM",
+            source_operation_id="wp023:unrelated-switch",
+        )
+    assert source.status == "active"
+
     pending = lifecycle.switch_plan_format(
         db,
         user_id=user.id,
@@ -202,7 +214,7 @@ def test_switch_collects_evening_then_replaces_one_current_plan_atomically(pg_se
     assert {effect.kind for effect in switched.effects} == {
         "cancel_step_jobs", "remove_step_keyboards", "reconcile_plan_schedule"
     }
-    replay = lifecycle.switch_plan_format(
+    replay = lifecycle.recover_plan_format_switch(
         db,
         user_id=user.id,
         target_plan_type="MEDIUM",
