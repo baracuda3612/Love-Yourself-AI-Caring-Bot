@@ -14,20 +14,21 @@ Tool registration in Coach prompt is T5.7.
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-_HHMM_RE = re.compile(r"^\d{2}:\d{2}$")
-
 def _validate_hhmm(hhmm: str) -> None:
-    """Raise ValueError if hhmm does not match HH:MM (exactly 2-digit each part)."""
-    if not _HHMM_RE.match(hhmm):
+    """Reject malformed or impossible local wall-clock values."""
+    from app.time_slots import TimeSlotError, canonicalize_hhmm
+
+    try:
+        canonicalize_hhmm(hhmm)
+    except TimeSlotError as exc:
         raise ValueError(
             f"Invalid time format {hhmm!r} — expected HH:MM (e.g. '09:30')"
-        )
+        ) from exc
 
 
 def _load_user_and_profile(db, user_id: int, *, lock: bool = False):
@@ -68,6 +69,7 @@ def create_followup_plan(
     from app.lifecycle import (  # lazy
         LifecycleTransitionError,
         activate_plan,
+        prepare_followup_evening_collection,
         recover_current_plan_activation,
     )
     from app.lifecycle_reconciliation import reconcile_scheduler_effects  # lazy
@@ -76,13 +78,30 @@ def create_followup_plan(
         _, profile = _load_user_and_profile(db, user_id, lock=True)
 
         time_slots: dict = (profile.daily_time_slots or {}) if profile else {}
-        day_time: Optional[str] = time_slots.get("DAY") or "14:00"
+        day_time: Optional[str] = time_slots.get("DAY")
+        if day_time is None:
+            raise ValueError("saved_day_time_missing")
 
         evening_time: Optional[str] = None
         if plan_type == "MEDIUM":
             if not (profile and profile.evening_slot_collected):
-                return {"status": "needs_evening_time"}
+                try:
+                    pending = prepare_followup_evening_collection(
+                        db,
+                        user_id=user_id,
+                        source_operation_id=source_operation_id,
+                    )
+                except LifecycleTransitionError as exc:
+                    raise ValueError(str(exc)) from exc
+                db.commit()
+                return {
+                    "status": "needs_evening_time",
+                    "duplicate": pending.duplicate,
+                    "disposition": "deferred",
+                }
             evening_time = time_slots.get("EVENING")
+            if evening_time is None:
+                raise ValueError("saved_evening_time_missing")
 
         try:
             activation = activate_plan(
@@ -93,6 +112,7 @@ def create_followup_plan(
                 evening_time=evening_time,
                 source_operation_id=source_operation_id,
                 require_plan_history=True,
+                required_previous_status="abandoned",
             )
         except LifecycleTransitionError as exc:
             if str(exc) != "followup_activation_requires_no_active_plan":
@@ -102,6 +122,7 @@ def create_followup_plan(
                     db,
                     user_id=user_id,
                     plan_type=plan_type,
+                    required_previous_status="abandoned",
                 )
             except LifecycleTransitionError as recovery_exc:
                 raise ValueError(str(recovery_exc)) from recovery_exc
@@ -118,6 +139,7 @@ def create_followup_plan(
             "persisted": True,
             "jobs_reconciled": False,
             "duplicate": activation.duplicate,
+            "disposition": "partial_failure",
         }
 
     logger.info(
@@ -130,16 +152,87 @@ def create_followup_plan(
         "plan_type": activation.plan_type,
         "jobs_reconciled": True,
         "duplicate": activation.duplicate,
+        "disposition": "replayed" if activation.duplicate else "applied",
     }
     if activation.code == "recovered_existing_plan":
         response["recovered"] = True
     return response
 
 
+def switch_plan_format(
+    user_id: int,
+    plan_type: str,
+    *,
+    source_operation_id: str,
+) -> dict:
+    """Atomically replace the current 7/14-day sequence with the other format."""
+    normalized = str(plan_type).strip().upper()
+    if normalized not in {"SHORT", "MEDIUM"}:
+        raise ValueError(f"plan_type must be 'SHORT' or 'MEDIUM', got {plan_type!r}")
+
+    from app.db import SessionLocal
+    from app.lifecycle import LifecycleTransitionError, switch_plan_format as decide
+    from app.lifecycle_reconciliation import reconcile_scheduler_effects
+
+    with SessionLocal() as db:
+        try:
+            result = decide(
+                db,
+                user_id=user_id,
+                target_plan_type=normalized,
+                source_operation_id=source_operation_id,
+            )
+        except LifecycleTransitionError as exc:
+            raise ValueError(str(exc)) from exc
+        db.commit()
+
+    if result.code == "needs_evening_time":
+        return {
+            "status": "needs_evening_time",
+            "target_plan_type": normalized,
+            "duplicate": result.duplicate,
+            "disposition": "deferred",
+        }
+
+    result = reconcile_scheduler_effects(result)
+    if not result.external_effects_succeeded:
+        return {
+            "status": "error",
+            "code": "switch_reconciliation_failed",
+            "plan_id": result.plan_id,
+            "source_plan_id": result.details.get("source_plan_id"),
+            "plan_type": result.plan_type,
+            "persisted": True,
+            "duplicate": result.duplicate,
+            "disposition": "partial_failure",
+        }
+    if result.code == "superseded":
+        return {
+            "status": "error",
+            "code": "superseded",
+            "plan_id": result.plan_id,
+            "plan_type": result.plan_type,
+            "duplicate": True,
+            "disposition": "superseded",
+            "current_disposition": result.details.get("current_disposition"),
+        }
+    return {
+        "status": "ok",
+        "plan_id": result.plan_id,
+        "source_plan_id": result.details.get("source_plan_id"),
+        "plan_type": result.plan_type,
+        "jobs_reconciled": True,
+        "duplicate": result.duplicate,
+        "disposition": "replayed" if result.duplicate else "applied",
+    }
+
+
 def record_evening_time(
     user_id: int,
     hhmm: str,
     *,
+    context: str,
+    pending_source_operation_id: str,
     source_operation_id: str,
 ) -> dict:
     """Persist the user's chosen evening delivery time and mark slot as collected.
@@ -160,6 +253,8 @@ def record_evening_time(
                 db,
                 user_id=user_id,
                 hhmm=hhmm,
+                context=context,
+                pending_source_operation_id=pending_source_operation_id,
                 source_operation_id=source_operation_id,
             )
         except LifecycleTransitionError as exc:
@@ -175,6 +270,7 @@ def record_evening_time(
             "saved": False,
             "applied": False,
             "duplicate": result.duplicate,
+            "disposition": "superseded",
         }
     logger.info("[plan_runtime] record_evening_time: user=%s hhmm=%s", user_id, hhmm)
     return {
@@ -185,6 +281,7 @@ def record_evening_time(
         "saved": True,
         "applied": result.applied,
         "duplicate": result.duplicate,
+        "disposition": "replayed" if result.duplicate else "applied",
     }
 
 
@@ -227,6 +324,7 @@ def change_day_time(
             "saved": False,
             "jobs_reconciled": False,
             "duplicate": result.duplicate,
+            "disposition": "superseded",
         }
     result = reconcile_scheduler_effects(result)
     effect = result.effects[0]
@@ -238,6 +336,7 @@ def change_day_time(
             "saved": True,
             "jobs_reconciled": False,
             "duplicate": result.duplicate,
+            "disposition": "partial_failure",
         }
     logger.info(
         "[plan_runtime] change_day_time: user=%s hhmm=%s rescheduled=%d",
@@ -250,6 +349,13 @@ def change_day_time(
         "jobs_reconciled": effect.state.value,
         "rescheduled": effect.succeeded,
         "duplicate": result.duplicate,
+        "disposition": (
+            "deferred"
+            if effect.state.value == "deferred"
+            else "replayed"
+            if result.duplicate
+            else "applied"
+        ),
     }
 
 
@@ -292,6 +398,7 @@ def change_evening_time(
             "saved": False,
             "jobs_reconciled": False,
             "duplicate": result.duplicate,
+            "disposition": "superseded",
         }
     result = reconcile_scheduler_effects(result)
     effect = result.effects[0]
@@ -303,6 +410,7 @@ def change_evening_time(
             "saved": True,
             "jobs_reconciled": False,
             "duplicate": result.duplicate,
+            "disposition": "partial_failure",
         }
     logger.info(
         "[plan_runtime] change_evening_time: user=%s hhmm=%s rescheduled=%d",
@@ -315,6 +423,13 @@ def change_evening_time(
         "jobs_reconciled": effect.state.value,
         "rescheduled": effect.succeeded,
         "duplicate": result.duplicate,
+        "disposition": (
+            "deferred"
+            if effect.state.value == "deferred"
+            else "replayed"
+            if result.duplicate
+            else "applied"
+        ),
     }
 
 
@@ -345,13 +460,13 @@ def cancel_plan(user_id: int, *, source_operation_id: str) -> dict:
             "persisted": True,
             "jobs_reconciled": False,
             "duplicate": result.duplicate,
+            "disposition": "partial_failure",
         }
 
-    effect = result.effects[0]
     logger.info(
-        "[plan_runtime] cancel_plan: user=%s step_jobs_reconciled=%d",
+        "[plan_runtime] cancel_plan: user=%s external_effects=%d",
         user_id,
-        effect.succeeded,
+        sum(effect.succeeded for effect in result.effects),
     )
     total_days = 14 if result.plan_type == "MEDIUM" else 7
     return {
@@ -360,6 +475,7 @@ def cancel_plan(user_id: int, *, source_operation_id: str) -> dict:
         "total_days": total_days,
         "jobs_reconciled": True,
         "duplicate": result.duplicate,
+        "disposition": "replayed" if result.duplicate else "applied",
     }
 
 
@@ -388,6 +504,7 @@ def pause_plan(user_id: int, *, source_operation_id: str) -> dict:
     """
     from app.db import SessionLocal  # lazy
     from app.lifecycle import LifecycleTransitionError, transition_current_plan  # lazy
+    from app.lifecycle_reconciliation import reconcile_scheduler_effects  # lazy
 
     with SessionLocal() as db:
         try:
@@ -401,6 +518,27 @@ def pause_plan(user_id: int, *, source_operation_id: str) -> dict:
             raise ValueError(str(exc)) from exc
         db.commit()
 
+    if result.code == "superseded":
+        return {
+            "status": "error",
+            "code": "superseded",
+            "plan_id": result.plan_id,
+            "plan_status": result.status,
+            "duplicate": True,
+            "disposition": "superseded",
+        }
+    result = reconcile_scheduler_effects(result)
+    if not result.external_effects_succeeded:
+        return {
+            "status": "error",
+            "code": "pause_reconciliation_failed",
+            "plan_id": result.plan_id,
+            "plan_status": result.status,
+            "persisted": True,
+            "duplicate": result.duplicate,
+            "disposition": "partial_failure",
+        }
+
     logger.info("[plan_runtime] pause_plan: user=%s", user_id)
     return {
         "status": "ok",
@@ -408,6 +546,7 @@ def pause_plan(user_id: int, *, source_operation_id: str) -> dict:
         "plan_status": result.status,
         "schedule_reconciliation": result.effects[0].state.value,
         "duplicate": result.duplicate,
+        "disposition": "replayed" if result.duplicate else "applied",
     }
 
 
@@ -418,6 +557,7 @@ def resume_plan(user_id: int, *, source_operation_id: str) -> dict:
     """
     from app.db import SessionLocal  # lazy
     from app.lifecycle import LifecycleTransitionError, transition_current_plan  # lazy
+    from app.lifecycle_reconciliation import reconcile_scheduler_effects  # lazy
 
     with SessionLocal() as db:
         try:
@@ -431,6 +571,27 @@ def resume_plan(user_id: int, *, source_operation_id: str) -> dict:
             raise ValueError(str(exc)) from exc
         db.commit()
 
+    if result.code == "superseded":
+        return {
+            "status": "error",
+            "code": "superseded",
+            "plan_id": result.plan_id,
+            "plan_status": result.status,
+            "duplicate": True,
+            "disposition": "superseded",
+        }
+    result = reconcile_scheduler_effects(result)
+    if not result.external_effects_succeeded:
+        return {
+            "status": "error",
+            "code": "resume_reconciliation_failed",
+            "plan_id": result.plan_id,
+            "plan_status": result.status,
+            "persisted": True,
+            "duplicate": result.duplicate,
+            "disposition": "partial_failure",
+        }
+
     logger.info("[plan_runtime] resume_plan: user=%s", user_id)
     return {
         "status": "ok",
@@ -438,4 +599,5 @@ def resume_plan(user_id: int, *, source_operation_id: str) -> dict:
         "plan_status": result.status,
         "schedule_reconciliation": result.effects[0].state.value,
         "duplicate": result.duplicate,
+        "disposition": "replayed" if result.duplicate else "applied",
     }

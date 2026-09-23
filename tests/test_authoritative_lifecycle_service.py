@@ -84,7 +84,8 @@ def test_abandon_replay_restores_authoritative_plan_type(monkeypatch):
             return [(31,), (32,)]
 
     class _ReplayDB:
-        def query(self, model):
+        def query(self, *models):
+            model = models[0]
             if model is lifecycle.AIPlan:
                 return _OneQuery(plan)
             if model is lifecycle.AIPlanStep.id:
@@ -142,7 +143,8 @@ def test_activation_replay_rejects_material_argument_drift(monkeypatch):
             return []
 
     class _ReplayDB:
-        def query(self, model):
+        def query(self, *models):
+            model = models[0]
             if model is lifecycle.AIPlan:
                 return _OneQuery(plan)
             raise AssertionError(f"unexpected model: {model}")
@@ -337,6 +339,69 @@ def test_activation_recovery_targets_recorded_current_plan(monkeypatch):
 
     assert recovered.code == "recovered_existing_plan"
     assert recovered.effects[0].target_ids == (14,)
+
+
+def test_followup_recovery_rejects_current_plan_without_abandoned_predecessor(
+    monkeypatch,
+):
+    plan = SimpleNamespace(
+        id=14, user_id=7, status="active", total_days=7, cycle_number=1
+    )
+
+    class _PreviousQuery(_OneQuery):
+        def order_by(self, *_args):
+            return self
+
+    class _DB:
+        def query(self, model):
+            assert model is lifecycle.AIPlan
+            return _PreviousQuery(None)
+
+    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args: object())
+    monkeypatch.setattr(lifecycle, "get_current_plan", lambda *_args, **_kwargs: plan)
+
+    with pytest.raises(
+        lifecycle.LifecycleTransitionError,
+        match="recoverable_activation_requires_abandoned_predecessor",
+    ):
+        lifecycle.recover_current_plan_activation(
+            _DB(),
+            user_id=7,
+            plan_type="SHORT",
+            required_previous_status="abandoned",
+        )
+
+
+def test_followup_recovery_does_not_mislabel_a_format_switch(monkeypatch):
+    plan = SimpleNamespace(
+        id=14, user_id=7, status="active", total_days=7, cycle_number=2
+    )
+    previous = SimpleNamespace(status="abandoned")
+    receipt = SimpleNamespace(source_operation_id="switch-activate:abc")
+
+    class _Query(_OneQuery):
+        def order_by(self, *_args):
+            return self
+
+    class _DB:
+        def query(self, model):
+            return _Query(
+                previous if model is lifecycle.AIPlan else receipt
+            )
+
+    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args: object())
+    monkeypatch.setattr(lifecycle, "get_current_plan", lambda *_args, **_kwargs: plan)
+
+    with pytest.raises(
+        lifecycle.LifecycleTransitionError,
+        match="recoverable_followup_activation_missing",
+    ):
+        lifecycle.recover_current_plan_activation(
+            _DB(),
+            user_id=7,
+            plan_type="SHORT",
+            required_previous_status="abandoned",
+        )
 
 
 def test_owned_step_transition_resolves_actor_inside_the_service(monkeypatch):
@@ -1004,42 +1069,27 @@ def test_time_change_replay_reconciles_only_currently_schedulable_steps(monkeypa
     assert replay.effects[0].target_ids == (14,)
 
 
-def test_time_change_replay_canonicalizes_accepted_noncanonical_value(monkeypatch):
-    receipt = SimpleNamespace(
-        user_id=7,
-        plan_id=14,
-        plan_step_id=None,
-        operation="change_morning_time",
-        result_status="09:00",
-    )
-    plan = SimpleNamespace(id=14, user_id=7, status="active", total_days=7)
-    user = SimpleNamespace(
-        id=7,
-        profile=SimpleNamespace(daily_time_slots={"MORNING": "09:00"}),
+def test_time_change_rejects_retired_slot_before_lock(monkeypatch):
+    monkeypatch.setattr(
+        lifecycle,
+        "_lock_user",
+        lambda *_args: pytest.fail("invalid slot must fail before persistence lock"),
     )
 
-    class _DB:
-        def query(self, model):
-            assert model is lifecycle.AIPlan
-            return _OneQuery(plan)
-
-    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args: user)
-    monkeypatch.setattr(lifecycle, "find_lifecycle_operation", lambda *_args: receipt)
-
-    replay = lifecycle.change_delivery_time(
-        _DB(),
-        user_id=7,
-        slot="MORNING",
-        hhmm="9:00",
-        source_operation_id="api:morning",
-    )
-
-    assert replay.code == "replayed"
-    assert replay.status == "09:00"
-    assert replay.details["value"] == "09:00"
+    with pytest.raises(
+        lifecycle.LifecycleTransitionError,
+        match="unsupported_delivery_slot",
+    ):
+        lifecycle.change_delivery_time(
+            object(),
+            user_id=7,
+            slot="MORNING",
+            hhmm="09:00",
+            source_operation_id="api:morning",
+        )
 
 
-def test_evening_preference_is_profile_only_for_active_plan(monkeypatch):
+def test_evening_preference_requires_explicit_switch_context(monkeypatch):
     user = SimpleNamespace(
         id=7,
         profile=SimpleNamespace(
@@ -1047,12 +1097,24 @@ def test_evening_preference_is_profile_only_for_active_plan(monkeypatch):
             evening_slot_collected=False,
         ),
     )
-    plan = SimpleNamespace(id=14, user_id=7, status="active", total_days=14)
+    plan = SimpleNamespace(id=14, user_id=7, status="active", total_days=7)
     calls = []
 
     monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args: user)
-    monkeypatch.setattr(lifecycle, "find_lifecycle_operation", lambda *_args: None)
-    monkeypatch.setattr(lifecycle, "_lifecycle_context_plan", lambda *_args: plan)
+    pending = SimpleNamespace(
+        user_id=7,
+        plan_id=14,
+        operation="switch_plan_format",
+        result_status="MEDIUM",
+    )
+    monkeypatch.setattr(
+        lifecycle,
+        "find_lifecycle_operation",
+        lambda _db, _user_id, source: (
+            pending if source == "coach:switch:medium" else None
+        ),
+    )
+    monkeypatch.setattr(lifecycle, "get_current_plan", lambda *_args, **_kwargs: plan)
     monkeypatch.setattr(lifecycle, "record_lifecycle_operation", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         "app.time_slots.update_user_time_slot_preferences",
@@ -1067,6 +1129,8 @@ def test_evening_preference_is_profile_only_for_active_plan(monkeypatch):
         _DB(),
         user_id=7,
         hhmm="20:30",
+        context="switch",
+        pending_source_operation_id="coach:switch:medium",
         source_operation_id="coach:evening",
     )
 
@@ -1075,12 +1139,19 @@ def test_evening_preference_is_profile_only_for_active_plan(monkeypatch):
     assert user.profile.evening_slot_collected is True
 
 
-def test_plan_format_and_continuation_interfaces_do_not_implement_deferred_work(
+def test_plan_format_defers_for_first_evening_time_and_continuation_stays_deferred(
     monkeypatch,
 ):
     active = SimpleNamespace(id=21, status="active", total_days=7)
     completed = SimpleNamespace(id=20, status="completed", total_days=14)
-    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args, **_kwargs: object())
+    user = SimpleNamespace(
+        id=1,
+        profile=SimpleNamespace(
+            daily_time_slots={"DAY": "14:00"},
+            evening_slot_collected=False,
+        ),
+    )
+    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args, **_kwargs: user)
     monkeypatch.setattr(lifecycle, "get_current_plan", lambda *_args, **_kwargs: active)
     monkeypatch.setattr(
         lifecycle,
@@ -1107,7 +1178,7 @@ def test_plan_format_and_continuation_interfaces_do_not_implement_deferred_work(
         source_operation_id="coach:switch:1",
     )
     assert switch.applied is False
-    assert switch.code == "deferred_to_wp_02_3"
+    assert switch.code == "needs_evening_time"
 
     continuation = lifecycle.prepare_continuation(
         db,
@@ -1122,7 +1193,14 @@ def test_plan_format_and_continuation_interfaces_do_not_implement_deferred_work(
 def test_deferred_interfaces_reserve_durable_source_receipts(monkeypatch):
     active = SimpleNamespace(id=21, status="active", total_days=7)
     completed = SimpleNamespace(id=20, status="completed", total_days=14)
-    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args, **_kwargs: object())
+    user = SimpleNamespace(
+        id=1,
+        profile=SimpleNamespace(
+            daily_time_slots={"DAY": "14:00"},
+            evening_slot_collected=False,
+        ),
+    )
+    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args, **_kwargs: user)
     monkeypatch.setattr(lifecycle, "get_current_plan", lambda *_args, **_kwargs: active)
     monkeypatch.setattr(
         lifecycle,
@@ -1153,6 +1231,7 @@ def test_deferred_interfaces_reserve_durable_source_receipts(monkeypatch):
         source_operation_id="coach:switch:1",
     )
     assert switch.applied is False
+    assert switch.code == "needs_evening_time"
     assert len(switch_db.added) == 1
     assert switch_db.added[0].plan_id == 21
     assert switch_db.added[0].operation == "switch_plan_format"
@@ -1248,7 +1327,14 @@ def test_deferred_interface_exact_replays_return_existing_reservations(monkeypat
         operation="prepare_continuation",
         result_status="MEDIUM",
     )
-    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args, **_kwargs: object())
+    user = SimpleNamespace(
+        id=1,
+        profile=SimpleNamespace(
+            daily_time_slots={"DAY": "14:00"},
+            evening_slot_collected=False,
+        ),
+    )
+    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args, **_kwargs: user)
     monkeypatch.setattr(lifecycle, "get_current_plan", lambda *_args, **_kwargs: active)
     monkeypatch.setattr(
         lifecycle,
@@ -1256,18 +1342,24 @@ def test_deferred_interface_exact_replays_return_existing_reservations(monkeypat
         lambda *_args, **_kwargs: switch_receipt,
     )
 
+    class _SwitchReplayDB:
+        def query(self, model):
+            if model is lifecycle.AIPlan:
+                return _OneQuery(active)
+            if model is lifecycle.PlanLifecycleOperation:
+                return _OneQuery(None)
+            raise AssertionError(f"unexpected model: {model}")
+
     switch = lifecycle.request_plan_format_switch(
-        object(),
+        _SwitchReplayDB(),
         user_id=1,
         target_plan_type="MEDIUM",
         source_operation_id="coach:switch:1",
     )
     assert switch.duplicate is True
     assert switch.applied is False
-    assert switch.details == {
-        "target_plan_type": "MEDIUM",
-        "current_disposition": "recorded_plan_current",
-    }
+    assert switch.code == "needs_evening_time"
+    assert switch.details["target_plan_type"] == "MEDIUM"
 
     class _CompletedDB:
         def query(self, _model):
@@ -1289,7 +1381,8 @@ def test_deferred_interface_exact_replays_return_existing_reservations(monkeypat
 
 
 def test_format_receipt_replays_recorded_plan_after_progression(monkeypatch):
-    recorded = SimpleNamespace(id=21, status="completed", total_days=7)
+    recorded = SimpleNamespace(id=21, status="abandoned", total_days=7)
+    replacement = SimpleNamespace(id=23, status="completed", total_days=14)
     current = SimpleNamespace(id=22, status="active", total_days=14)
     receipt = SimpleNamespace(
         user_id=1,
@@ -1299,10 +1392,32 @@ def test_format_receipt_replays_recorded_plan_after_progression(monkeypatch):
         result_status="MEDIUM",
     )
 
+    activation_receipt = SimpleNamespace(plan_id=23)
+
+    class _RowsQuery(_OneQuery):
+        def join(self, *_args):
+            return self
+
+        def order_by(self, *_args):
+            return self
+
+        def all(self):
+            return []
+
     class _DB:
-        def query(self, model):
-            assert model is lifecycle.AIPlan
-            return _OneQuery(recorded)
+        def __init__(self):
+            self.plan_queries = 0
+
+        def query(self, *models):
+            model = models[0]
+            if model is lifecycle.AIPlan:
+                self.plan_queries += 1
+                return _OneQuery(recorded if self.plan_queries == 1 else replacement)
+            if model is lifecycle.PlanLifecycleOperation:
+                return _OneQuery(activation_receipt)
+            if model is lifecycle.AIPlanStep.id:
+                return _RowsQuery(None)
+            raise AssertionError(f"unexpected model: {model}")
 
     monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args, **_kwargs: object())
     monkeypatch.setattr(lifecycle, "get_current_plan", lambda *_args, **_kwargs: current)
@@ -1315,8 +1430,8 @@ def test_format_receipt_replays_recorded_plan_after_progression(monkeypatch):
         source_operation_id="coach:switch:old-plan",
     )
 
-    assert replay.plan_id == 21
-    assert replay.status == "completed"
+    assert replay.plan_id == 23
+    assert replay.code == "superseded"
     assert replay.details["current_disposition"] == "another_plan_current"
 
 

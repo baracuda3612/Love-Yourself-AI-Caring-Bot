@@ -4,8 +4,14 @@ from contextlib import nullcontext
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app import api, lifecycle
+
+
+def test_time_slot_api_rejects_retired_morning_slot():
+    with pytest.raises(ValidationError):
+        api.TimeSlotsPayload(DAY="14:00", MORNING="09:30")
 
 
 class _DB:
@@ -54,7 +60,6 @@ def test_time_slot_api_reports_superseded_values_without_reconciliation(monkeypa
     with pytest.raises(HTTPException) as caught:
         api.set_user_time_slots(
             api.TimeSlotsPayload(
-                MORNING="09:00",
                 DAY="15:30",
                 EVENING="20:30",
             ),
@@ -67,8 +72,7 @@ def test_time_slot_api_reports_superseded_values_without_reconciliation(monkeypa
         "code": "superseded_time_change",
         "saved": False,
         "authoritative_values": {
-            "MORNING": "16:45",
-            "DAY": "16:45",
+                "DAY": "16:45",
             "EVENING": "16:45",
         },
     }
@@ -98,7 +102,7 @@ def test_paused_time_slot_api_reports_saved_but_deferred(monkeypatch):
     monkeypatch.setattr(api, "change_delivery_time", _deferred)
 
     outcome = api.set_user_time_slots(
-        api.TimeSlotsPayload(MORNING="09:00", DAY="14:00", EVENING="20:30"),
+        api.TimeSlotsPayload(DAY="14:00", EVENING="20:30"),
         user_id=1,
         idempotency_key="paused-1",
     )

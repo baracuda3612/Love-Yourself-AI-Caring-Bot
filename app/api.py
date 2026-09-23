@@ -5,7 +5,7 @@ from typing import Dict
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.config import settings
 from app.db import AIPlan, SessionLocal, User
@@ -84,16 +84,16 @@ DUR_LABELS_PULSE = {
 
 
 class TimeSlotsPayload(BaseModel):
-    MORNING: str
+    model_config = ConfigDict(extra="forbid")
+
     DAY: str
-    EVENING: str
+    EVENING: str | None = None
 
     def to_dict(self) -> Dict[str, str]:
-        return {
-            "MORNING": self.MORNING,
-            "DAY": self.DAY,
-            "EVENING": self.EVENING,
-        }
+        result = {"DAY": self.DAY}
+        if self.EVENING is not None:
+            result["EVENING"] = self.EVENING
+        return result
 
 
 @app.post("/user/time-slots")

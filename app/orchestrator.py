@@ -528,12 +528,36 @@ async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
     stm_history = await get_stm_history(user_id)
     current_mode = await get_fsm_state(user_id)
     temporal_context = await get_temporal_context(user_id)
+    pending_action = await session_memory.get_pending_action(user_id)
+
+    plan_type = None
+    evening_slot_collected = False
+    latest_plan_status = None
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.id == user_id).first()
+        if user is not None:
+            evening_slot_collected = bool(
+                user.profile and user.profile.evening_slot_collected
+            )
+            latest_plan = (
+                db.query(AIPlan)
+                .filter(AIPlan.user_id == user_id)
+                .order_by(AIPlan.cycle_number.desc(), AIPlan.id.desc())
+                .first()
+            )
+            if latest_plan is not None:
+                latest_plan_status = str(latest_plan.status)
+                plan_type = "MEDIUM" if int(latest_plan.total_days) == 14 else "SHORT"
 
     return {
         "message_text": message_text,
         "short_term_history": stm_history,
         "current_mode": current_mode,
         "temporal_context": temporal_context,
+        "plan_type": plan_type,
+        "evening_slot_collected": evening_slot_collected,
+        "latest_plan_status": latest_plan_status,
+        "pending_action": pending_action,
     }
 
 
@@ -553,16 +577,19 @@ def _build_tool_registry() -> Dict[str, Any]:
         pause_plan,
         record_evening_time,
         resume_plan,
+        switch_plan_format,
     )
     return {
         "create_followup_plan": lambda uid, args: create_followup_plan(
             uid,
-            args.get("plan_type", "SHORT"),
+            args["plan_type"],
             source_operation_id=args["_source_operation_id"],
         ),
         "record_evening_time":  lambda uid, args: record_evening_time(
             uid,
             args["hhmm"],
+            context=args["_evening_collection_context"],
+            pending_source_operation_id=args["_evening_collection_source_id"],
             source_operation_id=args["_source_operation_id"],
         ),
         "change_day_time":      lambda uid, args: change_day_time(
@@ -585,6 +612,11 @@ def _build_tool_registry() -> Dict[str, Any]:
         "cancel_plan":          lambda uid, args: cancel_plan(
             uid, source_operation_id=args["_source_operation_id"]
         ),
+        "switch_plan_format":   lambda uid, args: switch_plan_format(
+            uid,
+            args["plan_type"],
+            source_operation_id=args["_source_operation_id"],
+        ),
     }
 
 
@@ -598,6 +630,7 @@ _TOOL_REPLY_TEMPLATES: Dict[str, str] = {
     "pause_plan":           "⏸ План поставлено на паузу. Завдання не надходитимуть до відновлення.",
     "resume_plan":          "▶️ План відновлено. Майбутній розклад потребує узгодження.",
     "cancel_plan":          "🛑 Поточну серію вправ скасовано.",
+    "switch_plan_format":   "✅ Формат змінено, новий розклад узгоджено.",
 }
 
 
@@ -627,8 +660,16 @@ def _humanize_tool_error(tool_name: str, raw: str) -> str:
         return "Схоже, час введено неправильно. Напиши у форматі HH:MM, наприклад 09:30."
     if "only allowed from idle_onboarded" in r:
         return "Ця дія зараз недоступна — схоже, план уже є або щось пішло не так."
-    if "only allowed from" in r and "followup" in r or "create_followup" in tool_name:
-        return "Новий план можна запустити тільки після завершення поточного."
+    if "followup_requires_abandoned_plan" in r:
+        return "Новий план можна запустити тільки після скасування попереднього."
+    if "followup_activation_requires_no_active_plan" in r:
+        return "Спочатку потрібно завершити або скасувати поточний план."
+    if "requested_plan_type_already_current" in r:
+        return "Цей формат уже діє; обери інший формат для перемикання."
+    if "evening_time_requires_medium_plan" in r:
+        return "Вечірній час можна змінювати лише для 14-денного плану."
+    if "saved_day_time_missing" in r or "saved_day_time_invalid" in r:
+        return "Спочатку потрібно налаштувати коректний денний час."
     if "cancel_plan requires" in r:
         return "Скасувати можна тільки активний або призупинений план."
     if "pause_plan requires" in r:
@@ -662,6 +703,7 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
         "pause_plan",
         "resume_plan",
         "cancel_plan",
+        "switch_plan_format",
     }
     if tool_name in source_required_tools and not source_operation_id:
         logger.error(
@@ -671,6 +713,17 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
         )
         return "⚠️ Не вдалось виконати дію. Спробуй ще раз."
     tool_args["_source_operation_id"] = str(source_operation_id or "")
+
+    pending_action = None
+    if tool_name == "record_evening_time":
+        pending_action = await session_memory.get_pending_action(user_id)
+        if str(pending_action).startswith("collect_evening_time_for_medium:"):
+            tool_args["_evening_collection_context"] = "followup"
+        elif str(pending_action).startswith("collect_evening_time_for_switch:"):
+            tool_args["_evening_collection_context"] = "switch"
+        else:
+            return "⚠️ Вечірній час зараз не очікується. Спочатку обери 14 днів."
+        tool_args["_evening_collection_source_id"] = str(pending_action).split(":", 1)[1]
 
     registry = _build_tool_registry()
     handler = registry.get(tool_name)
@@ -705,42 +758,69 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
                 "Повтори цю саму дію."
             )
         if code == "superseded":
-            authoritative_time = result.get("day_time") or result.get(
-                "evening_time"
-            )
-            return (
-                "⚠️ Цей запит на зміну часу вже застарів. "
-                f"Актуальний час: {authoritative_time}."
-            )
+            if tool_name in {
+                "change_day_time", "change_evening_time", "record_evening_time"
+            }:
+                authoritative_time = result.get("day_time") or result.get(
+                    "evening_time"
+                )
+                if authoritative_time:
+                    return (
+                        "⚠️ Цей запит на зміну часу вже застарів. "
+                        f"Актуальний час: {authoritative_time}."
+                    )
+            return "⚠️ Цей запит уже застарів; поточний стан плану змінився."
         if code == "cancel_reconciliation_failed":
             return (
                 "⚠️ План скасовано, але очищення розкладу ще не завершене. "
+                "Повтори цю саму дію."
+            )
+        if code in {
+            "pause_reconciliation_failed",
+            "resume_reconciliation_failed",
+            "switch_reconciliation_failed",
+        }:
+            return (
+                "⚠️ Зміну збережено, але розклад ще не узгоджено. "
                 "Повтори цю саму дію."
             )
         return "⚠️ Дію збережено частково. Повтори цей самий запит."
 
     # needs_evening_time soft result from create_followup_plan
     if isinstance(result, dict) and result.get("status") == "needs_evening_time":
-        await session_memory.set_pending_action(
-            user_id,
-            f"collect_evening_time_for_medium:{source_operation_id}",
+        pending_kind = (
+            "collect_evening_time_for_switch"
+            if tool_name == "switch_plan_format"
+            else "collect_evening_time_for_medium"
         )
+        pending_key = f"{pending_kind}:{source_operation_id}"
+        await session_memory.set_pending_action(user_id, pending_key)
+        if await session_memory.get_pending_action(user_id) != pending_key:
+            return (
+                "⚠️ Запит збережено, але очікування вечірнього часу зараз "
+                "недоступне. Повтори вибір 14-денного формату пізніше."
+            )
         return "О котрій зручно отримувати вечірній момент? Напиши час у форматі 20:30"
 
     # After record_evening_time: if pending_action is collect_evening_time_for_medium,
     # deterministically create the MEDIUM plan — no second LLM round-trip.
     if tool_name == "record_evening_time" and result.get("status") == "ok":
-        pending = await session_memory.get_pending_action(user_id)
-        pending_prefix = "collect_evening_time_for_medium"
-        if pending == pending_prefix or str(pending).startswith(f"{pending_prefix}:"):
-            activation_source_id = (
-                str(pending).split(":", 1)[1]
-                if str(pending).startswith(f"{pending_prefix}:")
-                else f"{tool_args['_source_operation_id']}:followup"
-            )
+        pending = pending_action or await session_memory.get_pending_action(user_id)
+        followup_prefix = "collect_evening_time_for_medium"
+        switch_prefix = "collect_evening_time_for_switch"
+        if (
+            str(pending).startswith(f"{followup_prefix}:")
+            or str(pending).startswith(f"{switch_prefix}:")
+        ):
+            activation_source_id = str(pending).split(":", 1)[1]
             registry = _build_tool_registry()
             try:
-                activation = registry["create_followup_plan"](
+                cascade_tool = (
+                    "switch_plan_format"
+                    if str(pending).startswith(switch_prefix)
+                    else "create_followup_plan"
+                )
+                activation = registry[cascade_tool](
                     user_id,
                     {
                         "plan_type": "MEDIUM",
@@ -760,9 +840,9 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
                         "⚠️ Час збережено, але план не вдалось запустити. "
                         "Спробуй ще раз."
                     )
-                log_metric("plan_tool_executed", extra={"user_id": user_id, "tool": "create_followup_plan"})
+                log_metric("plan_tool_executed", extra={"user_id": user_id, "tool": cascade_tool})
                 await session_memory.clear_pending_action(user_id)  # only after success
-                return _TOOL_REPLY_TEMPLATES["create_followup_plan"]
+                return _TOOL_REPLY_TEMPLATES[cascade_tool]
             except Exception as exc:
                 logger.error("[TOOL] cascade create_followup_plan(MEDIUM) user=%s: %s", user_id, exc, exc_info=True)
                 # pending_action preserved — user can retry
@@ -782,6 +862,9 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
 
     if tool_name == "create_followup_plan" and result.get("recovered"):
         return "✅ Збережений план знайдено, його розклад узгоджено."
+
+    if result.get("disposition") == "replayed":
+        return "✅ Цю дію вже застосовано; актуальний стан підтверджено."
 
     template = _TOOL_REPLY_TEMPLATES.get(tool_name, "✅ Готово.")
     return template

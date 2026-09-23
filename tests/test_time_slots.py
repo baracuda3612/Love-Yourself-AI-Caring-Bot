@@ -4,6 +4,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
+
 os.environ.setdefault("BOT_TOKEN", "test-token")
 os.environ.setdefault(
     "DATABASE_URL",
@@ -109,3 +111,95 @@ def test_paused_plan_steps_are_updated_without_rescheduling_jobs():
     assert active_ids == []
     assert step.scheduled_for.hour == 15
     assert step.scheduled_for.minute == 30
+
+
+def test_resume_reanchors_remaining_days_without_replaying_delivered_work():
+    resumed_at = datetime(2026, 9, 4, 18, tzinfo=timezone.utc)  # Friday
+    delivered_at = datetime(2026, 9, 3, 14, tzinfo=timezone.utc)
+    delivered = SimpleNamespace(
+        id=20,
+        step_status="delivered",
+        order_in_day=0,
+        time_slot="DAY",
+        scheduled_for=delivered_at,
+        expires_at=delivered_at + timedelta(hours=10),
+    )
+    day_three_day = SimpleNamespace(
+        id=31,
+        step_status="pending",
+        order_in_day=0,
+        time_slot="DAY",
+        scheduled_for=datetime(2026, 9, 4, 14, tzinfo=timezone.utc),
+        expires_at=None,
+    )
+    day_three_evening = SimpleNamespace(
+        id=32,
+        step_status="pending",
+        order_in_day=1,
+        time_slot="EVENING",
+        scheduled_for=datetime(2026, 9, 4, 20, tzinfo=timezone.utc),
+        expires_at=None,
+    )
+    day_four = SimpleNamespace(
+        id=41,
+        step_status="pending",
+        order_in_day=0,
+        time_slot="DAY",
+        scheduled_for=datetime(2026, 9, 5, 14, tzinfo=timezone.utc),
+        expires_at=None,
+    )
+    plan = SimpleNamespace(
+        start_date=datetime(2026, 9, 1, tzinfo=timezone.utc),
+        days=[
+            SimpleNamespace(day_number=2, steps=[delivered]),
+            SimpleNamespace(day_number=3, steps=[day_three_day, day_three_evening]),
+            SimpleNamespace(day_number=4, steps=[day_four]),
+        ],
+    )
+    user = SimpleNamespace(
+        timezone="UTC",
+        profile=SimpleNamespace(
+            active_days=["MON", "TUE", "WED", "THU", "FRI"],
+            daily_time_slots={"DAY": "15:30", "EVENING": "20:30"},
+        ),
+    )
+
+    updated = time_slots.reanchor_pending_plan_steps(
+        user, plan, resumed_at=resumed_at
+    )
+
+    assert updated == [31, 32, 41]
+    assert delivered.scheduled_for == delivered_at
+    assert day_three_day.scheduled_for == datetime(2026, 9, 7, 15, 30, tzinfo=timezone.utc)
+    assert day_three_evening.scheduled_for == datetime(2026, 9, 7, 20, 30, tzinfo=timezone.utc)
+    assert day_four.scheduled_for == datetime(2026, 9, 8, 15, 30, tzinfo=timezone.utc)
+    assert day_three_day.expires_at == datetime(2026, 9, 7, 23, 59, 59, tzinfo=timezone.utc)
+
+
+def test_resume_invalid_slot_time_leaves_every_pending_step_unchanged():
+    original = datetime(2026, 9, 4, 14, tzinfo=timezone.utc)
+    first = SimpleNamespace(
+        id=31, step_status="pending", order_in_day=0,
+        time_slot="DAY", scheduled_for=original, expires_at=None,
+    )
+    second = SimpleNamespace(
+        id=32, step_status="pending", order_in_day=1,
+        time_slot="EVENING", scheduled_for=original, expires_at=None,
+    )
+    plan = SimpleNamespace(
+        start_date=original,
+        days=[SimpleNamespace(day_number=3, steps=[first, second])],
+    )
+    user = SimpleNamespace(
+        timezone="UTC",
+        profile=SimpleNamespace(
+            active_days=["MON", "TUE", "WED", "THU", "FRI"],
+            daily_time_slots={"DAY": "15:30", "EVENING": "24:00"},
+        ),
+    )
+
+    with pytest.raises(time_slots.TimeSlotError, match="invalid_time_range"):
+        time_slots.reanchor_pending_plan_steps(user, plan, resumed_at=original)
+
+    assert first.scheduled_for == original
+    assert second.scheduled_for == original

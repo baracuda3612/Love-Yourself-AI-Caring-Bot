@@ -755,10 +755,10 @@ def check_silent_users():
                 logger.error("[SILENT] user_id=%s", user.id, exc_info=True)
 
 
-def reconcile_expired_step_keyboards(
+def reconcile_terminal_step_keyboards(
     step_ids: list[int],
 ) -> SchedulerReconciliation:
-    """Retry keyboard removal until ``tg_message_id`` is cleared in PostgreSQL."""
+    """Retry terminal-step keyboard removal until PostgreSQL confirms it."""
     if not step_ids:
         return SchedulerReconciliation(attempted=0, succeeded=0)
     ordered_ids = tuple(dict.fromkeys(int(step_id) for step_id in step_ids))
@@ -770,7 +770,7 @@ def reconcile_expired_step_keyboards(
             .join(User, User.id == AIPlan.user_id)
             .filter(
                 AIPlanStep.id.in_(ordered_ids),
-                AIPlanStep.step_status == "expired",
+                AIPlanStep.step_status.in_(("expired", "canceled")),
             )
             .all()
         )
@@ -819,6 +819,13 @@ def reconcile_expired_step_keyboards(
         succeeded=len(succeeded_ids),
         failed_ids=tuple(failed_ids),
     )
+
+
+def reconcile_expired_step_keyboards(
+    step_ids: list[int],
+) -> SchedulerReconciliation:
+    """Compatibility alias for the terminal keyboard reconciler."""
+    return reconcile_terminal_step_keyboards(step_ids)
 
 
 def expire_overdue_steps() -> None:

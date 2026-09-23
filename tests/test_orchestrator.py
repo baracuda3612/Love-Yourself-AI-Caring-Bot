@@ -166,6 +166,39 @@ async def test_medium_evening_collection_preserves_activation_source(monkeypatch
 
 
 @pytest.mark.anyio
+async def test_evening_collection_does_not_promise_followup_when_pending_cache_fails(
+    monkeypatch,
+):
+    class MissingPendingMemory(PendingActionMemory):
+        async def set_pending_action(self, _user_id, _value):
+            return None
+
+    monkeypatch.setattr(orchestrator, "session_memory", MissingPendingMemory())
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "switch_plan_format": lambda *_args, **_kwargs: {
+                "status": "needs_evening_time"
+            }
+        },
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "switch_plan_format",
+            "arguments": {"plan_type": "MEDIUM"},
+            "call_id": "switch-7",
+        },
+    )
+
+    assert "недоступне" in response
+    assert "20:30" not in response
+
+
+@pytest.mark.anyio
 async def test_medium_cascade_reports_reconciliation_failure_and_keeps_retry_key(
     monkeypatch,
 ):
@@ -211,6 +244,43 @@ async def test_medium_cascade_reports_reconciliation_failure_and_keeps_retry_key
 
 
 @pytest.mark.anyio
+async def test_switch_evening_cascade_reuses_original_source_and_clears_pending(
+    monkeypatch,
+):
+    memory = PendingActionMemory("collect_evening_time_for_switch:switch-7")
+    captured = {}
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+
+    def switch(_user_id, args):
+        captured.update(args)
+        return {"status": "ok", "plan_id": 12, "plan_type": "MEDIUM"}
+
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "record_evening_time": lambda *_args, **_kwargs: {"status": "ok"},
+            "switch_plan_format": switch,
+        },
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "record_evening_time",
+            "arguments": {"hhmm": "20:30"},
+            "call_id": "evening-7",
+        },
+    )
+
+    assert "Формат змінено" in response
+    assert captured["_source_operation_id"] == "switch-7"
+    assert captured["plan_type"] == "MEDIUM"
+    assert memory.cleared is True
+
+
+@pytest.mark.anyio
 async def test_superseded_time_change_does_not_return_success_copy(monkeypatch):
     monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
@@ -239,6 +309,27 @@ async def test_superseded_time_change_does_not_return_success_copy(monkeypatch):
     assert response == (
         "⚠️ Цей запит на зміну часу вже застарів. Актуальний час: 16:45."
     )
+
+
+@pytest.mark.anyio
+async def test_superseded_plan_control_does_not_claim_current_time(monkeypatch):
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "resume_plan": lambda *_args, **_kwargs: {
+                "status": "error", "code": "superseded", "plan_status": "active"
+            }
+        },
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7, {"name": "resume_plan", "arguments": {}, "call_id": "resume-old"}
+    )
+
+    assert "застарів" in response
+    assert "None" not in response
 
 
 @pytest.mark.anyio
@@ -547,3 +638,16 @@ def test_auto_complete_rejects_multiple_current_plans(monkeypatch):
 
     with pytest.raises(LifecycleInvariantError, match="multiple current plans"):
         orchestrator._auto_complete_plan_if_needed(db, user)
+def test_followup_registry_requires_explicit_plan_type(monkeypatch):
+    monkeypatch.setattr(
+        "app.plan_runtime.tools.create_followup_plan",
+        lambda *_args, **_kwargs: pytest.fail("must reject before tool execution"),
+    )
+
+    registry = orchestrator._build_tool_registry()
+
+    with pytest.raises(KeyError, match="plan_type"):
+        registry["create_followup_plan"](
+            1,
+            {"_source_operation_id": "coach:followup:missing-type"},
+        )

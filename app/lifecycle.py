@@ -117,6 +117,7 @@ class LifecycleStatus:
     delivery_days_remaining: int = 0
     steps_total: int = 0
     steps_completed: int = 0
+    steps_delivered: int = 0
     steps_remaining: int = 0
     deliveries_remaining: int = 0
 
@@ -145,6 +146,7 @@ class LifecycleStatus:
             "days_remaining": self.delivery_days_remaining,
             "steps_total": self.steps_total,
             "steps_completed": self.steps_completed,
+            "steps_delivered": self.steps_delivered,
             "steps_remaining": self.steps_remaining,
             "deliveries_remaining": self.deliveries_remaining,
             "completion_rate": self.completion_rate,
@@ -233,7 +235,7 @@ def derive_current_mode(db: Session, user_id: int) -> CurrentMode:
 
 def read_lifecycle_status(db: Session, user_id: int) -> LifecycleStatus:
     """Re-read the persisted aggregate and derive truthful delivery facts."""
-    _lock_user(db, user_id)
+    user = _lock_user(db, user_id)
     plan = get_current_plan(db, user_id, lock=True)
     progress = (
         db.query(OnboardingProgress)
@@ -256,6 +258,7 @@ def read_lifecycle_status(db: Session, user_id: int) -> LifecycleStatus:
     )
     steps_total = base_steps.filter(AIPlanStep.step_status != "canceled").count()
     steps_completed = base_steps.filter(AIPlanStep.step_status == "completed").count()
+    steps_delivered = base_steps.filter(AIPlanStep.step_status == "delivered").count()
     steps_remaining = base_steps.filter(
         AIPlanStep.step_status.in_(("pending", "delivered"))
     ).count()
@@ -307,6 +310,7 @@ def read_lifecycle_status(db: Session, user_id: int) -> LifecycleStatus:
         delivery_days_remaining=int(delivery_days_remaining),
         steps_total=int(steps_total),
         steps_completed=int(steps_completed),
+        steps_delivered=int(steps_delivered),
         steps_remaining=int(steps_remaining),
         deliveries_remaining=int(deliveries_remaining),
     )
@@ -556,27 +560,18 @@ def activate_plan(
     evening_time: str | None,
     source_operation_id: str,
     require_plan_history: bool = False,
+    required_previous_status: str | None = None,
 ) -> LifecycleResult:
     """Create one plan under the lifecycle lock and expose schedule work."""
+    from app.time_slots import TimeSlotError, canonicalize_hhmm
+
+    normalized_plan_type = str(plan_type).strip().upper()
+    if normalized_plan_type not in {"SHORT", "MEDIUM"}:
+        raise LifecycleTransitionError("unsupported_plan_type")
     user = _lock_user(db, user_id)
     profile = getattr(user, "profile", None)
-    time_slots: dict[str, str] = (
-        dict(profile.daily_time_slots or {}) if profile is not None else {}
-    )
-    resolved_day_time = day_time or time_slots.get("DAY", "14:00")
-    resolved_evening_time = (
-        evening_time
-        if plan_type == "MEDIUM" and evening_time is not None
-        else (
-            time_slots.get("EVENING")
-            if plan_type == "MEDIUM"
-            and profile is not None
-            and profile.evening_slot_collected
-            else None
-        )
-    )
     receipt_status = _activation_receipt_status(
-        plan_type,
+        normalized_plan_type,
         day_time,
         evening_time,
     )
@@ -588,6 +583,15 @@ def activate_plan(
             receipt=existing,
             receipt_status=receipt_status,
         )
+    try:
+        resolved_day_time = canonicalize_hhmm(day_time)
+        resolved_evening_time = (
+            canonicalize_hhmm(evening_time)
+            if normalized_plan_type == "MEDIUM" and evening_time is not None
+            else None
+        )
+    except TimeSlotError as exc:
+        raise LifecycleTransitionError(str(exc)) from exc
     if existing is None and require_plan_history:
         if derive_current_mode(db, user_id) is not CurrentMode.NO_ACTIVE_PLAN:
             raise LifecycleTransitionError(
@@ -595,12 +599,24 @@ def activate_plan(
             )
         if db.query(AIPlan.id).filter(AIPlan.user_id == user_id).first() is None:
             raise LifecycleTransitionError("followup_activation_requires_plan_history")
+        if required_previous_status is not None:
+            latest = (
+                db.query(AIPlan)
+                .filter(AIPlan.user_id == user_id)
+                .order_by(AIPlan.cycle_number.desc(), AIPlan.id.desc())
+                .with_for_update()
+                .first()
+            )
+            if latest is None or str(latest.status) != required_previous_status:
+                raise LifecycleTransitionError(
+                    f"followup_requires_{required_previous_status}_plan"
+                )
     from app.plan_drafts.service import create_plan_for_lifecycle
 
     activation = create_plan_for_lifecycle(
         db,
         user_id=user_id,
-        plan_type=plan_type,
+        plan_type=normalized_plan_type,
         day_time=resolved_day_time,
         evening_time=resolved_evening_time,
         source_operation_id=source_operation_id,
@@ -624,12 +640,27 @@ def recover_current_plan_activation(
     *,
     user_id: int,
     plan_type: str,
+    required_previous_status: str | None = None,
 ) -> LifecycleResult:
     """Recover the recorded current activation independently of a Coach call id."""
     _lock_user(db, user_id)
     plan = get_current_plan(db, user_id, lock=True)
     if plan is None or _plan_type(plan) != plan_type:
         raise LifecycleTransitionError("recoverable_activation_missing")
+    if required_previous_status is not None:
+        previous = (
+            db.query(AIPlan)
+            .filter(
+                AIPlan.user_id == user_id,
+                AIPlan.cycle_number < plan.cycle_number,
+            )
+            .order_by(AIPlan.cycle_number.desc(), AIPlan.id.desc())
+            .first()
+        )
+        if previous is None or str(previous.status) != required_previous_status:
+            raise LifecycleTransitionError(
+                f"recoverable_activation_requires_{required_previous_status}_predecessor"
+            )
     receipt = (
         db.query(PlanLifecycleOperation)
         .filter(
@@ -642,6 +673,11 @@ def recover_current_plan_activation(
     )
     if receipt is None:
         raise LifecycleTransitionError("recoverable_activation_receipt_missing")
+    if (
+        required_previous_status == "abandoned"
+        and str(receipt.source_operation_id).startswith("switch-activate:")
+    ):
+        raise LifecycleTransitionError("recoverable_followup_activation_missing")
     return LifecycleResult(
         user_id=user_id,
         plan_id=plan.id,
@@ -667,24 +703,41 @@ def transition_current_plan(
     user_id: int,
     operation: str,
     source_operation_id: str,
+    occurred_at: datetime | None = None,
 ) -> LifecycleResult:
-    """Lock the user/current plan and apply pause or resume exactly once."""
+    """Apply pause/resume and return one exact post-commit schedule proof."""
     if operation not in _PLAN_TRANSITIONS:
         raise LifecycleTransitionError(f"unsupported plan operation: {operation}")
-    _lock_user(db, user_id)
+    user = _lock_user(db, user_id)
     existing = find_lifecycle_operation(db, user_id, source_operation_id)
     if existing:
         duplicate = _duplicate_operation_result(
             existing,
             expected_operation=operation,
         )
+        recorded_plan = (
+            db.query(AIPlan)
+            .filter(AIPlan.id == existing.plan_id, AIPlan.user_id == user_id)
+            .populate_existing()
+            .first()
+        )
+        if recorded_plan is None:
+            raise LifecycleInvariantError("plan_transition_receipt_plan_missing")
+        still_authoritative = str(recorded_plan.status) == duplicate.status
         return replace(
             duplicate,
-            code=f"{operation}_schedule_semantics_deferred_to_wp_02_3",
+            code="replayed" if still_authoritative else "superseded",
+            applied=still_authoritative,
+            plan_type=_plan_type(recorded_plan),
             effects=(
                 ExternalEffect(
-                    kind=f"{operation}_schedule_reconciliation",
-                    state=ExternalEffectState.DEFERRED,
+                    kind="reconcile_plan_schedule",
+                    target_ids=(int(recorded_plan.id),),
+                    state=(
+                        ExternalEffectState.PENDING
+                        if still_authoritative
+                        else ExternalEffectState.NOT_REQUIRED
+                    ),
                 ),
             ),
         )
@@ -696,6 +749,21 @@ def transition_current_plan(
     current = str(plan.status)
     if current not in allowed:
         raise LifecycleTransitionError(f"{operation} requires {sorted(allowed)}, got {current}")
+
+    updated_step_ids: tuple[int, ...] = ()
+    if operation == "resume":
+        from app.time_slots import TimeSlotError, reanchor_pending_plan_steps
+
+        try:
+            updated_step_ids = tuple(
+                reanchor_pending_plan_steps(
+                    user,
+                    plan,
+                    resumed_at=occurred_at,
+                )
+            )
+        except TimeSlotError as exc:
+            raise LifecycleTransitionError(str(exc)) from exc
 
     plan.status = target
     plan.version = int(plan.version or 0) + 1
@@ -713,14 +781,16 @@ def transition_current_plan(
         plan_id=plan.id,
         status=target,
         operation=operation,
-        code=f"{operation}_schedule_semantics_deferred_to_wp_02_3",
+        code="applied",
         plan_type=_plan_type(plan),
         effects=(
             ExternalEffect(
-                kind=f"{operation}_schedule_reconciliation",
-                state=ExternalEffectState.DEFERRED,
+                kind="reconcile_plan_schedule",
+                target_ids=(int(plan.id),),
+                state=ExternalEffectState.PENDING,
             ),
         ),
+        details={"updated_step_ids": updated_step_ids},
     )
 
 
@@ -760,6 +830,20 @@ def abandon_current_plan(
                 .all()
             )
         )
+        keyboard_ids = tuple(
+            step_id
+            for (step_id,) in (
+                db.query(AIPlanStep.id)
+                .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+                .filter(
+                    AIPlanDay.plan_id == existing.plan_id,
+                    AIPlanStep.step_status == "canceled",
+                    AIPlanStep.tg_message_id.isnot(None),
+                )
+                .order_by(AIPlanStep.id)
+                .all()
+            )
+        )
         return (
             replace(
                 duplicate,
@@ -771,6 +855,15 @@ def abandon_current_plan(
                         state=(
                             ExternalEffectState.PENDING
                             if canceled_ids
+                            else ExternalEffectState.NOT_REQUIRED
+                        ),
+                    ),
+                    ExternalEffect(
+                        kind="remove_step_keyboards",
+                        target_ids=keyboard_ids,
+                        state=(
+                            ExternalEffectState.PENDING
+                            if keyboard_ids
                             else ExternalEffectState.NOT_REQUIRED
                         ),
                     ),
@@ -825,6 +918,17 @@ def abandon_current_plan(
                     state=(
                         ExternalEffectState.PENDING
                         if open_steps
+                        else ExternalEffectState.NOT_REQUIRED
+                    ),
+                ),
+                ExternalEffect(
+                    kind="remove_step_keyboards",
+                    target_ids=tuple(
+                        step.id for step in open_steps if step.tg_message_id
+                    ),
+                    state=(
+                        ExternalEffectState.PENDING
+                        if any(step.tg_message_id for step in open_steps)
                         else ExternalEffectState.NOT_REQUIRED
                     ),
                 ),
@@ -1161,7 +1265,72 @@ def _lifecycle_context_plan(db: Session, user_id: int) -> AIPlan:
     )
     if latest is None:
         raise LifecycleTransitionError("lifecycle_context_missing")
+    if str(latest.status) != "abandoned":
+        raise LifecycleTransitionError("runtime_control_requires_current_or_abandoned_plan")
     return latest
+
+
+def _followup_evening_source_id(source_operation_id: str) -> str:
+    if not source_operation_id or len(source_operation_id) > 160:
+        raise LifecycleTransitionError("invalid_source_operation_id")
+    digest = hashlib.sha256(source_operation_id.encode()).hexdigest()[:32]
+    return f"followup-evening:{digest}"
+
+
+def prepare_followup_evening_collection(
+    db: Session,
+    *,
+    user_id: int,
+    source_operation_id: str,
+) -> LifecycleResult:
+    """Reserve a MEDIUM follow-up request before collecting its first evening time."""
+    from app.time_slots import TimeSlotError, canonicalize_hhmm
+
+    receipt_source = _followup_evening_source_id(source_operation_id)
+    user = _lock_user(db, user_id)
+    current = get_current_plan(db, user_id, lock=True)
+    if current is not None:
+        raise LifecycleTransitionError("followup_activation_requires_no_active_plan")
+    plan = _lifecycle_context_plan(db, user_id)
+    if str(plan.status) != "abandoned":
+        raise LifecycleTransitionError("followup_requires_abandoned_plan")
+    profile = user.profile
+    if profile is None or not isinstance(profile.daily_time_slots, dict):
+        raise LifecycleTransitionError("saved_day_time_missing")
+    try:
+        canonicalize_hhmm(profile.daily_time_slots.get("DAY"))
+    except TimeSlotError as exc:
+        raise LifecycleTransitionError("saved_day_time_invalid") from exc
+    if profile.evening_slot_collected:
+        raise LifecycleTransitionError("evening_time_already_collected")
+    existing = find_lifecycle_operation(db, user_id, receipt_source)
+    if existing is not None:
+        _duplicate_operation_result(
+            existing,
+            expected_operation="prepare_followup_evening",
+            expected_plan_id=plan.id,
+            expected_result_status="MEDIUM",
+        )
+    else:
+        record_lifecycle_operation(
+            db,
+            user_id=user_id,
+            plan_id=plan.id,
+            source_operation_id=receipt_source,
+            operation="prepare_followup_evening",
+            result_status="MEDIUM",
+        )
+        db.flush()
+    return LifecycleResult(
+        user_id=user_id,
+        plan_id=plan.id,
+        status="abandoned",
+        operation="prepare_followup_evening",
+        duplicate=existing is not None,
+        code="needs_evening_time",
+        applied=False,
+        plan_type="MEDIUM",
+    )
 
 
 def change_delivery_time(
@@ -1176,7 +1345,7 @@ def change_delivery_time(
     from app.time_slots import TimeSlotError, canonicalize_hhmm
 
     normalized_slot = str(slot).strip().upper()
-    if normalized_slot not in {"MORNING", "DAY", "EVENING"}:
+    if normalized_slot not in {"DAY", "EVENING"}:
         raise LifecycleTransitionError("unsupported_delivery_slot")
     try:
         canonical_hhmm = canonicalize_hhmm(hhmm)
@@ -1233,6 +1402,11 @@ def change_delivery_time(
         )
 
     context_plan = _lifecycle_context_plan(db, user_id)
+    if normalized_slot == "EVENING":
+        if _plan_type(context_plan) != "MEDIUM":
+            raise LifecycleTransitionError("evening_time_requires_medium_plan")
+        if not (user.profile and user.profile.evening_slot_collected):
+            raise LifecycleTransitionError("evening_time_not_collected")
     from app.time_slots import update_user_time_slots
 
     try:
@@ -1287,23 +1461,54 @@ def record_evening_time_preference(
     *,
     user_id: int,
     hhmm: str,
+    context: str,
+    pending_source_operation_id: str,
     source_operation_id: str,
 ) -> LifecycleResult:
     """Idempotently persist the collected MEDIUM-plan evening preference."""
     from app.time_slots import TimeSlotError, canonicalize_hhmm
 
-    operation = "record_evening_time"
+    if context not in {"followup", "switch"}:
+        raise LifecycleTransitionError("invalid_evening_collection_context")
+    if not pending_source_operation_id or len(pending_source_operation_id) > 160:
+        raise LifecycleTransitionError("invalid_evening_collection_source")
+    operation = f"record_evening_time_{context}"
     try:
         canonical_hhmm = canonicalize_hhmm(hhmm)
     except TimeSlotError as exc:
         raise LifecycleTransitionError(str(exc)) from exc
     user = _lock_user(db, user_id)
+    pending_receipt = find_lifecycle_operation(
+        db,
+        user_id,
+        (
+            _followup_evening_source_id(pending_source_operation_id)
+            if context == "followup"
+            else pending_source_operation_id
+        ),
+    )
+    if (
+        pending_receipt is None
+        or pending_receipt.operation
+        != (
+            "prepare_followup_evening"
+            if context == "followup"
+            else "switch_plan_format"
+        )
+        or pending_receipt.result_status != "MEDIUM"
+    ):
+        raise LifecycleTransitionError("evening_collection_intent_missing")
+    material = (
+        f"{context}|{pending_source_operation_id}|{canonical_hhmm}"
+    )
+    receipt_status = "e1:" + hashlib.sha256(material.encode()).hexdigest()[:20]
     existing = find_lifecycle_operation(db, user_id, source_operation_id)
     if existing is not None:
         duplicate = _duplicate_operation_result(
             existing,
             expected_operation=operation,
-            expected_result_status=canonical_hhmm,
+            expected_plan_id=pending_receipt.plan_id,
+            expected_result_status=receipt_status,
         )
         from app.time_slots import resolve_daily_time_slots
 
@@ -1321,7 +1526,23 @@ def record_evening_time_preference(
             },
         )
 
-    context_plan = _lifecycle_context_plan(db, user_id)
+    current = get_current_plan(db, user_id, lock=True)
+    if context == "followup":
+        if current is not None:
+            raise LifecycleTransitionError("evening_collection_requires_no_current_plan")
+        context_plan = _lifecycle_context_plan(db, user_id)
+        if str(context_plan.status) != "abandoned":
+            raise LifecycleTransitionError("followup_requires_abandoned_plan")
+    else:
+        if current is None:
+            raise LifecycleTransitionError("switch_evening_collection_requires_current_plan")
+        if _plan_type(current) != "SHORT":
+            raise LifecycleTransitionError("switch_evening_collection_requires_short_plan")
+        context_plan = current
+    if pending_receipt.plan_id != context_plan.id:
+        raise LifecycleTransitionError("evening_collection_context_superseded")
+    if user.profile and user.profile.evening_slot_collected:
+        raise LifecycleTransitionError("evening_time_already_collected")
     from app.time_slots import update_user_time_slot_preferences
 
     try:
@@ -1337,7 +1558,7 @@ def record_evening_time_preference(
         plan_id=context_plan.id,
         source_operation_id=source_operation_id,
         operation=operation,
-        result_status=canonical_hhmm,
+        result_status=receipt_status,
     )
     db.flush()
     return LifecycleResult(
@@ -1346,7 +1567,306 @@ def record_evening_time_preference(
         status=canonical_hhmm,
         operation=operation,
         plan_type=_plan_type(context_plan),
-        details={"value": canonical_hhmm, "collected": True},
+        details={"value": canonical_hhmm, "collected": True, "context": context},
+    )
+
+
+def _switch_activation_source_id(source_operation_id: str) -> str:
+    digest = hashlib.sha256(source_operation_id.encode()).hexdigest()[:32]
+    return f"switch-activate:{digest}"
+
+
+def _plan_terminal_effects(
+    db: Session,
+    plan_id: int,
+) -> tuple[ExternalEffect, ExternalEffect]:
+    rows = (
+        db.query(AIPlanStep.id, AIPlanStep.tg_message_id)
+        .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+        .filter(
+            AIPlanDay.plan_id == plan_id,
+            AIPlanStep.step_status == "canceled",
+        )
+        .order_by(AIPlanStep.id)
+        .all()
+    )
+    step_ids = tuple(int(step_id) for step_id, _ in rows)
+    keyboard_ids = tuple(
+        int(step_id) for step_id, message_id in rows if message_id is not None
+    )
+    return (
+        ExternalEffect(
+            kind="cancel_step_jobs",
+            target_ids=step_ids,
+            state=(
+                ExternalEffectState.PENDING
+                if step_ids
+                else ExternalEffectState.NOT_REQUIRED
+            ),
+        ),
+        ExternalEffect(
+            kind="remove_step_keyboards",
+            target_ids=keyboard_ids,
+            state=(
+                ExternalEffectState.PENDING
+                if keyboard_ids
+                else ExternalEffectState.NOT_REQUIRED
+            ),
+        ),
+    )
+
+
+def switch_plan_format(
+    db: Session,
+    *,
+    user_id: int,
+    target_plan_type: str,
+    source_operation_id: str,
+    occurred_at: datetime | None = None,
+) -> LifecycleResult:
+    """Atomically replace the current plan with the requested other format."""
+    normalized_target = str(target_plan_type).strip().upper()
+    if normalized_target not in {"SHORT", "MEDIUM"}:
+        raise LifecycleTransitionError("unsupported_plan_type")
+    if not source_operation_id or len(source_operation_id) > 160:
+        raise LifecycleTransitionError("invalid_source_operation_id")
+    user = _lock_user(db, user_id)
+    existing = find_lifecycle_operation(db, user_id, source_operation_id)
+    legacy_deferred_receipt = False
+    if existing is not None:
+        duplicate = _duplicate_operation_result(
+            existing,
+            expected_operation="switch_plan_format",
+            expected_result_status=normalized_target,
+        )
+        source = (
+            db.query(AIPlan)
+            .filter(AIPlan.id == existing.plan_id, AIPlan.user_id == user_id)
+            .populate_existing()
+            .first()
+        )
+        if source is None:
+            raise LifecycleInvariantError("format_receipt_plan_missing")
+        activation_receipt = (
+            db.query(PlanLifecycleOperation)
+            .filter(
+                PlanLifecycleOperation.user_id == user_id,
+                PlanLifecycleOperation.source_operation_id
+                == _switch_activation_source_id(source_operation_id),
+                PlanLifecycleOperation.operation == "activate",
+            )
+            .first()
+        )
+        if activation_receipt is not None:
+            replacement = (
+                db.query(AIPlan)
+                .filter(
+                    AIPlan.id == activation_receipt.plan_id,
+                    AIPlan.user_id == user_id,
+                )
+                .populate_existing()
+                .first()
+            )
+            if replacement is None:
+                raise LifecycleInvariantError("format_switch_replacement_missing")
+            current = get_current_plan(db, user_id, lock=True)
+            still_authoritative = (
+                current is not None
+                and current.id == replacement.id
+                and str(current.status) == "active"
+            )
+            cleanup_effects = _plan_terminal_effects(db, source.id)
+            return replace(
+                duplicate,
+                plan_id=replacement.id,
+                status="active",
+                code="replayed" if still_authoritative else "superseded",
+                applied=still_authoritative,
+                plan_type=_plan_type(replacement),
+                effects=(
+                    *cleanup_effects,
+                    ExternalEffect(
+                        kind="reconcile_plan_schedule",
+                        target_ids=(int(source.id),),
+                    ),
+                    ExternalEffect(
+                        kind="reconcile_plan_schedule",
+                        target_ids=(int(replacement.id),),
+                        state=(
+                            ExternalEffectState.PENDING
+                            if still_authoritative
+                            else ExternalEffectState.NOT_REQUIRED
+                        ),
+                    ),
+                ),
+                details={
+                    "source_plan_id": int(source.id),
+                    "target_plan_type": normalized_target,
+                    "current_disposition": (
+                        "replacement_current"
+                        if still_authoritative
+                        else "another_plan_current"
+                        if current is not None
+                        else "no_current_plan"
+                    ),
+                },
+            )
+        legacy_deferred_receipt = True
+        plan = source
+    else:
+        plan = get_current_plan(db, user_id, lock=True)
+    if plan is None:
+        raise LifecycleTransitionError("current_plan_missing")
+    if legacy_deferred_receipt:
+        current = get_current_plan(db, user_id, lock=True)
+        if current is None or current.id != plan.id:
+            raise LifecycleTransitionError("deferred_switch_source_no_longer_current")
+    source_plan_type = _plan_type(plan)
+    if source_plan_type == normalized_target:
+        raise LifecycleTransitionError("requested_plan_type_already_current")
+    profile = getattr(user, "profile", None)
+    raw_slots = dict(profile.daily_time_slots or {}) if profile is not None else {}
+    day_time = raw_slots.get("DAY")
+    if day_time is None:
+        raise LifecycleTransitionError("saved_day_time_missing")
+    from app.time_slots import TimeSlotError, canonicalize_hhmm
+
+    try:
+        day_time = canonicalize_hhmm(day_time)
+    except TimeSlotError as exc:
+        raise LifecycleTransitionError("saved_day_time_invalid") from exc
+    evening_time: str | None = None
+    if normalized_target == "MEDIUM":
+        if not (profile and profile.evening_slot_collected):
+            if not legacy_deferred_receipt:
+                record_lifecycle_operation(
+                    db,
+                    user_id=user_id,
+                    plan_id=plan.id,
+                    source_operation_id=source_operation_id,
+                    operation="switch_plan_format",
+                    result_status=normalized_target,
+                )
+                db.flush()
+            return LifecycleResult(
+                user_id=user_id,
+                plan_id=plan.id,
+                status=str(plan.status),
+                operation="switch_plan_format",
+                duplicate=legacy_deferred_receipt,
+                code="needs_evening_time",
+                applied=False,
+                plan_type=source_plan_type,
+                details={
+                    "source_plan_id": int(plan.id),
+                    "target_plan_type": normalized_target,
+                },
+            )
+        evening_time = raw_slots.get("EVENING")
+        if evening_time is None:
+            raise LifecycleTransitionError("saved_evening_time_missing")
+        try:
+            evening_time = canonicalize_hhmm(evening_time)
+        except TimeSlotError as exc:
+            raise LifecycleTransitionError("saved_evening_time_invalid") from exc
+
+    now = occurred_at or datetime.now(timezone.utc)
+    open_steps = (
+        db.query(AIPlanStep)
+        .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+        .filter(
+            AIPlanDay.plan_id == plan.id,
+            AIPlanStep.step_status.in_(("pending", "delivered")),
+        )
+        .populate_existing()
+        .with_for_update()
+        .all()
+    )
+    for step in open_steps:
+        step.step_status = "canceled"
+        step.terminal_at = now
+        step.version = max(0, int(step.version or 0)) + 1
+    plan.status = "abandoned"
+    plan.abandoned_at = now
+    plan.version = int(plan.version or 0) + 1
+    db.flush()
+
+    from app.plan_drafts.service import create_plan_for_lifecycle
+
+    activation_source = _switch_activation_source_id(source_operation_id)
+    receipt_status = _activation_receipt_status(
+        normalized_target,
+        day_time,
+        evening_time,
+    )
+    activation = create_plan_for_lifecycle(
+        db,
+        user_id=user_id,
+        plan_type=normalized_target,
+        day_time=day_time,
+        evening_time=evening_time,
+        source_operation_id=activation_source,
+        activation_receipt_status=receipt_status,
+    )
+    replacement = activation.plan
+    if not legacy_deferred_receipt:
+        record_lifecycle_operation(
+            db,
+            user_id=user_id,
+            plan_id=plan.id,
+            source_operation_id=source_operation_id,
+            operation="switch_plan_format",
+            result_status=normalized_target,
+        )
+    db.flush()
+    cleanup_effects = (
+        ExternalEffect(
+            kind="cancel_step_jobs",
+            target_ids=tuple(int(step.id) for step in open_steps),
+            state=(
+                ExternalEffectState.PENDING
+                if open_steps
+                else ExternalEffectState.NOT_REQUIRED
+            ),
+        ),
+        ExternalEffect(
+            kind="remove_step_keyboards",
+            target_ids=tuple(
+                int(step.id) for step in open_steps if step.tg_message_id
+            ),
+            state=(
+                ExternalEffectState.PENDING
+                if any(step.tg_message_id for step in open_steps)
+                else ExternalEffectState.NOT_REQUIRED
+            ),
+        ),
+    )
+    return LifecycleResult(
+        user_id=user_id,
+        plan_id=replacement.id,
+        status="active",
+        operation="switch_plan_format",
+        code="applied",
+        applied=True,
+        plan_type=_plan_type(replacement),
+        effects=(
+            *cleanup_effects,
+            ExternalEffect(
+                kind="reconcile_plan_schedule",
+                target_ids=(int(plan.id),),
+            ),
+            ExternalEffect(
+                kind="reconcile_plan_schedule",
+                target_ids=(int(replacement.id),),
+                state=ExternalEffectState.PENDING,
+            ),
+        ),
+        details={
+            "source_plan_id": int(plan.id),
+            "source_plan_type": source_plan_type,
+            "target_plan_type": normalized_target,
+            "total_days": int(replacement.total_days),
+        },
     )
 
 
@@ -1357,70 +1877,12 @@ def request_plan_format_switch(
     target_plan_type: str,
     source_operation_id: str,
 ) -> LifecycleResult:
-    """Stable WP-02.3 interface; no format mutation is implemented here."""
-    if target_plan_type not in {"SHORT", "MEDIUM"}:
-        raise LifecycleTransitionError("unsupported_plan_type")
-    if not source_operation_id or len(source_operation_id) > 160:
-        raise LifecycleTransitionError("invalid_source_operation_id")
-    _lock_user(db, user_id)
-    existing = find_lifecycle_operation(db, user_id, source_operation_id)
-    if existing is not None:
-        duplicate = _duplicate_operation_result(
-            existing,
-            expected_operation="switch_plan_format",
-            expected_result_status=target_plan_type,
-        )
-        current = get_current_plan(db, user_id, lock=True)
-        plan = (
-            current
-            if current is not None and current.id == existing.plan_id
-            else (
-                db.query(AIPlan)
-                .filter(AIPlan.id == existing.plan_id, AIPlan.user_id == user_id)
-                .populate_existing()
-                .first()
-            )
-        )
-        if plan is None:
-            raise LifecycleInvariantError("format_receipt_plan_missing")
-        return replace(
-            duplicate,
-            status=str(plan.status),
-            code="deferred_to_wp_02_3",
-            applied=False,
-            plan_type=_plan_type(plan),
-            details={
-                "target_plan_type": target_plan_type,
-                "current_disposition": (
-                    "recorded_plan_current"
-                    if current is not None and current.id == plan.id
-                    else "another_plan_current"
-                    if current is not None
-                    else "no_current_plan"
-                ),
-            },
-        )
-    plan = get_current_plan(db, user_id, lock=True)
-    if plan is None:
-        raise LifecycleTransitionError("current_plan_missing")
-    record_lifecycle_operation(
+    """Compatibility name for the now-implemented atomic switch operation."""
+    return switch_plan_format(
         db,
         user_id=user_id,
-        plan_id=plan.id,
+        target_plan_type=target_plan_type,
         source_operation_id=source_operation_id,
-        operation="switch_plan_format",
-        result_status=target_plan_type,
-    )
-    db.flush()
-    return LifecycleResult(
-        user_id=user_id,
-        plan_id=plan.id,
-        status=str(plan.status),
-        operation="switch_plan_format",
-        code="deferred_to_wp_02_3",
-        applied=False,
-        plan_type=_plan_type(plan),
-        details={"target_plan_type": target_plan_type},
     )
 
 

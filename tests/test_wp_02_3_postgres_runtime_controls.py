@@ -1,0 +1,238 @@
+"""Opt-in disposable PostgreSQL outcome rehearsal for WP-02.3.
+
+Run with WP02_3_POSTGRES_REHEARSAL=1 against compose.test.yml after Alembic
+upgrade. Every test uses one outer transaction and rolls back its seed rows.
+"""
+
+from __future__ import annotations
+
+import os
+from datetime import datetime, timedelta, timezone
+
+import pytest
+from sqlalchemy import create_engine, func
+from sqlalchemy.orm import Session
+
+from app import lifecycle
+from app.db import (
+    AIPlan,
+    AIPlanDay,
+    AIPlanStep,
+    ContentLibrary,
+    PlanLifecycleOperation,
+    User,
+    UserProfile,
+)
+from app.plan_drafts.plan_builder_v5 import get_default_builder
+
+
+pytestmark = pytest.mark.skipif(
+    os.environ.get("WP02_3_POSTGRES_REHEARSAL") != "1",
+    reason="requires the explicitly selected disposable PostgreSQL rehearsal",
+)
+
+_TEST_URL = (
+    "postgresql+psycopg2://love_yourself_test:love_yourself_test@"
+    "127.0.0.1:55432/love_yourself_test"
+)
+
+
+@pytest.fixture
+def pg_session():
+    engine = create_engine(_TEST_URL)
+    connection = engine.connect()
+    transaction = connection.begin()
+    db = Session(bind=connection)
+    try:
+        yield db
+    finally:
+        db.close()
+        transaction.rollback()
+        connection.close()
+        engine.dispose()
+
+
+def _seed_current_plan(db: Session, *, medium: bool = False):
+    start = datetime(2026, 9, 1, 8, tzinfo=timezone.utc)
+    user = User(tg_id=990230000 + (1 if medium else 0), is_active=True, timezone="UTC")
+    db.add(user)
+    db.flush()
+    profile = UserProfile(
+        user_id=user.id,
+        daily_time_slots={"DAY": "14:00", "EVENING": "20:30"},
+        evening_slot_collected=medium,
+        active_days=["MON", "TUE", "WED", "THU", "FRI"],
+    )
+    db.add(profile)
+    plan = AIPlan(
+        user_id=user.id,
+        title="WP-02.3 disposable source",
+        status="active",
+        cycle_number=1,
+        activated_at=start,
+        start_date=start,
+        version=1,
+        duration="MEDIUM" if medium else "SHORT",
+        total_days=14 if medium else 7,
+        preferred_time_slots=["DAY", "EVENING"] if medium else ["DAY"],
+    )
+    db.add(plan)
+    db.flush()
+    steps = []
+    for day_number in (1, 2, 3):
+        day = AIPlanDay(plan_id=plan.id, day_number=day_number)
+        db.add(day)
+        db.flush()
+        for order, slot in enumerate(("DAY", "EVENING") if medium else ("DAY",)):
+            scheduled = start + timedelta(days=day_number, hours=6 if slot == "DAY" else 12)
+            step = AIPlanStep(
+                day_id=day.id,
+                title=f"day {day_number} {slot}",
+                order_in_day=order,
+                time_slot=slot,
+                scheduled_for=scheduled,
+                expires_at=scheduled.replace(hour=23, minute=59, second=59),
+                step_status="pending",
+                version=1,
+            )
+            db.add(step)
+            steps.append(step)
+    db.flush()
+    return user, profile, plan, steps
+
+
+def _seed_disposable_builder_library(db: Session) -> None:
+    """Satisfy legacy exercise FKs within this test's rolled-back transaction."""
+    for exercise in get_default_builder().exercises:
+        db.add(ContentLibrary(
+            id=exercise.id,
+            content_version=1,
+            internal_name=exercise.title or exercise.id,
+            category="test",
+            difficulty=1,
+            energy_cost="test",
+            logic_tags={},
+            content_payload={"title": exercise.title},
+            is_active=exercise.is_active,
+        ))
+    db.flush()
+
+
+def test_pause_resume_reanchors_remaining_rows_and_receipts(pg_session):
+    db = pg_session
+    user, _profile, plan, steps = _seed_current_plan(db)
+    delivered_at = datetime(2026, 9, 2, 14, tzinfo=timezone.utc)
+    steps[0].step_status = "delivered"
+    delivered_expiry = steps[0].expires_at
+    db.flush()
+
+    paused = lifecycle.transition_current_plan(
+        db, user_id=user.id, operation="pause", source_operation_id="wp023:pause"
+    )
+    db.flush()
+    assert paused.status == "paused"
+    assert paused.effects[0].kind == "reconcile_plan_schedule"
+    assert lifecycle.complete_current_plan_if_ready(
+        db, user_id=user.id, plan_id=plan.id, source_operation_id="wp023:complete"
+    ) is None
+
+    resumed = lifecycle.transition_current_plan(
+        db,
+        user_id=user.id,
+        operation="resume",
+        source_operation_id="wp023:resume",
+        occurred_at=datetime(2026, 9, 4, 18, tzinfo=timezone.utc),
+    )
+    db.flush()
+    assert resumed.status == "active"
+    assert steps[0].scheduled_for == delivered_at
+    assert steps[0].expires_at == delivered_expiry
+    assert steps[1].scheduled_for == datetime(2026, 9, 7, 14, tzinfo=timezone.utc)
+    assert steps[2].scheduled_for == datetime(2026, 9, 8, 14, tzinfo=timezone.utc)
+    assert resumed.details["updated_step_ids"] == (steps[1].id, steps[2].id)
+    assert db.query(PlanLifecycleOperation).filter(
+        PlanLifecycleOperation.user_id == user.id,
+        PlanLifecycleOperation.operation.in_(("pause", "resume")),
+    ).count() == 2
+
+
+def test_switch_collects_evening_then_replaces_one_current_plan_atomically(pg_session):
+    db = pg_session
+    user, profile, source, source_steps = _seed_current_plan(db)
+    _seed_disposable_builder_library(db)
+    pending = lifecycle.switch_plan_format(
+        db,
+        user_id=user.id,
+        target_plan_type="MEDIUM",
+        source_operation_id="wp023:switch",
+    )
+    assert pending.code == "needs_evening_time"
+    assert source.status == "active"
+    assert all(step.step_status == "pending" for step in source_steps)
+
+    collected = lifecycle.record_evening_time_preference(
+        db,
+        user_id=user.id,
+        hhmm="20:30",
+        context="switch",
+        pending_source_operation_id="wp023:switch",
+        source_operation_id="wp023:evening",
+    )
+    assert collected.applied is True
+    assert profile.evening_slot_collected is True
+
+    switched = lifecycle.switch_plan_format(
+        db,
+        user_id=user.id,
+        target_plan_type="MEDIUM",
+        source_operation_id="wp023:switch",
+    )
+    db.flush()
+    assert switched.plan_id != source.id
+    assert switched.plan_type == "MEDIUM"
+    assert source.status == "abandoned"
+    assert all(step.step_status == "canceled" for step in source_steps)
+    assert db.query(AIPlan).filter(
+        AIPlan.user_id == user.id,
+        AIPlan.status.in_(("active", "paused")),
+    ).count() == 1
+    assert db.query(func.count(AIPlanStep.id)).join(AIPlanDay).filter(
+        AIPlanDay.plan_id == switched.plan_id,
+    ).scalar() == 28
+    assert {effect.kind for effect in switched.effects} == {
+        "cancel_step_jobs", "remove_step_keyboards", "reconcile_plan_schedule"
+    }
+    replay = lifecycle.switch_plan_format(
+        db,
+        user_id=user.id,
+        target_plan_type="MEDIUM",
+        source_operation_id="wp023:switch",
+    )
+    assert replay.duplicate is True
+    assert replay.plan_id == switched.plan_id
+    assert replay.code == "replayed"
+
+
+def test_switch_builder_failure_rolls_back_source_mutation(pg_session, monkeypatch):
+    db = pg_session
+    user, _profile, source, source_steps = _seed_current_plan(db, medium=True)
+    source_id = source.id
+    step_ids = [step.id for step in source_steps]
+    savepoint = db.begin_nested()
+    monkeypatch.setattr(
+        "app.plan_drafts.service.create_plan_for_lifecycle",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("builder_failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="builder_failed"):
+        lifecycle.switch_plan_format(
+            db,
+            user_id=user.id,
+            target_plan_type="SHORT",
+            source_operation_id="wp023:failed-switch",
+        )
+    savepoint.rollback()
+    db.expire_all()
+
+    assert db.get(AIPlan, source_id).status == "active"
+    assert all(db.get(AIPlanStep, step_id).step_status == "pending" for step_id in step_ids)

@@ -558,7 +558,7 @@ Before calling a runtime tool:
 **`create_followup_plan(plan_type)`**
 - Mode: `NO_ACTIVE_PLAN`.
 - `plan_type`: `SHORT` for 7 working days, `MEDIUM` for 14 working days.
-- Use when no 7 or 14-day sequence is currently running and the user
+- Use only after the user explicitly cancelled the previous sequence and now
   requests a new one.
 - Do not use while a sequence is active or paused.
 
@@ -627,6 +627,14 @@ For pause and resume, a direct and unambiguous request counts as confirmation.
 - Call only after the user confirms cancellation after these consequences
   have been explained.
 
+**`switch_plan_format(plan_type)`**
+- States: `ACTIVE`, `ACTIVE_PAUSED`.
+- Use when the user explicitly confirms switching the current sequence to the
+  other format (`SHORT` for 7 working days, `MEDIUM` for 14).
+- This is one atomic action; do not call `cancel_plan` first.
+- If the first switch to `MEDIUM` needs an evening time, the runtime keeps the
+  current sequence unchanged and asks for that time before applying the switch.
+
 **`get_plan_status`**
 - Use when the user asks for factual information about their current
   7 or 14-day sequence and that information is not already available
@@ -649,16 +657,16 @@ The current product state determines which runtime tools are available.
 
 | Current state | Available tools |
 |---|---|
-| `ACTIVE` | `pause_plan`, `cancel_plan`, `change_day_time`, `change_evening_time`, `get_plan_status` |
-| `ACTIVE_PAUSED` | `resume_plan`, `cancel_plan`, `change_day_time`, `change_evening_time`, `get_plan_status` |
+| `ACTIVE` | `pause_plan`, `cancel_plan`, `switch_plan_format`, `change_day_time`, `change_evening_time`, `get_plan_status` |
+| `ACTIVE_PAUSED` | `resume_plan`, `cancel_plan`, `switch_plan_format`, `change_day_time`, `change_evening_time`, `get_plan_status` |
 | `NO_ACTIVE_PLAN` | `create_followup_plan`, `record_evening_time`, `change_day_time`, `change_evening_time`, `get_plan_status` |
 | Any other state | none |
 
 Additional tool-specific conditions still apply:
 - `record_evening_time` is available only while creation of a 14-day
-  sequence is waiting for its first evening time.
+  sequence or an atomic switch to it is waiting for its first evening time.
 - `change_evening_time` is available only when an evening time is already
-  configured.
+  configured and the relevant sequence is 14 days.
 
 If a requested action is not available in the current state,
 say so briefly in user-facing terms.
@@ -736,6 +744,9 @@ def _context_message(payload: Dict[str, Any]) -> str:
     context = {
         "current_time": payload.get("temporal_context"),
         "current_mode": payload.get("current_mode"),
+        "plan_type": payload.get("plan_type"),
+        "evening_time_configured": bool(payload.get("evening_slot_collected")),
+        "pending_runtime_action": payload.get("pending_action"),
     }
     completion_context = payload.get("completion_context")
     if completion_context is not None:
@@ -847,6 +858,29 @@ COACH_TOOLS: List[Dict[str, Any]] = [
     },
     {
         "type": "function",
+        "name": "switch_plan_format",
+        "description": (
+            "Atomically switch the current ACTIVE or ACTIVE_PAUSED sequence "
+            "to the other format after one explicit user confirmation. "
+            "plan_type is the requested target format. If first-time evening "
+            "collection is needed, the runtime will request it before changing "
+            "the current sequence."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "plan_type": {
+                    "type": "string",
+                    "enum": ["SHORT", "MEDIUM"],
+                },
+            },
+            "required": ["plan_type"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
         "name": "record_evening_time",
         "description": (
             "Save the first evening delivery time while creation of a 14-day "
@@ -938,6 +972,7 @@ _TOOL_NAMES_BY_STATE: Dict[str, set] = {
         "change_day_time",
         "change_evening_time",
         "get_plan_status",
+        "switch_plan_format",
     },
     "ACTIVE_PAUSED": {
         "resume_plan",
@@ -945,6 +980,7 @@ _TOOL_NAMES_BY_STATE: Dict[str, set] = {
         "change_day_time",
         "change_evening_time",
         "get_plan_status",
+        "switch_plan_format",
     },
     "NO_ACTIVE_PLAN": {
         "create_followup_plan",
@@ -956,14 +992,43 @@ _TOOL_NAMES_BY_STATE: Dict[str, set] = {
 }
 
 
-def _coach_tools_for_state(current_mode: Any) -> List[Dict[str, Any]]:
+def _coach_tools_for_state(
+    current_mode: Any,
+    *,
+    plan_type: Any = None,
+    evening_slot_collected: bool = False,
+    pending_action: Any = None,
+    latest_plan_status: Any = None,
+) -> List[Dict[str, Any]]:
     """Filter COACH_TOOLS down to what the current product mode allows.
 
     Mirrors the "Tool Availability by State" table in Section 7 of
     COACH_SYSTEM_PROMPT — that table stops being the only enforcement
     point once this filter is applied before the API call.
     """
-    allowed_names = _TOOL_NAMES_BY_STATE.get(str(current_mode or ""), set())
+    mode = str(current_mode or "")
+    allowed_names = set(_TOOL_NAMES_BY_STATE.get(mode, set()))
+    pending = str(pending_action or "")
+    if mode in {"ACTIVE", "ACTIVE_PAUSED"}:
+        if str(plan_type) != "MEDIUM" or not evening_slot_collected:
+            allowed_names.discard("change_evening_time")
+        if pending.startswith("collect_evening_time_for_switch"):
+            allowed_names.add("record_evening_time")
+        else:
+            allowed_names.discard("record_evening_time")
+    elif mode == "NO_ACTIVE_PLAN":
+        if str(latest_plan_status) != "abandoned":
+            allowed_names -= {
+                "create_followup_plan",
+                "record_evening_time",
+                "change_day_time",
+                "change_evening_time",
+            }
+        else:
+            if not pending.startswith("collect_evening_time_for_medium"):
+                allowed_names.discard("record_evening_time")
+            if str(plan_type) != "MEDIUM" or not evening_slot_collected:
+                allowed_names.discard("change_evening_time")
     return [tool for tool in COACH_TOOLS if tool["name"] in allowed_names]
 
 
@@ -982,7 +1047,15 @@ async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
         context_payload["completion_context"] = completion_context
 
     messages = _compose_messages(context_payload)
-    available_tools = _coach_tools_for_state(context_payload.get("current_mode"))
+    available_tools = _coach_tools_for_state(
+        context_payload.get("current_mode"),
+        plan_type=context_payload.get("plan_type"),
+        evening_slot_collected=bool(
+            context_payload.get("evening_slot_collected")
+        ),
+        pending_action=context_payload.get("pending_action"),
+        latest_plan_status=context_payload.get("latest_plan_status"),
+    )
 
     request_kwargs: Dict[str, Any] = {
         "model": settings.COACH_MODEL,
