@@ -281,6 +281,102 @@ async def test_switch_evening_cascade_reuses_original_source_and_clears_pending(
 
 
 @pytest.mark.anyio
+async def test_switch_evening_cascade_reports_persisted_partial_and_retries_receipt(
+    monkeypatch,
+):
+    memory = PendingActionMemory("collect_evening_time_for_switch:switch-7")
+    switch_calls = []
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+
+    switch_results = iter((
+        {
+            "status": "error",
+            "code": "switch_reconciliation_failed",
+            "persisted": True,
+            "plan_id": 12,
+            "source_plan_id": 11,
+            "duplicate": False,
+        },
+        {
+            "status": "ok",
+            "plan_id": 12,
+            "source_plan_id": 11,
+            "duplicate": True,
+            "disposition": "replayed",
+        },
+    ))
+
+    def switch(_user_id, args):
+        switch_calls.append(args["_source_operation_id"])
+        return next(switch_results)
+
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "record_evening_time": lambda *_args, **_kwargs: {"status": "ok"},
+            "switch_plan_format": switch,
+        },
+    )
+
+    first = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "record_evening_time",
+            "arguments": {"hhmm": "20:30"},
+            "call_id": "evening-7",
+        },
+    )
+    assert "Новий 14-денний план уже збережено" in first
+    assert "розклад ще не узгоджено" in first
+    assert memory.pending == "collect_evening_time_for_switch:switch-7"
+    assert memory.cleared is False
+
+    second = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "record_evening_time",
+            "arguments": {"hhmm": "20:30"},
+            "call_id": "evening-7",
+        },
+    )
+    assert "Формат змінено" in second
+    assert switch_calls == ["switch-7", "switch-7"]
+    assert memory.cleared is True
+
+
+@pytest.mark.anyio
+async def test_direct_switch_partial_uses_persisted_change_copy(monkeypatch):
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "switch_plan_format": lambda *_args, **_kwargs: {
+                "status": "error",
+                "code": "switch_reconciliation_failed",
+                "persisted": True,
+                "plan_id": 12,
+            }
+        },
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "switch_plan_format",
+            "arguments": {"plan_type": "MEDIUM"},
+            "call_id": "switch-direct-7",
+        },
+    )
+
+    assert "Зміну збережено" in response
+    assert "розклад ще не узгоджено" in response
+    assert "не вдалось запустити" not in response
+
+
+@pytest.mark.anyio
 async def test_superseded_time_change_does_not_return_success_copy(monkeypatch):
     monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(

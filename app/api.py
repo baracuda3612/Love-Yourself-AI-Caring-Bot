@@ -133,6 +133,66 @@ def set_user_time_slots(
         if decision.code != "superseded"
     ]
     if superseded:
+        if outcomes:
+            outcome_by_slot = {
+                str(outcome.details["slot"]): outcome for outcome in outcomes
+            }
+            slot_results: Dict[str, Dict[str, object]] = {}
+            for decision in decisions:
+                slot = str(decision.details["slot"])
+                if decision.code == "superseded":
+                    slot_results[slot] = {
+                        "status": "superseded",
+                        "saved": False,
+                        "requested_value": decision.details.get("value"),
+                        "authoritative_value": decision.details.get(
+                            "authoritative_value"
+                        ),
+                    }
+                    continue
+                outcome = outcome_by_slot[slot]
+                states = {effect.state.value for effect in outcome.effects}
+                schedule_state = (
+                    "failed"
+                    if "failed" in states
+                    else "deferred"
+                    if "deferred" in states
+                    else "not_required"
+                    if states and states == {"not_required"}
+                    else "reconciled"
+                )
+                slot_results[slot] = {
+                    "status": (
+                        "partial_failure"
+                        if schedule_state == "failed"
+                        else "deferred"
+                        if schedule_state == "deferred"
+                        else "replayed"
+                        if outcome.duplicate
+                        else "applied"
+                    ),
+                    "saved": True,
+                    "requested_value": outcome.details.get("value"),
+                    "schedule_state": schedule_state,
+                }
+            reconciliation_failed = any(
+                effect.state.value == "failed"
+                for outcome in outcomes
+                for effect in outcome.effects
+            )
+            detail: Dict[str, object] = {
+                "code": "mixed_time_slot_outcome",
+                "saved": True,
+                "jobs_reconciled": not any(
+                    effect.state.value in {"failed", "deferred"}
+                    for outcome in outcomes
+                    for effect in outcome.effects
+                ),
+                "slots": slot_results,
+            }
+            if reconciliation_failed:
+                detail["retry_with_same_idempotency_key"] = True
+            raise HTTPException(status_code=409, detail=detail)
         raise HTTPException(
             status_code=409,
             detail={

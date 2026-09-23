@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from dataclasses import replace
 
 import pytest
 from fastapi import HTTPException
@@ -112,3 +113,89 @@ def test_paused_time_slot_api_reports_saved_but_deferred(monkeypatch):
         "jobs_reconciled": False,
         "schedule_state": "deferred",
     }
+
+
+def test_time_slot_api_reports_mixed_superseded_and_persisted_failure(monkeypatch):
+    """Retry K may conflict for DAY while K:evening is a new committed write."""
+    db = _DB()
+    monkeypatch.setattr(api, "SessionLocal", lambda: nullcontext(db))
+
+    def _mixed(_db, *, user_id, slot, hhmm, source_operation_id):
+        assert user_id == 1
+        assert source_operation_id == f"request-k:{slot.lower()}"
+        if slot == "DAY":
+            return lifecycle.LifecycleResult(
+                user_id=user_id,
+                plan_id=11,
+                status=hhmm,
+                operation="change_day_time",
+                duplicate=True,
+                code="superseded",
+                applied=False,
+                effects=(lifecycle.ExternalEffect(
+                    kind="reconcile_plan_schedule",
+                    state=lifecycle.ExternalEffectState.NOT_REQUIRED,
+                ),),
+                details={
+                    "slot": "DAY",
+                    "value": hhmm,
+                    "authoritative_value": "16:45",
+                },
+            )
+        return lifecycle.LifecycleResult(
+            user_id=user_id,
+            plan_id=11,
+            status=hhmm,
+            operation="change_evening_time",
+            effects=(lifecycle.ExternalEffect(
+                kind="reconcile_plan_schedule", target_ids=(11,)
+            ),),
+            details={
+                "slot": "EVENING",
+                "value": hhmm,
+                "updated_step_ids": (31,),
+            },
+        )
+
+    monkeypatch.setattr(api, "change_delivery_time", _mixed)
+
+    def _fail_evening(decision):
+        assert decision.details["slot"] == "EVENING"
+        return replace(
+            decision,
+            effects=(replace(
+                decision.effects[0], state=lifecycle.ExternalEffectState.FAILED
+            ),),
+        )
+
+    monkeypatch.setattr(api, "reconcile_scheduler_effects", _fail_evening)
+
+    with pytest.raises(HTTPException) as caught:
+        api.set_user_time_slots(
+            api.TimeSlotsPayload(DAY="15:30", EVENING="20:30"),
+            user_id=1,
+            idempotency_key="request-k",
+        )
+
+    assert caught.value.status_code == 409
+    assert caught.value.detail == {
+        "code": "mixed_time_slot_outcome",
+        "saved": True,
+        "jobs_reconciled": False,
+        "retry_with_same_idempotency_key": True,
+        "slots": {
+            "DAY": {
+                "status": "superseded",
+                "saved": False,
+                "requested_value": "15:30",
+                "authoritative_value": "16:45",
+            },
+            "EVENING": {
+                "status": "partial_failure",
+                "saved": True,
+                "requested_value": "20:30",
+                "schedule_state": "failed",
+            },
+        },
+    }
+    assert db.commits == 1

@@ -836,6 +836,17 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
                             "⚠️ План збережено, але його розклад не вдалося "
                             "повністю узгодити. Повтори введення часу."
                         )
+                    if (
+                        cascade_tool == "switch_plan_format"
+                        and isinstance(activation, dict)
+                        and activation.get("code") == "switch_reconciliation_failed"
+                        and activation.get("persisted") is True
+                    ):
+                        return (
+                            "⚠️ Новий 14-денний план уже збережено, але його "
+                            "розклад ще не узгоджено. Повтори введення того "
+                            "самого часу — новий план вдруге не створиться."
+                        )
                     return (
                         "⚠️ Час збережено, але план не вдалось запустити. "
                         "Спробуй ще раз."
