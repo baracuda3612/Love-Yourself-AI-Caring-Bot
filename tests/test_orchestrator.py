@@ -345,6 +345,27 @@ async def test_paused_switch_reply_does_not_claim_delivery_resumed(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_resume_waits_for_switch_proof_with_actionable_copy(monkeypatch):
+    def pending_switch(_user_id, _args):
+        raise ValueError("switch_schedule_pending")
+
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {"resume_plan": pending_switch},
+    )
+
+    reply = await orchestrator._execute_plan_tool(
+        7,
+        {"name": "resume_plan", "arguments": {}, "call_id": "resume-too-early"},
+    )
+
+    assert "розклад після зміни формату" in reply
+    assert "Повтори перевірку тієї самої зміни" in reply
+    assert "Відновлено" not in reply
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     ("first_error_code", "partial_message"),
     [

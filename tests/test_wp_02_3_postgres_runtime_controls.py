@@ -175,21 +175,33 @@ def test_paused_switch_keeps_delivery_off_until_explicit_resume(pg_session, monk
     )
     db.flush()
     replacement = db.get(AIPlan, switched.plan_id)
+    resumed_at = max(datetime.now(timezone.utc), replacement.activated_at) + timedelta(minutes=1)
     assert source.status == "abandoned"
     assert all(step.step_status == "canceled" for step in source_steps)
     assert replacement.status == switched.status == "paused"
     assert switched.details["total_days"] == 7
+    original_times = {
+        step.id: (step.scheduled_for, step.expires_at)
+        for day in replacement.days for step in day.steps
+    }
+    original_version = replacement.version
 
     jobs = {
         scheduler_module._generate_step_job_id(step): SimpleNamespace(next_run_time=step.scheduled_for)
         for step in source_steps
     }
+    stale_job_id = scheduler_module._generate_step_job_id(source_steps[0])
 
     class _Jobs:
+        failed_removals = 2
+
         def get_job(self, job_id):
             return jobs.get(job_id)
 
         def remove_job(self, job_id):
+            if job_id == stale_job_id and self.failed_removals:
+                self.failed_removals -= 1
+                raise RuntimeError("temporary job-store failure")
             jobs.pop(job_id, None)
 
     monkeypatch.setattr(scheduler_module, "scheduler", _Jobs())
@@ -208,9 +220,25 @@ def test_paused_switch_keeps_delivery_off_until_explicit_resume(pg_session, monk
     )
 
     outcome = lifecycle_reconciliation.reconcile_scheduler_effects(switched)
-    assert outcome.external_effects_succeeded
-    assert jobs == {}
-    assert events == [replacement.id]
+    assert not outcome.external_effects_succeeded
+    assert stale_job_id in jobs
+    assert events == []
+    with pytest.raises(lifecycle.LifecycleTransitionError, match="switch_schedule_pending"):
+        lifecycle.transition_current_plan(
+            db, user_id=user.id, operation="resume",
+            source_operation_id="wp023:resume-switched",
+            occurred_at=resumed_at,
+        )
+    assert replacement.status == "paused"
+    assert replacement.version == original_version
+    assert {
+        step.id: (step.scheduled_for, step.expires_at)
+        for day in replacement.days for step in day.steps
+    } == original_times
+    assert db.query(PlanLifecycleOperation).filter(
+        PlanLifecycleOperation.user_id == user.id,
+        PlanLifecycleOperation.source_operation_id == "wp023:resume-switched",
+    ).count() == 0
 
     replay = lifecycle.recover_switch_plan_format(
         db, user_id=user.id, switch_source_operation_id="wp023:paused-switch"
@@ -220,7 +248,21 @@ def test_paused_switch_keeps_delivery_off_until_explicit_resume(pg_session, monk
     assert replay.effects[-1].state is lifecycle.ExternalEffectState.PENDING
     assert lifecycle_reconciliation.reconcile_scheduler_effects(replay).external_effects_succeeded
     assert jobs == {}
-    assert events == [replacement.id, replacement.id]
+    assert events == [replacement.id]
+
+    # A successful scheduler pass without the durable ready marker is not enough.
+    with pytest.raises(lifecycle.LifecycleTransitionError, match="switch_schedule_pending"):
+        lifecycle.transition_current_plan(
+            db, user_id=user.id, operation="resume",
+            source_operation_id="wp023:resume-switched",
+            occurred_at=resumed_at,
+        )
+    assert replacement.status == "paused"
+    assert replacement.version == original_version
+    assert db.query(PlanLifecycleOperation).filter(
+        PlanLifecycleOperation.user_id == user.id,
+        PlanLifecycleOperation.source_operation_id == "wp023:resume-switched",
+    ).count() == 0
 
     lifecycle.record_switch_schedule_ready(
         db, user_id=user.id, plan_id=replacement.id,
@@ -229,7 +271,7 @@ def test_paused_switch_keeps_delivery_off_until_explicit_resume(pg_session, monk
     resumed = lifecycle.transition_current_plan(
         db, user_id=user.id, operation="resume",
         source_operation_id="wp023:resume-switched",
-        occurred_at=datetime.now(timezone.utc),
+        occurred_at=resumed_at,
     )
     db.flush()
     assert resumed.status == replacement.status == "active"
@@ -243,6 +285,18 @@ def test_paused_switch_keeps_delivery_off_until_explicit_resume(pg_session, monk
     assert set(jobs) == expected_ids
     assert lifecycle_reconciliation.reconcile_scheduler_effects(resumed).external_effects_succeeded
     assert set(jobs) == expected_ids
+    paused_again = lifecycle.transition_current_plan(
+        db, user_id=user.id, operation="pause",
+        source_operation_id="wp023:pause-after-resume",
+    )
+    assert paused_again.status == "paused"
+    switched_again = lifecycle.switch_plan_format(
+        db, user_id=user.id, target_plan_type="MEDIUM",
+        source_operation_id="wp023:switch-after-resume",
+        occurred_at=resumed_at + timedelta(minutes=1),
+    )
+    assert switched_again.status == "paused"
+    assert switched_again.plan_id != replacement.id
 
 
 def test_switch_collects_evening_then_replaces_one_current_plan_atomically(pg_session):

@@ -745,7 +745,7 @@ def transition_current_plan(
     plan = get_current_plan(db, user_id, lock=True)
     if plan is None:
         raise LifecycleTransitionError("current_plan_missing")
-    if operation == "pause" and not _switch_schedule_ready(db, user_id, plan.id):
+    if operation in {"pause", "resume"} and not _switch_schedule_ready(db, user_id, plan.id):
         raise LifecycleTransitionError("switch_schedule_pending")
     allowed, target = _PLAN_TRANSITIONS[operation]
     current = str(plan.status)
