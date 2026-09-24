@@ -246,6 +246,39 @@ async def test_medium_cascade_reports_reconciliation_failure_and_keeps_retry_key
 
 
 @pytest.mark.anyio
+async def test_medium_cascade_reports_event_only_failure_with_original_code(monkeypatch):
+    memory = PendingActionMemory("collect_evening_time_for_medium:call-medium-7")
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "record_evening_time": lambda *_a, **_k: {"status": "ok"},
+            "create_followup_plan": lambda *_a, **_k: {
+                "status": "ok",
+                "jobs_reconciled": True,
+                "activation_event_pending": True,
+                "original_source_operation_id": "call-medium-7",
+            },
+        },
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "record_evening_time",
+            "arguments": {"hhmm": "20:30"},
+            "call_id": "call-evening-7",
+        },
+    )
+
+    assert "запис події активації очікує повтору" in response
+    assert "Код дії: call-medium-7" in response
+    assert memory.cleared is True
+
+
+@pytest.mark.anyio
 async def test_switch_evening_cascade_reuses_original_source_and_clears_pending(
     monkeypatch,
 ):
@@ -285,6 +318,30 @@ async def test_switch_evening_cascade_reuses_original_source_and_clears_pending(
     assert captured["_source_operation_id"] == "switch-7"
     assert captured["plan_type"] == "MEDIUM"
     assert memory.cleared is True
+
+
+@pytest.mark.anyio
+async def test_paused_switch_reply_does_not_claim_delivery_resumed(monkeypatch):
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "switch_plan_format": lambda *_a, **_k: {
+                "status": "ok",
+                "plan_status": "paused",
+                "jobs_reconciled": True,
+            }
+        },
+    )
+
+    reply = await orchestrator._execute_plan_tool(
+        7,
+        {"name": "switch_plan_format", "arguments": {"plan_type": "SHORT"}, "call_id": "paused-switch"},
+    )
+
+    assert "лишається на паузі" in reply
+    assert "після відновлення" in reply
 
 
 @pytest.mark.anyio

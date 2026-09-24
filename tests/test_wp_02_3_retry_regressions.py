@@ -289,6 +289,35 @@ def test_event_only_failure_keeps_switch_operational_and_retries(monkeypatch):
     assert events == [23, 23]
 
 
+def test_paused_switch_runtime_preserves_state_and_proves_both_schedules(monkeypatch):
+    session = _Session()
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(session))
+    targets = []
+    monkeypatch.setattr(
+        scheduler, "reconcile_plan_schedule",
+        lambda plan_id: (
+            targets.append(plan_id)
+            or scheduler.SchedulerReconciliation(1, 1)
+        ),
+    )
+    monkeypatch.setattr(
+        lifecycle_reconciliation, "_record_activation_event", lambda _result: None
+    )
+    monkeypatch.setattr(
+        lifecycle, "record_switch_schedule_ready", lambda *_a, **_k: None
+    )
+
+    response = tools._finish_plan_format_result(
+        replace(_switch_result(), status="paused"),
+        pending_status="needs_evening_time",
+    )
+
+    assert response["status"] == "ok"
+    assert response["plan_status"] == "paused"
+    assert response["jobs_reconciled"] is True
+    assert targets == [11, 23]
+
+
 def test_keyboard_failure_is_hygiene_not_switch_gate(monkeypatch):
     session = _Session()
     monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(session))

@@ -7,13 +7,15 @@ upgrade. Every test uses one outer transaction and rolls back its seed rows.
 from __future__ import annotations
 
 import os
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine, func
 from sqlalchemy.orm import Session
 
-from app import lifecycle
+from app import lifecycle, lifecycle_reconciliation, scheduler as scheduler_module
 from app.db import (
     AIPlan,
     AIPlanDay,
@@ -157,6 +159,90 @@ def test_pause_resume_reanchors_remaining_rows_and_receipts(pg_session):
         PlanLifecycleOperation.user_id == user.id,
         PlanLifecycleOperation.operation.in_(("pause", "resume")),
     ).count() == 2
+
+
+def test_paused_switch_keeps_delivery_off_until_explicit_resume(pg_session, monkeypatch):
+    db = pg_session
+    user, _profile, source, source_steps = _seed_current_plan(db, medium=True)
+    _seed_disposable_builder_library(db)
+    lifecycle.transition_current_plan(
+        db, user_id=user.id, operation="pause", source_operation_id="wp023:pause-before-switch"
+    )
+
+    switched = lifecycle.switch_plan_format(
+        db, user_id=user.id, target_plan_type="SHORT",
+        source_operation_id="wp023:paused-switch",
+    )
+    db.flush()
+    replacement = db.get(AIPlan, switched.plan_id)
+    assert source.status == "abandoned"
+    assert all(step.step_status == "canceled" for step in source_steps)
+    assert replacement.status == switched.status == "paused"
+    assert switched.details["total_days"] == 7
+
+    jobs = {
+        scheduler_module._generate_step_job_id(step): SimpleNamespace(next_run_time=step.scheduled_for)
+        for step in source_steps
+    }
+
+    class _Jobs:
+        def get_job(self, job_id):
+            return jobs.get(job_id)
+
+        def remove_job(self, job_id):
+            jobs.pop(job_id, None)
+
+    monkeypatch.setattr(scheduler_module, "scheduler", _Jobs())
+    monkeypatch.setattr(scheduler_module, "SessionLocal", lambda: nullcontext(db))
+    monkeypatch.setattr(
+        scheduler_module, "schedule_plan_step",
+        lambda step, _user: jobs.__setitem__(
+            scheduler_module._generate_step_job_id(step),
+            SimpleNamespace(next_run_time=step.scheduled_for),
+        ),
+    )
+    events = []
+    monkeypatch.setattr(
+        lifecycle_reconciliation, "_record_activation_event",
+        lambda result: events.append(result.plan_id),
+    )
+
+    outcome = lifecycle_reconciliation.reconcile_scheduler_effects(switched)
+    assert outcome.external_effects_succeeded
+    assert jobs == {}
+    assert events == [replacement.id]
+
+    replay = lifecycle.recover_switch_plan_format(
+        db, user_id=user.id, switch_source_operation_id="wp023:paused-switch"
+    )
+    assert replay.duplicate is True
+    assert replay.status == "paused"
+    assert replay.effects[-1].state is lifecycle.ExternalEffectState.PENDING
+    assert lifecycle_reconciliation.reconcile_scheduler_effects(replay).external_effects_succeeded
+    assert jobs == {}
+    assert events == [replacement.id, replacement.id]
+
+    lifecycle.record_switch_schedule_ready(
+        db, user_id=user.id, plan_id=replacement.id,
+        switch_source_operation_id="wp023:paused-switch",
+    )
+    resumed = lifecycle.transition_current_plan(
+        db, user_id=user.id, operation="resume",
+        source_operation_id="wp023:resume-switched",
+        occurred_at=datetime.now(timezone.utc),
+    )
+    db.flush()
+    assert resumed.status == replacement.status == "active"
+    expected_ids = {
+        scheduler_module._generate_step_job_id(step)
+        for day in replacement.days for step in day.steps
+        if step.step_status == "pending"
+    }
+    assert len(resumed.details["updated_step_ids"]) == len(expected_ids) == 7
+    assert lifecycle_reconciliation.reconcile_scheduler_effects(resumed).external_effects_succeeded
+    assert set(jobs) == expected_ids
+    assert lifecycle_reconciliation.reconcile_scheduler_effects(resumed).external_effects_succeeded
+    assert set(jobs) == expected_ids
 
 
 def test_switch_collects_evening_then_replaces_one_current_plan_atomically(pg_session):

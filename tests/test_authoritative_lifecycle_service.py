@@ -893,6 +893,7 @@ def test_expiry_sweep_isolates_unexpected_candidate_failure(monkeypatch, caplog)
     def _step(step_id):
         return SimpleNamespace(
             id=step_id,
+            tg_message_id=900 + step_id,
             expires_at=past,
             scheduled_for=past,
             day=SimpleNamespace(
@@ -971,6 +972,7 @@ def test_expiry_sweep_isolates_unexpected_candidate_failure(monkeypatch, caplog)
         [_ScanDB(), candidate_dbs[1], candidate_dbs[2], candidate_dbs[3], _KeyboardDB()]
     )
     attempted = []
+    button_attempts = []
 
     def _expire(_db, *, step_id, **_kwargs):
         attempted.append(step_id)
@@ -989,70 +991,43 @@ def test_expiry_sweep_isolates_unexpected_candidate_failure(monkeypatch, caplog)
     monkeypatch.setattr(
         scheduler,
         "reconcile_expired_step_keyboards",
-        lambda _ids: SimpleNamespace(failed_ids=()),
+        lambda ids: (
+            button_attempts.append(ids)
+            or SimpleNamespace(failed_ids=())
+        ),
     )
 
     scheduler.expire_overdue_steps()
 
     assert attempted == [1, 2, 3]
+    assert button_attempts == [[1, 3]]
     assert candidate_dbs[1].commits == 1
     assert candidate_dbs[2].rollbacks == 1
     assert candidate_dbs[3].commits == 1
     assert "Candidate failed step=2; continuing sweep" in caplog.text
 
 
-@pytest.mark.parametrize("terminal_status", ("canceled", "completed", "skipped"))
-def test_terminal_keyboard_sweep_retries_without_expiry_or_ignored_event(
-    monkeypatch, terminal_status,
-):
-    step = SimpleNamespace(id=41, step_status=terminal_status, tg_message_id=901)
-    delivery_attempts = []
-    expiry_attempts = []
-    writes = []
+def test_expiry_does_not_scan_old_terminal_buttons(monkeypatch):
+    scans = []
 
     class _Query:
-        def __init__(self, kind):
-            self.kind = kind
-            self.clauses = []
-
         def join(self, *_args):
             return self
 
         def filter(self, *clauses):
-            self.clauses.extend(clauses)
+            scans.extend(
+                str(clause.compile(compile_kwargs={"literal_binds": True}))
+                for clause in clauses
+            )
             return self
 
         def order_by(self, *_args):
             return self
 
-        def _sql(self):
-            return " ".join(
-                str(clause.compile(compile_kwargs={"literal_binds": True}))
-                for clause in self.clauses
-            )
-
         def all(self):
-            sql = self._sql()
-            if self.kind == "candidate":
-                assert f"'{terminal_status}'" not in sql
-                assert "'pending'" in sql and "'delivered'" in sql
-                return []
-            if self.kind == "keyboard":
-                assert "tg_message_id IS NOT NULL" in sql
-                return [(step.id,)] if f"'{terminal_status}'" in sql and step.tg_message_id else []
-            if self.kind == "terminal":
-                assert f"'{terminal_status}'" in sql
-                return [(step.id, step.tg_message_id, 700)]
-            raise AssertionError(self.kind)
-
-        def first(self):
-            assert self.kind == "write"
-            return step
+            return []
 
     class _DB:
-        def __init__(self, kind):
-            self.kind = kind
-
         def __enter__(self):
             return self
 
@@ -1060,54 +1035,18 @@ def test_terminal_keyboard_sweep_retries_without_expiry_or_ignored_event(
             return False
 
         def query(self, *_models):
-            return _Query(self.kind)
+            return _Query()
 
-        def commit(self):
-            writes.append(step.tg_message_id)
-
-    kinds = iter(
-        ("candidate", "keyboard", "terminal",
-         "candidate", "keyboard", "terminal", "write",
-         "candidate", "keyboard")
-    )
-    monkeypatch.setattr(scheduler, "SessionLocal", lambda: _DB(next(kinds)))
+    monkeypatch.setattr(scheduler, "SessionLocal", _DB)
     monkeypatch.setattr(
-        scheduler, "expire_plan_step",
-        lambda *_a, **_k: expiry_attempts.append(True),
+        scheduler, "reconcile_expired_step_keyboards",
+        lambda _ids: pytest.fail("old button cleanup was retried"),
     )
 
-    class _Future:
-        def __init__(self, fail):
-            self.fail = fail
-
-        def result(self, **_kwargs):
-            if self.fail:
-                raise RuntimeError("Telegram temporarily unavailable")
-            return True
-
-    def submit(coroutine):
-        coroutine.close()
-        delivery_attempts.append(step.tg_message_id)
-        return _Future(fail=len(delivery_attempts) == 1)
-
-    monkeypatch.setattr(scheduler, "_submit_coroutine", submit)
-
     scheduler.expire_overdue_steps()
-    assert step.step_status == terminal_status
-    assert step.tg_message_id == 901
-    assert delivery_attempts == [901]
-    assert writes == []
-    assert expiry_attempts == []
 
-    scheduler.expire_overdue_steps()
-    assert step.tg_message_id is None
-    assert writes == [None]
-    assert delivery_attempts == [901, 901]
-    assert expiry_attempts == []
-
-    scheduler.expire_overdue_steps()
-    assert delivery_attempts == [901, 901]
-    assert expiry_attempts == []
+    assert any("'pending'" in clause and "'delivered'" in clause for clause in scans)
+    assert all("'completed'" not in clause and "'canceled'" not in clause for clause in scans)
 
 
 def test_keyboard_sweep_accepts_already_removed_markup_and_clears_marker(monkeypatch):

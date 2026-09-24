@@ -1787,12 +1787,11 @@ def switch_plan_format(
                 raise LifecycleInvariantError("format_switch_replacement_missing")
             current = get_current_plan(db, user_id, lock=True)
             replacement_current = current is not None and current.id == replacement.id
-            current_active = replacement_current and str(current.status) == "active"
             cleanup_effects = _plan_terminal_effects(db, source.id)
             return replace(
                 duplicate,
                 plan_id=replacement.id,
-                status=str(current.status) if replacement_current else "active",
+                status=str(current.status) if replacement_current else str(replacement.status),
                 code="replayed" if replacement_current else "superseded",
                 applied=replacement_current,
                 plan_type=_plan_type(replacement),
@@ -1819,7 +1818,7 @@ def switch_plan_format(
                         target_ids=(int(replacement.id),),
                         state=(
                             ExternalEffectState.PENDING
-                            if current_active
+                            if replacement_current
                             else ExternalEffectState.NOT_REQUIRED
                         ),
                     ),
@@ -1899,6 +1898,7 @@ def switch_plan_format(
         except TimeSlotError as exc:
             raise LifecycleTransitionError("saved_evening_time_invalid") from exc
 
+    source_was_paused = str(plan.status) == "paused"
     now = occurred_at or datetime.now(timezone.utc)
     open_steps = (
         db.query(AIPlanStep)
@@ -1938,6 +1938,9 @@ def switch_plan_format(
         activation_receipt_status=receipt_status,
     )
     replacement = activation.plan
+    if source_was_paused:
+        replacement.status = "paused"
+        replacement.version = int(replacement.version or 0) + 1
     if not legacy_deferred_receipt:
         record_lifecycle_operation(
             db,
@@ -1973,7 +1976,7 @@ def switch_plan_format(
     return LifecycleResult(
         user_id=user_id,
         plan_id=replacement.id,
-        status="active",
+        status=str(replacement.status),
         operation="switch_plan_format",
         code="applied",
         applied=True,

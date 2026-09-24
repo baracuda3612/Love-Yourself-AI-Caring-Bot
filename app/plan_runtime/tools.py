@@ -272,6 +272,7 @@ def _finish_plan_format_result(result, *, pending_status: str) -> dict:
     return {
         "status": "ok",
         "plan_id": result.plan_id,
+        "plan_status": result.status,
         "source_plan_id": result.details.get("source_plan_id"),
         "plan_type": result.plan_type,
         "switch_source_operation_id": result.details.get(

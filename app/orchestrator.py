@@ -740,21 +740,34 @@ def _retry_reference_note(value: Any) -> str:
 
 
 def _switch_success_reply(result: Dict[str, Any]) -> str:
+    if result.get("plan_status") == "paused":
+        base = "✅ Формат змінено. Новий план лишається на паузі; вправи почнуть надходити після відновлення."
+    else:
+        base = "✅ Формат змінено, новий розклад узгоджено."
     if not result.get("keyboard_cleanup_pending") and not result.get(
         "activation_event_pending"
     ):
-        return "✅ Формат змінено, новий розклад узгоджено."
+        return base
     notices = []
     if result.get("keyboard_cleanup_pending"):
-        notices.append("старі кнопки ще очищаються")
+        notices.append("не вдалося прибрати старі кнопки; натисни їх ще раз або повтори перевірку за кодом")
     if result.get("activation_event_pending"):
         notices.append("запис події активації очікує повтору")
-    return (
-        "✅ Новий план і розклад готові. "
-        + "; ".join(notices)
-        + "."
-        + _retry_reference_note(result.get("switch_source_operation_id"))
+    warning_base = (
+        base
+        if result.get("plan_status") == "paused"
+        else "✅ Новий план і розклад готові."
     )
+    return warning_base + " " + "; ".join(notices) + "." + _retry_reference_note(result.get("switch_source_operation_id"))
+
+
+def _followup_success_reply(result: Dict[str, Any]) -> str:
+    if result.get("activation_event_pending"):
+        return (
+            "✅ План і розклад готові; запис події активації очікує повтору."
+            + _retry_reference_note(result.get("original_source_operation_id"))
+        )
+    return _TOOL_REPLY_TEMPLATES["create_followup_plan"]
 
 
 async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optional[str]:
@@ -1059,7 +1072,7 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
                 return (
                     _switch_success_reply(activation)
                     if cascade_tool == "switch_plan_format"
-                    else _TOOL_REPLY_TEMPLATES[cascade_tool]
+                    else _followup_success_reply(activation)
                 )
             except Exception as exc:
                 logger.error("[TOOL] cascade create_followup_plan(MEDIUM) user=%s: %s", user_id, exc, exc_info=True)
@@ -1075,7 +1088,7 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
             if result.get("keyboard_cleanup_pending"):
                 return (
                     f"🛑 Поточні {total_days} днів скасовано. "
-                    "Старі кнопки ще очищаються."
+                    "Не вдалося прибрати старі кнопки; натисни їх ще раз або повтори перевірку за кодом."
                     + _retry_reference_note(result.get("original_source_operation_id"))
                 )
             return f"🛑 Поточні {total_days} днів скасовано."
@@ -1098,7 +1111,7 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
         else:
             reply = f"✅ {labels.get(action, 'Дію')} перевірено; розклад узгоджено."
         if result.get("keyboard_cleanup_pending"):
-            reply += " Старі кнопки ще очищаються."
+            reply += " Не вдалося прибрати старі кнопки; натисни їх ще раз або повтори перевірку за кодом."
         if result.get("activation_event_pending"):
             reply += " Запис події активації очікує повтору."
         if result.get("keyboard_cleanup_pending") or result.get("activation_event_pending"):
@@ -1114,13 +1127,14 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
 
     if tool_name in {"switch_plan_format", "retry_switch_plan_format"}:
         return _switch_success_reply(result)
-    if tool_name == "create_followup_plan" and result.get("activation_event_pending"):
-        return (
-            "✅ План і розклад готові; запис події активації очікує повтору."
-            + _retry_reference_note(result.get("original_source_operation_id"))
-        )
-    if tool_name == "create_followup_plan" and result.get("recovered"):
+    if (
+        tool_name == "create_followup_plan"
+        and result.get("recovered")
+        and not result.get("activation_event_pending")
+    ):
         return "✅ Збережений план знайдено, його розклад узгоджено."
+    if tool_name == "create_followup_plan":
+        return _followup_success_reply(result)
 
     if result.get("disposition") == "replayed":
         return "✅ Цю дію вже застосовано; актуальний стан підтверджено."

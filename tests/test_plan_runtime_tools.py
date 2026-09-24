@@ -423,6 +423,7 @@ def test_switch_tool_reconciles_source_and_replacement_after_commit(monkeypatch)
     assert captured["source_operation_id"] == "switch:applied"
     assert captured["target_plan_type"] == "MEDIUM"
     assert result["status"] == "ok"
+    assert result["plan_status"] == "active"
     assert result["source_plan_id"] == 11
     assert result["plan_id"] == 12
     assert captured["proof_db"] is fake_db
