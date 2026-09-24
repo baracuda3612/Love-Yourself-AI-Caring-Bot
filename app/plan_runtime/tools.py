@@ -130,7 +130,7 @@ def create_followup_plan(
         db.commit()
 
     activation = reconcile_scheduler_effects(activation)
-    if not activation.external_effects_succeeded:
+    if not _operational_effects_succeeded(activation):
         return {
             "status": "error",
             "code": "activation_reconciliation_failed",
@@ -151,12 +151,43 @@ def create_followup_plan(
         "plan_id": activation.plan_id,
         "plan_type": activation.plan_type,
         "jobs_reconciled": True,
+        "activation_event_pending": _effect_failed(
+            activation, "record_activation_event"
+        ),
         "duplicate": activation.duplicate,
         "disposition": "replayed" if activation.duplicate else "applied",
     }
     if activation.code == "recovered_existing_plan":
         response["recovered"] = True
     return response
+
+
+def _effect_failed(result, kind: str) -> bool:
+    from app.lifecycle import ExternalEffectState
+
+    return any(
+        effect.kind == kind
+        and effect.state is ExternalEffectState.FAILED
+        for effect in result.effects
+    )
+
+
+def _operational_effects_succeeded(result) -> bool:
+    from app.lifecycle import ExternalEffectState
+
+    return all(
+        effect.state in {
+            ExternalEffectState.SUCCEEDED,
+            ExternalEffectState.DEFERRED,
+            ExternalEffectState.NOT_REQUIRED,
+        }
+        for effect in result.effects
+        if effect.kind not in {
+            "record_activation_event",
+            "remove_step_keyboard",
+            "remove_step_keyboards",
+        }
+    )
 
 
 def _finish_plan_format_result(result, *, pending_status: str) -> dict:
@@ -169,19 +200,6 @@ def _finish_plan_format_result(result, *, pending_status: str) -> dict:
             "duplicate": result.duplicate,
             "disposition": "deferred",
         }
-
-    result = reconcile_scheduler_effects(result)
-    if not result.external_effects_succeeded:
-        return {
-            "status": "error",
-            "code": "switch_reconciliation_failed",
-            "plan_id": result.plan_id,
-            "source_plan_id": result.details.get("source_plan_id"),
-            "plan_type": result.plan_type,
-            "persisted": True,
-            "duplicate": result.duplicate,
-            "disposition": "partial_failure",
-        }
     if result.code == "superseded":
         return {
             "status": "error",
@@ -192,12 +210,71 @@ def _finish_plan_format_result(result, *, pending_status: str) -> dict:
             "disposition": "superseded",
             "current_disposition": result.details.get("current_disposition"),
         }
+
+    result = reconcile_scheduler_effects(result)
+    if not _operational_effects_succeeded(result):
+        return {
+            "status": "error",
+            "code": "switch_reconciliation_failed",
+            "plan_id": result.plan_id,
+            "source_plan_id": result.details.get("source_plan_id"),
+            "plan_type": result.plan_type,
+            "switch_source_operation_id": result.details.get(
+                "switch_source_operation_id"
+            ),
+            "persisted": True,
+            "jobs_reconciled": False,
+            "duplicate": result.duplicate,
+            "disposition": "partial_failure",
+        }
+    from app.db import SessionLocal
+    from app.lifecycle import LifecycleTransitionError, record_switch_schedule_ready
+
+    try:
+        with SessionLocal() as db:
+            record_switch_schedule_ready(
+                db,
+                user_id=int(result.user_id),
+                plan_id=int(result.plan_id),
+                switch_source_operation_id=result.details["switch_source_operation_id"],
+            )
+            db.commit()
+    except LifecycleTransitionError:
+        return {
+            "status": "error",
+            "code": "superseded",
+            "plan_id": result.plan_id,
+            "plan_type": result.plan_type,
+            "duplicate": result.duplicate,
+            "disposition": "superseded",
+        }
+    except Exception:
+        return {
+            "status": "error",
+            "code": "switch_proof_record_failed",
+            "plan_id": result.plan_id,
+            "switch_source_operation_id": result.details.get(
+                "switch_source_operation_id"
+            ),
+            "persisted": True,
+            "jobs_reconciled": True,
+            "disposition": "partial_failure",
+        }
     return {
         "status": "ok",
         "plan_id": result.plan_id,
         "source_plan_id": result.details.get("source_plan_id"),
         "plan_type": result.plan_type,
+        "switch_source_operation_id": result.details.get(
+            "switch_source_operation_id"
+        ),
         "jobs_reconciled": True,
+        "keyboard_cleanup_pending": _effect_failed(
+            result, "remove_step_keyboards"
+        ),
+        "activation_event_pending": _effect_failed(
+            result, "record_activation_event"
+        ),
         "duplicate": result.duplicate,
         "disposition": "replayed" if result.duplicate else "applied",
     }
@@ -267,47 +344,31 @@ def recover_plan_format_switch(
     return _finish_plan_format_result(result, pending_status="not_ready")
 
 
-def retry_plan_action(user_id: int, *, source_operation_id: str) -> dict:
-    """Reconcile the latest eligible accepted control from durable receipts."""
+def retry_switch_plan_format(
+    user_id: int, *, switch_source_operation_id: str | None = None
+) -> dict:
+    """Retry only the switch receipt attached to the current plan."""
     from app.db import SessionLocal
-    from app.lifecycle import LifecycleTransitionError, recover_latest_runtime_control
-    from app.lifecycle_reconciliation import reconcile_scheduler_effects
+    from app.lifecycle import LifecycleTransitionError, recover_switch_plan_format
 
     with SessionLocal() as db:
         try:
-            result = recover_latest_runtime_control(
+            result = recover_switch_plan_format(
                 db,
                 user_id=user_id,
-                source_operation_id=source_operation_id,
+                switch_source_operation_id=switch_source_operation_id,
             )
         except LifecycleTransitionError as exc:
             raise ValueError(str(exc)) from exc
         db.commit()
 
-    if result.code == "superseded":
+    if result.code == "needs_evening_time":
         return {
-            "status": "error",
-            "code": "superseded",
-            "plan_id": result.plan_id,
-            "disposition": "superseded",
+            "status": "needs_evening_time",
+            "pending_source_operation_id": result.details["switch_source_operation_id"],
+            "disposition": "deferred",
         }
-    result = reconcile_scheduler_effects(result)
-    if not result.external_effects_succeeded:
-        return {
-            "status": "error",
-            "code": "retry_reconciliation_failed",
-            "plan_id": result.plan_id,
-            "operation": result.operation,
-            "persisted": True,
-            "disposition": "partial_failure",
-        }
-    return {
-        "status": "ok",
-        "plan_id": result.plan_id,
-        "operation": result.operation,
-        "duplicate": result.duplicate,
-        "disposition": "replayed" if result.duplicate else "applied",
-    }
+    return _finish_plan_format_result(result, pending_status="needs_evening_time")
 
 
 def record_evening_time(

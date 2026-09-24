@@ -745,6 +745,8 @@ def transition_current_plan(
     plan = get_current_plan(db, user_id, lock=True)
     if plan is None:
         raise LifecycleTransitionError("current_plan_missing")
+    if operation == "pause" and not _switch_schedule_ready(db, user_id, plan.id):
+        raise LifecycleTransitionError("switch_schedule_pending")
     allowed, target = _PLAN_TRANSITIONS[operation]
     current = str(plan.status)
     if current not in allowed:
@@ -1620,6 +1622,76 @@ def _switch_activation_source_id(source_operation_id: str) -> str:
     return f"switch-activate:{digest}"
 
 
+def _switch_ready_source_id(activation_source_id: str) -> str:
+    digest = hashlib.sha256(activation_source_id.encode()).hexdigest()[:32]
+    return f"switch-ready:{digest}"
+
+
+def _switch_schedule_ready(db: Session, user_id: int, plan_id: int) -> bool:
+    activation = (
+        db.query(PlanLifecycleOperation)
+        .filter(
+            PlanLifecycleOperation.user_id == user_id,
+            PlanLifecycleOperation.plan_id == plan_id,
+            PlanLifecycleOperation.operation == "activate",
+        )
+        .first()
+    )
+    if activation is None or not getattr(activation, "source_operation_id", "").startswith(
+        "switch-activate:"
+    ):
+        return True
+    ready = find_lifecycle_operation(
+        db, user_id, _switch_ready_source_id(activation.source_operation_id)
+    )
+    return (
+        ready is not None
+        and ready.operation == "switch_schedule_ready"
+        and ready.plan_id == plan_id
+    )
+
+
+def record_switch_schedule_ready(
+    db: Session,
+    *,
+    user_id: int,
+    plan_id: int,
+    switch_source_operation_id: str,
+) -> None:
+    """Record post-commit schedule proof, independently of button/event hygiene."""
+    _lock_user(db, user_id)
+    activation_source = _switch_activation_source_id(switch_source_operation_id)
+    activation = find_lifecycle_operation(db, user_id, activation_source)
+    current = get_current_plan(db, user_id, lock=True)
+    if (
+        activation is None
+        or activation.operation != "activate"
+        or activation.plan_id != plan_id
+        or current is None
+        or current.id != plan_id
+    ):
+        raise LifecycleTransitionError("switch_schedule_proof_superseded")
+    ready_source = _switch_ready_source_id(activation_source)
+    ready = find_lifecycle_operation(db, user_id, ready_source)
+    if ready is not None:
+        _duplicate_operation_result(
+            ready,
+            expected_operation="switch_schedule_ready",
+            expected_plan_id=plan_id,
+            expected_result_status="ready",
+        )
+        return
+    record_lifecycle_operation(
+        db,
+        user_id=user_id,
+        plan_id=plan_id,
+        source_operation_id=ready_source,
+        operation="switch_schedule_ready",
+        result_status="ready",
+    )
+    db.flush()
+
+
 def _plan_terminal_effects(
     db: Session,
     plan_id: int,
@@ -1714,42 +1786,52 @@ def switch_plan_format(
             if replacement is None:
                 raise LifecycleInvariantError("format_switch_replacement_missing")
             current = get_current_plan(db, user_id, lock=True)
-            still_authoritative = (
-                current is not None
-                and current.id == replacement.id
-                and str(current.status) == "active"
-            )
+            replacement_current = current is not None and current.id == replacement.id
+            current_active = replacement_current and str(current.status) == "active"
             cleanup_effects = _plan_terminal_effects(db, source.id)
             return replace(
                 duplicate,
                 plan_id=replacement.id,
-                status="active",
-                code="replayed" if still_authoritative else "superseded",
-                applied=still_authoritative,
+                status=str(current.status) if replacement_current else "active",
+                code="replayed" if replacement_current else "superseded",
+                applied=replacement_current,
                 plan_type=_plan_type(replacement),
                 effects=(
-                    *cleanup_effects,
+                    *(
+                        cleanup_effects
+                        if replacement_current
+                        else tuple(
+                            replace(effect, state=ExternalEffectState.NOT_REQUIRED)
+                            for effect in cleanup_effects
+                        )
+                    ),
                     ExternalEffect(
                         kind="reconcile_plan_schedule",
                         target_ids=(int(source.id),),
+                        state=(
+                            ExternalEffectState.PENDING
+                            if replacement_current
+                            else ExternalEffectState.NOT_REQUIRED
+                        ),
                     ),
                     ExternalEffect(
                         kind="reconcile_plan_schedule",
                         target_ids=(int(replacement.id),),
                         state=(
                             ExternalEffectState.PENDING
-                            if still_authoritative
+                            if current_active
                             else ExternalEffectState.NOT_REQUIRED
                         ),
                     ),
                 ),
                 details={
                     "source_plan_id": int(source.id),
+                    "switch_source_operation_id": source_operation_id,
                     "target_plan_type": normalized_target,
                     "total_days": int(replacement.total_days),
                     "current_disposition": (
                         "replacement_current"
-                        if still_authoritative
+                        if replacement_current
                         else "another_plan_current"
                         if current is not None
                         else "no_current_plan"
@@ -1766,6 +1848,8 @@ def switch_plan_format(
         current = get_current_plan(db, user_id, lock=True)
         if current is None or current.id != plan.id:
             raise LifecycleTransitionError("deferred_switch_source_no_longer_current")
+    elif not _switch_schedule_ready(db, user_id, plan.id):
+        raise LifecycleTransitionError("switch_schedule_pending")
     source_plan_type = _plan_type(plan)
     if source_plan_type == normalized_target:
         raise LifecycleTransitionError("requested_plan_type_already_current")
@@ -1908,6 +1992,7 @@ def switch_plan_format(
         ),
         details={
             "source_plan_id": int(plan.id),
+            "switch_source_operation_id": source_operation_id,
             "source_plan_type": source_plan_type,
             "target_plan_type": normalized_target,
             "total_days": int(replacement.total_days),
@@ -1989,115 +2074,64 @@ def recover_plan_format_switch(
     )
 
 
-def recover_latest_runtime_control(
+def recover_switch_plan_format(
     db: Session,
     *,
     user_id: int,
-    source_operation_id: str,
+    switch_source_operation_id: str | None = None,
 ) -> LifecycleResult:
-    """Re-run the latest eligible control's effects from its durable receipt."""
-    from app.time_slots import TimeSlotError, canonicalize_hhmm
-
-    user = _lock_user(db, user_id)
+    """Retry only a switch attached to the current source or replacement."""
+    _lock_user(db, user_id)
     current = get_current_plan(db, user_id, lock=True)
-    if current is not None:
-        receipt = (
-            db.query(PlanLifecycleOperation)
-            .filter(
-                PlanLifecycleOperation.user_id == user_id,
-                PlanLifecycleOperation.plan_id == current.id,
-                PlanLifecycleOperation.operation.in_(("pause", "resume", "activate")),
-            )
-            .order_by(PlanLifecycleOperation.id.desc())
-            .first()
-        )
-        if receipt is None:
-            raise LifecycleTransitionError("recoverable_control_receipt_missing")
-        if receipt.operation in {"pause", "resume"}:
-            return transition_current_plan(
-                db,
-                user_id=user_id,
-                operation=receipt.operation,
-                source_operation_id=receipt.source_operation_id,
-            )
-        if str(receipt.source_operation_id).startswith("switch-activate:"):
-            candidates = (
-                db.query(PlanLifecycleOperation)
-                .filter(
-                    PlanLifecycleOperation.user_id == user_id,
-                    PlanLifecycleOperation.operation == "switch_plan_format",
-                )
-                .order_by(PlanLifecycleOperation.id.desc())
-                .all()
-            )
-            source = next(
-                (
-                    candidate for candidate in candidates
-                    if _switch_activation_source_id(candidate.source_operation_id)
-                    == receipt.source_operation_id
-                ),
-                None,
-            )
-            if source is None:
-                raise LifecycleInvariantError("switch_recovery_receipt_missing")
-            return switch_plan_format(
-                db,
-                user_id=user_id,
-                target_plan_type=_plan_type(current),
-                source_operation_id=source.source_operation_id,
-            )
-        return recover_current_plan_activation(
-            db,
-            user_id=user_id,
-            plan_type=_plan_type(current),
-            required_previous_status="abandoned",
-        )
+    if current is None:
+        raise LifecycleTransitionError("recoverable_switch_superseded")
 
-    latest = _lifecycle_context_plan(db, user_id)
-    if str(latest.status) != "abandoned":
-        raise LifecycleTransitionError("recoverable_control_missing")
-    pending = (
-        db.query(PlanLifecycleOperation)
+    receipts = (
+        [find_lifecycle_operation(db, user_id, switch_source_operation_id)]
+        if switch_source_operation_id
+        else db.query(PlanLifecycleOperation)
         .filter(
             PlanLifecycleOperation.user_id == user_id,
-            PlanLifecycleOperation.plan_id == latest.id,
-            PlanLifecycleOperation.operation == "prepare_followup_evening",
-            PlanLifecycleOperation.result_status == "MEDIUM",
+            PlanLifecycleOperation.operation == "switch_plan_format",
         )
         .order_by(PlanLifecycleOperation.id.desc())
-        .first()
+        .all()
     )
-    profile = getattr(user, "profile", None)
-    if pending is None or not (profile and profile.evening_slot_collected):
-        raise LifecycleTransitionError("recoverable_control_missing")
-    latest_receipt = (
-        db.query(PlanLifecycleOperation)
-        .filter(PlanLifecycleOperation.user_id == user_id)
-        .order_by(PlanLifecycleOperation.id.desc())
-        .first()
-    )
-    if (
-        latest_receipt is None
-        or latest_receipt.plan_id != latest.id
-        or latest_receipt.operation != "record_evening_time_followup"
-        or latest_receipt.id < pending.id
-    ):
-        raise LifecycleTransitionError("recoverable_control_superseded")
-    slots = profile.daily_time_slots if isinstance(profile.daily_time_slots, dict) else {}
-    try:
-        day_time = canonicalize_hhmm(slots.get("DAY"))
-        evening_time = canonicalize_hhmm(slots.get("EVENING"))
-    except TimeSlotError as exc:
-        raise LifecycleTransitionError("recoverable_followup_time_invalid") from exc
-    return activate_plan(
+    candidates: list[PlanLifecycleOperation] = []
+    for receipt in receipts:
+        if receipt is None:
+            continue
+        if receipt.operation != "switch_plan_format":
+            raise LifecycleTransitionError("switch_recovery_receipt_mismatch")
+        activation = find_lifecycle_operation(
+            db, user_id, _switch_activation_source_id(receipt.source_operation_id)
+        )
+        if (
+            receipt.plan_id == current.id and activation is None
+        ) or (
+            activation is not None
+            and activation.operation == "activate"
+            and activation.plan_id == current.id
+        ):
+            candidates.append(receipt)
+    if not candidates:
+        raise LifecycleTransitionError("recoverable_switch_superseded")
+    if len(candidates) != 1:
+        raise LifecycleTransitionError("recoverable_switch_ambiguous")
+
+    receipt = candidates[0]
+    result = switch_plan_format(
         db,
         user_id=user_id,
-        plan_type="MEDIUM",
-        day_time=day_time,
-        evening_time=evening_time,
-        source_operation_id=source_operation_id,
-        require_plan_history=True,
-        required_previous_status="abandoned",
+        target_plan_type=receipt.result_status,
+        source_operation_id=receipt.source_operation_id,
+    )
+    return replace(
+        result,
+        details={
+            **result.details,
+            "switch_source_operation_id": receipt.source_operation_id,
+        },
     )
 
 

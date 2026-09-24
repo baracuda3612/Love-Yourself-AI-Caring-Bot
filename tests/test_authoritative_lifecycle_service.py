@@ -1001,6 +1001,112 @@ def test_expiry_sweep_isolates_unexpected_candidate_failure(monkeypatch, caplog)
     assert "Candidate failed step=2; continuing sweep" in caplog.text
 
 
+def test_canceled_keyboard_sweep_retries_without_expiry_or_ignored_event(monkeypatch):
+    step = SimpleNamespace(id=41, step_status="canceled", tg_message_id=901)
+    delivery_attempts = []
+    expiry_attempts = []
+    writes = []
+
+    class _Query:
+        def __init__(self, kind):
+            self.kind = kind
+            self.clauses = []
+
+        def join(self, *_args):
+            return self
+
+        def filter(self, *clauses):
+            self.clauses.extend(clauses)
+            return self
+
+        def order_by(self, *_args):
+            return self
+
+        def _sql(self):
+            return " ".join(
+                str(clause.compile(compile_kwargs={"literal_binds": True}))
+                for clause in self.clauses
+            )
+
+        def all(self):
+            sql = self._sql()
+            if self.kind == "candidate":
+                assert "'canceled'" not in sql
+                assert "'pending'" in sql and "'delivered'" in sql
+                return []
+            if self.kind == "keyboard":
+                assert "tg_message_id IS NOT NULL" in sql
+                return [(step.id,)] if "'canceled'" in sql and step.tg_message_id else []
+            if self.kind == "terminal":
+                assert "'canceled'" in sql
+                return [(step.id, step.tg_message_id, 700)]
+            raise AssertionError(self.kind)
+
+        def first(self):
+            assert self.kind == "write"
+            return step
+
+    class _DB:
+        def __init__(self, kind):
+            self.kind = kind
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def query(self, *_models):
+            return _Query(self.kind)
+
+        def commit(self):
+            writes.append(step.tg_message_id)
+
+    kinds = iter(
+        ("candidate", "keyboard", "terminal",
+         "candidate", "keyboard", "terminal", "write",
+         "candidate", "keyboard")
+    )
+    monkeypatch.setattr(scheduler, "SessionLocal", lambda: _DB(next(kinds)))
+    monkeypatch.setattr(
+        scheduler, "expire_plan_step",
+        lambda *_a, **_k: expiry_attempts.append(True),
+    )
+
+    class _Future:
+        def __init__(self, fail):
+            self.fail = fail
+
+        def result(self, **_kwargs):
+            if self.fail:
+                raise RuntimeError("Telegram temporarily unavailable")
+            return True
+
+    def submit(coroutine):
+        coroutine.close()
+        delivery_attempts.append(step.tg_message_id)
+        return _Future(fail=len(delivery_attempts) == 1)
+
+    monkeypatch.setattr(scheduler, "_submit_coroutine", submit)
+
+    scheduler.expire_overdue_steps()
+    assert step.step_status == "canceled"
+    assert step.tg_message_id == 901
+    assert delivery_attempts == [901]
+    assert writes == []
+    assert expiry_attempts == []
+
+    scheduler.expire_overdue_steps()
+    assert step.tg_message_id is None
+    assert writes == [None]
+    assert delivery_attempts == [901, 901]
+    assert expiry_attempts == []
+
+    scheduler.expire_overdue_steps()
+    assert delivery_attempts == [901, 901]
+    assert expiry_attempts == []
+
+
 def test_time_change_replay_reconciles_only_currently_schedulable_steps(monkeypatch):
     past = datetime.now(timezone.utc).replace(year=2020)
     future = datetime.now(timezone.utc).replace(year=2030)

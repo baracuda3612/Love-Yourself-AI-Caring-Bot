@@ -186,6 +186,12 @@ def test_switch_collects_evening_then_replaces_one_current_plan_atomically(pg_se
     assert source.status == "active"
     assert all(step.step_status == "pending" for step in source_steps)
 
+    lost_key_retry = lifecycle.recover_switch_plan_format(
+        db, user_id=user.id, switch_source_operation_id="wp023:switch",
+    )
+    assert lost_key_retry.code == "needs_evening_time"
+    assert lost_key_retry.details["switch_source_operation_id"] == "wp023:switch"
+
     collected = lifecycle.record_evening_time_preference(
         db,
         user_id=user.id,
@@ -285,43 +291,49 @@ def test_switch_builder_failure_rolls_back_source_mutation(pg_session, monkeypat
     assert all(db.get(AIPlanStep, step_id).step_status == "pending" for step_id in step_ids)
 
 
-def test_fresh_receipt_retry_after_pause_and_switch_has_one_current_plan(pg_session):
+def test_switch_receipt_retry_and_pause_wait_for_schedule_proof(pg_session):
     db = pg_session
     user, _profile, source, _steps = _seed_current_plan(db, medium=True)
     _seed_disposable_builder_library(db)
-    lifecycle.transition_current_plan(
-        db, user_id=user.id, operation="pause", source_operation_id="wp023:pause-retry"
-    )
-    paused_retry = lifecycle.recover_latest_runtime_control(
-        db, user_id=user.id, source_operation_id="coach:new-pause-call"
-    )
-    assert paused_retry.operation == "pause"
-    assert paused_retry.duplicate is True
-    assert paused_retry.effects[0].target_ids == (source.id,)
-    assert source.status == "paused"
-
-    lifecycle.transition_current_plan(
-        db, user_id=user.id, operation="resume", source_operation_id="wp023:resume-retry"
-    )
-    resumed_retry = lifecycle.recover_latest_runtime_control(
-        db, user_id=user.id, source_operation_id="coach:new-resume-call"
-    )
-    assert resumed_retry.operation == "resume"
-    assert resumed_retry.duplicate is True
-
     switched = lifecycle.switch_plan_format(
         db, user_id=user.id, target_plan_type="SHORT",
         source_operation_id="wp023:switch-retry",
     )
-    switch_retry = lifecycle.recover_latest_runtime_control(
-        db, user_id=user.id, source_operation_id="coach:new-switch-call"
+    with pytest.raises(lifecycle.LifecycleTransitionError, match="switch_schedule_pending"):
+        lifecycle.transition_current_plan(
+            db, user_id=user.id, operation="pause", source_operation_id="wp023:early-pause"
+        )
+    with pytest.raises(lifecycle.LifecycleTransitionError, match="switch_schedule_pending"):
+        lifecycle.switch_plan_format(
+            db, user_id=user.id, target_plan_type="MEDIUM",
+            source_operation_id="wp023:second-switch",
+        )
+    replay = lifecycle.recover_switch_plan_format(
+        db, user_id=user.id, switch_source_operation_id="wp023:switch-retry"
     )
-    assert switch_retry.plan_id == switched.plan_id
-    assert switch_retry.operation == "switch_plan_format"
-    assert switch_retry.details["total_days"] == 7
+    assert replay.plan_id == switched.plan_id
+    assert replay.duplicate is True
+    assert source.status == "abandoned"
+    assert db.query(AIPlan).filter(AIPlan.user_id == user.id).count() == 2
+
+    lifecycle.record_switch_schedule_ready(
+        db, user_id=user.id, plan_id=switched.plan_id,
+        switch_source_operation_id="wp023:switch-retry",
+    )
+    lifecycle.record_switch_schedule_ready(
+        db, user_id=user.id, plan_id=switched.plan_id,
+        switch_source_operation_id="wp023:switch-retry",
+    )
+    paused = lifecycle.transition_current_plan(
+        db, user_id=user.id, operation="pause", source_operation_id="wp023:pause-after-proof"
+    )
+    assert paused.status == "paused"
+    assert db.query(PlanLifecycleOperation).filter(
+        PlanLifecycleOperation.user_id == user.id,
+        PlanLifecycleOperation.operation == "switch_schedule_ready",
+    ).count() == 1
     assert db.query(AIPlan).filter(
-        AIPlan.user_id == user.id,
-        AIPlan.status.in_(("active", "paused")),
+        AIPlan.user_id == user.id, AIPlan.status.in_(("active", "paused")),
     ).count() == 1
 
 
@@ -380,8 +392,11 @@ def test_followup_evening_fresh_retry_after_builder_rollback(pg_session, monkeyp
     assert replay.code == "replayed"
     assert profile.daily_time_slots["EVENING"] == "20:30"
 
-    activated = lifecycle.recover_latest_runtime_control(
-        db, user_id=user.id, source_operation_id="coach:fresh-after-builder-failure"
+    activated = lifecycle.activate_plan(
+        db, user_id=user.id, plan_type="MEDIUM", day_time="14:00",
+        evening_time="20:30",
+        source_operation_id="coach:fresh-after-builder-failure",
+        require_plan_history=True, required_previous_status="abandoned",
     )
     assert activated.operation == "activate"
     assert activated.plan_type == "MEDIUM"
@@ -391,8 +406,9 @@ def test_followup_evening_fresh_retry_after_builder_rollback(pg_session, monkeyp
         AIPlan.status.in_(("active", "paused")),
     ).count() == 1
 
-    recovered = lifecycle.recover_latest_runtime_control(
-        db, user_id=user.id, source_operation_id="coach:another-followup-retry"
+    recovered = lifecycle.recover_current_plan_activation(
+        db, user_id=user.id, plan_type="MEDIUM",
+        required_previous_status="abandoned",
     )
     assert recovered.plan_id == activated.plan_id
     assert recovered.duplicate is True
@@ -424,4 +440,34 @@ def test_stale_followup_evening_intent_cannot_collect_with_fresh_call(pg_session
     assert profile.evening_slot_collected is False
     assert db.query(PlanLifecycleOperation).filter(
         PlanLifecycleOperation.source_operation_id == "coach:fresh-old-intent"
+    ).count() == 0
+
+
+def test_old_switch_retry_after_later_cancellation_is_superseded(pg_session):
+    db = pg_session
+    user, _profile, _source, _steps = _seed_current_plan(db, medium=True)
+    _seed_disposable_builder_library(db)
+    switched = lifecycle.switch_plan_format(
+        db, user_id=user.id, target_plan_type="SHORT",
+        source_operation_id="wp023:old-switch",
+    )
+    lifecycle.record_switch_schedule_ready(
+        db, user_id=user.id, plan_id=switched.plan_id,
+        switch_source_operation_id="wp023:old-switch",
+    )
+    lifecycle.abandon_current_plan(
+        db,
+        user_id=user.id,
+        source_operation_id="wp023:later-cancel",
+        occurred_at=db.get(AIPlan, switched.plan_id).activated_at + timedelta(minutes=1),
+    )
+
+    with pytest.raises(
+        lifecycle.LifecycleTransitionError, match="recoverable_switch_superseded"
+    ):
+        lifecycle.recover_switch_plan_format(
+            db, user_id=user.id, switch_source_operation_id="wp023:old-switch"
+        )
+    assert db.query(AIPlan).filter(
+        AIPlan.user_id == user.id, AIPlan.status.in_(("active", "paused")),
     ).count() == 0

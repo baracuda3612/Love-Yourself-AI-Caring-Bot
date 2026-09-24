@@ -390,10 +390,18 @@ def test_switch_tool_reconciles_source_and_replacement_after_commit(monkeypatch)
                 lifecycle.ExternalEffect(kind="reconcile_plan_schedule", target_ids=(11,)),
                 lifecycle.ExternalEffect(kind="reconcile_plan_schedule", target_ids=(12,)),
             ),
-            details={"source_plan_id": 11},
+            details={
+                "source_plan_id": 11,
+                "switch_source_operation_id": "switch:applied",
+            },
         )
 
     monkeypatch.setattr(lifecycle, "switch_plan_format", decide)
+    monkeypatch.setattr(
+        lifecycle,
+        "record_switch_schedule_ready",
+        lambda db, **kwargs: captured.update(proof_db=db, proof=kwargs),
+    )
 
     def reconcile(result):
         assert fake_db.commits == 1
@@ -417,6 +425,12 @@ def test_switch_tool_reconciles_source_and_replacement_after_commit(monkeypatch)
     assert result["status"] == "ok"
     assert result["source_plan_id"] == 11
     assert result["plan_id"] == 12
+    assert captured["proof_db"] is fake_db
+    assert captured["proof"] == {
+        "user_id": 1,
+        "plan_id": 12,
+        "switch_source_operation_id": "switch:applied",
+    }
 
 
 def test_switch_recovery_waits_for_first_evening_without_new_intent(monkeypatch):
@@ -603,6 +617,7 @@ def test_create_followup_passes_source_and_derived_prerequisites(monkeypatch):
         "plan_id": 22,
         "plan_type": "MEDIUM",
         "jobs_reconciled": True,
+        "activation_event_pending": False,
         "duplicate": False,
         "disposition": "applied",
     }

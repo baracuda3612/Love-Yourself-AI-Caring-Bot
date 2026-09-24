@@ -18,108 +18,154 @@ class _Session:
         self.commits += 1
 
 
-@pytest.mark.parametrize("operation", ["pause", "resume", "switch_plan_format", "activate"])
-def test_fresh_retry_call_reconciles_durable_control_without_reapplying_decision(
-    monkeypatch, operation
-):
-    session = _Session()
-    captured = []
-    effect = lifecycle.ExternalEffect("reconcile_plan_schedule", (23,))
-    original = lifecycle.LifecycleResult(
-        user_id=7,
-        plan_id=23,
-        status="active",
-        operation=operation,
-        duplicate=True,
-        code="replayed",
-        effects=(effect,),
-        details={"total_days": 14},
+def _switch_result(*, with_keyboard: bool = False):
+    effects = [
+        lifecycle.ExternalEffect("reconcile_plan_schedule", (11,)),
+        lifecycle.ExternalEffect("reconcile_plan_schedule", (23,)),
+    ]
+    if with_keyboard:
+        effects.insert(0, lifecycle.ExternalEffect("remove_step_keyboards", (41,)))
+    return lifecycle.LifecycleResult(
+        user_id=7, plan_id=23, status="active", operation="switch_plan_format",
+        effects=tuple(effects),
+        details={
+            "source_plan_id": 11,
+            "switch_source_operation_id": "coach:s1",
+            "total_days": 14,
+        },
     )
+
+
+def test_fresh_retry_routes_only_the_current_switch_receipt(monkeypatch):
+    session = _Session()
+    decision = _switch_result()
+    captured = []
     monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(session))
 
     def recover(db, **kwargs):
         captured.append((db, kwargs))
-        return original
+        return decision
 
-    monkeypatch.setattr(lifecycle, "recover_latest_runtime_control", recover)
+    monkeypatch.setattr(lifecycle, "recover_switch_plan_format", recover)
     monkeypatch.setattr(
-        lifecycle_reconciliation,
-        "reconcile_scheduler_effects",
-        lambda result: replace(
-            result,
-            effects=(replace(effect, state=lifecycle.ExternalEffectState.SUCCEEDED),),
-        ),
+        tools, "_finish_plan_format_result",
+        lambda result, **_kwargs: {"status": "ok", "plan_id": result.plan_id},
     )
 
-    result = tools.retry_plan_action(7, source_operation_id="coach:fresh-retry")
+    response = tools.retry_switch_plan_format(
+        7, switch_source_operation_id="coach:s1"
+    )
 
-    assert captured == [(session, {"user_id": 7, "source_operation_id": "coach:fresh-retry"})]
+    assert captured == [(session, {
+        "user_id": 7, "switch_source_operation_id": "coach:s1",
+    })]
     assert session.commits == 1
-    assert result == {
-        "status": "ok",
-        "plan_id": 23,
-        "operation": operation,
-        "duplicate": True,
-        "disposition": "replayed",
-    }
+    assert response == {"status": "ok", "plan_id": 23}
 
 
-def test_retry_reports_partial_effect_without_claiming_success(monkeypatch):
+def test_event_only_failure_keeps_switch_operational_and_retries(monkeypatch):
     session = _Session()
-    effect = lifecycle.ExternalEffect("reconcile_plan_schedule", (23,))
-    original = lifecycle.LifecycleResult(
-        user_id=7, plan_id=23, status="paused", operation="pause",
-        duplicate=True, effects=(effect,),
-    )
     monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(session))
-    monkeypatch.setattr(lifecycle, "recover_latest_runtime_control", lambda *_a, **_k: original)
     monkeypatch.setattr(
-        lifecycle_reconciliation,
-        "reconcile_scheduler_effects",
-        lambda result: replace(
-            result,
-            effects=(replace(effect, state=lifecycle.ExternalEffectState.FAILED),),
-        ),
+        scheduler, "reconcile_plan_schedule",
+        lambda _plan_id: scheduler.SchedulerReconciliation(1, 1),
     )
-
-    result = tools.retry_plan_action(7, source_operation_id="coach:fresh-retry")
-
-    assert session.commits == 1
-    assert result["status"] == "error"
-    assert result["code"] == "retry_reconciliation_failed"
-    assert result["persisted"] is True
-
-
-@pytest.mark.parametrize("operation", ["activate", "switch_plan_format"])
-def test_replacement_activation_event_retried_after_failure(monkeypatch, operation):
-    effect = lifecycle.ExternalEffect("reconcile_plan_schedule", (23,))
-    result = lifecycle.LifecycleResult(
-        user_id=7, plan_id=23, status="active", operation=operation,
-        effects=(effect,), details={"total_days": 14},
-    )
+    ready = []
     monkeypatch.setattr(
-        scheduler,
-        "reconcile_plan_schedule",
-        lambda _plan_id: scheduler.SchedulerReconciliation(
-            attempted=1, succeeded=1, failed_ids=(),
-        ),
+        lifecycle, "record_switch_schedule_ready",
+        lambda _db, **kwargs: ready.append(kwargs["plan_id"]),
     )
-    attempts = []
+    events = []
 
     def record(_result):
-        attempts.append(_result.plan_id)
-        if len(attempts) == 1:
-            raise RuntimeError("event store temporarily unavailable")
+        events.append(_result.plan_id)
+        if len(events) == 1:
+            raise RuntimeError("event unavailable")
 
     monkeypatch.setattr(lifecycle_reconciliation, "_record_activation_event", record)
 
-    failed = lifecycle_reconciliation.reconcile_scheduler_effects(result)
-    replayed = lifecycle_reconciliation.reconcile_scheduler_effects(result)
+    first = tools._finish_plan_format_result(
+        _switch_result(), pending_status="needs_evening_time"
+    )
+    second = tools._finish_plan_format_result(
+        _switch_result(), pending_status="needs_evening_time"
+    )
 
-    assert failed.external_effects_succeeded is False
-    assert failed.effects[0].error_code == "activation_event_failed"
-    assert replayed.external_effects_succeeded is True
-    assert attempts == [23, 23]
+    assert first["status"] == second["status"] == "ok"
+    assert first["jobs_reconciled"] is True
+    assert first["activation_event_pending"] is True
+    assert second["activation_event_pending"] is False
+    assert ready == [23, 23]
+    assert events == [23, 23]
+
+
+def test_keyboard_failure_is_hygiene_not_switch_gate(monkeypatch):
+    session = _Session()
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(session))
+    monkeypatch.setattr(
+        scheduler, "reconcile_plan_schedule",
+        lambda _plan_id: scheduler.SchedulerReconciliation(1, 1),
+    )
+    monkeypatch.setattr(
+        scheduler, "reconcile_terminal_step_keyboards",
+        lambda ids: scheduler.SchedulerReconciliation(
+            len(ids), 0, tuple(ids)
+        ),
+    )
+    monkeypatch.setattr(
+        lifecycle_reconciliation, "_record_activation_event", lambda _result: None
+    )
+    ready = []
+    monkeypatch.setattr(
+        lifecycle, "record_switch_schedule_ready",
+        lambda _db, **kwargs: ready.append(kwargs["plan_id"]),
+    )
+
+    response = tools._finish_plan_format_result(
+        _switch_result(with_keyboard=True),
+        pending_status="needs_evening_time",
+    )
+
+    assert response["status"] == "ok"
+    assert response["keyboard_cleanup_pending"] is True
+    assert response["activation_event_pending"] is False
+    assert ready == [23]
+
+
+def test_schedule_failure_blocks_switch_ready_receipt_until_retry(monkeypatch):
+    session = _Session()
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(session))
+    attempts = []
+
+    def schedule(plan_id):
+        attempts.append(plan_id)
+        if len(attempts) == 1:
+            return scheduler.SchedulerReconciliation(1, 0, (plan_id,))
+        return scheduler.SchedulerReconciliation(1, 1)
+
+    monkeypatch.setattr(scheduler, "reconcile_plan_schedule", schedule)
+    monkeypatch.setattr(
+        lifecycle_reconciliation, "_record_activation_event", lambda _result: None
+    )
+    ready = []
+    monkeypatch.setattr(
+        lifecycle, "record_switch_schedule_ready",
+        lambda _db, **kwargs: ready.append(kwargs["plan_id"]),
+    )
+
+    first = tools._finish_plan_format_result(
+        _switch_result(), pending_status="needs_evening_time"
+    )
+    second = tools._finish_plan_format_result(
+        _switch_result(), pending_status="needs_evening_time"
+    )
+
+    assert first["status"] == "error"
+    assert first["code"] == "switch_reconciliation_failed"
+    assert first["jobs_reconciled"] is False
+    assert ready == [23]
+    assert second["status"] == "ok"
+    assert attempts == [11, 23, 11, 23]
 
 
 def test_deferred_switch_does_not_emit_activation_event(monkeypatch):

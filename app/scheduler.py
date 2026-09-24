@@ -840,8 +840,8 @@ def expire_overdue_steps() -> None:
       This keeps legacy / adaptation-created steps aligned with the same local
       end-of-day rule used by plan finalization.
 
-    After marking expired, removes inline keyboard buttons from the Telegram
-    message so the user sees the task as closed (no tappable buttons).
+    After marking expired, removes inline keyboards from expired and canceled
+    steps. Canceled steps are never expiry candidates or ignored telemetry.
     """
     from sqlalchemy import or_
 
@@ -933,7 +933,7 @@ def expire_overdue_steps() -> None:
             for (step_id,) in (
                 db.query(AIPlanStep.id)
                 .filter(
-                    AIPlanStep.step_status == "expired",
+                    AIPlanStep.step_status.in_(("expired", "canceled")),
                     AIPlanStep.tg_message_id.isnot(None),
                 )
                 .all()
