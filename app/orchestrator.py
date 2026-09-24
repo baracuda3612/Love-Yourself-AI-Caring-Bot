@@ -594,6 +594,7 @@ def _build_tool_registry() -> Dict[str, Any]:
         pause_plan,
         record_evening_time,
         resume_plan,
+        retry_plan_action,
         retry_switch_plan_format,
         switch_plan_format,
     )
@@ -638,6 +639,11 @@ def _build_tool_registry() -> Dict[str, Any]:
         "retry_switch_plan_format": lambda uid, args: retry_switch_plan_format(
             uid,
             switch_source_operation_id=args.get("switch_source_operation_id"),
+        ),
+        "retry_plan_action": lambda uid, args: retry_plan_action(
+            uid,
+            args["action"],
+            args["original_source_operation_id"],
         ),
     }
 
@@ -701,6 +707,12 @@ def _humanize_tool_error(tool_name: str, raw: str) -> str:
         )
     if "switch_recovery_receipt_mismatch" in r:
         return "⚠️ Цей код не належить зміні формату."
+    if "retry_action_superseded" in r:
+        return "⚠️ Цю дію вже витіснила новіша зміна плану; старий повтор не застосовано."
+    if "retry_receipt_missing" in r or "retry_receipt_action_mismatch" in r:
+        return "⚠️ Не знайдено саме цієї збереженої дії. Перевір її код і тип."
+    if "retry_source_required" in r or "unsupported_retry_action" in r:
+        return "⚠️ Для повтору потрібні тип дії та її початковий код."
     if "requested_plan_type_already_current" in r:
         return "Цей формат уже діє; обери інший формат для перемикання."
     if "evening_time_requires_medium_plan" in r:
@@ -767,6 +779,7 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
         "cancel_plan",
         "switch_plan_format",
         "retry_switch_plan_format",
+        "retry_plan_action",
     }
     if tool_name in source_required_tools and not source_operation_id:
         logger.error(
@@ -891,12 +904,21 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
 
     if isinstance(result, dict) and result.get("status") == "error":
         code = result.get("code")
-        retry_reference = result.get("switch_source_operation_id") or source_operation_id
+        retry_reference = (
+            result.get("original_source_operation_id")
+            or result.get("switch_source_operation_id")
+            or source_operation_id
+        )
         retry_note = _retry_reference_note(retry_reference)
         if code == "switch_proof_record_failed":
             return (
                 "⚠️ Розклад узгоджено, але підтвердження ще не збережено. "
                 "Повтори перевірку цієї зміни." + retry_note
+            )
+        if code == "retry_postproof_failed":
+            return (
+                "⚠️ Не вдалося остаточно перевірити стан цієї дії. "
+                "Повтори перевірку за тим самим кодом." + retry_note
             )
         if code == "activation_reconciliation_failed":
             return (
@@ -923,9 +945,16 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
                     )
             return "⚠️ Цей запит уже застарів; поточний стан плану змінився."
         if code == "cancel_reconciliation_failed":
+            if result.get("historical_cleanup"):
+                return (
+                    "⚠️ Прибирання старого скасованого плану ще не завершене; "
+                    "поточний план не змінено. Повтори перевірку."
+                    + retry_note
+                )
             return (
                 "⚠️ План скасовано, але очищення розкладу ще не завершене. "
                 "Повтори цю саму дію."
+                + retry_note
             )
         if code in {
             "pause_reconciliation_failed",
@@ -1043,7 +1072,38 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
     if tool_name == "cancel_plan":
         total_days = result.get("total_days")
         if total_days in {7, 14}:
+            if result.get("keyboard_cleanup_pending"):
+                return (
+                    f"🛑 Поточні {total_days} днів скасовано. "
+                    "Старі кнопки ще очищаються."
+                    + _retry_reference_note(result.get("original_source_operation_id"))
+                )
             return f"🛑 Поточні {total_days} днів скасовано."
+
+    if tool_name == "retry_plan_action":
+        action = result.get("action")
+        labels = {
+            "pause": "Паузу",
+            "resume": "Відновлення",
+            "cancel": "Скасування",
+            "followup": "Новий план",
+        }
+        if action == "cancel" and result.get("historical_cleanup"):
+            reply = "✅ Прибирання старого скасованого плану перевірено; поточний план не змінено."
+        elif action == "followup" and result.get("plan_status") == "paused":
+            reply = (
+                "✅ Новий план збережено й зараз на паузі. "
+                "Активний розклад буде перевірено при відновленні."
+            )
+        else:
+            reply = f"✅ {labels.get(action, 'Дію')} перевірено; розклад узгоджено."
+        if result.get("keyboard_cleanup_pending"):
+            reply += " Старі кнопки ще очищаються."
+        if result.get("activation_event_pending"):
+            reply += " Запис події активації очікує повтору."
+        if result.get("keyboard_cleanup_pending") or result.get("activation_event_pending"):
+            reply += _retry_reference_note(result.get("original_source_operation_id"))
+        return reply
 
     if tool_name in {"change_day_time", "change_evening_time"}:
         if result.get("jobs_reconciled") == "deferred":
@@ -1052,13 +1112,15 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
                 "Розклад призупиненого плану зараз не змінено."
             )
 
-    if tool_name == "create_followup_plan" and result.get("recovered"):
-        return "✅ Збережений план знайдено, його розклад узгоджено."
-
     if tool_name in {"switch_plan_format", "retry_switch_plan_format"}:
         return _switch_success_reply(result)
     if tool_name == "create_followup_plan" and result.get("activation_event_pending"):
-        return "✅ План і розклад готові; запис події активації очікує повтору."
+        return (
+            "✅ План і розклад готові; запис події активації очікує повтору."
+            + _retry_reference_note(result.get("original_source_operation_id"))
+        )
+    if tool_name == "create_followup_plan" and result.get("recovered"):
+        return "✅ Збережений план знайдено, його розклад узгоджено."
 
     if result.get("disposition") == "replayed":
         return "✅ Цю дію вже застосовано; актуальний стан підтверджено."

@@ -673,6 +673,96 @@ async def test_fresh_coach_retry_routes_same_switch_receipt_and_reports_partial(
 
 
 @pytest.mark.anyio
+async def test_fresh_control_retry_uses_original_code_not_new_call_id(monkeypatch):
+    captured = []
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_a, **_k: None)
+
+    def retry(user_id, args):
+        captured.append((user_id, dict(args)))
+        return {
+            "status": "error", "code": "resume_reconciliation_failed",
+            "persisted": True,
+            "original_source_operation_id": "coach:resume-original",
+        }
+
+    monkeypatch.setattr(
+        orchestrator, "_build_tool_registry",
+        lambda: {"retry_plan_action": retry},
+    )
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "retry_plan_action",
+            "arguments": {
+                "action": "resume",
+                "original_source_operation_id": "coach:resume-original",
+            },
+            "call_id": "coach:new-retry-call",
+        },
+    )
+
+    assert captured[0][1]["original_source_operation_id"] == "coach:resume-original"
+    assert captured[0][1]["_source_operation_id"] == "coach:new-retry-call"
+    assert "розклад ще не узгоджено" in response
+    assert "coach:resume-original" in response
+
+
+@pytest.mark.anyio
+async def test_stale_control_retry_cannot_claim_success(monkeypatch):
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {"retry_plan_action": lambda *_a, **_k: (_ for _ in ()).throw(
+            ValueError("retry_action_superseded")
+        )},
+    )
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "retry_plan_action",
+            "arguments": {
+                "action": "pause",
+                "original_source_operation_id": "coach:old-pause",
+            },
+            "call_id": "coach:new-retry-call",
+        },
+    )
+    assert "новіша зміна" in response
+    assert "узгоджено" not in response
+
+
+@pytest.mark.anyio
+async def test_paused_followup_retry_does_not_claim_active_schedule(monkeypatch):
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {"retry_plan_action": lambda *_a, **_k: {
+            "status": "ok",
+            "action": "followup",
+            "plan_status": "paused",
+            "activation_event_pending": True,
+            "original_source_operation_id": "coach:followup-1",
+        }},
+    )
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "retry_plan_action",
+            "arguments": {
+                "action": "followup",
+                "original_source_operation_id": "coach:followup-1",
+            },
+            "call_id": "coach:retry-1",
+        },
+    )
+    assert "на паузі" in response
+    assert "при відновленні" in response
+    assert "розклад узгоджено" not in response
+    assert "coach:followup-1" in response
+
+
+@pytest.mark.anyio
 async def test_event_only_failure_does_not_claim_schedule_failure(monkeypatch):
     monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(

@@ -645,6 +645,14 @@ For pause and resume, a direct and unambiguous request counts as confirmation.
 - This never requests another replacement or retries pause, resume, or a
   historical plan. A different format or time requires its normal tool.
 
+**`retry_plan_action(action, original_source_operation_id)`**
+- Use only after a persisted partial result or pending button/event warning
+  for `pause`, `resume`, `cancel`, or `followup`. Copy both the action and its
+  exact code from the prior reply.
+- Never substitute the new tool-call ID or guess a different receipt. If the
+  code is unavailable, ask the user for it. A later lifecycle decision may
+  make the old action superseded; report that result without claiming repair.
+
 **`get_plan_status`**
 - Use when the user asks for factual information about their current
   7 or 14-day sequence and that information is not already available
@@ -667,9 +675,9 @@ The current product state determines which runtime tools are available.
 
 | Current state | Available tools |
 |---|---|
-| `ACTIVE` | `pause_plan`, `cancel_plan`, `switch_plan_format`, `retry_switch_plan_format`, `change_day_time`, `change_evening_time`, `get_plan_status` |
-| `ACTIVE_PAUSED` | `resume_plan`, `cancel_plan`, `switch_plan_format`, `retry_switch_plan_format`, `change_day_time`, `change_evening_time`, `get_plan_status` |
-| `NO_ACTIVE_PLAN` | `create_followup_plan`, `record_evening_time`, `change_day_time`, `change_evening_time`, `get_plan_status` |
+| `ACTIVE` | `pause_plan`, `cancel_plan`, `switch_plan_format`, `retry_switch_plan_format`, `retry_plan_action`, `change_day_time`, `change_evening_time`, `get_plan_status` |
+| `ACTIVE_PAUSED` | `resume_plan`, `cancel_plan`, `switch_plan_format`, `retry_switch_plan_format`, `retry_plan_action`, `change_day_time`, `change_evening_time`, `get_plan_status` |
+| `NO_ACTIVE_PLAN` | `create_followup_plan`, `record_evening_time`, `retry_plan_action`, `change_day_time`, `change_evening_time`, `get_plan_status` |
 | Any other state | none |
 
 Additional tool-specific conditions still apply:
@@ -914,6 +922,31 @@ COACH_TOOLS: List[Dict[str, Any]] = [
     },
     {
         "type": "function",
+        "name": "retry_plan_action",
+        "description": (
+            "Retry one exact persisted pause, resume, cancellation, or follow-up "
+            "action after incomplete external effects or a pending hygiene/event "
+            "warning; never choose another receipt."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["pause", "resume", "cancel", "followup"],
+                },
+                "original_source_operation_id": {
+                    "type": "string",
+                    "description": "Exact action code from the earlier partial reply.",
+                },
+            },
+            "required": ["action", "original_source_operation_id"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
         "name": "record_evening_time",
         "description": (
             "Save the first evening delivery time while creation of a 14-day "
@@ -1007,6 +1040,7 @@ _TOOL_NAMES_BY_STATE: Dict[str, set] = {
         "get_plan_status",
         "switch_plan_format",
         "retry_switch_plan_format",
+        "retry_plan_action",
     },
     "ACTIVE_PAUSED": {
         "resume_plan",
@@ -1016,6 +1050,7 @@ _TOOL_NAMES_BY_STATE: Dict[str, set] = {
         "get_plan_status",
         "switch_plan_format",
         "retry_switch_plan_format",
+        "retry_plan_action",
     },
     "NO_ACTIVE_PLAN": {
         "create_followup_plan",
@@ -1023,6 +1058,7 @@ _TOOL_NAMES_BY_STATE: Dict[str, set] = {
         "change_day_time",
         "change_evening_time",
         "get_plan_status",
+        "retry_plan_action",
     },
 }
 
@@ -1058,6 +1094,7 @@ def _coach_tools_for_state(
                 "record_evening_time",
                 "change_day_time",
                 "change_evening_time",
+                "retry_plan_action",
             }
         else:
             if not pending.startswith("collect_evening_time_for_medium"):

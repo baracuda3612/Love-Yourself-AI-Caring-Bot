@@ -141,6 +141,29 @@ class FakeSession:
         pass
 
 
+@pytest.mark.anyio
+async def test_completed_keyboard_marker_clears_only_after_telegram_success(monkeypatch):
+    user = DummyUser(tg_id=123, user_id=42)
+    step = DummyStep(101, DummyDay(DummyPlan(user)), is_completed=True)
+    step.tg_message_id = 555
+    session = FakeSession(step)
+    monkeypatch.setattr(telegram, "SessionLocal", lambda: session)
+
+    message = DummyMessage()
+    message.message_id = 555
+    callback = DummyCallbackQuery("task_complete:101", 123, message)
+    await telegram._clear_terminal_callback_keyboard(callback, step.id)
+    assert step.tg_message_id is None
+
+    step.tg_message_id = 555
+
+    async def failed_edit(**_kwargs):
+        raise RuntimeError("Telegram unavailable")
+
+    message.edit_reply_markup = failed_edit
+    await telegram._clear_terminal_callback_keyboard(callback, step.id)
+    assert step.tg_message_id == 555
+
 @pytest.fixture(autouse=True)
 def _authoritative_step_boundary(monkeypatch):
     def transition(

@@ -770,7 +770,9 @@ def reconcile_terminal_step_keyboards(
             .join(User, User.id == AIPlan.user_id)
             .filter(
                 AIPlanStep.id.in_(ordered_ids),
-                AIPlanStep.step_status.in_(("expired", "canceled")),
+                AIPlanStep.step_status.in_(
+                    ("completed", "skipped", "expired", "canceled")
+                ),
             )
             .all()
         )
@@ -801,9 +803,13 @@ def reconcile_terminal_step_keyboards(
             continue
         try:
             future.result(timeout=30)
-        except Exception:
-            failed_ids.append(step_id)
-            continue
+        except Exception as exc:
+            # A callback may have removed the buttons before its DB marker
+            # could be cleared. Telegram's exact no-change reply proves the
+            # requested empty markup is already in place.
+            if "message is not modified" not in str(exc).lower():
+                failed_ids.append(step_id)
+                continue
         with SessionLocal() as db:
             current = db.query(AIPlanStep).filter(AIPlanStep.id == step_id).first()
             if current is None:
@@ -840,8 +846,8 @@ def expire_overdue_steps() -> None:
       This keeps legacy / adaptation-created steps aligned with the same local
       end-of-day rule used by plan finalization.
 
-    After marking expired, removes inline keyboards from expired and canceled
-    steps. Canceled steps are never expiry candidates or ignored telemetry.
+    After marking expired, retries inline-keyboard removal for every terminal
+    step. Only pending/delivered steps can expire or emit ignored telemetry.
     """
     from sqlalchemy import or_
 
@@ -933,7 +939,9 @@ def expire_overdue_steps() -> None:
             for (step_id,) in (
                 db.query(AIPlanStep.id)
                 .filter(
-                    AIPlanStep.step_status.in_(("expired", "canceled")),
+                    AIPlanStep.step_status.in_(
+                        ("completed", "skipped", "expired", "canceled")
+                    ),
                     AIPlanStep.tg_message_id.isnot(None),
                 )
                 .all()

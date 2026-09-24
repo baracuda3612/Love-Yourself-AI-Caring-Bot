@@ -2135,6 +2135,109 @@ def recover_switch_plan_format(
     )
 
 
+def recover_plan_action(
+    db: Session,
+    *,
+    user_id: int,
+    action: str,
+    original_source_operation_id: str,
+) -> LifecycleResult:
+    """Replay one named accepted control, never an inferred newer action."""
+    if not isinstance(action, str):
+        raise LifecycleTransitionError("unsupported_retry_action")
+    expected = {
+        "pause": "pause",
+        "resume": "resume",
+        "cancel": "abandon",
+        "followup": "activate",
+    }.get(action)
+    if expected is None:
+        raise LifecycleTransitionError("unsupported_retry_action")
+    if (
+        not isinstance(original_source_operation_id, str)
+        or not original_source_operation_id
+        or len(original_source_operation_id) > 160
+    ):
+        raise LifecycleTransitionError("retry_source_required")
+    _lock_user(db, user_id)
+    receipt = find_lifecycle_operation(db, user_id, original_source_operation_id)
+    if receipt is None:
+        raise LifecycleTransitionError("retry_receipt_missing")
+    if receipt.operation != expected:
+        raise LifecycleTransitionError("retry_receipt_action_mismatch")
+
+    current = get_current_plan(db, user_id, lock=True)
+    if action == "cancel":
+        canceled_plan = (
+            db.query(AIPlan)
+            .filter(AIPlan.id == receipt.plan_id, AIPlan.user_id == user_id)
+            .first()
+        )
+        if canceled_plan is None or str(canceled_plan.status) != "abandoned":
+            raise LifecycleTransitionError("retry_action_superseded")
+        latest = (
+            db.query(AIPlan)
+            .filter(AIPlan.user_id == user_id)
+            .order_by(AIPlan.cycle_number.desc(), AIPlan.id.desc())
+            .first()
+        )
+        result, _ = abandon_current_plan(
+            db, user_id=user_id, source_operation_id=original_source_operation_id
+        )
+        return replace(
+            result,
+            code=(
+                "historical_cleanup"
+                if latest is not None and latest.id != receipt.plan_id
+                else "replayed"
+            ),
+        )
+
+    if current is None or current.id != receipt.plan_id:
+        raise LifecycleTransitionError("retry_action_superseded")
+    if action in {"pause", "resume"}:
+        if str(current.status) != receipt.result_status:
+            raise LifecycleTransitionError("retry_action_superseded")
+        newer_control = (
+            db.query(PlanLifecycleOperation.id)
+            .filter(
+                PlanLifecycleOperation.user_id == user_id,
+                PlanLifecycleOperation.plan_id == current.id,
+                PlanLifecycleOperation.id > receipt.id,
+                PlanLifecycleOperation.operation.in_(("pause", "resume")),
+            )
+            .first()
+        )
+        if newer_control is not None:
+            raise LifecycleTransitionError("retry_action_superseded")
+        return transition_current_plan(
+            db,
+            user_id=user_id,
+            operation=action,
+            source_operation_id=original_source_operation_id,
+        )
+
+    if (
+        str(current.status) not in {"active", "paused"}
+        or original_source_operation_id.startswith("switch-activate:")
+    ):
+        raise LifecycleTransitionError("retry_action_superseded")
+    predecessor = (
+        db.query(AIPlan)
+        .filter(AIPlan.user_id == user_id, AIPlan.cycle_number < current.cycle_number)
+        .order_by(AIPlan.cycle_number.desc(), AIPlan.id.desc())
+        .first()
+    )
+    if predecessor is None or str(predecessor.status) != "abandoned":
+        raise LifecycleTransitionError("retry_action_superseded")
+    return recover_current_plan_activation(
+        db,
+        user_id=user_id,
+        plan_type=_plan_type(current),
+        required_previous_status="abandoned",
+    )
+
+
 def prepare_continuation(
     db: Session,
     *,

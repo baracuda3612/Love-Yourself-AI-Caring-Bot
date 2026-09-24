@@ -516,6 +516,8 @@ def test_cancel_uses_one_aggregate_operation_then_cancels_jobs(monkeypatch):
         "plan_id": 11,
         "total_days": 7,
         "jobs_reconciled": True,
+        "keyboard_cleanup_pending": False,
+        "original_source_operation_id": "telegram:cancel-1",
         "duplicate": False,
         "disposition": "applied",
     }
@@ -618,6 +620,7 @@ def test_create_followup_passes_source_and_derived_prerequisites(monkeypatch):
         "plan_type": "MEDIUM",
         "jobs_reconciled": True,
         "activation_event_pending": False,
+        "original_source_operation_id": "coach:activate-4",
         "duplicate": False,
         "disposition": "applied",
     }
@@ -677,6 +680,7 @@ def test_activation_reconciliation_failure_is_returned_as_error(monkeypatch):
         "code": "activation_reconciliation_failed",
         "plan_id": 22,
         "plan_type": "SHORT",
+        "original_source_operation_id": "coach:activate:failed",
         "persisted": True,
         "jobs_reconciled": False,
         "duplicate": False,

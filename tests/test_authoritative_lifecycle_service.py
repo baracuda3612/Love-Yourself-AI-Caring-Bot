@@ -1001,8 +1001,11 @@ def test_expiry_sweep_isolates_unexpected_candidate_failure(monkeypatch, caplog)
     assert "Candidate failed step=2; continuing sweep" in caplog.text
 
 
-def test_canceled_keyboard_sweep_retries_without_expiry_or_ignored_event(monkeypatch):
-    step = SimpleNamespace(id=41, step_status="canceled", tg_message_id=901)
+@pytest.mark.parametrize("terminal_status", ("canceled", "completed", "skipped"))
+def test_terminal_keyboard_sweep_retries_without_expiry_or_ignored_event(
+    monkeypatch, terminal_status,
+):
+    step = SimpleNamespace(id=41, step_status=terminal_status, tg_message_id=901)
     delivery_attempts = []
     expiry_attempts = []
     writes = []
@@ -1031,14 +1034,14 @@ def test_canceled_keyboard_sweep_retries_without_expiry_or_ignored_event(monkeyp
         def all(self):
             sql = self._sql()
             if self.kind == "candidate":
-                assert "'canceled'" not in sql
+                assert f"'{terminal_status}'" not in sql
                 assert "'pending'" in sql and "'delivered'" in sql
                 return []
             if self.kind == "keyboard":
                 assert "tg_message_id IS NOT NULL" in sql
-                return [(step.id,)] if "'canceled'" in sql and step.tg_message_id else []
+                return [(step.id,)] if f"'{terminal_status}'" in sql and step.tg_message_id else []
             if self.kind == "terminal":
-                assert "'canceled'" in sql
+                assert f"'{terminal_status}'" in sql
                 return [(step.id, step.tg_message_id, 700)]
             raise AssertionError(self.kind)
 
@@ -1090,7 +1093,7 @@ def test_canceled_keyboard_sweep_retries_without_expiry_or_ignored_event(monkeyp
     monkeypatch.setattr(scheduler, "_submit_coroutine", submit)
 
     scheduler.expire_overdue_steps()
-    assert step.step_status == "canceled"
+    assert step.step_status == terminal_status
     assert step.tg_message_id == 901
     assert delivery_attempts == [901]
     assert writes == []
@@ -1105,6 +1108,53 @@ def test_canceled_keyboard_sweep_retries_without_expiry_or_ignored_event(monkeyp
     scheduler.expire_overdue_steps()
     assert delivery_attempts == [901, 901]
     assert expiry_attempts == []
+
+
+def test_keyboard_sweep_accepts_already_removed_markup_and_clears_marker(monkeypatch):
+    step = SimpleNamespace(id=41, tg_message_id=901)
+
+    class _Query:
+        def join(self, *_args):
+            return self
+
+        def filter(self, *_args):
+            return self
+
+        def all(self):
+            return [(41, 901, 700)]
+
+        def first(self):
+            return step
+
+    class _DB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def query(self, *_args):
+            return _Query()
+
+        def commit(self):
+            return None
+
+    class _Future:
+        def result(self, **_kwargs):
+            raise RuntimeError("Bad Request: message is not modified")
+
+    def submit(coroutine):
+        coroutine.close()
+        return _Future()
+
+    monkeypatch.setattr(scheduler, "SessionLocal", _DB)
+    monkeypatch.setattr(scheduler, "_submit_coroutine", submit)
+
+    outcome = scheduler.reconcile_terminal_step_keyboards([41])
+
+    assert outcome.failed_ids == ()
+    assert outcome.succeeded == 1
+    assert step.tg_message_id is None
 
 
 def test_time_change_replay_reconciles_only_currently_schedulable_steps(monkeypatch):

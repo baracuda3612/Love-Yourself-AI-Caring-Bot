@@ -471,3 +471,131 @@ def test_old_switch_retry_after_later_cancellation_is_superseded(pg_session):
     assert db.query(AIPlan).filter(
         AIPlan.user_id == user.id, AIPlan.status.in_(("active", "paused")),
     ).count() == 0
+
+
+def test_exact_pause_resume_retry_rejects_later_cycle(pg_session):
+    db = pg_session
+    user, _profile, plan, _steps = _seed_current_plan(db)
+    lifecycle.transition_current_plan(
+        db, user_id=user.id, operation="pause", source_operation_id="wp023:pause-1"
+    )
+    replay = lifecycle.recover_plan_action(
+        db, user_id=user.id, action="pause",
+        original_source_operation_id="wp023:pause-1",
+    )
+    assert replay.duplicate is True
+    assert replay.plan_id == plan.id
+
+    lifecycle.transition_current_plan(
+        db, user_id=user.id, operation="resume", source_operation_id="wp023:resume-1",
+        occurred_at=datetime(2026, 9, 4, 18, tzinfo=timezone.utc),
+    )
+    resumed = lifecycle.recover_plan_action(
+        db, user_id=user.id, action="resume",
+        original_source_operation_id="wp023:resume-1",
+    )
+    assert resumed.duplicate is True
+    with pytest.raises(lifecycle.LifecycleTransitionError, match="retry_action_superseded"):
+        lifecycle.recover_plan_action(
+            db, user_id=user.id, action="pause",
+            original_source_operation_id="wp023:pause-1",
+        )
+
+    lifecycle.transition_current_plan(
+        db, user_id=user.id, operation="pause", source_operation_id="wp023:pause-2"
+    )
+    with pytest.raises(lifecycle.LifecycleTransitionError, match="retry_action_superseded"):
+        lifecycle.recover_plan_action(
+            db, user_id=user.id, action="pause",
+            original_source_operation_id="wp023:pause-1",
+        )
+    with pytest.raises(lifecycle.LifecycleTransitionError, match="retry_action_superseded"):
+        lifecycle.recover_plan_action(
+            db, user_id=user.id, action="resume",
+            original_source_operation_id="wp023:resume-1",
+        )
+    assert plan.status == "paused"
+
+
+def test_exact_cancel_retry_cleans_old_steps_without_touching_new_plan(pg_session):
+    db = pg_session
+    user, _profile, source, _steps = _seed_current_plan(db)
+    db.add(OnboardingProgress(
+        user_id=user.id, stage="COMPLETED",
+        completed_at=datetime(2026, 9, 1, 8, tzinfo=timezone.utc),
+    ))
+    db.flush()
+    _seed_disposable_builder_library(db)
+    lifecycle.abandon_current_plan(
+        db, user_id=user.id, source_operation_id="wp023:cancel-1"
+    )
+    replay = lifecycle.recover_plan_action(
+        db, user_id=user.id, action="cancel",
+        original_source_operation_id="wp023:cancel-1",
+    )
+    assert replay.duplicate is True
+    assert replay.plan_id == source.id
+    with pytest.raises(lifecycle.LifecycleTransitionError, match="retry_receipt_action_mismatch"):
+        lifecycle.recover_plan_action(
+            db, user_id=user.id, action="resume",
+            original_source_operation_id="wp023:cancel-1",
+        )
+
+    activated = lifecycle.activate_plan(
+        db, user_id=user.id, plan_type="SHORT", day_time="14:00",
+        evening_time=None, source_operation_id="wp023:followup-1",
+        require_plan_history=True, required_previous_status="abandoned",
+    )
+    assert activated.plan_id != source.id
+    old_cleanup = lifecycle.recover_plan_action(
+        db, user_id=user.id, action="cancel",
+        original_source_operation_id="wp023:cancel-1",
+    )
+    assert old_cleanup.code == "historical_cleanup"
+    assert old_cleanup.plan_id == source.id
+    assert db.get(AIPlan, activated.plan_id).status == "active"
+
+
+def test_exact_followup_retry_records_event_while_paused_without_scheduling(pg_session):
+    db = pg_session
+    user, _profile, source, _steps = _seed_current_plan(db)
+    db.add(OnboardingProgress(
+        user_id=user.id, stage="COMPLETED",
+        completed_at=datetime(2026, 9, 1, 8, tzinfo=timezone.utc),
+    ))
+    db.flush()
+    _seed_disposable_builder_library(db)
+    lifecycle.abandon_current_plan(
+        db, user_id=user.id, source_operation_id="wp023:cancel-before-followup"
+    )
+    followup = lifecycle.activate_plan(
+        db, user_id=user.id, plan_type="SHORT", day_time="14:00",
+        evening_time=None, source_operation_id="wp023:followup-2",
+        require_plan_history=True, required_previous_status="abandoned",
+    )
+    replay = lifecycle.recover_plan_action(
+        db, user_id=user.id, action="followup",
+        original_source_operation_id="wp023:followup-2",
+    )
+    assert replay.duplicate is True
+    assert replay.plan_id == followup.plan_id
+
+    lifecycle.transition_current_plan(
+        db, user_id=user.id, operation="pause", source_operation_id="wp023:pause-followup"
+    )
+    paused_replay = lifecycle.recover_plan_action(
+        db, user_id=user.id, action="followup",
+        original_source_operation_id="wp023:followup-2",
+    )
+    assert paused_replay.status == "paused"
+    assert paused_replay.effects[0].state is lifecycle.ExternalEffectState.NOT_REQUIRED
+    lifecycle.abandon_current_plan(
+        db, user_id=user.id, source_operation_id="wp023:cancel-followup",
+        occurred_at=db.get(AIPlan, followup.plan_id).activated_at + timedelta(minutes=1),
+    )
+    with pytest.raises(lifecycle.LifecycleTransitionError, match="retry_action_superseded"):
+        lifecycle.recover_plan_action(
+            db, user_id=user.id, action="followup",
+            original_source_operation_id="wp023:followup-2",
+        )
+    assert source.status == "abandoned"

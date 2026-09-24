@@ -130,12 +130,20 @@ def create_followup_plan(
         db.commit()
 
     activation = reconcile_scheduler_effects(activation)
+    if activation.code == "superseded":
+        return {
+            "status": "error",
+            "code": "superseded",
+            "plan_id": activation.plan_id,
+            "disposition": "superseded",
+        }
     if not _operational_effects_succeeded(activation):
         return {
             "status": "error",
             "code": "activation_reconciliation_failed",
             "plan_id": activation.plan_id,
             "plan_type": activation.plan_type,
+            "original_source_operation_id": source_operation_id,
             "persisted": True,
             "jobs_reconciled": False,
             "duplicate": activation.duplicate,
@@ -150,6 +158,7 @@ def create_followup_plan(
         "status": "ok",
         "plan_id": activation.plan_id,
         "plan_type": activation.plan_type,
+        "original_source_operation_id": source_operation_id,
         "jobs_reconciled": True,
         "activation_event_pending": _effect_failed(
             activation, "record_activation_event"
@@ -369,6 +378,86 @@ def retry_switch_plan_format(
             "disposition": "deferred",
         }
     return _finish_plan_format_result(result, pending_status="needs_evening_time")
+
+
+def retry_plan_action(
+    user_id: int,
+    action: str,
+    original_source_operation_id: str,
+) -> dict:
+    """Retry one exact accepted pause/resume/cancel/follow-up receipt."""
+    from app.db import SessionLocal
+    from app.lifecycle import LifecycleTransitionError, recover_plan_action
+    from app.lifecycle_reconciliation import reconcile_scheduler_effects
+
+    with SessionLocal() as db:
+        try:
+            result = recover_plan_action(
+                db,
+                user_id=user_id,
+                action=action,
+                original_source_operation_id=original_source_operation_id,
+            )
+        except LifecycleTransitionError as exc:
+            raise ValueError(str(exc)) from exc
+        db.commit()
+
+    result = reconcile_scheduler_effects(result)
+    try:
+        with SessionLocal() as db:
+            verified = recover_plan_action(
+                db,
+                user_id=user_id,
+                action=action,
+                original_source_operation_id=original_source_operation_id,
+            )
+            if verified.plan_id != result.plan_id or verified.status != result.status:
+                raise LifecycleTransitionError("retry_action_superseded")
+    except LifecycleTransitionError:
+        return {
+            "status": "error",
+            "code": "superseded",
+            "plan_id": result.plan_id,
+            "original_source_operation_id": original_source_operation_id,
+            "disposition": "superseded",
+        }
+    except Exception:
+        return {
+            "status": "error",
+            "code": "retry_postproof_failed",
+            "plan_id": result.plan_id,
+            "original_source_operation_id": original_source_operation_id,
+            "persisted": True,
+            "disposition": "partial_failure",
+        }
+    common = {
+        "plan_id": result.plan_id,
+        "plan_status": result.status,
+        "historical_cleanup": verified.code == "historical_cleanup",
+        "original_source_operation_id": original_source_operation_id,
+        "duplicate": True,
+    }
+    if not _operational_effects_succeeded(result):
+        return {
+            "status": "error",
+            "code": {
+                "pause": "pause_reconciliation_failed",
+                "resume": "resume_reconciliation_failed",
+                "cancel": "cancel_reconciliation_failed",
+                "followup": "activation_reconciliation_failed",
+            }[action],
+            "persisted": True,
+            "disposition": "partial_failure",
+            **common,
+        }
+    return {
+        "status": "ok",
+        "action": action,
+        "disposition": "replayed",
+        "keyboard_cleanup_pending": _effect_failed(result, "remove_step_keyboards"),
+        "activation_event_pending": _effect_failed(result, "record_activation_event"),
+        **common,
+    }
 
 
 def record_evening_time(
@@ -595,12 +684,13 @@ def cancel_plan(user_id: int, *, source_operation_id: str) -> dict:
         db.commit()
 
     result = reconcile_scheduler_effects(result)
-    if not result.external_effects_succeeded:
+    if not _operational_effects_succeeded(result):
         return {
             "status": "error",
             "code": "cancel_reconciliation_failed",
             "plan_id": result.plan_id,
             "plan_status": result.status,
+            "original_source_operation_id": source_operation_id,
             "persisted": True,
             "jobs_reconciled": False,
             "duplicate": result.duplicate,
@@ -618,6 +708,8 @@ def cancel_plan(user_id: int, *, source_operation_id: str) -> dict:
         "plan_id": result.plan_id,
         "total_days": total_days,
         "jobs_reconciled": True,
+        "keyboard_cleanup_pending": _effect_failed(result, "remove_step_keyboards"),
+        "original_source_operation_id": source_operation_id,
         "duplicate": result.duplicate,
         "disposition": "replayed" if result.duplicate else "applied",
     }
@@ -668,6 +760,7 @@ def pause_plan(user_id: int, *, source_operation_id: str) -> dict:
             "code": "superseded",
             "plan_id": result.plan_id,
             "plan_status": result.status,
+            "original_source_operation_id": source_operation_id,
             "duplicate": True,
             "disposition": "superseded",
         }
@@ -678,6 +771,7 @@ def pause_plan(user_id: int, *, source_operation_id: str) -> dict:
             "code": "pause_reconciliation_failed",
             "plan_id": result.plan_id,
             "plan_status": result.status,
+            "original_source_operation_id": source_operation_id,
             "persisted": True,
             "duplicate": result.duplicate,
             "disposition": "partial_failure",

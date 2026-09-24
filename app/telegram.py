@@ -36,6 +36,37 @@ dp.include_router(router)
 logger = logging.getLogger(__name__)
 
 
+async def _clear_terminal_callback_keyboard(callback_query: CallbackQuery, step_id: int) -> None:
+    """Keep the durable keyboard retry marker until Telegram removal succeeds."""
+    message = callback_query.message
+    if message is None:
+        return
+    try:
+        await message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        logger.exception("Terminal keyboard removal pending step=%s", step_id)
+        return
+    message_id = getattr(message, "message_id", None)
+    if message_id is None:
+        return
+    try:
+        with SessionLocal() as db:
+            step = (
+                db.query(AIPlanStep)
+                .filter(
+                    AIPlanStep.id == step_id,
+                    AIPlanStep.tg_message_id == message_id,
+                    AIPlanStep.step_status.in_(("completed", "skipped")),
+                )
+                .first()
+            )
+            if step is not None:
+                step.tg_message_id = None
+                db.commit()
+    except Exception:
+        logger.exception("Terminal keyboard receipt update pending step=%s", step_id)
+
+
 def _ensure_user(db, tg_user) -> tuple[User, bool]:
     user: Optional[User] = db.query(User).filter(User.tg_id == tg_user.id).first()
     is_created = False
@@ -219,7 +250,7 @@ async def handle_task_completed(callback_query: CallbackQuery):
 
     await callback_query.answer("✅ Чудово! Завдання виконано.")
     if callback_query.message:
-        await callback_query.message.edit_reply_markup(reply_markup=None)
+        await _clear_terminal_callback_keyboard(callback_query, step_id)
 
         try:
             with SessionLocal() as db:
@@ -351,7 +382,7 @@ async def handle_task_skipped(callback_query: CallbackQuery):
 
     await callback_query.answer("⏭️ Завдання пропущено")
     if callback_query.message:
-        await callback_query.message.edit_reply_markup(reply_markup=None)
+        await _clear_terminal_callback_keyboard(callback_query, step_id)
 
         try:
             with SessionLocal() as db:
