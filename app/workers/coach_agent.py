@@ -635,6 +635,15 @@ For pause and resume, a direct and unambiguous request counts as confirmation.
 - If the first switch to `MEDIUM` needs an evening time, the runtime keeps the
   current sequence unchanged and asks for that time before applying the switch.
 
+**`retry_plan_action`**
+- Use only when the user asks to retry or verify a previously saved plan action
+  whose scheduling was reported incomplete, or to finish a first 14-day
+  follow-up after its evening time was saved but the plan did not launch. It
+  checks the latest eligible durable lifecycle receipt; it does not request
+  a new pause, resume, switch, cancellation, or follow-up decision.
+- If the user provides a different plan format or delivery time, use the
+  corresponding change tool instead of retrying the old action.
+
 **`get_plan_status`**
 - Use when the user asks for factual information about their current
   7 or 14-day sequence and that information is not already available
@@ -657,9 +666,9 @@ The current product state determines which runtime tools are available.
 
 | Current state | Available tools |
 |---|---|
-| `ACTIVE` | `pause_plan`, `cancel_plan`, `switch_plan_format`, `change_day_time`, `change_evening_time`, `get_plan_status` |
-| `ACTIVE_PAUSED` | `resume_plan`, `cancel_plan`, `switch_plan_format`, `change_day_time`, `change_evening_time`, `get_plan_status` |
-| `NO_ACTIVE_PLAN` | `create_followup_plan`, `record_evening_time`, `change_day_time`, `change_evening_time`, `get_plan_status` |
+| `ACTIVE` | `pause_plan`, `cancel_plan`, `switch_plan_format`, `retry_plan_action`, `change_day_time`, `change_evening_time`, `get_plan_status` |
+| `ACTIVE_PAUSED` | `resume_plan`, `cancel_plan`, `switch_plan_format`, `retry_plan_action`, `change_day_time`, `change_evening_time`, `get_plan_status` |
+| `NO_ACTIVE_PLAN` | `create_followup_plan`, `record_evening_time`, `retry_plan_action`, `change_day_time`, `change_evening_time`, `get_plan_status` |
 | Any other state | none |
 
 Additional tool-specific conditions still apply:
@@ -881,6 +890,17 @@ COACH_TOOLS: List[Dict[str, Any]] = [
     },
     {
         "type": "function",
+        "name": "retry_plan_action",
+        "description": (
+            "Retry the latest already saved plan action after incomplete "
+            "scheduling, or finish a first 14-day follow-up whose evening "
+            "time was saved. Do not make a new plan decision or change arguments."
+        ),
+        "parameters": _EMPTY_PARAMETERS,
+        "strict": True,
+    },
+    {
+        "type": "function",
         "name": "record_evening_time",
         "description": (
             "Save the first evening delivery time while creation of a 14-day "
@@ -973,6 +993,7 @@ _TOOL_NAMES_BY_STATE: Dict[str, set] = {
         "change_evening_time",
         "get_plan_status",
         "switch_plan_format",
+        "retry_plan_action",
     },
     "ACTIVE_PAUSED": {
         "resume_plan",
@@ -981,6 +1002,7 @@ _TOOL_NAMES_BY_STATE: Dict[str, set] = {
         "change_evening_time",
         "get_plan_status",
         "switch_plan_format",
+        "retry_plan_action",
     },
     "NO_ACTIVE_PLAN": {
         "create_followup_plan",
@@ -988,6 +1010,7 @@ _TOOL_NAMES_BY_STATE: Dict[str, set] = {
         "change_day_time",
         "change_evening_time",
         "get_plan_status",
+        "retry_plan_action",
     },
 }
 

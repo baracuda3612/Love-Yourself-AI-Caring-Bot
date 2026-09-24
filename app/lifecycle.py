@@ -1541,8 +1541,52 @@ def record_evening_time_preference(
         context_plan = current
     if pending_receipt.plan_id != context_plan.id:
         raise LifecycleTransitionError("evening_collection_context_superseded")
+    if context == "followup":
+        latest_pending = (
+            db.query(PlanLifecycleOperation)
+            .filter(
+                PlanLifecycleOperation.user_id == user_id,
+                PlanLifecycleOperation.plan_id == context_plan.id,
+                PlanLifecycleOperation.operation == "prepare_followup_evening",
+            )
+            .order_by(PlanLifecycleOperation.id.desc())
+            .first()
+        )
+        if latest_pending is None or latest_pending.id != pending_receipt.id:
+            raise LifecycleTransitionError("evening_collection_context_superseded")
     if user.profile and user.profile.evening_slot_collected:
-        raise LifecycleTransitionError("evening_time_already_collected")
+        if context != "followup":
+            raise LifecycleTransitionError("evening_time_already_collected")
+        raw_slots = (
+            user.profile.daily_time_slots
+            if isinstance(user.profile.daily_time_slots, dict)
+            else {}
+        )
+        try:
+            saved_evening = canonicalize_hhmm(raw_slots.get("EVENING"))
+        except TimeSlotError as exc:
+            raise LifecycleTransitionError("saved_evening_time_invalid") from exc
+        if saved_evening != canonical_hhmm:
+            raise LifecycleTransitionError("followup_evening_time_mismatch")
+        record_lifecycle_operation(
+            db,
+            user_id=user_id,
+            plan_id=context_plan.id,
+            source_operation_id=source_operation_id,
+            operation=operation,
+            result_status=receipt_status,
+        )
+        db.flush()
+        return LifecycleResult(
+            user_id=user_id,
+            plan_id=context_plan.id,
+            status=canonical_hhmm,
+            operation=operation,
+            duplicate=True,
+            code="replayed",
+            plan_type=_plan_type(context_plan),
+            details={"value": canonical_hhmm, "collected": True, "context": context},
+        )
     from app.time_slots import update_user_time_slot_preferences
 
     try:
@@ -1702,6 +1746,7 @@ def switch_plan_format(
                 details={
                     "source_plan_id": int(source.id),
                     "target_plan_type": normalized_target,
+                    "total_days": int(replacement.total_days),
                     "current_disposition": (
                         "replacement_current"
                         if still_authoritative
@@ -1941,6 +1986,118 @@ def recover_plan_format_switch(
         user_id=user_id,
         target_plan_type=normalized_target,
         source_operation_id=source_operation_id,
+    )
+
+
+def recover_latest_runtime_control(
+    db: Session,
+    *,
+    user_id: int,
+    source_operation_id: str,
+) -> LifecycleResult:
+    """Re-run the latest eligible control's effects from its durable receipt."""
+    from app.time_slots import TimeSlotError, canonicalize_hhmm
+
+    user = _lock_user(db, user_id)
+    current = get_current_plan(db, user_id, lock=True)
+    if current is not None:
+        receipt = (
+            db.query(PlanLifecycleOperation)
+            .filter(
+                PlanLifecycleOperation.user_id == user_id,
+                PlanLifecycleOperation.plan_id == current.id,
+                PlanLifecycleOperation.operation.in_(("pause", "resume", "activate")),
+            )
+            .order_by(PlanLifecycleOperation.id.desc())
+            .first()
+        )
+        if receipt is None:
+            raise LifecycleTransitionError("recoverable_control_receipt_missing")
+        if receipt.operation in {"pause", "resume"}:
+            return transition_current_plan(
+                db,
+                user_id=user_id,
+                operation=receipt.operation,
+                source_operation_id=receipt.source_operation_id,
+            )
+        if str(receipt.source_operation_id).startswith("switch-activate:"):
+            candidates = (
+                db.query(PlanLifecycleOperation)
+                .filter(
+                    PlanLifecycleOperation.user_id == user_id,
+                    PlanLifecycleOperation.operation == "switch_plan_format",
+                )
+                .order_by(PlanLifecycleOperation.id.desc())
+                .all()
+            )
+            source = next(
+                (
+                    candidate for candidate in candidates
+                    if _switch_activation_source_id(candidate.source_operation_id)
+                    == receipt.source_operation_id
+                ),
+                None,
+            )
+            if source is None:
+                raise LifecycleInvariantError("switch_recovery_receipt_missing")
+            return switch_plan_format(
+                db,
+                user_id=user_id,
+                target_plan_type=_plan_type(current),
+                source_operation_id=source.source_operation_id,
+            )
+        return recover_current_plan_activation(
+            db,
+            user_id=user_id,
+            plan_type=_plan_type(current),
+            required_previous_status="abandoned",
+        )
+
+    latest = _lifecycle_context_plan(db, user_id)
+    if str(latest.status) != "abandoned":
+        raise LifecycleTransitionError("recoverable_control_missing")
+    pending = (
+        db.query(PlanLifecycleOperation)
+        .filter(
+            PlanLifecycleOperation.user_id == user_id,
+            PlanLifecycleOperation.plan_id == latest.id,
+            PlanLifecycleOperation.operation == "prepare_followup_evening",
+            PlanLifecycleOperation.result_status == "MEDIUM",
+        )
+        .order_by(PlanLifecycleOperation.id.desc())
+        .first()
+    )
+    profile = getattr(user, "profile", None)
+    if pending is None or not (profile and profile.evening_slot_collected):
+        raise LifecycleTransitionError("recoverable_control_missing")
+    latest_receipt = (
+        db.query(PlanLifecycleOperation)
+        .filter(PlanLifecycleOperation.user_id == user_id)
+        .order_by(PlanLifecycleOperation.id.desc())
+        .first()
+    )
+    if (
+        latest_receipt is None
+        or latest_receipt.plan_id != latest.id
+        or latest_receipt.operation != "record_evening_time_followup"
+        or latest_receipt.id < pending.id
+    ):
+        raise LifecycleTransitionError("recoverable_control_superseded")
+    slots = profile.daily_time_slots if isinstance(profile.daily_time_slots, dict) else {}
+    try:
+        day_time = canonicalize_hhmm(slots.get("DAY"))
+        evening_time = canonicalize_hhmm(slots.get("EVENING"))
+    except TimeSlotError as exc:
+        raise LifecycleTransitionError("recoverable_followup_time_invalid") from exc
+    return activate_plan(
+        db,
+        user_id=user_id,
+        plan_type="MEDIUM",
+        day_time=day_time,
+        evening_time=evening_time,
+        source_operation_id=source_operation_id,
+        require_plan_history=True,
+        required_previous_status="abandoned",
     )
 
 

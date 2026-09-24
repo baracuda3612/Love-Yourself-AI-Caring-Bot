@@ -593,6 +593,7 @@ def _build_tool_registry() -> Dict[str, Any]:
         pause_plan,
         record_evening_time,
         resume_plan,
+        retry_plan_action,
         switch_plan_format,
     )
     return {
@@ -633,6 +634,10 @@ def _build_tool_registry() -> Dict[str, Any]:
             args["plan_type"],
             source_operation_id=args["_source_operation_id"],
         ),
+        "retry_plan_action": lambda uid, args: retry_plan_action(
+            uid,
+            source_operation_id=args["_source_operation_id"],
+        ),
     }
 
 
@@ -647,6 +652,7 @@ _TOOL_REPLY_TEMPLATES: Dict[str, str] = {
     "resume_plan":          "▶️ План відновлено. Майбутній розклад потребує узгодження.",
     "cancel_plan":          "🛑 Поточну серію вправ скасовано.",
     "switch_plan_format":   "✅ Формат змінено, новий розклад узгоджено.",
+    "retry_plan_action":  "✅ Збережену дію перевірено, розклад узгоджено.",
 }
 
 
@@ -720,6 +726,7 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
         "resume_plan",
         "cancel_plan",
         "switch_plan_format",
+        "retry_plan_action",
     }
     if tool_name in source_required_tools and not source_operation_id:
         logger.error(
@@ -851,6 +858,7 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
             "pause_reconciliation_failed",
             "resume_reconciliation_failed",
             "switch_reconciliation_failed",
+            "retry_reconciliation_failed",
         }:
             return (
                 "⚠️ Зміну збережено, але розклад ще не узгоджено. "

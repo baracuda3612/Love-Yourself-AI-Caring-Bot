@@ -100,7 +100,12 @@ def reconcile_scheduler_effects(result: LifecycleResult) -> LifecycleResult:
         )
 
     reconciled = replace(result, effects=tuple(outcomes))
-    if result.operation == "activate" and reconciled.external_effects_succeeded:
+    activation_ready = result.operation == "activate" or (
+        result.operation == "switch_plan_format"
+        and result.code in {"applied", "replayed", "superseded"}
+        and "total_days" in result.details
+    )
+    if activation_ready and reconciled.external_effects_succeeded:
         try:
             _record_activation_event(result)
         except Exception:

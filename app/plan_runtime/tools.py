@@ -267,6 +267,49 @@ def recover_plan_format_switch(
     return _finish_plan_format_result(result, pending_status="not_ready")
 
 
+def retry_plan_action(user_id: int, *, source_operation_id: str) -> dict:
+    """Reconcile the latest eligible accepted control from durable receipts."""
+    from app.db import SessionLocal
+    from app.lifecycle import LifecycleTransitionError, recover_latest_runtime_control
+    from app.lifecycle_reconciliation import reconcile_scheduler_effects
+
+    with SessionLocal() as db:
+        try:
+            result = recover_latest_runtime_control(
+                db,
+                user_id=user_id,
+                source_operation_id=source_operation_id,
+            )
+        except LifecycleTransitionError as exc:
+            raise ValueError(str(exc)) from exc
+        db.commit()
+
+    if result.code == "superseded":
+        return {
+            "status": "error",
+            "code": "superseded",
+            "plan_id": result.plan_id,
+            "disposition": "superseded",
+        }
+    result = reconcile_scheduler_effects(result)
+    if not result.external_effects_succeeded:
+        return {
+            "status": "error",
+            "code": "retry_reconciliation_failed",
+            "plan_id": result.plan_id,
+            "operation": result.operation,
+            "persisted": True,
+            "disposition": "partial_failure",
+        }
+    return {
+        "status": "ok",
+        "plan_id": result.plan_id,
+        "operation": result.operation,
+        "duplicate": result.duplicate,
+        "disposition": "replayed" if result.duplicate else "applied",
+    }
+
+
 def record_evening_time(
     user_id: int,
     hhmm: str,

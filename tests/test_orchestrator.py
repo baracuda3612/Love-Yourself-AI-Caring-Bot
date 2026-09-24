@@ -597,6 +597,29 @@ async def test_direct_switch_partial_uses_persisted_change_copy(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_fresh_coach_retry_routes_durable_receipt_and_reports_partial(monkeypatch):
+    captured = []
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+
+    def retry(user_id, args):
+        captured.append((user_id, args["_source_operation_id"]))
+        return {
+            "status": "error", "code": "retry_reconciliation_failed",
+            "persisted": True, "plan_id": 12,
+        }
+
+    monkeypatch.setattr(orchestrator, "_build_tool_registry", lambda: {"retry_plan_action": retry})
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {"name": "retry_plan_action", "arguments": {}, "call_id": "coach:new-call"},
+    )
+
+    assert captured == [(7, "coach:new-call")]
+    assert "Зміну збережено" in response
+    assert "розклад ще не узгоджено" in response
+
+
+@pytest.mark.anyio
 async def test_superseded_time_change_does_not_return_success_copy(monkeypatch):
     monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(

@@ -19,11 +19,14 @@ from app.db import (
     AIPlanDay,
     AIPlanStep,
     ContentLibrary,
+    OnboardingProgress,
     PlanLifecycleOperation,
     User,
+    UserEvent,
     UserProfile,
 )
 from app.plan_drafts.plan_builder_v5 import get_default_builder
+from app.telemetry import log_user_event
 
 
 pytestmark = pytest.mark.skipif(
@@ -209,6 +212,20 @@ def test_switch_collects_evening_then_replaces_one_current_plan_atomically(pg_se
         AIPlan.user_id == user.id,
         AIPlan.status.in_(("active", "paused")),
     ).count() == 1
+
+    for _ in range(2):
+        log_user_event(
+            db, user_id=user.id, event_type="plan_activated",
+            event_source="plan_finalization",
+            source_operation_id=f"plan-activation:{switched.plan_id}",
+            plan_id=switched.plan_id,
+            context={"total_days": int(switched.details["total_days"])},
+        )
+    assert db.query(UserEvent).filter(
+        UserEvent.user_id == user.id,
+        UserEvent.plan_id == switched.plan_id,
+        UserEvent.event_name == "plan_activated",
+    ).count() == 1
     assert db.query(func.count(AIPlanStep.id)).join(AIPlanDay).filter(
         AIPlanDay.plan_id == switched.plan_id,
     ).scalar() == 28
@@ -266,3 +283,145 @@ def test_switch_builder_failure_rolls_back_source_mutation(pg_session, monkeypat
 
     assert db.get(AIPlan, source_id).status == "active"
     assert all(db.get(AIPlanStep, step_id).step_status == "pending" for step_id in step_ids)
+
+
+def test_fresh_receipt_retry_after_pause_and_switch_has_one_current_plan(pg_session):
+    db = pg_session
+    user, _profile, source, _steps = _seed_current_plan(db, medium=True)
+    _seed_disposable_builder_library(db)
+    lifecycle.transition_current_plan(
+        db, user_id=user.id, operation="pause", source_operation_id="wp023:pause-retry"
+    )
+    paused_retry = lifecycle.recover_latest_runtime_control(
+        db, user_id=user.id, source_operation_id="coach:new-pause-call"
+    )
+    assert paused_retry.operation == "pause"
+    assert paused_retry.duplicate is True
+    assert paused_retry.effects[0].target_ids == (source.id,)
+    assert source.status == "paused"
+
+    lifecycle.transition_current_plan(
+        db, user_id=user.id, operation="resume", source_operation_id="wp023:resume-retry"
+    )
+    resumed_retry = lifecycle.recover_latest_runtime_control(
+        db, user_id=user.id, source_operation_id="coach:new-resume-call"
+    )
+    assert resumed_retry.operation == "resume"
+    assert resumed_retry.duplicate is True
+
+    switched = lifecycle.switch_plan_format(
+        db, user_id=user.id, target_plan_type="SHORT",
+        source_operation_id="wp023:switch-retry",
+    )
+    switch_retry = lifecycle.recover_latest_runtime_control(
+        db, user_id=user.id, source_operation_id="coach:new-switch-call"
+    )
+    assert switch_retry.plan_id == switched.plan_id
+    assert switch_retry.operation == "switch_plan_format"
+    assert switch_retry.details["total_days"] == 7
+    assert db.query(AIPlan).filter(
+        AIPlan.user_id == user.id,
+        AIPlan.status.in_(("active", "paused")),
+    ).count() == 1
+
+
+def test_followup_evening_fresh_retry_after_builder_rollback(pg_session, monkeypatch):
+    db = pg_session
+    user, profile, source, _steps = _seed_current_plan(db)
+    db.add(OnboardingProgress(
+        user_id=user.id, stage="COMPLETED",
+        completed_at=datetime(2026, 9, 1, 8, tzinfo=timezone.utc),
+    ))
+    source.status = "abandoned"
+    source.abandoned_at = datetime(2026, 9, 2, 8, tzinfo=timezone.utc)
+    db.flush()
+    _seed_disposable_builder_library(db)
+    lifecycle.prepare_followup_evening_collection(
+        db, user_id=user.id, source_operation_id="wp023:followup-intent"
+    )
+    first = lifecycle.record_evening_time_preference(
+        db, user_id=user.id, hhmm="20:30", context="followup",
+        pending_source_operation_id="wp023:followup-intent",
+        source_operation_id="wp023:evening-first",
+    )
+    assert first.applied is True
+    assert profile.evening_slot_collected is True
+
+    savepoint = db.begin_nested()
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            "app.plan_drafts.service.create_plan_for_lifecycle",
+            lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("builder_failed")),
+        )
+        with pytest.raises(RuntimeError, match="builder_failed"):
+            lifecycle.activate_plan(
+                db, user_id=user.id, plan_type="MEDIUM", day_time="14:00",
+                evening_time="20:30", source_operation_id="wp023:followup-intent",
+                require_plan_history=True, required_previous_status="abandoned",
+            )
+    savepoint.rollback()
+    db.expire_all()
+    profile = db.get(UserProfile, profile.id)
+    assert profile.evening_slot_collected is True
+
+    with pytest.raises(lifecycle.LifecycleTransitionError, match="followup_evening_time_mismatch"):
+        lifecycle.record_evening_time_preference(
+            db, user_id=user.id, hhmm="21:00", context="followup",
+            pending_source_operation_id="wp023:followup-intent",
+            source_operation_id="wp023:evening-drift",
+        )
+
+    replay = lifecycle.record_evening_time_preference(
+        db, user_id=user.id, hhmm="20:30", context="followup",
+        pending_source_operation_id="wp023:followup-intent",
+        source_operation_id="wp023:evening-fresh",
+    )
+    assert replay.duplicate is True
+    assert replay.code == "replayed"
+    assert profile.daily_time_slots["EVENING"] == "20:30"
+
+    activated = lifecycle.recover_latest_runtime_control(
+        db, user_id=user.id, source_operation_id="coach:fresh-after-builder-failure"
+    )
+    assert activated.operation == "activate"
+    assert activated.plan_type == "MEDIUM"
+    assert activated.plan_id != source.id
+    assert db.query(AIPlan).filter(
+        AIPlan.user_id == user.id,
+        AIPlan.status.in_(("active", "paused")),
+    ).count() == 1
+
+    recovered = lifecycle.recover_latest_runtime_control(
+        db, user_id=user.id, source_operation_id="coach:another-followup-retry"
+    )
+    assert recovered.plan_id == activated.plan_id
+    assert recovered.duplicate is True
+    assert db.query(AIPlan).filter(AIPlan.user_id == user.id).count() == 2
+
+
+def test_stale_followup_evening_intent_cannot_collect_with_fresh_call(pg_session):
+    db = pg_session
+    user, profile, source, _steps = _seed_current_plan(db)
+    source.status = "abandoned"
+    source.abandoned_at = datetime(2026, 9, 2, 8, tzinfo=timezone.utc)
+    db.flush()
+    lifecycle.prepare_followup_evening_collection(
+        db, user_id=user.id, source_operation_id="wp023:old-intent"
+    )
+    lifecycle.prepare_followup_evening_collection(
+        db, user_id=user.id, source_operation_id="wp023:new-intent"
+    )
+
+    with pytest.raises(
+        lifecycle.LifecycleTransitionError,
+        match="evening_collection_context_superseded",
+    ):
+        lifecycle.record_evening_time_preference(
+            db, user_id=user.id, hhmm="20:30", context="followup",
+            pending_source_operation_id="wp023:old-intent",
+            source_operation_id="coach:fresh-old-intent",
+        )
+    assert profile.evening_slot_collected is False
+    assert db.query(PlanLifecycleOperation).filter(
+        PlanLifecycleOperation.source_operation_id == "coach:fresh-old-intent"
+    ).count() == 0
