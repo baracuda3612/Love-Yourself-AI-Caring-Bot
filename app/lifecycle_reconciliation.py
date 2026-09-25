@@ -45,18 +45,30 @@ def reconcile_scheduler_effects(result: LifecycleResult) -> LifecycleResult:
     from app.scheduler import (
         reconcile_cancel_plan_step_jobs,
         reconcile_plan_schedule,
+        reconcile_terminal_step_keyboards,
     )
 
     outcomes: list[ExternalEffect] = []
     for effect in result.effects:
+        if effect.kind == "record_activation_event":
+            # A retry re-evaluates the event after the current schedule proof.
+            continue
         if effect.state is not ExternalEffectState.PENDING:
             outcomes.append(effect)
             continue
         try:
             if effect.kind == "reconcile_plan_schedule":
-                reconciliation = reconcile_plan_schedule(result.plan_id)
+                reconciliation = reconcile_plan_schedule(
+                    int(effect.target_ids[0])
+                    if effect.target_ids
+                    else result.plan_id
+                )
             elif effect.kind == "cancel_step_jobs":
                 reconciliation = reconcile_cancel_plan_step_jobs(
+                    list(effect.target_ids)
+                )
+            elif effect.kind in {"remove_step_keyboard", "remove_step_keyboards"}:
+                reconciliation = reconcile_terminal_step_keyboards(
                     list(effect.target_ids)
                 )
             else:
@@ -90,25 +102,40 @@ def reconcile_scheduler_effects(result: LifecycleResult) -> LifecycleResult:
             )
         )
 
-    reconciled = replace(result, effects=tuple(outcomes))
-    if result.operation == "activate" and reconciled.external_effects_succeeded:
-        try:
-            _record_activation_event(result)
-        except Exception:
-            logger.exception(
-                "Activation event reconciliation failed plan=%s",
-                result.plan_id,
-            )
-            reconciled = replace(
-                reconciled,
-                effects=tuple(
-                    _failed(effect, "activation_event_failed")
-                    if effect.kind == "reconcile_plan_schedule"
-                    else effect
-                    for effect in reconciled.effects
-                ),
-            )
-    return reconciled
+    activation_ready = result.operation == "activate" or (
+        result.operation == "switch_plan_format"
+        and result.code in {"applied", "replayed"}
+        and "total_days" in result.details
+    )
+    if activation_ready:
+        event_effect = ExternalEffect(
+            kind="record_activation_event",
+            target_ids=(int(result.plan_id),),
+        )
+        schedule_succeeded = all(
+            effect.state in {
+                ExternalEffectState.SUCCEEDED,
+                ExternalEffectState.DEFERRED,
+                ExternalEffectState.NOT_REQUIRED,
+            }
+            for effect in outcomes
+            if effect.kind not in {"remove_step_keyboard", "remove_step_keyboards"}
+        )
+        if not schedule_succeeded:
+            event_effect = replace(event_effect, state=ExternalEffectState.DEFERRED)
+        else:
+            try:
+                _record_activation_event(result)
+            except Exception:
+                logger.exception(
+                    "Activation event reconciliation failed plan=%s",
+                    result.plan_id,
+                )
+                event_effect = _failed(event_effect, "activation_event_failed")
+            else:
+                event_effect = replace(event_effect, state=ExternalEffectState.SUCCEEDED)
+        outcomes.append(event_effect)
+    return replace(result, effects=tuple(outcomes))
 
 
 __all__ = ["reconcile_scheduler_effects"]

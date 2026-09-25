@@ -5,7 +5,7 @@ from typing import Dict
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.config import settings
 from app.db import AIPlan, SessionLocal, User
@@ -19,6 +19,7 @@ from app.lifecycle import (
     LifecycleInvariantError,
     LifecycleTransitionError,
     change_delivery_time,
+    read_post_effect_truth,
 )
 from app.lifecycle_reconciliation import reconcile_scheduler_effects
 
@@ -84,16 +85,16 @@ DUR_LABELS_PULSE = {
 
 
 class TimeSlotsPayload(BaseModel):
-    MORNING: str
+    model_config = ConfigDict(extra="forbid")
+
     DAY: str
-    EVENING: str
+    EVENING: str | None = None
 
     def to_dict(self) -> Dict[str, str]:
-        return {
-            "MORNING": self.MORNING,
-            "DAY": self.DAY,
-            "EVENING": self.EVENING,
-        }
+        result = {"DAY": self.DAY}
+        if self.EVENING is not None:
+            result["EVENING"] = self.EVENING
+        return result
 
 
 @app.post("/user/time-slots")
@@ -124,24 +125,107 @@ def set_user_time_slots(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         db.commit()
 
-    superseded = [
-        decision for decision in decisions if decision.code == "superseded"
-    ]
     outcomes = [
         reconcile_scheduler_effects(decision)
         for decision in decisions
         if decision.code != "superseded"
     ]
+    outcome_by_slot = {
+        str(outcome.details["slot"]): outcome for outcome in outcomes
+    }
+    try:
+        # One locked read gives both slots the same authoritative boundary.
+        with SessionLocal() as db:
+            truth_by_slot = {
+                str(decision.details["slot"]): read_post_effect_truth(
+                    db,
+                    user_id=user_id,
+                    result=outcome_by_slot.get(str(decision.details["slot"]), decision),
+                    source_operation_id=(
+                        f"{idempotency_key}:{str(decision.details['slot']).lower()}"
+                    ),
+                )
+                for decision in decisions
+            }
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "postproof_failed",
+                "saved": bool(outcomes),
+                "retry_with_same_idempotency_key": True,
+            },
+        ) from exc
+    superseded = [
+        decision for decision in decisions
+        if decision.code == "superseded"
+        or truth_by_slot[str(decision.details["slot"])].code == "superseded"
+    ]
     if superseded:
+        if len(superseded) != len(decisions):
+            slot_results: Dict[str, Dict[str, object]] = {}
+            for decision in decisions:
+                slot = str(decision.details["slot"])
+                if decision in superseded:
+                    slot_results[slot] = {
+                        "status": "superseded",
+                        "saved": decision.code != "superseded",
+                        "requested_value": decision.details.get("value"),
+                        "authoritative_value": truth_by_slot[slot].authoritative_value,
+                    }
+                    continue
+                outcome = outcome_by_slot[slot]
+                states = {effect.state.value for effect in outcome.effects}
+                schedule_state = (
+                    "failed"
+                    if "failed" in states
+                    else "deferred"
+                    if "deferred" in states
+                    else "not_required"
+                    if states and states == {"not_required"}
+                    else "reconciled"
+                )
+                slot_results[slot] = {
+                    "status": (
+                        "partial_failure"
+                        if schedule_state == "failed"
+                        else "deferred"
+                        if schedule_state == "deferred"
+                        else "replayed"
+                        if outcome.duplicate
+                        else "applied"
+                    ),
+                    "saved": True,
+                    "requested_value": outcome.details.get("value"),
+                    "schedule_state": schedule_state,
+                }
+            reconciliation_failed = any(
+                effect.state.value == "failed"
+                for outcome in outcomes
+                for effect in outcome.effects
+            )
+            detail: Dict[str, object] = {
+                "code": "mixed_time_slot_outcome",
+                "saved": bool(outcomes),
+                "jobs_reconciled": not any(
+                    effect.state.value in {"failed", "deferred"}
+                    for outcome in outcomes
+                    for effect in outcome.effects
+                ),
+                "slots": slot_results,
+            }
+            if reconciliation_failed:
+                detail["retry_with_same_idempotency_key"] = True
+            raise HTTPException(status_code=409, detail=detail)
         raise HTTPException(
             status_code=409,
             detail={
                 "code": "superseded_time_change",
-                "saved": False,
+                "saved": bool(outcomes),
                 "authoritative_values": {
-                    str(decision.details["slot"]): decision.details.get(
-                        "authoritative_value"
-                    )
+                    str(decision.details["slot"]): truth_by_slot[
+                        str(decision.details["slot"])
+                    ].authoritative_value
                     for decision in superseded
                 },
             },

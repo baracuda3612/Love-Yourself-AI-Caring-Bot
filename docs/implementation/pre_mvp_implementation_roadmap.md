@@ -703,9 +703,10 @@ Remove as complete subsystems, not isolated symbols:
 
 ### WP-02.2 — Build the authoritative lifecycle service
 
-**Status:** `IMPLEMENTED` — remediation acceptance passed after `60876d7`;
-final fresh-context local re-review and configured GitHub review for the new
-candidate SHA are pending. Founder merge is pending.
+**Status:** `VERIFIED` — focused and expanded acceptance, disposable
+PostgreSQL rehearsal, fresh-context local review, and configured GitHub review
+passed; founder merged PR #257 as
+`103d668aac7b80df4b4428fde2315e16e94d424f`.
 
 Create one backend boundary for:
 
@@ -1550,7 +1551,7 @@ block exit gate passes.
   - [x] WP-01.4 — Establish event, privacy, and deployment primitives
 - [ ] B2 — Target lifecycle and runtime actions
   - [x] WP-02.1 — Remove dead lifecycle entrances and the schedule-adjustment tunnel
-  - [ ] WP-02.2 — Build the authoritative lifecycle service
+  - [x] WP-02.2 — Build the authoritative lifecycle service
   - [ ] WP-02.3 — Complete runtime controls and plan-format behavior
 - [ ] B3 — Content, plan generation, presentation, and scheduled delivery
   - [ ] WP-03.1 — Migrate the versioned Content Library
@@ -1595,9 +1596,9 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | `WP-02.2 — Build the authoritative lifecycle service` |
-| Status | `VERIFIED` |
-| Next action | Founder reviews and manually merges PR #257 into `implementation/pre-mvp`; Block 2 remains in progress until WP-02.3 is verified |
+| Current package | `WP-02.3 — Complete runtime controls and plan-format behavior` |
+| Status | `IN PROGRESS` |
+| Next action | Implement and locally verify WP-02.3 from founder merge `103d668`; Block 2 remains in progress until WP-02.3 is independently reviewed and verified |
 | Current blockers | None for disposable founder-only refactoring; paid backup/restore remains deferred to Gate G1 before durable data or market launch |
 
 ### Private founder log

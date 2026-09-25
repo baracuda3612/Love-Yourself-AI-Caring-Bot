@@ -11,6 +11,16 @@ from app import lifecycle, lifecycle_reconciliation
 from app.plan_runtime import tools
 
 
+@pytest.fixture(autouse=True)
+def _stub_post_effect_proof_for_mutation_only_tests(monkeypatch):
+    """These unit fakes do not persist receipts; proof has its own tests."""
+    monkeypatch.setattr(
+        lifecycle,
+        "read_post_effect_truth",
+        lambda *_args, **_kwargs: lifecycle.PostEffectTruth(),
+    )
+
+
 class _Query:
     def __init__(self, value):
         self.value = value
@@ -53,14 +63,18 @@ class _DB:
         self.commits += 1
 
 
-@pytest.mark.parametrize("value", ["9:00", "0900", "24", ""])
+@pytest.mark.parametrize(
+    "value",
+    ["9:00", "0900", "24", "", "24:00", "12:60", "99:99", "-1:00"],
+)
 def test_hhmm_rejects_non_canonical_shape(value):
     with pytest.raises(ValueError, match="Invalid time format"):
         tools._validate_hhmm(value)
 
 
-def test_hhmm_accepts_canonical_shape():
-    tools._validate_hhmm("09:30")
+@pytest.mark.parametrize("value", ["00:00", "09:30", "23:59"])
+def test_hhmm_accepts_canonical_shape(value):
+    tools._validate_hhmm(value)
 
 
 @pytest.mark.parametrize(
@@ -135,6 +149,7 @@ def test_direct_time_tools_update_authority_and_reschedule_active_steps(
         "jobs_reconciled": "succeeded",
         "rescheduled": 1,
         "duplicate": False,
+        "disposition": "applied",
     }
     assert fake_db.commits == 1
 
@@ -201,6 +216,7 @@ def test_time_tools_report_superseded_replays_without_reconciliation(
         "saved": False,
         "jobs_reconciled": False,
         "duplicate": True,
+        "disposition": "superseded",
     }
     assert fake_db.commits == 1
 
@@ -229,6 +245,8 @@ def test_evening_preference_superseded_replay_is_not_success(monkeypatch):
     result = tools.record_evening_time(
         1,
         "20:30",
+        context="followup",
+        pending_source_operation_id="coach:activate:medium",
         source_operation_id="coach:evening-old",
     )
 
@@ -240,6 +258,7 @@ def test_evening_preference_superseded_replay_is_not_success(monkeypatch):
         "saved": False,
         "applied": False,
         "duplicate": True,
+        "disposition": "superseded",
     }
 
 
@@ -280,6 +299,7 @@ def test_pause_passes_stable_source_operation_and_writes_no_mirror(monkeypatch):
         "plan_status": "paused",
         "schedule_reconciliation": "deferred",
         "duplicate": False,
+        "disposition": "applied",
     }
     assert captured["source_operation_id"] == "coach:call-1"
     assert captured["operation"] == "pause"
@@ -322,8 +342,141 @@ def test_resume_passes_stable_source_operation(monkeypatch):
         "plan_status": "active",
         "schedule_reconciliation": "deferred",
         "duplicate": True,
+        "disposition": "replayed",
     }
     assert captured["source_operation_id"] == "coach:call-2"
+
+
+def test_resume_reports_persisted_schedule_failure_without_success_copy(monkeypatch):
+    fake_db = _DB(user=SimpleNamespace(id=1), profile=SimpleNamespace(user_id=1))
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(fake_db))
+    monkeypatch.setattr(
+        lifecycle,
+        "transition_current_plan",
+        lambda *_args, **_kwargs: lifecycle.LifecycleResult(
+            user_id=1,
+            plan_id=10,
+            status="active",
+            operation="resume",
+            effects=(lifecycle.ExternalEffect(
+                kind="reconcile_plan_schedule", target_ids=(10,)
+            ),),
+        ),
+    )
+    monkeypatch.setattr(
+        lifecycle_reconciliation,
+        "reconcile_scheduler_effects",
+        lambda result: replace(
+            result,
+            effects=(replace(
+                result.effects[0], state=lifecycle.ExternalEffectState.FAILED
+            ),),
+        ),
+    )
+
+    result = tools.resume_plan(1, source_operation_id="resume:partial")
+
+    assert result["status"] == "error"
+    assert result["code"] == "resume_reconciliation_failed"
+    assert result["persisted"] is True
+    assert result["disposition"] == "partial_failure"
+    assert fake_db.commits == 1
+
+
+def test_switch_tool_reconciles_source_and_replacement_after_commit(monkeypatch):
+    fake_db = _DB(user=SimpleNamespace(id=1), profile=SimpleNamespace(user_id=1))
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(fake_db))
+    captured = {}
+
+    def decide(_db, **kwargs):
+        captured.update(kwargs)
+        return lifecycle.LifecycleResult(
+            user_id=1,
+            plan_id=12,
+            status="active",
+            operation="switch_plan_format",
+            plan_type="MEDIUM",
+            effects=(
+                lifecycle.ExternalEffect(kind="reconcile_plan_schedule", target_ids=(11,)),
+                lifecycle.ExternalEffect(kind="reconcile_plan_schedule", target_ids=(12,)),
+            ),
+            details={
+                "source_plan_id": 11,
+                "switch_source_operation_id": "switch:applied",
+            },
+        )
+
+    monkeypatch.setattr(lifecycle, "switch_plan_format", decide)
+    monkeypatch.setattr(
+        lifecycle,
+        "record_switch_schedule_ready",
+        lambda db, **kwargs: captured.update(proof_db=db, proof=kwargs),
+    )
+
+    def reconcile(result):
+        assert fake_db.commits == 1
+        assert [effect.target_ids for effect in result.effects] == [(11,), (12,)]
+        return replace(
+            result,
+            effects=tuple(
+                replace(effect, state=lifecycle.ExternalEffectState.SUCCEEDED)
+                for effect in result.effects
+            ),
+        )
+
+    monkeypatch.setattr(lifecycle_reconciliation, "reconcile_scheduler_effects", reconcile)
+
+    result = tools.switch_plan_format(
+        1, "MEDIUM", source_operation_id="switch:applied"
+    )
+
+    assert captured["source_operation_id"] == "switch:applied"
+    assert captured["target_plan_type"] == "MEDIUM"
+    assert result["status"] == "ok"
+    assert result["plan_status"] == "active"
+    assert result["source_plan_id"] == 11
+    assert result["plan_id"] == 12
+    assert captured["proof_db"] is fake_db
+    assert captured["proof"] == {
+        "user_id": 1,
+        "plan_id": 12,
+        "switch_source_operation_id": "switch:applied",
+    }
+
+
+def test_switch_recovery_waits_for_first_evening_without_new_intent(monkeypatch):
+    fake_db = _DB(user=SimpleNamespace(id=1), profile=SimpleNamespace(user_id=1))
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(fake_db))
+    captured = {}
+
+    def recover(_db, **kwargs):
+        captured.update(kwargs)
+        return lifecycle.LifecycleResult(
+            user_id=1,
+            plan_id=11,
+            status="active",
+            operation="switch_plan_format",
+            duplicate=True,
+            code="needs_evening_time",
+            applied=False,
+            plan_type="SHORT",
+            details={"target_plan_type": "MEDIUM"},
+        )
+
+    monkeypatch.setattr(lifecycle, "recover_plan_format_switch", recover)
+
+    result = tools.recover_plan_format_switch(
+        1, "MEDIUM", "20:30", source_operation_id="switch:pending"
+    )
+
+    assert result == {
+        "status": "not_ready",
+        "target_plan_type": "MEDIUM",
+        "duplicate": True,
+        "disposition": "deferred",
+    }
+    assert captured["source_operation_id"] == "switch:pending"
+    assert fake_db.commits == 1
 
 
 def test_cancel_uses_one_aggregate_operation_then_cancels_jobs(monkeypatch):
@@ -374,7 +527,11 @@ def test_cancel_uses_one_aggregate_operation_then_cancels_jobs(monkeypatch):
         "plan_id": 11,
         "total_days": 7,
         "jobs_reconciled": True,
+        "keyboard_cleanup_pending": False,
+        "original_source_operation_id": "telegram:cancel-1",
         "duplicate": False,
+        "disposition": "applied",
+        "historical_cleanup": False,
     }
     assert fake_db.commits == 1
 
@@ -390,14 +547,30 @@ def test_create_followup_medium_requires_collected_evening_slot(monkeypatch):
     fake_db = _DB(user=user, profile=profile, plan=historical_plan)
 
     monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(fake_db))
+    monkeypatch.setattr(
+        lifecycle,
+        "prepare_followup_evening_collection",
+        lambda *_args, **_kwargs: lifecycle.LifecycleResult(
+            user_id=1,
+            plan_id=10,
+            status="abandoned",
+            operation="prepare_followup_evening",
+            code="needs_evening_time",
+            applied=False,
+        ),
+    )
     result = tools.create_followup_plan(
         1,
         "MEDIUM",
         source_operation_id="coach:activate-3",
     )
 
-    assert result == {"status": "needs_evening_time"}
-    assert fake_db.commits == 0
+    assert result == {
+        "status": "needs_evening_time",
+        "duplicate": False,
+        "disposition": "deferred",
+    }
+    assert fake_db.commits == 1
 
 
 def test_create_followup_passes_source_and_derived_prerequisites(monkeypatch):
@@ -458,12 +631,16 @@ def test_create_followup_passes_source_and_derived_prerequisites(monkeypatch):
         "plan_id": 22,
         "plan_type": "MEDIUM",
         "jobs_reconciled": True,
+        "activation_event_pending": False,
+        "original_source_operation_id": "coach:activate-4",
         "duplicate": False,
+        "disposition": "applied",
     }
     assert captured["plan_type"] == "MEDIUM"
     assert captured["evening_time"] == "20:30"
     assert captured["source_operation_id"] == "coach:activate-4"
     assert captured["require_plan_history"] is True
+    assert captured["required_previous_status"] == "abandoned"
     assert fake_db.commits == 1
 
 
@@ -515,9 +692,11 @@ def test_activation_reconciliation_failure_is_returned_as_error(monkeypatch):
         "code": "activation_reconciliation_failed",
         "plan_id": 22,
         "plan_type": "SHORT",
+        "original_source_operation_id": "coach:activate:failed",
         "persisted": True,
         "jobs_reconciled": False,
         "duplicate": False,
+        "disposition": "partial_failure",
     }
 
 
@@ -572,6 +751,7 @@ def test_get_plan_status_uses_derived_mode_day_and_step_status(monkeypatch):
         "days_remaining": 0,
         "steps_total": 3,
         "steps_completed": 1,
+        "steps_delivered": 0,
         "steps_remaining": 1,
         "deliveries_remaining": 1,
         "completion_rate": 33,

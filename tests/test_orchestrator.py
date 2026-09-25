@@ -1,7 +1,9 @@
 import os
 import pathlib
 import sys
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,7 +18,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
-from app import orchestrator
+from app import db as database
+from app import lifecycle, orchestrator
 from app.lifecycle import LifecycleEntitlementError, LifecycleResult
 
 
@@ -166,6 +169,39 @@ async def test_medium_evening_collection_preserves_activation_source(monkeypatch
 
 
 @pytest.mark.anyio
+async def test_evening_collection_does_not_promise_followup_when_pending_cache_fails(
+    monkeypatch,
+):
+    class MissingPendingMemory(PendingActionMemory):
+        async def set_pending_action(self, _user_id, _value):
+            return None
+
+    monkeypatch.setattr(orchestrator, "session_memory", MissingPendingMemory())
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "switch_plan_format": lambda *_args, **_kwargs: {
+                "status": "needs_evening_time"
+            }
+        },
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "switch_plan_format",
+            "arguments": {"plan_type": "MEDIUM"},
+            "call_id": "switch-7",
+        },
+    )
+
+    assert "недоступне" in response
+    assert "20:30" not in response
+
+
+@pytest.mark.anyio
 async def test_medium_cascade_reports_reconciliation_failure_and_keeps_retry_key(
     monkeypatch,
 ):
@@ -175,7 +211,6 @@ async def test_medium_cascade_reports_reconciliation_failure_and_keeps_retry_key
     captured = {}
     monkeypatch.setattr(orchestrator, "session_memory", memory)
     monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
-
     def followup(_user_id, args):
         captured.update(args)
         return {
@@ -211,6 +246,659 @@ async def test_medium_cascade_reports_reconciliation_failure_and_keeps_retry_key
 
 
 @pytest.mark.anyio
+async def test_medium_cascade_reports_event_only_failure_with_original_code(monkeypatch):
+    memory = PendingActionMemory("collect_evening_time_for_medium:call-medium-7")
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "record_evening_time": lambda *_a, **_k: {"status": "ok"},
+            "create_followup_plan": lambda *_a, **_k: {
+                "status": "ok",
+                "jobs_reconciled": True,
+                "activation_event_pending": True,
+                "original_source_operation_id": "call-medium-7",
+            },
+        },
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "record_evening_time",
+            "arguments": {"hhmm": "20:30"},
+            "call_id": "call-evening-7",
+        },
+    )
+
+    assert "запис події активації очікує повтору" in response
+    assert "Код дії: call-medium-7" in response
+    assert memory.cleared is True
+
+
+@pytest.mark.anyio
+async def test_switch_evening_cascade_reuses_original_source_and_clears_pending(
+    monkeypatch,
+):
+    memory = PendingActionMemory("collect_evening_time_for_switch:switch-7")
+    captured = {}
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_recover_retained_switch",
+        lambda *_args, **_kwargs: {"status": "not_ready"},
+    )
+
+    def switch(_user_id, args):
+        captured.update(args)
+        return {"status": "ok", "plan_id": 12, "plan_type": "MEDIUM"}
+
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "record_evening_time": lambda *_args, **_kwargs: {"status": "ok"},
+            "switch_plan_format": switch,
+        },
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "record_evening_time",
+            "arguments": {"hhmm": "20:30"},
+            "call_id": "evening-7",
+        },
+    )
+
+    assert "Формат змінено" in response
+    assert captured["_source_operation_id"] == "switch-7"
+    assert captured["plan_type"] == "MEDIUM"
+    assert memory.cleared is True
+
+
+@pytest.mark.anyio
+async def test_paused_switch_reply_does_not_claim_delivery_resumed(monkeypatch):
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "switch_plan_format": lambda *_a, **_k: {
+                "status": "ok",
+                "plan_status": "paused",
+                "jobs_reconciled": True,
+            }
+        },
+    )
+
+    reply = await orchestrator._execute_plan_tool(
+        7,
+        {"name": "switch_plan_format", "arguments": {"plan_type": "SHORT"}, "call_id": "paused-switch"},
+    )
+
+    assert "лишається на паузі" in reply
+    assert "після відновлення" in reply
+
+
+@pytest.mark.anyio
+async def test_resume_waits_for_switch_proof_with_actionable_copy(monkeypatch):
+    def pending_switch(_user_id, _args):
+        raise ValueError("switch_schedule_pending")
+
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {"resume_plan": pending_switch},
+    )
+
+    reply = await orchestrator._execute_plan_tool(
+        7,
+        {"name": "resume_plan", "arguments": {}, "call_id": "resume-too-early"},
+    )
+
+    assert "розклад після зміни формату" in reply
+    assert "Повтори перевірку тієї самої зміни" in reply
+    assert "Відновлено" not in reply
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("first_error_code", "partial_message"),
+    [
+        ("switch_reconciliation_failed", "розклад ще не узгоджено"),
+        ("switch_proof_record_failed", "підтвердження ще не збережено"),
+    ],
+)
+async def test_switch_evening_cascade_reports_persisted_partial_and_retries_receipt(
+    monkeypatch, first_error_code, partial_message,
+):
+    memory = PendingActionMemory("collect_evening_time_for_switch:switch-7")
+    switch_calls = []
+    recovery_calls = []
+    evening_calls = []
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+
+    recovery_results = iter((
+        LifecycleResult(
+            user_id=7,
+            plan_id=11,
+            status="active",
+            operation="switch_plan_format",
+            duplicate=True,
+            code="needs_evening_time",
+            applied=False,
+            plan_type="SHORT",
+            details={"target_plan_type": "MEDIUM"},
+        ),
+        LifecycleResult(
+            user_id=7,
+            plan_id=12,
+            status="active",
+            operation="switch_plan_format",
+            duplicate=True,
+            code="replayed",
+            plan_type="MEDIUM",
+            details={
+                "source_plan_id": 11,
+                "switch_source_operation_id": "switch-7",
+            },
+        ),
+    ))
+    receipt = SimpleNamespace(
+        user_id=7,
+        plan_id=11,
+        plan_step_id=None,
+        operation="switch_plan_format",
+        result_status="MEDIUM",
+    )
+
+    class RecoveryDB:
+        def commit(self):
+            return None
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(RecoveryDB()))
+    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args: object())
+    monkeypatch.setattr(
+        lifecycle,
+        "find_lifecycle_operation",
+        lambda *_args, **_kwargs: receipt,
+    )
+
+    def switch(_user_id, args):
+        switch_calls.append(args["_source_operation_id"])
+        return {
+            "status": "error",
+            "code": first_error_code,
+            "persisted": True,
+            "plan_id": 12,
+            "source_plan_id": 11,
+            "duplicate": False,
+        }
+
+    def recover(_db, **kwargs):
+        recovery_calls.append(kwargs["source_operation_id"])
+        return next(recovery_results)
+
+    def record_evening(_user_id, args):
+        evening_calls.append(args["_source_operation_id"])
+        if args["_source_operation_id"] != "evening-7":
+            raise ValueError("switch_evening_collection_requires_short_plan")
+        return {"status": "ok"}
+
+    monkeypatch.setattr(lifecycle, "switch_plan_format", recover)
+    monkeypatch.setattr(
+        lifecycle, "record_switch_schedule_ready", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "record_evening_time": record_evening,
+            "switch_plan_format": switch,
+        },
+    )
+
+    first = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "record_evening_time",
+            "arguments": {"hhmm": "20:30"},
+            "call_id": "evening-7",
+        },
+    )
+    if first_error_code == "switch_reconciliation_failed":
+        assert "Новий 14-денний план уже збережено" in first
+    assert partial_message in first
+    assert memory.pending == "collect_evening_time_for_switch:switch-7"
+    assert memory.cleared is False
+
+    second = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "record_evening_time",
+            "arguments": {"hhmm": "20:30"},
+            "call_id": "evening-8",
+        },
+    )
+    assert "Формат змінено" in second
+    assert switch_calls == ["switch-7"]
+    assert recovery_calls == ["switch-7", "switch-7"]
+    assert evening_calls == ["evening-7"]
+    assert memory.cleared is True
+
+
+@pytest.mark.anyio
+async def test_switch_recovery_rejects_invalid_fresh_time_before_builder(monkeypatch):
+    memory = PendingActionMemory("collect_evening_time_for_switch:switch-invalid")
+    user = SimpleNamespace(
+        id=7,
+        profile=SimpleNamespace(
+            daily_time_slots={"DAY": "14:00", "EVENING": "20:30"},
+            evening_slot_collected=True,
+        ),
+    )
+    receipt = SimpleNamespace(
+        user_id=7,
+        plan_id=11,
+        plan_step_id=None,
+        operation="switch_plan_format",
+        result_status="MEDIUM",
+    )
+    switch_calls = []
+
+    class RecoveryDB:
+        def commit(self):
+            return None
+
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(RecoveryDB()))
+    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args: user)
+    monkeypatch.setattr(
+        lifecycle,
+        "find_lifecycle_operation",
+        lambda *_args, **_kwargs: receipt,
+    )
+
+    def would_build(_db, **kwargs):
+        switch_calls.append(kwargs["source_operation_id"])
+        return LifecycleResult(
+            user_id=7,
+            plan_id=12,
+            status="active",
+            operation="switch_plan_format",
+            plan_type="MEDIUM",
+        )
+
+    monkeypatch.setattr(lifecycle, "switch_plan_format", would_build)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {"record_evening_time": lambda *_args, **_kwargs: pytest.fail(
+            "invalid recovery input must fail before the time mutation"
+        )},
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "record_evening_time",
+            "arguments": {"hhmm": "99:99"},
+            "call_id": "evening-invalid-8",
+        },
+    )
+
+    assert "неправильно" in response
+    assert switch_calls == []
+    assert memory.pending == "collect_evening_time_for_switch:switch-invalid"
+
+
+@pytest.mark.anyio
+async def test_switch_recovery_rejects_different_fresh_time_before_replay(monkeypatch):
+    memory = PendingActionMemory("collect_evening_time_for_switch:switch-different")
+    user = SimpleNamespace(
+        id=7,
+        profile=SimpleNamespace(
+            daily_time_slots={"DAY": "14:00", "EVENING": "20:30"},
+            evening_slot_collected=True,
+        ),
+    )
+    receipt = SimpleNamespace(
+        user_id=7,
+        plan_id=11,
+        plan_step_id=None,
+        operation="switch_plan_format",
+        result_status="MEDIUM",
+    )
+    replay_calls = []
+
+    class RecoveryDB:
+        def commit(self):
+            return None
+
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(RecoveryDB()))
+    monkeypatch.setattr(lifecycle, "_lock_user", lambda *_args: user)
+    monkeypatch.setattr(
+        lifecycle,
+        "find_lifecycle_operation",
+        lambda *_args, **_kwargs: receipt,
+    )
+
+    def would_replay(_db, **kwargs):
+        replay_calls.append(kwargs["source_operation_id"])
+        return LifecycleResult(
+            user_id=7,
+            plan_id=12,
+            status="active",
+            operation="switch_plan_format",
+            duplicate=True,
+            code="replayed",
+            plan_type="MEDIUM",
+        )
+
+    monkeypatch.setattr(lifecycle, "switch_plan_format", would_replay)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {"record_evening_time": lambda *_args, **_kwargs: pytest.fail(
+            "mismatched recovery input must fail before the time mutation"
+        )},
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "record_evening_time",
+            "arguments": {"hhmm": "21:00"},
+            "call_id": "evening-different-8",
+        },
+    )
+
+    assert "не збігається" in response
+    assert replay_calls == []
+    assert memory.pending == "collect_evening_time_for_switch:switch-different"
+
+
+@pytest.mark.anyio
+async def test_switch_recovery_rejects_unrelated_pending_source(monkeypatch):
+    memory = PendingActionMemory("collect_evening_time_for_switch:missing-source")
+    evening_calls = []
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(
+        orchestrator,
+        "_recover_retained_switch",
+        lambda *_args, **_kwargs: (
+            (_ for _ in ()).throw(ValueError("switch_recovery_receipt_missing"))
+        ),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "record_evening_time": lambda *_args, **_kwargs: evening_calls.append(True),
+        },
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "record_evening_time",
+            "arguments": {"hhmm": "20:30"},
+            "call_id": "evening-unrelated",
+        },
+    )
+
+    assert "недійсний" in response
+    assert evening_calls == []
+    assert memory.cleared is True
+
+
+@pytest.mark.anyio
+async def test_retained_switch_proof_write_failure_keeps_retry_key(monkeypatch):
+    memory = PendingActionMemory("collect_evening_time_for_switch:switch-7")
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_recover_retained_switch",
+        lambda *_a, **_k: {"status": "error", "code": "switch_proof_record_failed"},
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {"record_evening_time": lambda *_a, **_k: pytest.fail("no new time write")},
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "record_evening_time",
+            "arguments": {"hhmm": "20:30"},
+            "call_id": "evening-retry",
+        },
+    )
+
+    assert "Розклад узгоджено" in response
+    assert "switch-7" in response
+    assert memory.pending == "collect_evening_time_for_switch:switch-7"
+    assert memory.cleared is False
+
+
+@pytest.mark.anyio
+async def test_direct_switch_partial_uses_persisted_change_copy(monkeypatch):
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "switch_plan_format": lambda *_args, **_kwargs: {
+                "status": "error",
+                "code": "switch_reconciliation_failed",
+                "persisted": True,
+                "plan_id": 12,
+            }
+        },
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "switch_plan_format",
+            "arguments": {"plan_type": "MEDIUM"},
+            "call_id": "switch-direct-7",
+        },
+    )
+
+    assert "Зміну збережено" in response
+    assert "розклад ще не узгоджено" in response
+    assert "не вдалось запустити" not in response
+
+
+@pytest.mark.anyio
+async def test_fresh_coach_retry_routes_same_switch_receipt_and_reports_partial(monkeypatch):
+    captured = []
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+
+    def retry(user_id, args):
+        captured.append((user_id, args["switch_source_operation_id"]))
+        return {
+            "status": "error", "code": "switch_reconciliation_failed",
+            "persisted": True, "plan_id": 12,
+            "switch_source_operation_id": "coach:s1",
+        }
+
+    monkeypatch.setattr(
+        orchestrator, "_build_tool_registry",
+        lambda: {"retry_switch_plan_format": retry},
+    )
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "retry_switch_plan_format",
+            "arguments": {"switch_source_operation_id": "coach:s1"},
+            "call_id": "coach:new-call",
+        },
+    )
+
+    assert captured == [(7, "coach:s1")]
+    assert "Зміну збережено" in response
+    assert "розклад ще не узгоджено" in response
+
+
+@pytest.mark.anyio
+async def test_fresh_control_retry_uses_original_code_not_new_call_id(monkeypatch):
+    captured = []
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_a, **_k: None)
+
+    def retry(user_id, args):
+        captured.append((user_id, dict(args)))
+        return {
+            "status": "error", "code": "resume_reconciliation_failed",
+            "persisted": True,
+            "original_source_operation_id": "coach:resume-original",
+        }
+
+    monkeypatch.setattr(
+        orchestrator, "_build_tool_registry",
+        lambda: {"retry_plan_action": retry},
+    )
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "retry_plan_action",
+            "arguments": {
+                "action": "resume",
+                "original_source_operation_id": "coach:resume-original",
+            },
+            "call_id": "coach:new-retry-call",
+        },
+    )
+
+    assert captured[0][1]["original_source_operation_id"] == "coach:resume-original"
+    assert captured[0][1]["_source_operation_id"] == "coach:new-retry-call"
+    assert "розклад ще не узгоджено" in response
+    assert "coach:resume-original" in response
+
+
+@pytest.mark.anyio
+async def test_stale_control_retry_cannot_claim_success(monkeypatch):
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {"retry_plan_action": lambda *_a, **_k: (_ for _ in ()).throw(
+            ValueError("retry_action_superseded")
+        )},
+    )
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "retry_plan_action",
+            "arguments": {
+                "action": "pause",
+                "original_source_operation_id": "coach:old-pause",
+            },
+            "call_id": "coach:new-retry-call",
+        },
+    )
+    assert "новіша зміна" in response
+    assert "узгоджено" not in response
+
+
+@pytest.mark.anyio
+async def test_paused_followup_retry_does_not_claim_active_schedule(monkeypatch):
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {"retry_plan_action": lambda *_a, **_k: {
+            "status": "ok",
+            "action": "followup",
+            "plan_status": "paused",
+            "activation_event_pending": True,
+            "original_source_operation_id": "coach:followup-1",
+        }},
+    )
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "retry_plan_action",
+            "arguments": {
+                "action": "followup",
+                "original_source_operation_id": "coach:followup-1",
+            },
+            "call_id": "coach:retry-1",
+        },
+    )
+    assert "на паузі" in response
+    assert "при відновленні" in response
+    assert "розклад узгоджено" not in response
+    assert "coach:followup-1" in response
+
+
+@pytest.mark.anyio
+async def test_event_only_failure_does_not_claim_schedule_failure(monkeypatch):
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "switch_plan_format": lambda *_a, **_k: {
+                "status": "ok", "jobs_reconciled": True,
+                "activation_event_pending": True,
+                "switch_source_operation_id": "coach:s1",
+            }
+        },
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "switch_plan_format",
+            "arguments": {"plan_type": "MEDIUM"},
+            "call_id": "coach:s1",
+        },
+    )
+
+    assert "розклад готові" in response
+    assert "запис події активації" in response
+    assert "розклад ще не узгоджено" not in response
+
+
+@pytest.mark.anyio
+async def test_lost_switch_pending_key_is_rebuilt_from_receipt(monkeypatch):
+    memory = PendingActionMemory()
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "retry_switch_plan_format": lambda *_a, **_k: {
+                "status": "needs_evening_time",
+                "pending_source_operation_id": "coach:s1",
+            }
+        },
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7,
+        {
+            "name": "retry_switch_plan_format",
+            "arguments": {"switch_source_operation_id": None},
+            "call_id": "coach:r1",
+        },
+    )
+
+    assert "20:30" in response
+    assert memory.pending == "collect_evening_time_for_switch:coach:s1"
+
+
+@pytest.mark.anyio
 async def test_superseded_time_change_does_not_return_success_copy(monkeypatch):
     monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
@@ -239,6 +927,27 @@ async def test_superseded_time_change_does_not_return_success_copy(monkeypatch):
     assert response == (
         "⚠️ Цей запит на зміну часу вже застарів. Актуальний час: 16:45."
     )
+
+
+@pytest.mark.anyio
+async def test_superseded_plan_control_does_not_claim_current_time(monkeypatch):
+    monkeypatch.setattr(orchestrator, "log_metric", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_tool_registry",
+        lambda: {
+            "resume_plan": lambda *_args, **_kwargs: {
+                "status": "error", "code": "superseded", "plan_status": "active"
+            }
+        },
+    )
+
+    response = await orchestrator._execute_plan_tool(
+        7, {"name": "resume_plan", "arguments": {}, "call_id": "resume-old"}
+    )
+
+    assert "застарів" in response
+    assert "None" not in response
 
 
 @pytest.mark.anyio
@@ -547,3 +1256,16 @@ def test_auto_complete_rejects_multiple_current_plans(monkeypatch):
 
     with pytest.raises(LifecycleInvariantError, match="multiple current plans"):
         orchestrator._auto_complete_plan_if_needed(db, user)
+def test_followup_registry_requires_explicit_plan_type(monkeypatch):
+    monkeypatch.setattr(
+        "app.plan_runtime.tools.create_followup_plan",
+        lambda *_args, **_kwargs: pytest.fail("must reject before tool execution"),
+    )
+
+    registry = orchestrator._build_tool_registry()
+
+    with pytest.raises(KeyError, match="plan_type"):
+        registry["create_followup_plan"](
+            1,
+            {"_source_operation_id": "coach:followup:missing-type"},
+        )

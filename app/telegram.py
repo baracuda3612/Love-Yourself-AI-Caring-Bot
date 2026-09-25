@@ -36,6 +36,90 @@ dp.include_router(router)
 logger = logging.getLogger(__name__)
 
 
+async def _clear_terminal_callback_keyboard(callback_query: CallbackQuery, step_id: int) -> bool:
+    """Remove buttons once; a remaining button is the user's explicit retry path."""
+    message = callback_query.message
+    if message is None:
+        return False
+    try:
+        await message.edit_reply_markup(reply_markup=None)
+    except Exception as exc:
+        if "message is not modified" not in str(exc).lower():
+            logger.exception("Terminal keyboard removal failed step=%s", step_id)
+            try:
+                await message.answer(
+                    "⚠️ Стан вправи збережено, але кнопки не вдалося прибрати. "
+                    "Натисни їх ще раз, щоб повторити прибирання; "
+                    "вправа вдруге не зарахується."
+                )
+            except Exception:
+                logger.exception("Could not notify button cleanup failure step=%s", step_id)
+            return False
+    message_id = getattr(message, "message_id", None)
+    if message_id is None:
+        return True
+    try:
+        with SessionLocal() as db:
+            step = (
+                db.query(AIPlanStep)
+                .filter(
+                    AIPlanStep.id == step_id,
+                    AIPlanStep.tg_message_id == message_id,
+                    AIPlanStep.step_status.in_(
+                        ("completed", "skipped", "expired", "canceled")
+                    ),
+                )
+                .first()
+            )
+            if step is not None:
+                step.tg_message_id = None
+                db.commit()
+    except Exception:
+        logger.exception("Terminal keyboard receipt update pending step=%s", step_id)
+    return True
+
+
+def _stale_terminal_keyboard_status(
+    callback_query: CallbackQuery, step_id: int
+) -> str | None:
+    """Authorize a stale-button retry without repeating the recorded action."""
+    message_id = getattr(callback_query.message, "message_id", None)
+    if message_id is None:
+        return None
+    try:
+        with SessionLocal() as db:
+            step = db.query(AIPlanStep).filter(AIPlanStep.id == step_id).first()
+            if (
+                step is None
+                or step.step_status not in {"completed", "skipped", "expired", "canceled"}
+                or step.tg_message_id != message_id
+                or step.day.plan.user.tg_id != callback_query.from_user.id
+            ):
+                return None
+            status = str(step.step_status)
+    except Exception:
+        logger.exception("Stale button lookup failed step=%s", step_id)
+        return None
+    return status
+
+
+async def _answer_stale_terminal_callback(
+    callback_query: CallbackQuery, step_id: int
+) -> bool:
+    status = _stale_terminal_keyboard_status(callback_query, step_id)
+    if status is None:
+        return False
+    replies = {
+        "completed": "Завдання вже виконано",
+        "skipped": "Завдання вже пропущено",
+        "expired": "Термін завдання минув",
+        "canceled": "Завдання скасовано",
+    }
+    await callback_query.answer(replies[status])
+    await _clear_terminal_callback_keyboard(callback_query, step_id)
+    return True
+
+
 def _ensure_user(db, tg_user) -> tuple[User, bool]:
     user: Optional[User] = db.query(User).filter(User.tg_id == tg_user.id).first()
     is_created = False
@@ -178,6 +262,9 @@ async def handle_task_completed(callback_query: CallbackQuery):
             return
         except LifecycleTransitionError as exc:
             reason = str(exc)
+            db.rollback()
+            if await _answer_stale_terminal_callback(callback_query, step_id):
+                return
             if reason == "plan_step_missing":
                 await callback_query.answer("Завдання не знайдено")
             elif reason == "plan_not_active":
@@ -201,6 +288,8 @@ async def handle_task_completed(callback_query: CallbackQuery):
                 await callback_query.answer("Завдання вже виконано")
             else:
                 await callback_query.answer("Завдання вже пропущено")
+            if callback_query.message:
+                await _clear_terminal_callback_keyboard(callback_query, step_id)
             return
 
         log_user_event(
@@ -219,7 +308,7 @@ async def handle_task_completed(callback_query: CallbackQuery):
 
     await callback_query.answer("✅ Чудово! Завдання виконано.")
     if callback_query.message:
-        await callback_query.message.edit_reply_markup(reply_markup=None)
+        await _clear_terminal_callback_keyboard(callback_query, step_id)
 
         try:
             with SessionLocal() as db:
@@ -313,6 +402,9 @@ async def handle_task_skipped(callback_query: CallbackQuery):
             return
         except LifecycleTransitionError as exc:
             reason = str(exc)
+            db.rollback()
+            if await _answer_stale_terminal_callback(callback_query, step_id):
+                return
             if reason == "plan_step_missing":
                 await callback_query.answer("Завдання не знайдено")
             elif reason == "plan_not_active":
@@ -335,6 +427,8 @@ async def handle_task_skipped(callback_query: CallbackQuery):
                 await callback_query.answer("Завдання вже виконано")
             else:
                 await callback_query.answer("Завдання вже пропущено")
+            if callback_query.message:
+                await _clear_terminal_callback_keyboard(callback_query, step_id)
             return
 
         log_user_event(
@@ -351,7 +445,7 @@ async def handle_task_skipped(callback_query: CallbackQuery):
 
     await callback_query.answer("⏭️ Завдання пропущено")
     if callback_query.message:
-        await callback_query.message.edit_reply_markup(reply_markup=None)
+        await _clear_terminal_callback_keyboard(callback_query, step_id)
 
         try:
             with SessionLocal() as db:

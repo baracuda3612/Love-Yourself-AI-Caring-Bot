@@ -187,8 +187,10 @@ def test_compose_messages_injects_english_product_map_before_runtime_context():
             {
                 "pause_plan",
                 "cancel_plan",
+                "switch_plan_format",
+                "retry_switch_plan_format",
+                "retry_plan_action",
                 "change_day_time",
-                "change_evening_time",
                 "get_plan_status",
             },
         ),
@@ -197,20 +199,16 @@ def test_compose_messages_injects_english_product_map_before_runtime_context():
             {
                 "resume_plan",
                 "cancel_plan",
+                "switch_plan_format",
+                "retry_switch_plan_format",
+                "retry_plan_action",
                 "change_day_time",
-                "change_evening_time",
                 "get_plan_status",
             },
         ),
         (
             "NO_ACTIVE_PLAN",
-            {
-                "create_followup_plan",
-                "record_evening_time",
-                "change_day_time",
-                "change_evening_time",
-                "get_plan_status",
-            },
+            {"get_plan_status"},
         ),
         ("NO_ACTIVE_PLAN_WITHOUT_HISTORY", set()),
         ("ONBOARDING", set()),
@@ -222,6 +220,39 @@ def test_coach_tools_are_filtered_by_state(state, expected_names):
         tool["name"] for tool in coach_agent._coach_tools_for_state(state)
     }
     assert actual_names == expected_names
+
+
+def test_coach_tools_follow_plan_type_abandoned_state_and_pending_intent():
+    def names(mode, **context):
+        return {
+            tool["name"]
+            for tool in coach_agent._coach_tools_for_state(mode, **context)
+        }
+
+    medium_active = names(
+        "ACTIVE", plan_type="MEDIUM", evening_slot_collected=True
+    )
+    assert "change_evening_time" in medium_active
+    assert "record_evening_time" not in medium_active
+    short_switch_pending = names(
+        "ACTIVE",
+        plan_type="SHORT",
+        pending_action="collect_evening_time_for_switch:call-1",
+    )
+    assert "record_evening_time" in short_switch_pending
+    assert "change_evening_time" not in short_switch_pending
+    abandoned = names(
+        "NO_ACTIVE_PLAN", latest_plan_status="abandoned", plan_type="SHORT"
+    )
+    assert "create_followup_plan" in abandoned
+    assert "record_evening_time" not in abandoned
+    abandoned_pending = names(
+        "NO_ACTIVE_PLAN",
+        latest_plan_status="abandoned",
+        plan_type="SHORT",
+        pending_action="collect_evening_time_for_medium:call-2",
+    )
+    assert "record_evening_time" in abandoned_pending
 
 
 def test_coach_tool_schemas_are_strict_and_validate_hhmm_shape():
@@ -250,8 +281,10 @@ def test_coach_tool_schemas_are_strict_and_validate_hhmm_shape():
             {
                 "pause_plan",
                 "cancel_plan",
+                "switch_plan_format",
+                "retry_switch_plan_format",
+                "retry_plan_action",
                 "change_day_time",
-                "change_evening_time",
                 "get_plan_status",
             },
         ),

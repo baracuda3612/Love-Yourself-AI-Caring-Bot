@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import logging
+import re
 
 import pytz
 from sqlalchemy.exc import IntegrityError
@@ -528,18 +529,58 @@ async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
     stm_history = await get_stm_history(user_id)
     current_mode = await get_fsm_state(user_id)
     temporal_context = await get_temporal_context(user_id)
+    pending_action = await session_memory.get_pending_action(user_id)
+
+    plan_type = None
+    evening_slot_collected = False
+    latest_plan_status = None
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.id == user_id).first()
+        if user is not None:
+            evening_slot_collected = bool(
+                user.profile and user.profile.evening_slot_collected
+            )
+            latest_plan = (
+                db.query(AIPlan)
+                .filter(AIPlan.user_id == user_id)
+                .order_by(AIPlan.cycle_number.desc(), AIPlan.id.desc())
+                .first()
+            )
+            if latest_plan is not None:
+                latest_plan_status = str(latest_plan.status)
+                plan_type = "MEDIUM" if int(latest_plan.total_days) == 14 else "SHORT"
 
     return {
         "message_text": message_text,
         "short_term_history": stm_history,
         "current_mode": current_mode,
         "temporal_context": temporal_context,
+        "plan_type": plan_type,
+        "evening_slot_collected": evening_slot_collected,
+        "latest_plan_status": latest_plan_status,
+        "pending_action": pending_action,
     }
 
 
 # Tool name → callable map (allowlist).
 # Only these tools may be invoked by Coach via tool_call signal.
 _PLAN_TOOL_REGISTRY: Dict[str, Any] = {}
+
+
+def _recover_retained_switch(
+    user_id: int,
+    source_operation_id: str,
+    hhmm: str,
+) -> dict:
+    """Use the internal receipt-gated recovery entrance, not a Coach tool."""
+    from app.plan_runtime.tools import recover_plan_format_switch
+
+    return recover_plan_format_switch(
+        user_id,
+        "MEDIUM",
+        hhmm,
+        source_operation_id=source_operation_id,
+    )
 
 
 def _build_tool_registry() -> Dict[str, Any]:
@@ -553,16 +594,21 @@ def _build_tool_registry() -> Dict[str, Any]:
         pause_plan,
         record_evening_time,
         resume_plan,
+        retry_plan_action,
+        retry_switch_plan_format,
+        switch_plan_format,
     )
     return {
         "create_followup_plan": lambda uid, args: create_followup_plan(
             uid,
-            args.get("plan_type", "SHORT"),
+            args["plan_type"],
             source_operation_id=args["_source_operation_id"],
         ),
         "record_evening_time":  lambda uid, args: record_evening_time(
             uid,
             args["hhmm"],
+            context=args["_evening_collection_context"],
+            pending_source_operation_id=args["_evening_collection_source_id"],
             source_operation_id=args["_source_operation_id"],
         ),
         "change_day_time":      lambda uid, args: change_day_time(
@@ -585,6 +631,20 @@ def _build_tool_registry() -> Dict[str, Any]:
         "cancel_plan":          lambda uid, args: cancel_plan(
             uid, source_operation_id=args["_source_operation_id"]
         ),
+        "switch_plan_format":   lambda uid, args: switch_plan_format(
+            uid,
+            args["plan_type"],
+            source_operation_id=args["_source_operation_id"],
+        ),
+        "retry_switch_plan_format": lambda uid, args: retry_switch_plan_format(
+            uid,
+            switch_source_operation_id=args.get("switch_source_operation_id"),
+        ),
+        "retry_plan_action": lambda uid, args: retry_plan_action(
+            uid,
+            args["action"],
+            args["original_source_operation_id"],
+        ),
     }
 
 
@@ -598,6 +658,8 @@ _TOOL_REPLY_TEMPLATES: Dict[str, str] = {
     "pause_plan":           "⏸ План поставлено на паузу. Завдання не надходитимуть до відновлення.",
     "resume_plan":          "▶️ План відновлено. Майбутній розклад потребує узгодження.",
     "cancel_plan":          "🛑 Поточну серію вправ скасовано.",
+    "switch_plan_format":   "✅ Формат змінено, новий розклад узгоджено.",
+    "retry_switch_plan_format": "✅ Зміну формату перевірено, розклад узгоджено.",
 }
 
 
@@ -627,8 +689,36 @@ def _humanize_tool_error(tool_name: str, raw: str) -> str:
         return "Схоже, час введено неправильно. Напиши у форматі HH:MM, наприклад 09:30."
     if "only allowed from idle_onboarded" in r:
         return "Ця дія зараз недоступна — схоже, план уже є або щось пішло не так."
-    if "only allowed from" in r and "followup" in r or "create_followup" in tool_name:
-        return "Новий план можна запустити тільки після завершення поточного."
+    if "followup_requires_abandoned_plan" in r:
+        return "Новий план можна запустити тільки після скасування попереднього."
+    if "followup_activation_requires_no_active_plan" in r:
+        return "Спочатку потрібно завершити або скасувати поточний план."
+    if "recoverable_switch_superseded" in r:
+        return "⚠️ Ця збережена дія вже застаріла; поточний стан плану змінився."
+    if "recoverable_switch_ambiguous" in r:
+        return (
+            "⚠️ Є кілька запитів на зміну формату. "
+            "Для точного повтору потрібен код попередньої зміни."
+        )
+    if "switch_schedule_pending" in r:
+        return (
+            "⚠️ Спочатку потрібно узгодити розклад після зміни формату. "
+            "Повтори перевірку тієї самої зміни."
+        )
+    if "switch_recovery_receipt_mismatch" in r:
+        return "⚠️ Цей код не належить зміні формату."
+    if "retry_action_superseded" in r:
+        return "⚠️ Цю дію вже витіснила новіша зміна плану; старий повтор не застосовано."
+    if "retry_receipt_missing" in r or "retry_receipt_action_mismatch" in r:
+        return "⚠️ Не знайдено саме цієї збереженої дії. Перевір її код і тип."
+    if "retry_source_required" in r or "unsupported_retry_action" in r:
+        return "⚠️ Для повтору потрібні тип дії та її початковий код."
+    if "requested_plan_type_already_current" in r:
+        return "Цей формат уже діє; обери інший формат для перемикання."
+    if "evening_time_requires_medium_plan" in r:
+        return "Вечірній час можна змінювати лише для 14-денного плану."
+    if "saved_day_time_missing" in r or "saved_day_time_invalid" in r:
+        return "Спочатку потрібно налаштувати коректний денний час."
     if "cancel_plan requires" in r:
         return "Скасувати можна тільки активний або призупинений план."
     if "pause_plan requires" in r:
@@ -640,6 +730,44 @@ def _humanize_tool_error(tool_name: str, raw: str) -> str:
     # fallback — hide raw internals
     logger.debug("[TOOL] unmapped ValueError tool=%s: %s", tool_name, raw)
     return "⚠️ Не вдалось виконати дію. Спробуй ще раз."
+
+
+def _retry_reference_note(value: Any) -> str:
+    source = str(value or "")
+    if not re.fullmatch(r"[A-Za-z0-9:_-]{1,160}", source):
+        return ""
+    return f" Код дії: {source}."
+
+
+def _switch_success_reply(result: Dict[str, Any]) -> str:
+    if result.get("plan_status") == "paused":
+        base = "✅ Формат змінено. Новий план лишається на паузі; вправи почнуть надходити після відновлення."
+    else:
+        base = "✅ Формат змінено, новий розклад узгоджено."
+    if not result.get("keyboard_cleanup_pending") and not result.get(
+        "activation_event_pending"
+    ):
+        return base
+    notices = []
+    if result.get("keyboard_cleanup_pending"):
+        notices.append("не вдалося прибрати старі кнопки; натисни їх ще раз або повтори перевірку за кодом")
+    if result.get("activation_event_pending"):
+        notices.append("запис події активації очікує повтору")
+    warning_base = (
+        base
+        if result.get("plan_status") == "paused"
+        else "✅ Новий план і розклад готові."
+    )
+    return warning_base + " " + "; ".join(notices) + "." + _retry_reference_note(result.get("switch_source_operation_id"))
+
+
+def _followup_success_reply(result: Dict[str, Any]) -> str:
+    if result.get("activation_event_pending"):
+        return (
+            "✅ План і розклад готові; запис події активації очікує повтору."
+            + _retry_reference_note(result.get("original_source_operation_id"))
+        )
+    return _TOOL_REPLY_TEMPLATES["create_followup_plan"]
 
 
 async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optional[str]:
@@ -662,6 +790,9 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
         "pause_plan",
         "resume_plan",
         "cancel_plan",
+        "switch_plan_format",
+        "retry_switch_plan_format",
+        "retry_plan_action",
     }
     if tool_name in source_required_tools and not source_operation_id:
         logger.error(
@@ -672,11 +803,85 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
         return "⚠️ Не вдалось виконати дію. Спробуй ще раз."
     tool_args["_source_operation_id"] = str(source_operation_id or "")
 
+    pending_action = None
+    if tool_name == "record_evening_time":
+        pending_action = await session_memory.get_pending_action(user_id)
+        if str(pending_action).startswith("collect_evening_time_for_medium:"):
+            tool_args["_evening_collection_context"] = "followup"
+        elif str(pending_action).startswith("collect_evening_time_for_switch:"):
+            tool_args["_evening_collection_context"] = "switch"
+        else:
+            return "⚠️ Вечірній час зараз не очікується. Спочатку обери 14 днів."
+        tool_args["_evening_collection_source_id"] = str(pending_action).split(":", 1)[1]
+
     registry = _build_tool_registry()
     handler = registry.get(tool_name)
     if handler is None:
         logger.warning("[TOOL] Unknown tool_call name=%r for user=%s — skipping", tool_name, user_id)
         return None
+
+    if (
+        tool_name == "record_evening_time"
+        and tool_args.get("_evening_collection_context") == "switch"
+    ):
+        retained_source = tool_args["_evening_collection_source_id"]
+        try:
+            recovery = _recover_retained_switch(
+                user_id,
+                retained_source,
+                str(tool_args.get("hhmm") or ""),
+            )
+        except ValueError as exc:
+            raw_error = str(exc)
+            logger.warning(
+                "[TOOL] retained switch recovery user=%s failed: %s",
+                user_id,
+                exc,
+            )
+            if "Invalid time format" in raw_error:
+                return _humanize_tool_error(tool_name, raw_error)
+            if raw_error == "switch_recovery_evening_time_mismatch":
+                return (
+                    "⚠️ Цей час не збігається з уже збереженим. Для "
+                    "відновлення введи попередній вечірній час; змінити його "
+                    "можна після узгодження розкладу."
+                )
+            await session_memory.clear_pending_action(user_id)
+            return "⚠️ Попередній запит на зміну формату вже недійсний."
+        except Exception as exc:
+            logger.error(
+                "[TOOL] retained switch recovery user=%s error: %s",
+                user_id,
+                exc,
+                exc_info=True,
+            )
+            return "⚠️ Не вдалось перевірити розклад. Спробуй ще раз."
+        if recovery.get("status") != "not_ready":
+            log_metric(
+                "plan_tool_executed",
+                extra={"user_id": user_id, "tool": "recover_plan_format_switch"},
+            )
+            if recovery.get("status") == "ok":
+                await session_memory.clear_pending_action(user_id)
+                return _switch_success_reply(recovery)
+            if (
+                recovery.get("code") == "switch_reconciliation_failed"
+                and recovery.get("persisted") is True
+            ):
+                return (
+                    "⚠️ Новий 14-денний план уже збережено, але його "
+                    "розклад ще не узгоджено. Повтори введення того "
+                    "самого часу — новий план вдруге не створиться."
+                    + _retry_reference_note(retained_source)
+                )
+            if recovery.get("code") == "switch_proof_record_failed":
+                return (
+                    "⚠️ Розклад узгоджено, але підтвердження ще не збережено. "
+                    "Повтори введення того самого часу."
+                    + _retry_reference_note(retained_source)
+                )
+            await session_memory.clear_pending_action(user_id)
+            return "⚠️ Цей запит уже застарів; поточний стан плану змінився."
 
     try:
         result = handler(user_id, tool_args)
@@ -692,12 +897,47 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
     if tool_name == "get_plan_status":
         return _format_plan_status(result)
 
+    if (
+        tool_name == "retry_switch_plan_format"
+        and isinstance(result, dict)
+        and result.get("status") == "needs_evening_time"
+    ):
+        pending_source = result.get("pending_source_operation_id")
+        if not pending_source:
+            return "⚠️ Не вдалось відновити очікування вечірнього часу."
+        pending_key = f"collect_evening_time_for_switch:{pending_source}"
+        await session_memory.set_pending_action(user_id, pending_key)
+        if await session_memory.get_pending_action(user_id) != pending_key:
+            return "⚠️ Запит збережено, але очікування вечірнього часу недоступне."
+        return (
+            "О котрій зручно отримувати вечірній момент? "
+            "Напиши час у форматі 20:30."
+            + _retry_reference_note(pending_source)
+        )
+
     if isinstance(result, dict) and result.get("status") == "error":
         code = result.get("code")
+        retry_reference = (
+            result.get("original_source_operation_id")
+            or result.get("switch_source_operation_id")
+            or source_operation_id
+        )
+        retry_note = _retry_reference_note(retry_reference)
+        if code == "switch_proof_record_failed":
+            return (
+                "⚠️ Розклад узгоджено, але підтвердження ще не збережено. "
+                "Повтори перевірку цієї зміни." + retry_note
+            )
+        if code in {"retry_postproof_failed", "postproof_failed"}:
+            return (
+                "⚠️ Не вдалося остаточно перевірити стан цієї дії. "
+                "Повтори перевірку за тим самим кодом." + retry_note
+            )
         if code == "activation_reconciliation_failed":
             return (
                 "⚠️ План збережено, але його розклад не вдалося повністю "
                 "узгодити. Повтори запуск із тим самим запитом."
+                + retry_note
             )
         if code == "schedule_reconciliation_failed":
             return (
@@ -705,42 +945,85 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
                 "Повтори цю саму дію."
             )
         if code == "superseded":
-            authoritative_time = result.get("day_time") or result.get(
-                "evening_time"
-            )
-            return (
-                "⚠️ Цей запит на зміну часу вже застарів. "
-                f"Актуальний час: {authoritative_time}."
-            )
+            if tool_name in {
+                "change_day_time", "change_evening_time", "record_evening_time"
+            }:
+                authoritative_time = result.get("day_time") or result.get(
+                    "evening_time"
+                )
+                if authoritative_time:
+                    return (
+                        "⚠️ Цей запит на зміну часу вже застарів. "
+                        f"Актуальний час: {authoritative_time}."
+                    )
+            return "⚠️ Цей запит уже застарів; поточний стан плану змінився."
         if code == "cancel_reconciliation_failed":
+            if result.get("historical_cleanup"):
+                return (
+                    "⚠️ Прибирання старого скасованого плану ще не завершене; "
+                    "поточний план не змінено. Повтори перевірку."
+                    + retry_note
+                )
             return (
                 "⚠️ План скасовано, але очищення розкладу ще не завершене. "
                 "Повтори цю саму дію."
+                + retry_note
+            )
+        if code in {
+            "pause_reconciliation_failed",
+            "resume_reconciliation_failed",
+            "switch_reconciliation_failed",
+        }:
+            return (
+                "⚠️ Зміну збережено, але розклад ще не узгоджено. "
+                "Повтори цю саму дію."
+                + retry_note
             )
         return "⚠️ Дію збережено частково. Повтори цей самий запит."
 
     # needs_evening_time soft result from create_followup_plan
     if isinstance(result, dict) and result.get("status") == "needs_evening_time":
-        await session_memory.set_pending_action(
-            user_id,
-            f"collect_evening_time_for_medium:{source_operation_id}",
+        pending_kind = (
+            "collect_evening_time_for_switch"
+            if tool_name == "switch_plan_format"
+            else "collect_evening_time_for_medium"
         )
-        return "О котрій зручно отримувати вечірній момент? Напиши час у форматі 20:30"
+        pending_key = f"{pending_kind}:{source_operation_id}"
+        await session_memory.set_pending_action(user_id, pending_key)
+        if await session_memory.get_pending_action(user_id) != pending_key:
+            return (
+                "⚠️ Запит збережено, але очікування вечірнього часу зараз "
+                "недоступне. Повтори вибір 14-денного формату пізніше."
+            )
+        return (
+            "О котрій зручно отримувати вечірній момент? "
+            "Напиши час у форматі 20:30."
+            + (
+                _retry_reference_note(source_operation_id)
+                if tool_name == "switch_plan_format"
+                else ""
+            )
+        )
 
     # After record_evening_time: if pending_action is collect_evening_time_for_medium,
     # deterministically create the MEDIUM plan — no second LLM round-trip.
     if tool_name == "record_evening_time" and result.get("status") == "ok":
-        pending = await session_memory.get_pending_action(user_id)
-        pending_prefix = "collect_evening_time_for_medium"
-        if pending == pending_prefix or str(pending).startswith(f"{pending_prefix}:"):
-            activation_source_id = (
-                str(pending).split(":", 1)[1]
-                if str(pending).startswith(f"{pending_prefix}:")
-                else f"{tool_args['_source_operation_id']}:followup"
-            )
+        pending = pending_action or await session_memory.get_pending_action(user_id)
+        followup_prefix = "collect_evening_time_for_medium"
+        switch_prefix = "collect_evening_time_for_switch"
+        if (
+            str(pending).startswith(f"{followup_prefix}:")
+            or str(pending).startswith(f"{switch_prefix}:")
+        ):
+            activation_source_id = str(pending).split(":", 1)[1]
             registry = _build_tool_registry()
             try:
-                activation = registry["create_followup_plan"](
+                cascade_tool = (
+                    "switch_plan_format"
+                    if str(pending).startswith(switch_prefix)
+                    else "create_followup_plan"
+                )
+                activation = registry[cascade_tool](
                     user_id,
                     {
                         "plan_type": "MEDIUM",
@@ -755,23 +1038,97 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
                         return (
                             "⚠️ План збережено, але його розклад не вдалося "
                             "повністю узгодити. Повтори введення часу."
+                            + _retry_reference_note(activation_source_id)
+                        )
+                    if (
+                        cascade_tool == "switch_plan_format"
+                        and isinstance(activation, dict)
+                        and activation.get("code") == "switch_reconciliation_failed"
+                        and activation.get("persisted") is True
+                    ):
+                        return (
+                            "⚠️ Новий 14-денний план уже збережено, але його "
+                            "розклад ще не узгоджено. Повтори введення того "
+                            "самого часу — новий план вдруге не створиться."
+                            + _retry_reference_note(activation_source_id)
+                        )
+                    if (
+                        cascade_tool == "switch_plan_format"
+                        and isinstance(activation, dict)
+                        and activation.get("code") == "switch_proof_record_failed"
+                    ):
+                        return (
+                            "⚠️ Розклад узгоджено, але підтвердження ще не збережено. "
+                            "Повтори введення того самого часу."
+                            + _retry_reference_note(activation_source_id)
                         )
                     return (
                         "⚠️ Час збережено, але план не вдалось запустити. "
                         "Спробуй ще раз."
+                        + _retry_reference_note(activation_source_id)
                     )
-                log_metric("plan_tool_executed", extra={"user_id": user_id, "tool": "create_followup_plan"})
+                log_metric("plan_tool_executed", extra={"user_id": user_id, "tool": cascade_tool})
                 await session_memory.clear_pending_action(user_id)  # only after success
-                return _TOOL_REPLY_TEMPLATES["create_followup_plan"]
+                return (
+                    _switch_success_reply(activation)
+                    if cascade_tool == "switch_plan_format"
+                    else _followup_success_reply(activation)
+                )
             except Exception as exc:
                 logger.error("[TOOL] cascade create_followup_plan(MEDIUM) user=%s: %s", user_id, exc, exc_info=True)
                 # pending_action preserved — user can retry
-                return "⚠️ Час збережено, але план не вдалось запустити. Спробуй ще раз."
+                return (
+                    "⚠️ Час збережено, але план не вдалось запустити. Спробуй ще раз."
+                    + _retry_reference_note(activation_source_id)
+                )
 
     if tool_name == "cancel_plan":
         total_days = result.get("total_days")
         if total_days in {7, 14}:
+            if result.get("historical_cleanup"):
+                reply = (
+                    f"🛑 Попередні {total_days} днів скасовано; "
+                    "поточний план не змінено."
+                )
+                if result.get("keyboard_cleanup_pending"):
+                    reply += (
+                        " Не вдалося прибрати старі кнопки; натисни їх ще раз "
+                        "або повтори перевірку за кодом."
+                        + _retry_reference_note(result.get("original_source_operation_id"))
+                    )
+                return reply
+            if result.get("keyboard_cleanup_pending"):
+                return (
+                    f"🛑 Поточні {total_days} днів скасовано. "
+                    "Не вдалося прибрати старі кнопки; натисни їх ще раз або повтори перевірку за кодом."
+                    + _retry_reference_note(result.get("original_source_operation_id"))
+                )
             return f"🛑 Поточні {total_days} днів скасовано."
+
+    if tool_name == "retry_plan_action":
+        action = result.get("action")
+        labels = {
+            "pause": "Паузу",
+            "resume": "Відновлення",
+            "cancel": "Скасування",
+            "followup": "Новий план",
+        }
+        if action == "cancel" and result.get("historical_cleanup"):
+            reply = "✅ Прибирання старого скасованого плану перевірено; поточний план не змінено."
+        elif action == "followup" and result.get("plan_status") == "paused":
+            reply = (
+                "✅ Новий план збережено й зараз на паузі. "
+                "Активний розклад буде перевірено при відновленні."
+            )
+        else:
+            reply = f"✅ {labels.get(action, 'Дію')} перевірено; розклад узгоджено."
+        if result.get("keyboard_cleanup_pending"):
+            reply += " Не вдалося прибрати старі кнопки; натисни їх ще раз або повтори перевірку за кодом."
+        if result.get("activation_event_pending"):
+            reply += " Запис події активації очікує повтору."
+        if result.get("keyboard_cleanup_pending") or result.get("activation_event_pending"):
+            reply += _retry_reference_note(result.get("original_source_operation_id"))
+        return reply
 
     if tool_name in {"change_day_time", "change_evening_time"}:
         if result.get("jobs_reconciled") == "deferred":
@@ -780,8 +1137,19 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
                 "Розклад призупиненого плану зараз не змінено."
             )
 
-    if tool_name == "create_followup_plan" and result.get("recovered"):
+    if tool_name in {"switch_plan_format", "retry_switch_plan_format"}:
+        return _switch_success_reply(result)
+    if (
+        tool_name == "create_followup_plan"
+        and result.get("recovered")
+        and not result.get("activation_event_pending")
+    ):
         return "✅ Збережений план знайдено, його розклад узгоджено."
+    if tool_name == "create_followup_plan":
+        return _followup_success_reply(result)
+
+    if result.get("disposition") == "replayed":
+        return "✅ Цю дію вже застосовано; актуальний стан підтверджено."
 
     template = _TOOL_REPLY_TEMPLATES.get(tool_name, "✅ Готово.")
     return template

@@ -141,6 +141,81 @@ class FakeSession:
         pass
 
 
+@pytest.mark.anyio
+async def test_completed_keyboard_marker_clears_only_after_telegram_success(monkeypatch):
+    user = DummyUser(tg_id=123, user_id=42)
+    step = DummyStep(101, DummyDay(DummyPlan(user)), is_completed=True)
+    step.tg_message_id = 555
+    session = FakeSession(step)
+    monkeypatch.setattr(telegram, "SessionLocal", lambda: session)
+
+    message = DummyMessage()
+    message.message_id = 555
+    callback = DummyCallbackQuery("task_complete:101", 123, message)
+    await telegram._clear_terminal_callback_keyboard(callback, step.id)
+    assert step.tg_message_id is None
+
+    step.tg_message_id = 555
+
+    async def failed_edit(**_kwargs):
+        raise RuntimeError("Telegram unavailable")
+
+    message.edit_reply_markup = failed_edit
+    await telegram._clear_terminal_callback_keyboard(callback, step.id)
+    assert step.tg_message_id == 555
+    assert "Натисни їх ще раз" in message.answers[-1]
+
+
+@pytest.mark.anyio
+async def test_duplicate_click_retries_only_button_cleanup(monkeypatch):
+    user = DummyUser(tg_id=123, user_id=42)
+    step = DummyStep(101, DummyDay(DummyPlan(user)), is_completed=True)
+    step.tg_message_id = 555
+    message = DummyMessage()
+    message.message_id = 555
+    callback = DummyCallbackQuery("task_complete:101", 123, message)
+    monkeypatch.setattr(telegram, "SessionLocal", lambda: FakeSession(step))
+    monkeypatch.setattr(
+        telegram, "log_user_event", lambda *_a, **_k: pytest.fail("duplicate event"),
+    )
+
+    async def failed_edit(**_kwargs):
+        raise RuntimeError("Telegram unavailable")
+
+    message.edit_reply_markup = failed_edit
+    await telegram.handle_task_completed(callback)
+    assert step.tg_message_id == 555
+    assert "Натисни їх ще раз" in message.answers[-1]
+
+    message.edit_reply_markup = DummyMessage().edit_reply_markup
+    await telegram.handle_task_completed(callback)
+    assert step.tg_message_id is None
+    assert callback.answers[-1] == "Завдання вже виконано"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status", ("expired", "canceled", "skipped"))
+async def test_stale_terminal_button_retries_cleanup_without_action(monkeypatch, status):
+    user = DummyUser(tg_id=123, user_id=42)
+    plan = DummyPlan(user, status="abandoned" if status == "canceled" else "active")
+    step = DummyStep(101, DummyDay(plan), skipped=status == "skipped")
+    step.step_status = status
+    step.tg_message_id = 555
+    message = DummyMessage()
+    message.message_id = 555
+    callback = DummyCallbackQuery("task_complete:101", 123, message)
+    monkeypatch.setattr(telegram, "SessionLocal", lambda: FakeSession(step))
+    monkeypatch.setattr(
+        telegram, "log_user_event", lambda *_a, **_k: pytest.fail("new event"),
+    )
+
+    await telegram.handle_task_completed(callback)
+
+    assert step.step_status == status
+    assert step.tg_message_id is None
+    assert message.edited_reply_markup is None
+    assert callback.answers
+
 @pytest.fixture(autouse=True)
 def _authoritative_step_boundary(monkeypatch):
     def transition(

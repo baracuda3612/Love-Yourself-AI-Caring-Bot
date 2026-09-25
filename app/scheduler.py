@@ -755,10 +755,10 @@ def check_silent_users():
                 logger.error("[SILENT] user_id=%s", user.id, exc_info=True)
 
 
-def reconcile_expired_step_keyboards(
+def reconcile_terminal_step_keyboards(
     step_ids: list[int],
 ) -> SchedulerReconciliation:
-    """Retry keyboard removal until ``tg_message_id`` is cleared in PostgreSQL."""
+    """Retry terminal-step keyboard removal until PostgreSQL confirms it."""
     if not step_ids:
         return SchedulerReconciliation(attempted=0, succeeded=0)
     ordered_ids = tuple(dict.fromkeys(int(step_id) for step_id in step_ids))
@@ -770,7 +770,9 @@ def reconcile_expired_step_keyboards(
             .join(User, User.id == AIPlan.user_id)
             .filter(
                 AIPlanStep.id.in_(ordered_ids),
-                AIPlanStep.step_status == "expired",
+                AIPlanStep.step_status.in_(
+                    ("completed", "skipped", "expired", "canceled")
+                ),
             )
             .all()
         )
@@ -801,9 +803,13 @@ def reconcile_expired_step_keyboards(
             continue
         try:
             future.result(timeout=30)
-        except Exception:
-            failed_ids.append(step_id)
-            continue
+        except Exception as exc:
+            # A callback may have removed the buttons before its DB marker
+            # could be cleared. Telegram's exact no-change reply proves the
+            # requested empty markup is already in place.
+            if "message is not modified" not in str(exc).lower():
+                failed_ids.append(step_id)
+                continue
         with SessionLocal() as db:
             current = db.query(AIPlanStep).filter(AIPlanStep.id == step_id).first()
             if current is None:
@@ -821,6 +827,13 @@ def reconcile_expired_step_keyboards(
     )
 
 
+def reconcile_expired_step_keyboards(
+    step_ids: list[int],
+) -> SchedulerReconciliation:
+    """Compatibility alias for the terminal keyboard reconciler."""
+    return reconcile_terminal_step_keyboards(step_ids)
+
+
 def expire_overdue_steps() -> None:
     """
     Runs every hour at :05.
@@ -833,8 +846,8 @@ def expire_overdue_steps() -> None:
       This keeps legacy / adaptation-created steps aligned with the same local
       end-of-day rule used by plan finalization.
 
-    After marking expired, removes inline keyboard buttons from the Telegram
-    message so the user sees the task as closed (no tappable buttons).
+    After marking expired, removes buttons only for steps expired in this run.
+    Only pending/delivered steps can expire or emit ignored telemetry.
     """
     from sqlalchemy import or_
 
@@ -863,6 +876,7 @@ def expire_overdue_steps() -> None:
     repaired = 0
     count = 0
     failed_ids: list[int] = []
+    expired_keyboard_ids: list[int] = []
     for step_id in candidate_ids:
         with SessionLocal() as candidate_db:
             step = (
@@ -910,6 +924,8 @@ def expire_overdue_steps() -> None:
                 continue
             repaired += int(repaired_candidate)
             count += 1
+            if step.tg_message_id is not None:
+                expired_keyboard_ids.append(step_id)
 
     if count or repaired:
         logger.info(
@@ -920,23 +936,13 @@ def expire_overdue_steps() -> None:
     if failed_ids:
         logger.error("[EXPIRE] Candidate failures for step ids: %s", failed_ids)
 
-    with SessionLocal() as db:
-        pending_keyboard_ids = [
-            step_id
-            for (step_id,) in (
-                db.query(AIPlanStep.id)
-                .filter(
-                    AIPlanStep.step_status == "expired",
-                    AIPlanStep.tg_message_id.isnot(None),
-                )
-                .all()
-            )
-        ]
-
-    reconciliation = reconcile_expired_step_keyboards(pending_keyboard_ids)
+    if expired_keyboard_ids:
+        reconciliation = reconcile_expired_step_keyboards(expired_keyboard_ids)
+    else:
+        reconciliation = SchedulerReconciliation(attempted=0, succeeded=0)
     if reconciliation.failed_ids:
         logger.warning(
-            "[EXPIRE] Keyboard reconciliation pending for step ids: %s",
+            "[EXPIRE] Button removal failed for step ids: %s; no background retry",
             reconciliation.failed_ids,
         )
 

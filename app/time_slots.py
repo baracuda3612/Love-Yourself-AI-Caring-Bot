@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta, timezone
+import re
 from typing import Any, Dict, Iterable, Optional
 
 import pytz
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.db import AIPlan, AIPlanDay, AIPlanStep, User, UserProfile
 
 TIME_SLOTS = ("MORNING", "DAY", "EVENING")
+_HHMM_RE = re.compile(r"^\d{2}:\d{2}$")
 DEFAULT_DAILY_TIME_SLOTS: Dict[str, str] = {
     "MORNING": "09:30",
     "DAY": "14:00",
@@ -49,7 +51,10 @@ def canonicalize_hhmm(value: str) -> str:
     """Return the one persisted/receipt representation for an accepted time."""
     if not isinstance(value, str):
         raise TimeSlotError("invalid_time_format")
-    parsed = _parse_time(value.strip())
+    stripped = value.strip()
+    if not _HHMM_RE.fullmatch(stripped):
+        raise TimeSlotError("invalid_time_format")
+    parsed = _parse_time(stripped)
     return f"{parsed.hour:02d}:{parsed.minute:02d}"
 
 
@@ -208,6 +213,67 @@ def recompute_future_steps(
             if is_active:
                 active_step_ids.append(step.id)
     return updated_step_ids, active_step_ids
+
+
+def reanchor_pending_plan_steps(
+    user: User,
+    plan: AIPlan,
+    *,
+    resumed_at: Optional[datetime] = None,
+) -> list[int]:
+    """Move remaining pending work to consecutive selected work days.
+
+    Delivered work remains actionable through its existing expiry.  The first
+    still-pending logical day is anchored to the next selected work day after
+    resume, and later logical days retain their grouping and order.
+    """
+    from app.active_days import next_active_date, resolve_active_days, step_expires_at
+
+    resumed_at = resumed_at or datetime.now(timezone.utc)
+    if resumed_at.tzinfo is None:
+        resumed_at = resumed_at.replace(tzinfo=timezone.utc)
+    tz = _normalize_timezone(user.timezone)
+    profile = user.profile
+    raw_slots = getattr(profile, "daily_time_slots", None)
+    if not isinstance(raw_slots, dict):
+        raise TimeSlotError("daily_time_slots_invalid")
+    daily_time_slots: Dict[str, str] = {}
+    for slot in ("DAY", "EVENING"):
+        if slot in raw_slots:
+            daily_time_slots[slot] = canonicalize_hhmm(raw_slots[slot])
+    if "DAY" not in daily_time_slots:
+        raise TimeSlotError("saved_day_time_missing")
+    active_days = resolve_active_days(user.profile)
+    cursor = resumed_at.astimezone(tz).date() + timedelta(days=1)
+    updates: list[tuple[AIPlanStep, datetime, datetime]] = []
+
+    for day in sorted(plan.days, key=lambda item: int(item.day_number)):
+        pending_steps = [
+            step for step in day.steps if str(step.step_status) == "pending"
+        ]
+        if not pending_steps:
+            continue
+        anchor_date = next_active_date(cursor, active_days)
+        for step in sorted(pending_steps, key=lambda item: int(item.order_in_day or 0)):
+            slot = normalize_time_slot(step.time_slot)
+            if slot not in {"DAY", "EVENING"}:
+                raise TimeSlotError("unsupported_delivery_slot")
+            if slot not in daily_time_slots:
+                raise TimeSlotError(f"saved_{slot.lower()}_time_missing")
+            scheduled_for = compute_scheduled_for(
+                plan_start=plan.start_date or resumed_at,
+                day_number=1,
+                time_slot=slot,
+                timezone_name=user.timezone,
+                daily_time_slots=daily_time_slots,
+                anchor_date=anchor_date,
+            )
+            updates.append((step, scheduled_for, step_expires_at(scheduled_for, tz)))
+        cursor = anchor_date + timedelta(days=1)
+    for step, scheduled_for, expires_at in updates:
+        step.scheduled_for = scheduled_for
+        step.expires_at = expires_at
+    return [int(step.id) for step, _, _ in updates]
 
 
 def resolve_step_date(
