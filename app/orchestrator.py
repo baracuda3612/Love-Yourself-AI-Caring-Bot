@@ -928,7 +928,7 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
                 "⚠️ Розклад узгоджено, але підтвердження ще не збережено. "
                 "Повтори перевірку цієї зміни." + retry_note
             )
-        if code == "retry_postproof_failed":
+        if code in {"retry_postproof_failed", "postproof_failed"}:
             return (
                 "⚠️ Не вдалося остаточно перевірити стан цієї дії. "
                 "Повтори перевірку за тим самим кодом." + retry_note
@@ -1085,6 +1085,18 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
     if tool_name == "cancel_plan":
         total_days = result.get("total_days")
         if total_days in {7, 14}:
+            if result.get("historical_cleanup"):
+                reply = (
+                    f"🛑 Попередні {total_days} днів скасовано; "
+                    "поточний план не змінено."
+                )
+                if result.get("keyboard_cleanup_pending"):
+                    reply += (
+                        " Не вдалося прибрати старі кнопки; натисни їх ще раз "
+                        "або повтори перевірку за кодом."
+                        + _retry_reference_note(result.get("original_source_operation_id"))
+                    )
+                return reply
             if result.get("keyboard_cleanup_pending"):
                 return (
                     f"🛑 Поточні {total_days} днів скасовано. "

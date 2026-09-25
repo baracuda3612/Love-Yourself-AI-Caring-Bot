@@ -130,6 +130,17 @@ def create_followup_plan(
         db.commit()
 
     activation = reconcile_scheduler_effects(activation)
+    truth, proof_error = _post_effect_check(user_id, activation, source_operation_id)
+    if proof_error:
+        return proof_error
+    if truth.code == "superseded":
+        return {
+            "status": "error",
+            "code": "superseded",
+            "plan_id": activation.plan_id,
+            "original_source_operation_id": source_operation_id,
+            "disposition": "superseded",
+        }
     if activation.code == "superseded":
         return {
             "status": "error",
@@ -197,6 +208,34 @@ def _operational_effects_succeeded(result) -> bool:
             "remove_step_keyboards",
         }
     )
+
+
+def _post_effect_truth(user_id: int, result, source_operation_id: str):
+    from app.db import SessionLocal
+    from app.lifecycle import read_post_effect_truth
+
+    with SessionLocal() as db:
+        return read_post_effect_truth(
+            db,
+            user_id=user_id,
+            result=result,
+            source_operation_id=source_operation_id,
+        )
+
+
+def _post_effect_check(user_id: int, result, source_operation_id: str):
+    try:
+        return _post_effect_truth(user_id, result, source_operation_id), None
+    except Exception:
+        logger.exception("[plan_runtime] post-effect proof failed: user=%s", user_id)
+        return None, {
+            "status": "error",
+            "code": "postproof_failed",
+            "plan_id": result.plan_id,
+            "original_source_operation_id": source_operation_id,
+            "persisted": True,
+            "disposition": "partial_failure",
+        }
 
 
 def _finish_plan_format_result(result, *, pending_status: str) -> dict:
@@ -561,6 +600,20 @@ def change_day_time(
             "disposition": "superseded",
         }
     result = reconcile_scheduler_effects(result)
+    truth, proof_error = _post_effect_check(user_id, result, source_operation_id)
+    if proof_error:
+        return proof_error
+    if truth.code == "superseded":
+        return {
+            "status": "error",
+            "code": "superseded",
+            "day_time": truth.authoritative_value,
+            "requested_day_time": hhmm,
+            "saved": True,
+            "jobs_reconciled": False,
+            "duplicate": result.duplicate,
+            "disposition": "superseded",
+        }
     effect = result.effects[0]
     if effect.state.value == "failed":
         return {
@@ -635,6 +688,20 @@ def change_evening_time(
             "disposition": "superseded",
         }
     result = reconcile_scheduler_effects(result)
+    truth, proof_error = _post_effect_check(user_id, result, source_operation_id)
+    if proof_error:
+        return proof_error
+    if truth.code == "superseded":
+        return {
+            "status": "error",
+            "code": "superseded",
+            "evening_time": truth.authoritative_value,
+            "requested_evening_time": hhmm,
+            "saved": True,
+            "jobs_reconciled": False,
+            "duplicate": result.duplicate,
+            "disposition": "superseded",
+        }
     effect = result.effects[0]
     if effect.state.value == "failed":
         return {
@@ -685,6 +752,17 @@ def cancel_plan(user_id: int, *, source_operation_id: str) -> dict:
         db.commit()
 
     result = reconcile_scheduler_effects(result)
+    truth, proof_error = _post_effect_check(user_id, result, source_operation_id)
+    if proof_error:
+        return proof_error
+    if truth.code == "superseded":
+        return {
+            "status": "error",
+            "code": "superseded",
+            "plan_id": result.plan_id,
+            "original_source_operation_id": source_operation_id,
+            "disposition": "superseded",
+        }
     if not _operational_effects_succeeded(result):
         return {
             "status": "error",
@@ -696,6 +774,7 @@ def cancel_plan(user_id: int, *, source_operation_id: str) -> dict:
             "jobs_reconciled": False,
             "duplicate": result.duplicate,
             "disposition": "partial_failure",
+            "historical_cleanup": truth.historical_cleanup,
         }
 
     logger.info(
@@ -713,6 +792,7 @@ def cancel_plan(user_id: int, *, source_operation_id: str) -> dict:
         "original_source_operation_id": source_operation_id,
         "duplicate": result.duplicate,
         "disposition": "replayed" if result.duplicate else "applied",
+        "historical_cleanup": truth.historical_cleanup,
     }
 
 
@@ -766,6 +846,17 @@ def pause_plan(user_id: int, *, source_operation_id: str) -> dict:
             "disposition": "superseded",
         }
     result = reconcile_scheduler_effects(result)
+    truth, proof_error = _post_effect_check(user_id, result, source_operation_id)
+    if proof_error:
+        return proof_error
+    if truth.code == "superseded":
+        return {
+            "status": "error",
+            "code": "superseded",
+            "plan_id": result.plan_id,
+            "original_source_operation_id": source_operation_id,
+            "disposition": "superseded",
+        }
     if not result.external_effects_succeeded:
         return {
             "status": "error",
@@ -820,6 +911,17 @@ def resume_plan(user_id: int, *, source_operation_id: str) -> dict:
             "disposition": "superseded",
         }
     result = reconcile_scheduler_effects(result)
+    truth, proof_error = _post_effect_check(user_id, result, source_operation_id)
+    if proof_error:
+        return proof_error
+    if truth.code == "superseded":
+        return {
+            "status": "error",
+            "code": "superseded",
+            "plan_id": result.plan_id,
+            "original_source_operation_id": source_operation_id,
+            "disposition": "superseded",
+        }
     if not result.external_effects_succeeded:
         return {
             "status": "error",

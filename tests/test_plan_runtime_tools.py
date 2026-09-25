@@ -11,6 +11,16 @@ from app import lifecycle, lifecycle_reconciliation
 from app.plan_runtime import tools
 
 
+@pytest.fixture(autouse=True)
+def _stub_post_effect_proof_for_mutation_only_tests(monkeypatch):
+    """These unit fakes do not persist receipts; proof has its own tests."""
+    monkeypatch.setattr(
+        lifecycle,
+        "read_post_effect_truth",
+        lambda *_args, **_kwargs: lifecycle.PostEffectTruth(),
+    )
+
+
 class _Query:
     def __init__(self, value):
         self.value = value
@@ -521,6 +531,7 @@ def test_cancel_uses_one_aggregate_operation_then_cancels_jobs(monkeypatch):
         "original_source_operation_id": "telegram:cancel-1",
         "duplicate": False,
         "disposition": "applied",
+        "historical_cleanup": False,
     }
     assert fake_db.commits == 1
 

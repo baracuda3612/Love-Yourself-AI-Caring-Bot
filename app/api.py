@@ -19,6 +19,7 @@ from app.lifecycle import (
     LifecycleInvariantError,
     LifecycleTransitionError,
     change_delivery_time,
+    read_post_effect_truth,
 )
 from app.lifecycle_reconciliation import reconcile_scheduler_effects
 
@@ -124,30 +125,53 @@ def set_user_time_slots(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         db.commit()
 
-    superseded = [
-        decision for decision in decisions if decision.code == "superseded"
-    ]
     outcomes = [
         reconcile_scheduler_effects(decision)
         for decision in decisions
         if decision.code != "superseded"
     ]
-    if superseded:
-        if outcomes:
-            outcome_by_slot = {
-                str(outcome.details["slot"]): outcome for outcome in outcomes
+    outcome_by_slot = {
+        str(outcome.details["slot"]): outcome for outcome in outcomes
+    }
+    try:
+        # One locked read gives both slots the same authoritative boundary.
+        with SessionLocal() as db:
+            truth_by_slot = {
+                str(decision.details["slot"]): read_post_effect_truth(
+                    db,
+                    user_id=user_id,
+                    result=outcome_by_slot.get(str(decision.details["slot"]), decision),
+                    source_operation_id=(
+                        f"{idempotency_key}:{str(decision.details['slot']).lower()}"
+                    ),
+                )
+                for decision in decisions
             }
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "postproof_failed",
+                "saved": bool(outcomes),
+                "retry_with_same_idempotency_key": True,
+            },
+        ) from exc
+    superseded = [
+        decision for decision in decisions
+        if decision.code == "superseded"
+        or truth_by_slot[str(decision.details["slot"])].code == "superseded"
+    ]
+    if superseded:
+        if len(superseded) != len(decisions):
             slot_results: Dict[str, Dict[str, object]] = {}
             for decision in decisions:
                 slot = str(decision.details["slot"])
-                if decision.code == "superseded":
+                if decision in superseded:
                     slot_results[slot] = {
                         "status": "superseded",
-                        "saved": False,
+                        "saved": decision.code != "superseded",
                         "requested_value": decision.details.get("value"),
-                        "authoritative_value": decision.details.get(
-                            "authoritative_value"
-                        ),
+                        "authoritative_value": truth_by_slot[slot].authoritative_value,
                     }
                     continue
                 outcome = outcome_by_slot[slot]
@@ -182,7 +206,7 @@ def set_user_time_slots(
             )
             detail: Dict[str, object] = {
                 "code": "mixed_time_slot_outcome",
-                "saved": True,
+                "saved": bool(outcomes),
                 "jobs_reconciled": not any(
                     effect.state.value in {"failed", "deferred"}
                     for outcome in outcomes
@@ -197,11 +221,11 @@ def set_user_time_slots(
             status_code=409,
             detail={
                 "code": "superseded_time_change",
-                "saved": False,
+                "saved": bool(outcomes),
                 "authoritative_values": {
-                    str(decision.details["slot"]): decision.details.get(
-                        "authoritative_value"
-                    )
+                    str(decision.details["slot"]): truth_by_slot[
+                        str(decision.details["slot"])
+                    ].authoritative_value
                     for decision in superseded
                 },
             },

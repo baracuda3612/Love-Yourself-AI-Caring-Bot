@@ -10,6 +10,19 @@ from pydantic import ValidationError
 from app import api, lifecycle
 
 
+@pytest.fixture(autouse=True)
+def _stub_post_effect_proof_for_mutation_only_tests(monkeypatch):
+    """The API unit fakes do not persist receipts; proof has its own tests."""
+    monkeypatch.setattr(
+        api,
+        "read_post_effect_truth",
+        lambda _db, *, result, **_kwargs: lifecycle.PostEffectTruth(
+            code="superseded" if result.code == "superseded" else "current",
+            authoritative_value=result.details.get("authoritative_value"),
+        ),
+    )
+
+
 def test_time_slot_api_rejects_retired_morning_slot():
     with pytest.raises(ValidationError):
         api.TimeSlotsPayload(DAY="14:00", MORNING="09:30")

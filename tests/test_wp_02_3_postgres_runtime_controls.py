@@ -739,3 +739,96 @@ def test_exact_followup_retry_records_event_while_paused_without_scheduling(pg_s
             original_source_operation_id="wp023:followup-2",
         )
     assert source.status == "abandoned"
+
+
+def test_post_effect_proof_sees_newer_control_and_time_receipts(pg_session):
+    db = pg_session
+    user, _profile, _plan, _steps = _seed_current_plan(db)
+    paused = lifecycle.transition_current_plan(
+        db, user_id=user.id, operation="pause", source_operation_id="proof:pause"
+    )
+    assert lifecycle.read_post_effect_truth(
+        db, user_id=user.id, result=paused, source_operation_id="proof:pause"
+    ).code == "current"
+    resumed = lifecycle.transition_current_plan(
+        db, user_id=user.id, operation="resume", source_operation_id="proof:resume"
+    )
+    assert lifecycle.read_post_effect_truth(
+        db, user_id=user.id, result=paused, source_operation_id="proof:pause"
+    ).code == "superseded"
+    lifecycle.transition_current_plan(
+        db, user_id=user.id, operation="pause", source_operation_id="proof:pause-again"
+    )
+    assert lifecycle.read_post_effect_truth(
+        db, user_id=user.id, result=paused, source_operation_id="proof:pause"
+    ).code == "superseded"
+    lifecycle.transition_current_plan(
+        db, user_id=user.id, operation="resume", source_operation_id="proof:resume-again"
+    )
+    assert lifecycle.read_post_effect_truth(
+        db, user_id=user.id, result=resumed, source_operation_id="proof:resume"
+    ).code == "superseded"
+
+    user.profile.daily_time_slots = {**user.profile.daily_time_slots, "DAY": "15:30"}
+    lifecycle.record_lifecycle_operation(
+        db, user_id=user.id, plan_id=_plan.id,
+        source_operation_id="proof:time-a", operation="change_day_time",
+        result_status="15:30",
+    )
+    db.flush()
+    first_time = lifecycle.LifecycleResult(
+        user_id=user.id, plan_id=_plan.id, status="15:30",
+        operation="change_day_time",
+    )
+    assert lifecycle.read_post_effect_truth(
+        db, user_id=user.id, result=first_time, source_operation_id="proof:time-a"
+    ).code == "current"
+    user.profile.daily_time_slots = {**user.profile.daily_time_slots, "DAY": "16:45"}
+    lifecycle.record_lifecycle_operation(
+        db, user_id=user.id, plan_id=_plan.id,
+        source_operation_id="proof:time-b", operation="change_day_time",
+        result_status="16:45",
+    )
+    db.flush()
+    truth = lifecycle.read_post_effect_truth(
+        db, user_id=user.id, result=first_time, source_operation_id="proof:time-a"
+    )
+    assert truth.code == "superseded"
+    assert truth.authoritative_value == "16:45"
+
+
+def test_post_effect_proof_describes_old_cancel_and_changed_followup(pg_session):
+    db = pg_session
+    user, _profile, source, _steps = _seed_current_plan(db)
+    db.add(OnboardingProgress(
+        user_id=user.id, stage="COMPLETED",
+        completed_at=datetime(2026, 9, 1, 8, tzinfo=timezone.utc),
+    ))
+    db.flush()
+    _seed_disposable_builder_library(db)
+    canceled, _ = lifecycle.abandon_current_plan(
+        db, user_id=user.id, source_operation_id="proof:cancel"
+    )
+    db.flush()
+    assert lifecycle.read_post_effect_truth(
+        db, user_id=user.id, result=canceled, source_operation_id="proof:cancel"
+    ).historical_cleanup is False
+    followup = lifecycle.activate_plan(
+        db, user_id=user.id, plan_type="SHORT", day_time="14:00",
+        evening_time=None, source_operation_id="proof:followup",
+        require_plan_history=True, required_previous_status="abandoned",
+    )
+    assert lifecycle.read_post_effect_truth(
+        db, user_id=user.id, result=canceled, source_operation_id="proof:cancel"
+    ).historical_cleanup is True
+    assert lifecycle.read_post_effect_truth(
+        db, user_id=user.id, result=followup, source_operation_id="proof:followup"
+    ).code == "current"
+    lifecycle.transition_current_plan(
+        db, user_id=user.id, operation="pause", source_operation_id="proof:later-pause"
+    )
+    assert lifecycle.read_post_effect_truth(
+        db, user_id=user.id, result=followup, source_operation_id="proof:followup"
+    ).code == "superseded"
+    assert db.get(AIPlan, followup.plan_id).status == "paused"
+    assert source.status == "abandoned"

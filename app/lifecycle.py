@@ -103,6 +103,130 @@ class LifecycleResult:
 
 
 @dataclass(frozen=True)
+class PostEffectTruth:
+    """Caller truth at the last authoritative read after external effects."""
+
+    code: str = "current"
+    authoritative_value: str | None = None
+    historical_cleanup: bool = False
+
+
+def read_post_effect_truth(
+    db: Session,
+    *,
+    user_id: int,
+    result: LifecycleResult,
+    source_operation_id: str,
+) -> PostEffectTruth:
+    """Recheck one committed receipt and its current plan/slot under the user lock.
+
+    This read runs in a fresh session after reconciliation. It does not retry an
+    effect or create another lifecycle decision.
+    """
+    user = _lock_user(db, user_id)
+    receipt = find_lifecycle_operation(db, user_id, source_operation_id)
+    if receipt is None and result.code == "recovered_existing_plan":
+        receipt = (
+            db.query(PlanLifecycleOperation)
+            .filter(
+                PlanLifecycleOperation.user_id == user_id,
+                PlanLifecycleOperation.plan_id == result.plan_id,
+                PlanLifecycleOperation.operation == "activate",
+            )
+            .order_by(PlanLifecycleOperation.id.desc())
+            .first()
+        )
+    if (
+        receipt is None
+        or receipt.operation != result.operation
+        or receipt.plan_id != result.plan_id
+        or (
+            result.operation != "activate"
+            and receipt.result_status != result.status
+        )
+    ):
+        raise LifecycleInvariantError("post_effect_receipt_mismatch")
+
+    current = get_current_plan(db, user_id, lock=True)
+    if result.operation == "abandon":
+        canceled = (
+            db.query(AIPlan)
+            .filter(AIPlan.id == result.plan_id, AIPlan.user_id == user_id)
+            .populate_existing()
+            .first()
+        )
+        if canceled is None or str(canceled.status) != "abandoned":
+            return PostEffectTruth(code="superseded")
+        latest = (
+            db.query(AIPlan)
+            .filter(AIPlan.user_id == user_id)
+            .order_by(AIPlan.cycle_number.desc(), AIPlan.id.desc())
+            .first()
+        )
+        historical = latest is not None and latest.id != result.plan_id
+        return PostEffectTruth(
+            code="historical_cleanup" if historical else "current",
+            historical_cleanup=historical,
+        )
+
+    if result.operation in {"change_day_time", "change_evening_time"}:
+        from app.time_slots import resolve_daily_time_slots
+
+        slot = result.operation.removeprefix("change_").removesuffix("_time").upper()
+        value = resolve_daily_time_slots(user.profile).get(slot)
+        latest = current or (
+            db.query(AIPlan)
+            .filter(AIPlan.user_id == user_id)
+            .order_by(AIPlan.cycle_number.desc(), AIPlan.id.desc())
+            .first()
+        )
+        is_current = (
+            latest is not None
+            and latest.id == result.plan_id
+            and value == result.status
+        )
+        if is_current:
+            later_plan_change = (
+                db.query(PlanLifecycleOperation.id)
+                .filter(
+                    PlanLifecycleOperation.user_id == user_id,
+                    PlanLifecycleOperation.plan_id == result.plan_id,
+                    PlanLifecycleOperation.id > receipt.id,
+                    PlanLifecycleOperation.operation.in_((
+                        "pause", "resume", "abandon", "switch_plan_format",
+                    )),
+                )
+                .first()
+            )
+            is_current = later_plan_change is None
+        return PostEffectTruth(
+            code="current" if is_current else "superseded",
+            authoritative_value=value,
+        )
+
+    if result.operation not in {"pause", "resume", "activate"}:
+        raise LifecycleInvariantError("unsupported_post_effect_operation")
+    is_current = (
+        current is not None
+        and current.id == result.plan_id
+        and str(current.status) == result.status
+    )
+    if is_current:
+        newer_control = (
+            db.query(PlanLifecycleOperation.id)
+            .filter(
+                PlanLifecycleOperation.user_id == user_id,
+                PlanLifecycleOperation.plan_id == result.plan_id,
+                PlanLifecycleOperation.id > receipt.id,
+                PlanLifecycleOperation.operation.in_(("pause", "resume")),
+            )
+            .first()
+        )
+        is_current = newer_control is None
+    return PostEffectTruth(code="current" if is_current else "superseded")
+
+
+@dataclass(frozen=True)
 class LifecycleStatus:
     """Authoritative current-plan and remaining-delivery facts."""
 
