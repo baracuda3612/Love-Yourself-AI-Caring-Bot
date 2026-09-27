@@ -366,7 +366,7 @@ package does not become `READY` until every listed package/gate is satisfied.
 | `WP-02.1` | `WP-01.3`; reachability/import evidence retained |
 | `WP-02.2` | `WP-01.3`, `WP-01.4` |
 | `WP-02.3` | `WP-02.2` |
-| `WP-03.1` | `WP-01.2`; Delivery UX audit already closed; `DG-02` for cool water only; `DG-08` for required GIF assets |
+| `WP-03.1` | `WP-01.2`; Delivery UX audit already closed. Create and approve the nine GIFs within WP-03.1; `DG-08` gates exercise eligibility, not the start of media work. `DG-02` later gates cool-water eligibility only. |
 | `WP-03.2` | `WP-03.1`, `WP-01.3` |
 | `WP-03.3` | `WP-03.1`, `WP-01.4` |
 | `WP-03.4` | `WP-02.2`, `WP-03.3`, `WP-01.4` event operation |
@@ -667,7 +667,9 @@ founder merged PR #255 as
 
 ## 8. Block 2 — Target lifecycle and runtime actions
 
-**Status:** `IN PROGRESS`
+**Status:** `COMPLETE` — WP-02.1, WP-02.2, and WP-02.3 are verified and
+founder-merged. The B2 runtime controls use the authoritative lifecycle
+boundary; completion/continuation orchestration remains owned by WP-03.5.
 **Depends on:** B1 lifecycle authority  
 **Objective:** make all plan operations use one atomic lifecycle before adding
 new user-facing channels. Completion/continuation orchestration is finalized in
@@ -735,6 +737,12 @@ send ambient Telegram messages from persistence helpers.
 
 ### WP-02.3 — Complete runtime controls and plan-format behavior
 
+**Status:** `VERIFIED` — focused and PostgreSQL acceptance evidence, independent
+local review, and configured GitHub review were completed; the founder merged
+PR #258 as `1edf9349c280fe8b5f7098c83c351a8f9235da3a` on 2026-09-25.
+The founder accepted one low-impact exact-retry gap as deferred rather than an
+MVP merge blocker; this does not claim that path is fixed.
+
 **Scope**
 
 * semantic time validation;
@@ -766,17 +774,30 @@ send ambient Telegram messages from persistence helpers.
 **Objective:** make the primary product touchpoint deterministic, versioned,
 and reliable without live OpenAI dependency.
 
+**Founder override — 2026-09-27 (animation coverage):** All nine FD-10 target
+exercises require their own unique, approved, versioned GIF. The GIFs for
+`breathing_sigh`, `pmr_fist`, and `cold_water_face` are instructional; the
+other six are exercise-specific illustrative assets. This is a required
+content/release attribute, not optional polish or a shared generic loop.
+Complete text instructions remain authoritative, and media delivery must retain
+a text fallback. This override supersedes earlier roadmap language limiting
+required GIFs to technique-sensitive exercises; it does not amend the FD
+records. `cold_water_face` remains ineligible until its separate medical review
+(`DG-02`) and asset approval pass.
+
 ### WP-03.1 — Migrate the versioned Content Library
 
 **Scope**
 
 * implement the FD-10 target records and schema;
 * encode stable exercise ID, content version, exact steps/duration, structured
-  requirements, review status, and optional media/alt text;
+  requirements, review status, and required per-exercise GIF/alt-text metadata;
 * remove legacy parent/variation/weight/adaptation metadata;
 * enforce release eligibility fail-closed;
-* create and version required GIFs for breathing and fist PMR;
-* keep cool water excluded until its medical review and required GIF pass;
+* create, approve, and version nine unique GIFs: instructional for
+  `breathing_sigh`, `pmr_fist`, and `cold_water_face`; illustrative for the
+  other six target exercises;
+* keep cool water excluded until its medical review and GIF approval pass;
 * synchronize content-specific contracts and tests.
 
 **Primary audit coverage:** `CONTENT-01…06`, `CONTENT-08…09`, `FD-10`,
@@ -785,7 +806,10 @@ and reliable without live OpenAI dependency.
 **Exit criteria**
 
 * one source of content truth feeds builder and renderer;
-* only reviewed, eligible, versioned records can enter beta;
+* only active, versioned records satisfying their own review gate and carrying
+  their own approved GIF can enter beta; the eight non-cool-water records may
+  enter limited beta with `review_status=unreviewed`, while cool water requires
+  medical approval; all nine target records have distinct approved assets;
 * five-record on-demand launch pool is valid without cool water;
 * content migration and rollback/version semantics are tested.
 
@@ -820,7 +844,8 @@ and reliable without live OpenAI dependency.
   actions, deadline, status, and media metadata;
 * escaped and size-bounded Telegram HTML;
 * no internal scheduling/category/rationale metadata;
-* versioned GIF delivery with complete text fallback;
+* versioned per-exercise GIF delivery for the nine target exercises, with
+  complete text fallback;
 * renderer contains no plan selection or lifecycle ownership.
 
 **Primary audit coverage:** `DEL-01…02`, `DEL-07…08`, `UX-03`, `UX-15…16`,
@@ -1451,7 +1476,7 @@ policy.
 | `DG-05` | WP-08.1 | Remove `MORNING` or retain one frozen guarded definition | Keep frozen; add no new behavior |
 | `DG-06` | WP-10.1 | First pilot pricing and unit of sale | Build no billing system |
 | `DG-07` | Gate G4 | Legal roles, notice, contract, cross-border, DPIA determination | No company production launch |
-| `DG-08` | WP-03.1 | Final GIF art direction/assets | Technique-sensitive item is ineligible without required asset |
+| `DG-08` | WP-03.1 | Approval of nine unique versioned GIFs: three instructional, six illustrative | Any target exercise without its own approved asset is ineligible |
 
 ---
 
@@ -1524,7 +1549,7 @@ Cross-package dependencies remain in the package descriptions above.
 | `FD-12` | WP-00.4, WP-01.1, and WP-09.3 recovery/release |
 | `FD-13…14` | WP-03.3 and WP-04.3 user-facing product identity/preview |
 | `FD-15` | WP-07.4 deterministic cycle summary |
-| `FD-16` | WP-03.1/03.3 instructional GIF boundary |
+| `FD-16` | WP-03.1/03.3 instructional GIF boundary; B3 founder override requires unique GIFs for all nine target exercises |
 | `FD-17` | WP-05.3 Coach admission and cost controls |
 | `FD-18` | WP-04.1 access and WP-10.2 production deployment |
 | `FD-19` | B6 independent on-demand channel |
@@ -1549,10 +1574,10 @@ block exit gate passes.
   - [x] WP-01.2 — Define the target schema and invariant ledger
   - [x] WP-01.3 — Implement the plan-centric lifecycle migration
   - [x] WP-01.4 — Establish event, privacy, and deployment primitives
-- [ ] B2 — Target lifecycle and runtime actions
+- [x] B2 — Target lifecycle and runtime actions
   - [x] WP-02.1 — Remove dead lifecycle entrances and the schedule-adjustment tunnel
   - [x] WP-02.2 — Build the authoritative lifecycle service
-  - [ ] WP-02.3 — Complete runtime controls and plan-format behavior
+  - [x] WP-02.3 — Complete runtime controls and plan-format behavior
 - [ ] B3 — Content, plan generation, presentation, and scheduled delivery
   - [ ] WP-03.1 — Migrate the versioned Content Library
   - [ ] WP-03.2 — Correct deterministic plan generation
@@ -1596,10 +1621,10 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | `WP-02.3 — Complete runtime controls and plan-format behavior` |
-| Status | `IN PROGRESS` |
-| Next action | Implement and locally verify WP-02.3 from founder merge `103d668`; Block 2 remains in progress until WP-02.3 is independently reviewed and verified |
-| Current blockers | None for disposable founder-only refactoring; paid backup/restore remains deferred to Gate G1 before durable data or market launch |
+| Current package | `WP-03.1 — Migrate the versioned Content Library` |
+| Status | `READY` — B2 is complete; WP-03.1 implementation has not started |
+| Next action | Finalize the separate WP-03.1 package contract, then produce and approve nine unique GIFs as the first WP-03.1 work; migrate the versioned library against that media contract in a fresh implementation task |
+| Current blockers | `DG-08` asset approval is required before each exercise becomes eligible; `DG-02` medical review is needed later for cool water only, after its exercise and GIF are prepared. Neither prevents starting WP-03.1 media work. Paid backup/restore remains deferred to Gate G1 before durable data or market launch |
 
 ### Private founder log
 
@@ -1647,7 +1672,11 @@ behavior.
 
 ---
 
-## 22. Immediate next step after approval
+## 22. Historical first steps after roadmap approval
+
+The sequence below was the initial handoff and has been completed through B2.
+The current next step is WP-03.1, as recorded in the current-package table
+above; do not restart WP-00.4 or WP-01.1 from this historical list.
 
 1. Complete WP-00.4 repository hardening and targeted verification.
 2. Rotate compromised provider credentials with founder approval.
