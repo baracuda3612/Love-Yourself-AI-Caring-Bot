@@ -366,7 +366,7 @@ package does not become `READY` until every listed package/gate is satisfied.
 | `WP-02.1` | `WP-01.3`; reachability/import evidence retained |
 | `WP-02.2` | `WP-01.3`, `WP-01.4` |
 | `WP-02.3` | `WP-02.2` |
-| `WP-03.1` | `WP-01.2`; Delivery UX audit already closed. Create and approve the nine GIFs within WP-03.1; `DG-08` gates exercise eligibility, not the start of media work. `DG-02` later gates cool-water eligibility only. |
+| `WP-03.1` | `WP-01.2`; Delivery UX audit already closed. Package the three founder-approved instructional GIFs (2026-10-01 override); six other exercises need complete text only. DG-08 visual approval is closed. `DG-02` later gates cool-water eligibility only. |
 | `WP-03.2` | `WP-03.1`, `WP-01.3` |
 | `WP-03.3` | `WP-03.1`, `WP-01.4` |
 | `WP-03.4` | `WP-02.2`, `WP-03.3`, `WP-01.4` event operation |
@@ -774,44 +774,38 @@ MVP merge blocker; this does not claim that path is fixed.
 **Objective:** make the primary product touchpoint deterministic, versioned,
 and reliable without live OpenAI dependency.
 
-**Founder override — 2026-09-27 (animation coverage):** All nine FD-10 target
-exercises require their own unique, approved, versioned GIF. The GIFs for
-`breathing_sigh`, `pmr_fist`, and `cold_water_face` are instructional; the
-other six are exercise-specific illustrative assets. This is a required
-content/release attribute, not optional polish or a shared generic loop.
-Complete text instructions remain authoritative, and media delivery must retain
-a text fallback. This override supersedes earlier roadmap language limiting
-required GIFs to technique-sensitive exercises; it does not amend the FD
-records. `cold_water_face` remains ineligible until its separate medical review
-(`DG-02`) and asset approval pass.
+**Current founder override — 2026-10-01:** supersedes the historical 2026-09-27
+nine-GIF requirement. The catalogue contains nine exercises; only `breathing_sigh`,
+`pmr_fist`, and `cold_water_face` require their own approved instructional GIF.
+The other six use complete text without required media. DG-08 visual approval
+is complete. DG-02 remains open for cold-water eligibility only. Historical
+FD-10/FD-16 and the merged 2026-09-27 decision remain traceable in Git history;
+[WP-03.1](work_packages/WP-03.1_versioned_content_library.md) owns this override.
 
 ### WP-03.1 — Migrate the versioned Content Library
 
 **Scope**
 
-* implement the FD-10 target records and schema;
-* encode stable exercise ID, content version, exact steps/duration, structured
-  requirements, review status, and required per-exercise GIF/alt-text metadata;
-* remove legacy parent/variation/weight/adaptation metadata;
-* enforce release eligibility fail-closed;
-* create, approve, and version nine unique GIFs: instructional for
-  `breathing_sigh`, `pmr_fist`, and `cold_water_face`; illustrative for the
-  other six target exercises;
-* keep cool water excluded until its medical review and GIF approval pass;
-* synchronize content-specific contracts and tests.
+* implement nine FD-10 records with composite version identity and immutable copy;
+* make DB the builder/renderer release authority with exact steps/duration,
+  structured requirements and fail-closed review/media gates;
+* preserve referenced legacy content/history without selecting legacy parents;
+* package three approved GIFs unchanged, with digest, approval and alt text;
+* allow six complete-text records without GIF; keep cold water medically gated;
+* rehearse migration/repeat/failure and safe rollback or forward repair;
+* synchronize current content contracts and direct tests.
 
 **Primary audit coverage:** `CONTENT-01…06`, `CONTENT-08…09`, `FD-10`,
 `FD-16`, `EOD-03` prerequisite.
 
 **Exit criteria**
 
-* one source of content truth feeds builder and renderer;
-* only active, versioned records satisfying their own review gate and carrying
-  their own approved GIF can enter beta; the eight non-cool-water records may
-  enter limited beta with `review_status=unreviewed`, while cool water requires
-  medical approval; all nine target records have distinct approved assets;
-* five-record on-demand launch pool is valid without cool water;
-* content migration and rollback/version semantics are tested.
+* one DB authority supplies exact selected versions to builder and renderer;
+* eight eligible records / five eligible `switch` until DG-02 approval;
+* three distinct approved instructional files; six intentional text-only records;
+* full text independently available when GIF delivery fails (WP-03.3 owns sending);
+* version/history semantics, migration failure/repeat and rollback refusal verified;
+* independent local review and configured GitHub review before merge recommendation.
 
 ### WP-03.2 — Correct deterministic plan generation
 
@@ -1476,7 +1470,7 @@ policy.
 | `DG-05` | WP-08.1 | Remove `MORNING` or retain one frozen guarded definition | Keep frozen; add no new behavior |
 | `DG-06` | WP-10.1 | First pilot pricing and unit of sale | Build no billing system |
 | `DG-07` | Gate G4 | Legal roles, notice, contract, cross-border, DPIA determination | No company production launch |
-| `DG-08` | WP-03.1 | Approval of nine unique versioned GIFs: three instructional, six illustrative | Any target exercise without its own approved asset is ineligible |
+| `DG-08` | WP-03.1 | Three instructional GIFs visually approved 2026-10-01; packaging/version evidence in WP-03.1 | Only the three instructional records require media; six others are text-only |
 
 ---
 
@@ -1549,7 +1543,7 @@ Cross-package dependencies remain in the package descriptions above.
 | `FD-12` | WP-00.4, WP-01.1, and WP-09.3 recovery/release |
 | `FD-13…14` | WP-03.3 and WP-04.3 user-facing product identity/preview |
 | `FD-15` | WP-07.4 deterministic cycle summary |
-| `FD-16` | WP-03.1/03.3 instructional GIF boundary; B3 founder override requires unique GIFs for all nine target exercises |
+| `FD-16` | WP-03.1/03.3 instructional GIF boundary; 2026-10-01 founder override requires only three instructional GIFs; six text-only records are valid |
 | `FD-17` | WP-05.3 Coach admission and cost controls |
 | `FD-18` | WP-04.1 access and WP-10.2 production deployment |
 | `FD-19` | B6 independent on-demand channel |
@@ -1622,9 +1616,9 @@ block exit gate passes.
 | Field | Value |
 |---|---|
 | Current package | `WP-03.1 — Migrate the versioned Content Library` |
-| Status | `READY` — B2 is complete; WP-03.1 implementation has not started |
-| Next action | Finalize the separate WP-03.1 package contract, then produce and approve nine unique GIFs as the first WP-03.1 work; migrate the versioned library against that media contract in a fresh implementation task |
-| Current blockers | `DG-08` asset approval is required before each exercise becomes eligible; `DG-02` medical review is needed later for cool water only, after its exercise and GIF are prepared. Neither prevents starting WP-03.1 media work. Paid backup/restore remains deferred to Gate G1 before durable data or market launch |
+| Status | `IMPLEMENTATION_CANDIDATE` — versioned content and asset packaging implemented; acceptance/review evidence in WP-03.1 |
+| Next action | Complete WP-03.1 acceptance and independent review, then open its PR into implementation/pre-mvp; founder owns merge |
+| Current blockers | `DG-08` visual approval is complete for the three required instructional GIFs; six other exercises need no GIF. `DG-02` remains open for cool water only. Paid backup/restore remains deferred to Gate G1 before durable data or market launch |
 
 ### Private founder log
 

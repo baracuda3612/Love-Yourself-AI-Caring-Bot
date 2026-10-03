@@ -23,7 +23,7 @@ from sqlalchemy.orm import sessionmaker
 from scripts.inspect_database_schema import inspect_database
 
 
-EXPECTED_REVISION = "20260905_event_privacy"
+EXPECTED_REVISION = "20261003_content_library"
 EXPECTED_APPLICATION_TABLES = {
     "access_entitlements",
     "access_identities",
@@ -34,6 +34,7 @@ EXPECTED_APPLICATION_TABLES = {
     "ai_plans",
     "chat_history",
     "content_library",
+    "legacy_content_library",
     "deployment_enrollments",
     "deployment_invitations",
     "deployment_roster_entries",
@@ -1414,9 +1415,9 @@ def _seed_authoritative_plan(
             cursor.execute(
                 """
                 INSERT INTO ai_plan_steps (
-                  day_id, title, order_in_day, exercise_id, mechanic,
+                  day_id, title, order_in_day, exercise_id, content_version, mechanic,
                   step_status, terminal_at, version, slot_type
-                ) VALUES (%s, %s, 0, 'migration-seed', 'switch',
+                ) VALUES (%s, %s, 0, 'migration-seed', 1, 'switch',
                           %s, %s::timestamptz, 1, 'CORE')
                 RETURNING id
                 """,
@@ -1431,6 +1432,8 @@ def _seed_authoritative_plan(
 
 def _seed_activation_draft(connection, *, tg_id: int) -> tuple[int, str]:
     draft_id = str(uuid4())
+    seed_path = Path(__file__).resolve().parents[1] / "resource/assets/content_library/tasks/burnout_combined_content_library.json"
+    protocol = next(record for record in json.loads(seed_path.read_text())["inventory"] if record["id"] == "tactile_surface")
     with connection.cursor() as cursor:
         cursor.execute(
             "INSERT INTO users (tg_id, timezone, is_active) "
@@ -1438,6 +1441,11 @@ def _seed_activation_draft(connection, *, tg_id: int) -> tuple[int, str]:
             (tg_id,),
         )
         user_id = cursor.fetchone()[0]
+        cursor.execute(
+            "INSERT INTO user_profiles (user_id, daily_time_slots, active_days) "
+            "VALUES (%s, '{\"DAY\":\"14:00\"}', '[\"MON\",\"TUE\",\"WED\",\"THU\",\"FRI\"]')",
+            (user_id,),
+        )
         cursor.execute(
             "INSERT INTO onboarding_progress (user_id, stage, started_at) "
             "VALUES (%s, 'START', now())",
@@ -1456,10 +1464,10 @@ def _seed_activation_draft(connection, *, tg_id: int) -> tuple[int, str]:
             cursor.execute(
                 """
                 INSERT INTO plan_draft_steps (
-                  id, draft_id, day_number, exercise_id, mechanic, time_slot
-                ) VALUES (%s::uuid, %s::uuid, %s, 'migration-seed', 'switch', 'DAY')
+                  id, draft_id, day_number, exercise_id, content_version, content_snapshot, mechanic, time_slot
+                ) VALUES (%s::uuid, %s::uuid, %s, 'tactile_surface', 1, %s::jsonb, 'switch', 'DAY')
                 """,
-                (str(uuid4()), draft_id, day_number),
+                (str(uuid4()), draft_id, day_number, json.dumps(protocol)),
             )
     connection.commit()
     return user_id, draft_id
@@ -1491,6 +1499,12 @@ def _assert_lifecycle_concurrency(target_url: str) -> None:
         transition_plan_step,
     )
     from app.plan_finalization import finalize_plan
+
+    from app.content_library import load_content_library
+    seed_engine = create_engine(sqlalchemy_url)
+    with sessionmaker(bind=seed_engine).begin() as seed_db:
+        load_content_library(seed_db)
+    seed_engine.dispose()
 
     connection = psycopg2.connect(
         target_url,

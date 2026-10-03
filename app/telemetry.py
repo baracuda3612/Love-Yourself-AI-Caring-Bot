@@ -267,12 +267,12 @@ def _resolve_plan_linkage(
         exercise_id = step.exercise_id
         content_version = None
         if exercise_id is not None:
-            content = db.get(ContentLibrary, exercise_id)
+            content = db.get(ContentLibrary, (exercise_id, step.content_version))
             if content is None or content.content_version <= 0:
                 raise EventLinkageCompatibilityError(
                     "plan_step_content_identity_unavailable"
                 )
-            content_version = content.content_version
+            content_version = step.content_version
         return resolved_plan_id, plan_step_id, exercise_id, content_version
 
     if plan_id is not None:

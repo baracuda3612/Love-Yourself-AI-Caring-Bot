@@ -128,14 +128,26 @@ Telegram-бот, що раз на робочий день у обраний юз
 
 ## 2.5 Exercise / content contract
 
-- **Розмір бібліотеки:** 8 вправ (v5 approved, “v0.1 для тесту”). *(exercise_library_v5)*
-- **Механіки:** 2 — State Switch (5 вправ), Unload (3 вправи). *(exercise_library_v5)*
-- **Валідні для 7-day плану:** тільки **state_switch** (5 вправ). *(priorities and freeze P1; t23_t24)*
-- **Валідні для 14-day:** DAY=state_switch, EVENING=unload (3 unload-вправи, з них 2 hardlock:E). *(exercise_library_v5; t23_t24)*
-- **Internal metadata (НЕ user-facing):** слоти M/D/E, `hardlock`, `fogg` chain, `variants[]` ctx, exercise `id`. Слоти в бібліотеці треба трактувати як legacy compatibility. *(exercise_library рішення §4,§6; Чатджипіті аналіз finding 3)*
-- **Що Coach МОЖЕ пояснити:** механізм вправи (чому працює), кроки, тривалість. *(Product spirit §2 “якщо не можна пояснити механізм — не входить”)*
-- **Що Coach НЕ може:** вигадувати вправи поза бібліотекою; змінювати послідовність; обіцяти ефект; називати психологічні фреймворки як діагноз.
-- **Чи можна міняти послідовність mid-plan:** Ні автоматично. Послідовність визначена заздалегідь, однакова для всіх; cooldown “одна вправа не повторюється 2 дні підряд” вже є. Blacklist-заміна — **не MVP** (P2/frozen). *(Conceptual map §6,§8; behavior_loop_audit §6.2)*
+Чинний content contract синхронізовано **2026-10-03** з FD-10/FD-16 та
+[WP-03.1](../implementation/work_packages/WP-03.1_versioned_content_library.md).
+Історичні v5 references у таблиці джерел та C8 збережені як попередні рішення.
+
+- Дев’ять independent stable IDs, version 1: шість `switch`, три `unload`.
+- DB `content_library` є release authority: точні українські title/steps, секунди,
+  duration label, modality, structured requirements, review/activation controls.
+- Опубліковані версії та plan snapshots незмінні; edits створюють нову версію.
+- Рішення засновника **2026-10-01** замінює nine-GIF requirement від 2026-09-27:
+  тільки `breathing_sigh`, `pmr_fist`, `cold_water_face` потребують своїх погоджених
+  навчальних GIF. Інші шість вправ мають повний текст без обов’язкового медіа.
+- DG-08 visual approval закрито. DG-02 лишається відкритим: `cold_water_face`
+  не вибирається й не показується до qualified review точної версії та GIF.
+  Початковий beta pool: 8 вправ, з них 5 `switch`.
+- Legacy parent/variation, weight та adaptation/classification fields виключені
+  з актуального каталогу. Історичні legacy rows/references зберігаються без
+  автоматичного mapping. Requirements не дозволяють inferred personalization.
+- Повний текст залишається авторитетним без доступного GIF; фактичний channel
+  fallback та ExercisePresentation належать WP-03.3. Plan rules — WP-03.2.
+- Coach не вигадує вправи, не змінює послідовність і не обіцяє ефект.
 
 ## 2.6 Scheduler / delivery contract
 
@@ -613,11 +625,13 @@ plan-centric lifecycle з derived `current_mode`.
 
 ### content library
 
-- **Має підтримувати:** 8 вправ, 2 механіки; state_switch доступний для SHORT.
-- **Legacy шукати:** slot/hardlock/fogg/variants як user-facing.
-- **Блокер:** бібліотека розширюється перед бетою (не треба).
-- **Frozen:** evening бібліотека 3→5+ (P2).
-- **Evidence:** exercise_library v5; C8.
+- **Чинний контракт:** дев’ять exact versioned records у DB, 6 `switch`/3 `unload`;
+  8 eligible records / 5 eligible `switch` до DG-02.
+- **Медіа:** три distinct instructional GIF, founder-approved 2026-10-01;
+  шість вправ не потребують GIF. Exact text незалежний від media delivery.
+- **Історія:** append-only released copy, composite references, immutable snapshots;
+  legacy parent/variation доступний лише як історія, не як selectable catalogue.
+- **Evidence:** FD-10, FD-16, dated 2026-10-01 override, WP-03.1.
 
 ### telemetry
 

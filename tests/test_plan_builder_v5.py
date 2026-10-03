@@ -13,6 +13,10 @@ Critical invariants verified:
 """
 
 from pathlib import Path
+import json
+from unittest.mock import Mock
+from app.content_library import is_eligible, FIELDS
+from app.db import ContentLibrary
 
 import pytest
 
@@ -42,7 +46,12 @@ RECIPE_PATH = (
 
 @pytest.fixture(scope="module")
 def builder() -> PlanBuilderV5:
-    return PlanBuilderV5(LIBRARY_PATH, RECIPE_PATH)
+    seed = json.loads(LIBRARY_PATH.read_text())["inventory"]
+    rows = [ContentLibrary(exercise_id=row["id"], legacy_record=False,
+        **{key: row[key] for key in FIELDS}) for row in seed]
+    db = Mock()
+    db.execute.return_value.scalars.return_value = rows
+    return PlanBuilderV5(db, RECIPE_PATH)
 
 
 # ── T1: SHORT plan produces exactly 7 steps ───────────────────────────────────

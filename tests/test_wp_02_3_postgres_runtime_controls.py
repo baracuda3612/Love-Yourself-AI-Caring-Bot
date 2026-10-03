@@ -108,18 +108,8 @@ def _seed_current_plan(db: Session, *, medium: bool = False):
 
 def _seed_disposable_builder_library(db: Session) -> None:
     """Satisfy legacy exercise FKs within this test's rolled-back transaction."""
-    for exercise in get_default_builder().exercises:
-        db.add(ContentLibrary(
-            id=exercise.id,
-            content_version=1,
-            internal_name=exercise.title or exercise.id,
-            category="test",
-            difficulty=1,
-            energy_cost="test",
-            logic_tags={},
-            content_payload={"title": exercise.title},
-            is_active=exercise.is_active,
-        ))
+    from app.content_library import load_content_library
+    load_content_library(db)
     db.flush()
 
 

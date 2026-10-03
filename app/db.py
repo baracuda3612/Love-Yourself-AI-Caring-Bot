@@ -43,7 +43,7 @@ SessionLocal = sessionmaker(
 Base = declarative_base()
 logger = logging.getLogger(__name__)
 
-EXPECTED_ALEMBIC_REVISION = "20260905_event_privacy"
+EXPECTED_ALEMBIC_REVISION = "20261003_content_library"
 
 
 class SchemaVersionError(RuntimeError):
@@ -327,6 +327,7 @@ class AIPlanStep(Base):
     __tablename__ = "ai_plan_steps"
 
     __table_args__ = (
+        ForeignKeyConstraint(["exercise_id", "content_version"], ["content_library.exercise_id", "content_library.content_version"], ondelete="RESTRICT", match="FULL"),
         UniqueConstraint("day_id", "order_in_day", name="uq_ai_plan_steps_day_order"),
         CheckConstraint("version >= 0", name="ck_ai_plan_steps_version"),
         CheckConstraint(
@@ -348,7 +349,9 @@ class AIPlanStep(Base):
     day_id = Column(Integer, ForeignKey("ai_plan_days.id"), nullable=False, index=True)
     
     # Content
-    exercise_id = Column(String, ForeignKey("content_library.id"), nullable=True, index=True)
+    exercise_id = Column(String, nullable=True, index=True)
+    content_version = Column(Integer, nullable=True)
+    content_snapshot = Column(JSONB, nullable=True)
     title = Column(String, nullable=False)
     description = Column(Text)
     step_type = Column(
@@ -478,11 +481,17 @@ class PlanDraftRecord(Base):
 class PlanDraftStep(Base):
     __tablename__ = "plan_draft_steps"
 
+    __table_args__ = (
+        ForeignKeyConstraint(["exercise_id", "content_version"], ["content_library.exercise_id", "content_library.content_version"], ondelete="RESTRICT"),
+    )
+
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     draft_id = Column(UUID(as_uuid=True), ForeignKey("plan_drafts.id"), nullable=False, index=True)
 
     day_number = Column(Integer, nullable=False)
     exercise_id = Column(String(50), nullable=False)
+    content_version = Column(Integer, nullable=True)  # NULL only for preserved legacy drafts
+    content_snapshot = Column(JSONB, nullable=True)
     # mechanic: snapshot from library at build time (T5.2). "switch" | "unload"
     mechanic = Column(String(10), nullable=True)  # nullable: legacy rows pre-T5.2
     slot_type = Column(String(20), nullable=True)   # legacy; not used in v5
@@ -494,10 +503,10 @@ class PlanDraftStep(Base):
 
 
 # -------------------- CONTENT LIBRARY --------------------
-class ContentLibrary(Base):
-    __tablename__ = "content_library"
+class LegacyContentLibrary(Base):
+    __tablename__ = "legacy_content_library"
     __table_args__ = (
-        UniqueConstraint("id", "content_version", name="uq_content_library_identity"),
+        UniqueConstraint("id", "content_version", name="uq_legacy_content_library_identity"),
     )
 
     id = Column(String, primary_key=True)
@@ -509,6 +518,31 @@ class ContentLibrary(Base):
     logic_tags = Column(JSONB, nullable=False, default=dict)
     content_payload = Column(JSONB, nullable=False, default=dict)
     is_active = Column(Boolean, default=True, nullable=False)
+
+
+class ContentLibrary(Base):
+    __tablename__ = "content_library"
+    __table_args__ = (
+        CheckConstraint("content_version > 0", name="ck_content_version_positive"),
+        CheckConstraint("review_status IN ('unreviewed','approved','rejected')", name="ck_content_review_status"),
+        CheckConstraint("legacy_record OR (duration_seconds IS NOT NULL AND duration_seconds > 0 AND cooldown_days IS NOT NULL AND cooldown_days >= 0 AND mechanic IS NOT NULL AND mechanic IN ('switch','unload') AND modality IS NOT NULL)", name="ck_content_protocol"),
+    )
+
+    exercise_id = Column(Text, primary_key=True)
+    content_version = Column(Integer, primary_key=True)
+    display = Column(JSONB, nullable=False)
+    duration_seconds = Column(Integer, nullable=True)
+    mechanic = Column(Text, nullable=True)
+    modality = Column(Text, nullable=True)
+    requirements = Column(JSONB, nullable=False, default=dict)
+    cooldown_days = Column(Integer, nullable=True)
+    review_required = Column(Boolean, nullable=False, default=False)
+    review_status = Column(Text, nullable=False, default="unreviewed")
+    review_evidence = Column(JSONB(none_as_null=True), nullable=True)
+    media = Column(JSONB(none_as_null=True), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    legacy_record = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
 # -------------------- DEPLOYMENT / PRIVACY --------------------
@@ -798,7 +832,7 @@ class UserEvent(Base):
         ),
         ForeignKeyConstraint(
             ["exercise_id", "content_version"],
-            ["content_library.id", "content_library.content_version"],
+            ["content_library.exercise_id", "content_library.content_version"],
             ondelete="RESTRICT",
             match="FULL",
         ),
@@ -870,7 +904,7 @@ class UserEvent(Base):
         nullable=True,
         index=True,
     )
-    step_id = Column(Text, ForeignKey("content_library.id"), nullable=True)
+    step_id = Column(Text, ForeignKey("legacy_content_library.id", ondelete="RESTRICT"), nullable=True)
     context = Column(JSONB, nullable=True)
 
     user = relationship("User", back_populates="events")
@@ -1045,7 +1079,7 @@ class TaskStats(Base):
     __tablename__ = "task_stats"
 
     user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
-    step_id = Column(Text, ForeignKey("content_library.id"), primary_key=True)
+    step_id = Column(Text, ForeignKey("legacy_content_library.id", ondelete="RESTRICT"), primary_key=True)
     attempts_total = Column(Integer, default=0)
     completed_total = Column(Integer, default=0)
     skipped_total = Column(Integer, default=0)
@@ -1066,7 +1100,7 @@ class FailureSignal(Base):
         nullable=False,
         index=True,
     )
-    step_id = Column(Text, ForeignKey("content_library.id"), nullable=False)
+    step_id = Column(Text, ForeignKey("legacy_content_library.id", ondelete="RESTRICT"), nullable=False)
     trigger_event = Column(String, nullable=False)
     failure_context_tag = Column(String)
     detected_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -231,3 +231,12 @@ exercises: one on each selected working day in the 7-day format or two in the
 14-day format.
 
 After the 7 or 14 days are completed, the bot also sends a completion message.
+
+
+The library contains nine versioned exercises: six switch actions and three
+unload actions. Cold water remains unavailable until medical approval.
+Breathing, fist, and cold water have approved instructional GIFs; the other
+six exercises use complete text. Text defines execution; the GIF demonstrates
+the sequence and does not act as a timer.
+
+<!-- Content reference: FD-10, FD-16; founder media override 2026-10-01; WP-03.1 synchronized 2026-10-03. -->
