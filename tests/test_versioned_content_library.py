@@ -9,7 +9,7 @@ import pytest
 
 from app.content_library import (
     DEFAULT_SEED_PATH, ROOT, EXERCISE_IDS, FIELDS, REQUIRED_MEDIA,
-    ContentValidationError, gif_metadata, is_eligible, load_content_library,
+    ContentValidationError, eligible_catalogue, gif_metadata, is_eligible, load_content_library,
     selected_content, validate_record,
 )
 from app.db import ContentLibrary
@@ -123,8 +123,9 @@ def test_text_read_and_renderer_survive_gif_io_failure(records, monkeypatch):
     assert payload['display']['title'] in text
     assert all(s in text for s in payload['display']['steps'])
     assert payload['display']['duration_label'] in text
-    with pytest.raises(ContentValidationError):
-        selected_content(db, protocol['id'], 1, lock=True)
+    assert selected_content(db, protocol['id'], 1, lock=True)['display']==protocol['display']
+    db.execute.return_value.scalars.return_value=[row(r) for r in records]
+    assert len(eligible_catalogue(db))==8
 
 
 def test_exact_read_refuses_inactive_and_medically_gated(records):
@@ -169,3 +170,17 @@ def test_outer_media_version_change_does_not_transfer_approval(records):
     record['media']['content_version']=2
     with pytest.raises(ContentValidationError,match='approval must cover'):
         validate_record(record)
+
+
+def test_clinical_date_is_optional_metadata_but_medical_gate_stays_closed(records):
+    cold=next(r for r in records if r['id']=='cold_water_face')
+    assert not is_eligible(row(cold))
+    cold['review_status']='approved'
+    cold['review_evidence']=dict(exercise_id=cold['id'],content_version=1,
+        reviewer='disposable test clinician',qualification='disposable qualification',
+        reference='disposable review',media_sha256=cold['media']['sha256'])
+    assert is_eligible(row(cold))
+    cold['review_evidence']['approved_on']='unknown'
+    assert is_eligible(row(cold))
+    cold['review_evidence']['content_version']=2
+    assert not is_eligible(row(cold))

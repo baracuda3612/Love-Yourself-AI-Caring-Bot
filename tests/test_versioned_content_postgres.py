@@ -282,3 +282,11 @@ def test_released_media_paths_preserve_prior_versions(db,tmp_path,same_bytes,sam
         assert db.get(ContentLibrary,('tactile_surface',2)) is None
     assert (ROOT/old_path).read_bytes()==original
     assert selected_content(db,'breathing_sigh',1,lock=True)['media']['sha256']==sha256(original).hexdigest()
+
+
+def test_builder_and_activation_never_read_gif_bytes(db,monkeypatch):
+    monkeypatch.setattr(Path,'read_bytes',lambda self: (_ for _ in ()).throw(AssertionError('runtime GIF I/O')))
+    assert len(eligible_catalogue(db))==8
+    assert len(eligible_catalogue(db,'switch'))==5
+    user,draft=make_draft(db)
+    assert activate(db,user,draft).plan.id is not None

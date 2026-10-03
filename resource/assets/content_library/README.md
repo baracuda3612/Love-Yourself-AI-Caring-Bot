@@ -17,8 +17,8 @@ and demonstration loop duration. The GIF files are packaged unchanged:
 The 2026-10-01 founder decision supersedes the 2026-09-27 nine-GIF requirement.
 The other six records intentionally contain `media: null`. DG-08 visual approval
 is closed. DG-02 remains open: cold water cannot be selected or shown until a
-qualified review covers the exact content version and matching GIF. Initial
-eligible pool: eight total, five `switch`. No skip-based inferred profile.
+qualified review covers the exact content version and matching GIF. Clinical approval dates are optional audit metadata; qualified
+approval of the exact version remains required. Initial eligible pool: eight total, five `switch`. No skip-based inferred profile.
 
 Loader validates the whole release before adding rows. Repeating an identical
 version is a no-op; changes to the same version conflict. Instructions, duration,
@@ -35,8 +35,9 @@ exercises still require no GIF.
 
 Builder calls `eligible_catalogue(db)` (latest version per ID); activation locks
 and rechecks `selected_content(db, id, version, lock=True)`. Renderer resolves
-that same exact version with full text and no dependency on GIF I/O. It rejects
-inactive and medically gated content. The narrow adapter retains the
+that same exact version with full text. Builder, activation and renderer never
+read GIF bytes or verify file hashes; those checks occur only in the release
+loader. Runtime rejects inactive and medically gated content. The narrow adapter retains the
 existing notification layout; ExercisePresentation, sendAnimation, actual media
 fallback and delivery-variant snapshots belong to WP-03.3.
 

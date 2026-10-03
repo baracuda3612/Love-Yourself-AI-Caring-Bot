@@ -122,7 +122,7 @@ def validate_record(record: dict, *, check_files: bool = True, asset_root: Path 
     if record['review_required'] and record['review_status'] == 'approved':
         evidence = record['review_evidence'] or {}
         _require(evidence.get('exercise_id') == eid and evidence.get('content_version') == version, 'review must match exact version')
-        _require(all(_text(evidence.get(k)) for k in ('reviewer', 'qualification', 'approved_on', 'reference')), 'qualified review evidence required')
+        _require(all(_text(evidence.get(k)) for k in ('reviewer', 'qualification', 'reference')), 'qualified review evidence required')
         _require(evidence.get('media_sha256') == (record['media'] or {}).get('sha256') and evidence.get('media_sha256') is not None, 'medical review must cover matching media')
     validate_media(record['media'], eid, version, check_files=check_files, asset_root=asset_root)
 
@@ -169,13 +169,13 @@ def load_content_library(db: Session, source_path: str | Path = DEFAULT_SEED_PAT
     return len(pending)
 
 
-def is_eligible(content: ContentLibrary, *, check_files: bool = True) -> bool:
+def is_eligible(content: ContentLibrary) -> bool:
     if not content.is_active:
         return False
     if content.review_required and content.review_status != 'approved':
         return False
     try:
-        validate_record(record_payload(content), check_files=check_files)
+        validate_record(record_payload(content), check_files=False)
     except (ContentValidationError, OSError):
         return False
     return True
@@ -193,12 +193,12 @@ def eligible_catalogue(db: Session, mechanic: str | None = None) -> list[dict]:
 def selected_content(db: Session, exercise_id: str, version: int, *, lock: bool = False) -> dict:
     """Read an exact already selected protocol with text independent of GIF I/O.
 
-    Activation locks the control fields and verifies packaged media. Presentation
-    can retain the text when an approved file later cannot be loaded/delivered.
+    Activation locks the current control fields. GIF bytes and checksums are
+    checked only by the release loader, never by runtime selection/activation.
     """
     query = select(ContentLibrary).where(ContentLibrary.exercise_id == exercise_id, ContentLibrary.content_version == version)
     if lock:
         query = query.with_for_update(read=True)
     content = db.execute(query.execution_options(populate_existing=True)).scalar_one_or_none()
-    _require(content is not None and is_eligible(content, check_files=lock), 'selected content is unavailable')
+    _require(content is not None and is_eligible(content), 'selected content is unavailable')
     return record_payload(content)
