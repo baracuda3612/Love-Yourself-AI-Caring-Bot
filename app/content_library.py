@@ -150,8 +150,14 @@ def load_content_library(db: Session, source_path: str | Path = DEFAULT_SEED_PAT
             _require(media in manifest, 'asset approval/identity absent from manifest')
             _require(media['path'] not in seen_paths and media['sha256'] not in seen_digests, 'shared/generic media rejected')
             seen_paths.add(media['path']); seen_digests.add(media['sha256'])
-            shared = db.execute(select(ContentLibrary).where(ContentLibrary.exercise_id != record['id'], ContentLibrary.media.is_not(None))).scalars()
-            _require(all(row.media is None or (row.media.get('sha256') != media['sha256'] and row.media.get('path') != media['path']) for row in shared), 'media belongs to another exercise')
+            released = db.execute(select(ContentLibrary).where(ContentLibrary.media.is_not(None))).scalars()
+            for row in released:
+                if row.media is None:
+                    continue
+                if row.exercise_id == record['id']:
+                    _require(row.media.get('path') != media['path'] or row.media.get('sha256') == media['sha256'], 'released media path has different bytes; publish a new asset path')
+                else:
+                    _require(row.media.get('sha256') != media['sha256'] and row.media.get('path') != media['path'], 'media belongs to another exercise')
         existing = db.get(ContentLibrary, (record['id'], record['content_version']))
         if existing:
             _require(record_payload(existing) == record, 'content version conflict; publish a new version')

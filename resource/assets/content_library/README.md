@@ -26,6 +26,13 @@ requirements, identity and media are immutable; publish a new content version
 and obtain its own matching media/review evidence. Review/activation controls
 may change, without changing historical plan snapshots.
 
+A media path already referenced by a released version can be reused only for
+identical bytes of the same exercise. Replacement bytes need a distinct asset
+filename/path and matching manifest approval; retain the prior files and add
+new approved paths explicitly to the Docker allowlist. Other exercises cannot
+share that path or digest. This applies only to attached media: the six text-only
+exercises still require no GIF.
+
 Builder calls `eligible_catalogue(db)` (latest version per ID); activation locks
 and rechecks `selected_content(db, id, version, lock=True)`. Renderer resolves
 that same exact version with full text and no dependency on GIF I/O. It rejects

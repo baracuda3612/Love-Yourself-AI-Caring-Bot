@@ -1,6 +1,7 @@
 """Opt-in WP-03.1 rehearsal. Creates and removes its own disposable databases."""
 from copy import deepcopy
 from datetime import datetime, timezone
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -17,8 +18,8 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from app.content_library import (
-    ContentValidationError, DEFAULT_SEED_PATH, eligible_catalogue,
-    load_content_library, record_payload, selected_content,
+    ContentValidationError, DEFAULT_SEED_PATH, ROOT, eligible_catalogue,
+    load_content_library, record_payload, selected_content, validate_record,
 )
 from app.db import AIPlanDay, AIPlanStep, ContentLibrary, User, UserProfile
 from app.plan_drafts.plan_builder_v5 import get_default_builder
@@ -232,3 +233,52 @@ def test_pause_resume_and_repeat_seed_keep_new_plan_snapshots(db):
     assert load_content_library(db)==0
     db.flush()
     assert [(s.id,s.exercise_id,s.content_version,s.content_snapshot) for s in steps]==before
+
+
+@pytest.mark.parametrize('same_bytes,same_path', [(True,True),(True,False),(False,True),(False,False)])
+def test_released_media_paths_preserve_prior_versions(db,tmp_path,same_bytes,same_path):
+    seed=json.loads(DEFAULT_SEED_PATH.read_text())
+    manifest=json.loads((ROOT/'resource/assets/content_library/media/manifest.json').read_text())
+    # Work only on disposable fixture copies; approved repository bytes are untouched.
+    for asset in manifest['assets']:
+        target=tmp_path/asset['path']; target.parent.mkdir(parents=True,exist_ok=True)
+        target.write_bytes((ROOT/asset['path']).read_bytes())
+    future=seed['inventory'][0]
+    old_path=future['media']['path']
+    original=(ROOT/old_path).read_bytes()
+    future['content_version']=2
+    future['display']['title']+=' v2'
+    media=future['media']; media['content_version']=2
+    if not same_path:
+        media['path']=old_path.replace('.gif','.v2.gif')
+    # A trailing fixture byte changes the digest without touching approved files.
+    replacement=original if same_bytes else original+b'\x00'
+    (tmp_path/media['path']).write_bytes(replacement)
+    media.update(sha256=sha256(replacement).hexdigest(),asset_version=2,revision='disposable-fixture-v2')
+    media['approval'].update(content_version=2,asset_version=2,sha256=media['sha256'],evidence='disposable fixture approval')
+    manifest['assets'].append(deepcopy(media))
+    seed_path=tmp_path/'seed.json'; seed_path.write_text(json.dumps(seed))
+    manifest_path=tmp_path/'manifest.json'; manifest_path.write_text(json.dumps(manifest))
+    if same_path and not same_bytes:
+        with pytest.raises(ContentValidationError,match='publish a new asset path'):
+            load_content_library(db,seed_path,asset_root=tmp_path,manifest_path=manifest_path)
+        assert db.get(ContentLibrary,('breathing_sigh',2)) is None
+        assert db.query(ContentLibrary).count()==9
+    else:
+        assert load_content_library(db,seed_path,asset_root=tmp_path,manifest_path=manifest_path)==1
+        assert load_content_library(db,seed_path,asset_root=tmp_path,manifest_path=manifest_path)==0
+        validate_record(record_payload(db.get(ContentLibrary,('breathing_sigh',1))),asset_root=tmp_path)
+        validate_record(record_payload(db.get(ContentLibrary,('breathing_sigh',2))),asset_root=tmp_path)
+        # Even after a replacement, another exercise cannot claim the old asset.
+        optional=seed['inventory'][2]
+        optional['content_version']=2
+        optional['media']=deepcopy(manifest['assets'][0])
+        optional['media'].update(exercise_id='tactile_surface',content_version=2,role='illustrative')
+        optional['media']['approval'].update(exercise_id='tactile_surface',content_version=2)
+        manifest['assets'].append(deepcopy(optional['media']))
+        seed_path.write_text(json.dumps(seed)); manifest_path.write_text(json.dumps(manifest))
+        with pytest.raises(ContentValidationError,match='shared/generic|another exercise'):
+            load_content_library(db,seed_path,asset_root=tmp_path,manifest_path=manifest_path)
+        assert db.get(ContentLibrary,('tactile_surface',2)) is None
+    assert (ROOT/old_path).read_bytes()==original
+    assert selected_content(db,'breathing_sigh',1,lock=True)['media']['sha256']==sha256(original).hexdigest()
