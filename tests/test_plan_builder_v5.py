@@ -47,7 +47,7 @@ RECIPE_PATH = (
 @pytest.fixture(scope="module")
 def builder() -> PlanBuilderV5:
     seed = json.loads(LIBRARY_PATH.read_text())["inventory"]
-    rows = [ContentLibrary(exercise_id=row["id"], legacy_record=False,
+    rows = [ContentLibrary(exercise_id=row["id"],
         **{key: row[key] for key in FIELDS}) for row in seed]
     db = Mock()
     db.execute.return_value.scalars.return_value = rows

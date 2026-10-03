@@ -22,7 +22,7 @@ def records():
 
 
 def row(record):
-    return ContentLibrary(exercise_id=record['id'], legacy_record=False,
+    return ContentLibrary(exercise_id=record['id'],
         **{key: deepcopy(record[key]) for key in FIELDS})
 
 

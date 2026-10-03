@@ -143,8 +143,8 @@ Telegram-бот, що раз на робочий день у обраний юз
   не вибирається й не показується до qualified review точної версії та GIF.
   Початковий beta pool: 8 вправ, з них 5 `switch`.
 - Legacy parent/variation, weight та adaptation/classification fields виключені
-  з актуального каталогу. Історичні legacy rows/references зберігаються без
-  автоматичного mapping. Requirements не дозволяють inferred personalization.
+  з актуального каталогу. За рішенням 2026-10-03 (0 користувачів) старий каталог
+  замінюється без архіву чи перенесення старих планів. Requirements не дозволяють inferred personalization.
 - Повний текст залишається авторитетним без доступного GIF; фактичний channel
   fallback та ExercisePresentation належать WP-03.3. Plan rules — WP-03.2.
 - Coach не вигадує вправи, не змінює послідовність і не обіцяє ефект.
@@ -630,7 +630,7 @@ plan-centric lifecycle з derived `current_mode`.
 - **Медіа:** три distinct instructional GIF, founder-approved 2026-10-01;
   шість вправ не потребують GIF. Exact text незалежний від media delivery.
 - **Історія:** append-only released copy, composite references, immutable snapshots;
-  legacy parent/variation доступний лише як історія, не як selectable catalogue.
+  старий parent/variation каталог видаляється під час zero-user cutover (2026-10-03).
 - **Evidence:** FD-10, FD-16, dated 2026-10-01 override, WP-03.1.
 
 ### telemetry

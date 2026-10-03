@@ -27,7 +27,7 @@ from app.plan_finalization import FinalizationError, finalize_plan
 from app.lifecycle import _activation_receipt_status
 from app.telemetry import write_event_operation
 from app.ux.task_notification import format_task_notification
-from scripts.test_migrations import _run_alembic, _seed_legacy_rows
+from scripts.test_migrations import _run_alembic
 
 pytestmark = pytest.mark.skipif(os.environ.get('WP03_1_POSTGRES_REHEARSAL') != '1', reason='explicit disposable PostgreSQL rehearsal required')
 ADMIN = 'postgresql://love_yourself_test:love_yourself_test@127.0.0.1:55432/love_yourself_test'
@@ -43,44 +43,29 @@ def migrated_engine():
             cursor.execute(sql.SQL('CREATE DATABASE {}').format(sql.Identifier(name)))
         _run_alembic(url, '20260827_schema_baseline')
         connection = psycopg2.connect(url)
-        _seed_legacy_rows(connection)
-        legacy_draft_id=str(uuid4())
         with connection.cursor() as cursor:
-            cursor.execute("INSERT INTO plan_drafts (id,user_id,status,duration,draft_data,total_days,total_steps,is_valid) SELECT %s::uuid,id,'DRAFT','SHORT','{\"historical\":\"old copy\"}',7,1,true FROM users WHERE tg_id=9000001", (legacy_draft_id,))
-            cursor.execute("INSERT INTO plan_draft_steps (id,draft_id,day_number,exercise_id,mechanic,time_slot) VALUES (%s::uuid,%s::uuid,1,'migration-seed','switch','DAY')", (str(uuid4()),legacy_draft_id))
+            cursor.execute("INSERT INTO content_library (id,content_version,internal_name,category,difficulty,energy_cost,logic_tags,content_payload,is_active) VALUES ('old-content',1,'old','old',1,'low','{}','{}',true)")
         connection.commit()
         _run_alembic(url, '20260905_event_privacy')
+        # The founder-confirmed zero-user cutover refuses an unexpected user.
         with connection.cursor() as cursor:
-            cursor.execute('SELECT id,title,description,exercise_id FROM ai_plan_steps ORDER BY id')
-            old_steps = cursor.fetchall()
-            cursor.execute('SELECT event_id,step_id,context FROM user_events ORDER BY event_id')
-            old_events = cursor.fetchall()
-            # A failure after table rename/new DDL must roll everything back.
-            cursor.execute("UPDATE content_library SET content_version=0 WHERE id='migration-seed'")
+            cursor.execute("INSERT INTO users (tg_id,timezone) VALUES (990031000,'UTC')")
         connection.commit()
         failure = _run_alembic(url, 'head', check=False)
-        assert failure.returncode != 0 and 'ck_content_version_positive' in failure.stderr
+        assert failure.returncode != 0 and 'requires zero users' in failure.stderr
         with connection.cursor() as cursor:
             cursor.execute('SELECT version_num FROM alembic_version')
             assert cursor.fetchone()[0] == '20260905_event_privacy'
-            cursor.execute("SELECT to_regclass('public.legacy_content_library')")
-            assert cursor.fetchone()[0] is None
-            cursor.execute("UPDATE content_library SET content_version=1 WHERE id='migration-seed'")
+            cursor.execute("SELECT id FROM content_library")
+            assert cursor.fetchall() == [('old-content',)]
+            cursor.execute("DELETE FROM users WHERE tg_id=990031000")
         connection.commit()
         _run_alembic(url, 'head'); _run_alembic(url, 'head')
         with connection.cursor() as cursor:
-            cursor.execute('SELECT id,title,description,exercise_id FROM ai_plan_steps ORDER BY id')
-            assert cursor.fetchall() == old_steps
-            cursor.execute('SELECT event_id,step_id,context FROM user_events ORDER BY event_id')
-            assert cursor.fetchall() == old_events
-            cursor.execute("SELECT bool_and(content_version=1 AND content_snapshot IS NULL) FROM ai_plan_steps WHERE exercise_id='migration-seed'")
-            assert cursor.fetchone()[0]
-            cursor.execute("SELECT legacy_record,is_active FROM content_library WHERE exercise_id='migration-seed'")
-            assert cursor.fetchone() == (True,False)
-            cursor.execute("SELECT content_version,content_snapshot,exercise_id FROM plan_draft_steps WHERE draft_id=%s::uuid", (legacy_draft_id,))
-            assert cursor.fetchone()==(None,None,'migration-seed')
-            cursor.execute("SELECT draft_data FROM plan_drafts WHERE id=%s::uuid", (legacy_draft_id,))
-            assert cursor.fetchone()[0]=={'historical':'old copy'}
+            cursor.execute('SELECT count(*) FROM content_library')
+            assert cursor.fetchone()[0] == 0
+            cursor.execute("SELECT to_regclass('public.legacy_content_library')")
+            assert cursor.fetchone()[0] is None
         connection.close()
         engine = create_engine(url)
         with Session(engine) as db:
@@ -154,7 +139,7 @@ def test_builder_activation_renderer_and_event_use_exact_version(db):
     if values['media']:
         values['media']['content_version']=2
     values['display']['title']='new version'
-    db.add(ContentLibrary(exercise_id=values.pop('id'), legacy_record=False, **values)); db.flush()
+    db.add(ContentLibrary(exercise_id=values.pop('id'),  **values)); db.flush()
     event=write_event_operation(db,user_id=user.id,event_name='task_completed',event_source='wp031',source_operation_id='wp031:event',plan_step_id=step.id,properties={'day_number':1})
     assert event.event.content_version==1 and event.event.exercise_id==step.exercise_id
     message=format_task_notification(db,step,None,1,1,1)
@@ -170,7 +155,7 @@ def test_builder_activation_renderer_and_event_use_exact_version(db):
             db.execute(text("UPDATE user_events SET content_version=2 WHERE event_id=:id"),{'id':event.event.event_id})
 
 
-def test_activation_rechecks_gate_and_keeps_legacy_drafts_closed(db):
+def test_activation_rechecks_gate(db):
     user,draft=make_draft(db)
     selected=draft.steps[0]
     db.get(ContentLibrary,(selected.exercise_id,selected.content_version)).is_active=False; db.flush()
@@ -183,7 +168,7 @@ def test_db_rejects_in_place_content_and_referenced_deletion(db):
         "UPDATE content_library SET display='{}' WHERE exercise_id='tactile_surface'",
         "UPDATE content_library SET duration_seconds=21 WHERE exercise_id='tactile_surface'",
         "UPDATE content_library SET media='{}' WHERE exercise_id='breathing_sigh'",
-        "DELETE FROM content_library WHERE exercise_id='migration-seed'",
+        "DELETE FROM content_library WHERE exercise_id='tactile_surface'",
     ]:
         with pytest.raises(DBAPIError):
             with db.begin_nested():
@@ -197,7 +182,7 @@ def test_downgrade_is_refused_without_losing_versions(migrated_engine):
     assert result.returncode!=0 and 'forward repair' in result.stderr
     with migrated_engine.connect() as connection:
         assert connection.execute(text('SELECT version_num FROM alembic_version')).scalar_one()=='20261003_content_library'
-        assert connection.execute(text('SELECT count(*) FROM content_library WHERE NOT legacy_record')).scalar_one()==9
+        assert connection.execute(text('SELECT count(*) FROM content_library')).scalar_one()==9
 
 
 def test_medical_gate_approves_only_matching_version(db):
@@ -214,7 +199,7 @@ def test_medical_gate_approves_only_matching_version(db):
     future=record_payload(cold)
     future.update(content_version=2,review_status='unreviewed',review_evidence=None)
     # Keep deliberately stale media-version evidence: v2 cannot inherit v1 approval.
-    db.add(ContentLibrary(exercise_id=future.pop('id'),legacy_record=False,**future)); db.flush()
+    db.add(ContentLibrary(exercise_id=future.pop('id'),**future)); db.flush()
     assert 'cold_water_face' not in {r['id'] for r in eligible_catalogue(db)}
     with pytest.raises(ContentValidationError):
         selected_content(db,'cold_water_face',2)
@@ -237,15 +222,13 @@ def test_snapshot_mutation_and_partial_identity_are_rejected(db):
 
 
 
-def test_unversioned_legacy_draft_cannot_activate(db):
-    from app.db import PlanDraftRecord, PlanDraftStep
-    user=User(tg_id=991031002,timezone='UTC',is_active=True)
-    db.add(user); db.flush()
-    db.add(UserProfile(user_id=user.id,daily_time_slots={'DAY':'14:00'}))
-    draft=PlanDraftRecord(user_id=user.id,status='DRAFT',duration='SHORT',draft_data={},total_days=7,total_steps=7,is_valid=True)
-    db.add(draft); db.flush()
-    for day in range(1,8):
-        db.add(PlanDraftStep(draft_id=draft.id,day_number=day,exercise_id='migration-seed',mechanic='switch',time_slot='DAY'))
+def test_pause_resume_and_repeat_seed_keep_new_plan_snapshots(db):
+    user,draft=make_draft(db); result=activate(db,user,draft)
+    steps=db.execute(select(AIPlanStep).join(AIPlanDay).where(AIPlanDay.plan_id==result.plan.id).order_by(AIPlanStep.id)).scalars().all()
+    before=[(s.id,s.exercise_id,s.content_version,deepcopy(s.content_snapshot)) for s in steps]
+    from app.lifecycle import transition_current_plan
+    assert transition_current_plan(db,user_id=user.id,operation='pause',source_operation_id='wp031:pause').status=='paused'
+    assert transition_current_plan(db,user_id=user.id,operation='resume',source_operation_id='wp031:resume',occurred_at=datetime(2026,10,4,8,tzinfo=timezone.utc)).status=='active'
+    assert load_content_library(db)==0
     db.flush()
-    with pytest.raises(FinalizationError,match='draft_content_version_unavailable'):
-        activate(db,user,draft)
+    assert [(s.id,s.exercise_id,s.content_version,s.content_snapshot) for s in steps]==before

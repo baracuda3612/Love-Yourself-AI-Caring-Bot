@@ -789,7 +789,7 @@ FD-10/FD-16 and the merged 2026-09-27 decision remain traceable in Git history;
 * implement nine FD-10 records with composite version identity and immutable copy;
 * make DB the builder/renderer release authority with exact steps/duration,
   structured requirements and fail-closed review/media gates;
-* preserve referenced legacy content/history without selecting legacy parents;
+* replace old content in the founder-confirmed zero-user cutover; retain new released versions and snapshots;
 * package three approved GIFs unchanged, with digest, approval and alt text;
 * allow six complete-text records without GIF; keep cold water medically gated;
 * rehearse migration/repeat/failure and safe rollback or forward repair;
@@ -838,7 +838,7 @@ FD-10/FD-16 and the merged 2026-09-27 decision remain traceable in Git history;
   actions, deadline, status, and media metadata;
 * escaped and size-bounded Telegram HTML;
 * no internal scheduling/category/rationale metadata;
-* versioned per-exercise GIF delivery for the nine target exercises, with
+* versioned per-exercise GIF delivery for the three required instructional exercises, with
   complete text fallback;
 * renderer contains no plan selection or lifecycle ownership.
 

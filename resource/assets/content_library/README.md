@@ -29,7 +29,7 @@ may change, without changing historical plan snapshots.
 Builder calls `eligible_catalogue(db)` (latest version per ID); activation locks
 and rechecks `selected_content(db, id, version, lock=True)`. Renderer resolves
 that same exact version with full text and no dependency on GIF I/O. It rejects
-inactive, medically gated and legacy content. The narrow adapter retains the
+inactive and medically gated content. The narrow adapter retains the
 existing notification layout; ExercisePresentation, sendAnimation, actual media
 fallback and delivery-variant snapshots belong to WP-03.3.
 
@@ -37,18 +37,16 @@ fallback and delivery-variant snapshots belong to WP-03.3.
 
 1. This package rehearses disposable PostgreSQL only. Before any durable founder
    or employee database: Gate G1 fresh backup and verified scratch restore.
-2. Inventory content, plan/draft references and delivered copy. Stop if a legacy
-   ID collides with a target version; never infer equivalence or overwrite it.
+2. Confirm the founder-approved zero-user cutover (2026-10-03). Migration refuses
+   a populated users table; old unreferenced content is discarded without an
+   archive or old-plan backfill. New published versions/snapshots remain immutable.
 3. Stop old writers/schedulers. Last safe application rollback point is the
    pre-WP-03.1 schema (`20260905_event_privacy`) before this forward migration.
 4. Run `.venv/bin/python -m alembic upgrade head`, then
    `.venv/bin/python -m scripts.load_content_library` using the intended DB URL.
    Deploy the matching application and assets; startup checks the exact revision.
-5. Legacy original rows/payloads remain in `legacy_content_library`. Existing
-   composite references retain inactive historical records in `content_library`.
-   Old plan copy remains unchanged. Unversioned legacy drafts cannot activate;
-   legacy content cannot enter new delivery. Review existing open legacy work
-   before durable rollout rather than mapping or silently replacing it.
+5. The founder manages catalogue changes manually. Automatic queued-message
+   revocation, send-time eligibility rechecks and plan rebuilding are deferred.
 6. Downgrade is explicitly refused: it could erase new releases or history.
    Use a verified pre-rollout restore (coordinate all writes) or forward repair.
    A failed migration is transactional; repair its invalid input, then retry.

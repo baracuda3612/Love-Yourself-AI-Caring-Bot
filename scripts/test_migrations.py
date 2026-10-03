@@ -34,7 +34,6 @@ EXPECTED_APPLICATION_TABLES = {
     "ai_plans",
     "chat_history",
     "content_library",
-    "legacy_content_library",
     "deployment_enrollments",
     "deployment_invitations",
     "deployment_roster_entries",
@@ -438,7 +437,7 @@ def _assert_event_privacy_operations(target_url: str) -> None:
             )
             assert linked.event.plan_id == step.day.plan.id
             assert linked.event.plan_step_id == step.id
-            assert linked.event.exercise_id == "migration-seed"
+            assert linked.event.exercise_id == "tactile_surface"
             assert linked.event.content_version == 1
             assert linked.event.step_id is None
             assert linked.event.context is None
@@ -1417,7 +1416,7 @@ def _seed_authoritative_plan(
                 INSERT INTO ai_plan_steps (
                   day_id, title, order_in_day, exercise_id, content_version, mechanic,
                   step_status, terminal_at, version, slot_type
-                ) VALUES (%s, %s, 0, 'migration-seed', 1, 'switch',
+                ) VALUES (%s, %s, 0, 'tactile_surface', 1, 'switch',
                           %s, %s::timestamptz, 1, 'CORE')
                 RETURNING id
                 """,
@@ -1943,6 +1942,12 @@ def main() -> None:
         finally:
             target_connection.close()
 
+        # Rehearse prior B1 backfill separately from the zero-user WP-03.1 cutover.
+        _run_alembic(target_url, "20260905_event_privacy")
+        with psycopg2.connect(target_url) as scratch:
+            _assert_seeded_backfill(scratch)
+            with scratch.cursor() as cursor:
+                cursor.execute("TRUNCATE users CASCADE")
         _run_alembic(target_url, "head")
         _run_alembic(target_url, "head")
         target_connection = psycopg2.connect(
@@ -1951,10 +1956,13 @@ def main() -> None:
         )
         try:
             _assert_inventory(inspect_database(target_connection))
-            _assert_seeded_backfill(target_connection)
         finally:
             target_connection.close()
         _assert_lifecycle_concurrency(target_url)
+        with psycopg2.connect(target_url) as scratch:
+            _seed_authoritative_plan(scratch, tg_id=9000001, step_status="completed")
+            with scratch.cursor() as cursor:
+                cursor.execute("INSERT INTO users (tg_id,timezone,is_active,first_seen_at,first_seen_at_source) VALUES (9000099,'Europe/Kyiv',true,NULL,NULL)")
         _assert_event_privacy_operations(target_url)
 
         _run_alembic(resume_target_url, "20260827_schema_baseline")
@@ -1987,6 +1995,10 @@ def main() -> None:
         finally:
             resume_connection.close()
 
+        _run_alembic(resume_target_url, "20260905_event_privacy")
+        with psycopg2.connect(resume_target_url) as scratch:
+            with scratch.cursor() as cursor:
+                cursor.execute("TRUNCATE users CASCADE")
         _run_alembic(resume_target_url, "head")
         _run_alembic(resume_target_url, "head")
         resume_connection = psycopg2.connect(

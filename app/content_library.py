@@ -154,17 +154,17 @@ def load_content_library(db: Session, source_path: str | Path = DEFAULT_SEED_PAT
             _require(all(row.media is None or (row.media.get('sha256') != media['sha256'] and row.media.get('path') != media['path']) for row in shared), 'media belongs to another exercise')
         existing = db.get(ContentLibrary, (record['id'], record['content_version']))
         if existing:
-            _require(not existing.legacy_record and record_payload(existing) == record, 'content version conflict; publish a new version')
+            _require(record_payload(existing) == record, 'content version conflict; publish a new version')
         else:
             pending.append(record)
     for record in pending:
-        db.add(ContentLibrary(exercise_id=record['id'], legacy_record=False, **{key: deepcopy(record[key]) for key in FIELDS}))
+        db.add(ContentLibrary(exercise_id=record['id'], **{key: deepcopy(record[key]) for key in FIELDS}))
     db.flush()
     return len(pending)
 
 
 def is_eligible(content: ContentLibrary, *, check_files: bool = True) -> bool:
-    if content.legacy_record or not content.is_active:
+    if not content.is_active:
         return False
     if content.review_required and content.review_status != 'approved':
         return False
@@ -177,7 +177,7 @@ def is_eligible(content: ContentLibrary, *, check_files: bool = True) -> bool:
 
 def eligible_catalogue(db: Session, mechanic: str | None = None) -> list[dict]:
     """Latest released version per ID; never resurrect an older gated version."""
-    latest = select(ContentLibrary.exercise_id, func.max(ContentLibrary.content_version).label('version')).where(ContentLibrary.legacy_record.is_(False)).group_by(ContentLibrary.exercise_id).subquery()
+    latest = select(ContentLibrary.exercise_id, func.max(ContentLibrary.content_version).label('version')).group_by(ContentLibrary.exercise_id).subquery()
     query = select(ContentLibrary).join(latest, (ContentLibrary.exercise_id == latest.c.exercise_id) & (ContentLibrary.content_version == latest.c.version)).order_by(ContentLibrary.exercise_id)
     if mechanic is not None:
         query = query.where(ContentLibrary.mechanic == mechanic)
