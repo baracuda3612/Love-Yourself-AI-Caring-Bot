@@ -36,10 +36,10 @@ pytestmark = pytest.mark.skipif(
     reason="requires the explicitly selected disposable PostgreSQL rehearsal",
 )
 
-_TEST_URL = (
+_TEST_URL = os.environ.get("WP02_3_TEST_DATABASE_URL", (
     "postgresql+psycopg2://love_yourself_test:love_yourself_test@"
     "127.0.0.1:55432/love_yourself_test"
-)
+))
 
 
 @pytest.fixture
@@ -107,19 +107,9 @@ def _seed_current_plan(db: Session, *, medium: bool = False):
 
 
 def _seed_disposable_builder_library(db: Session) -> None:
-    """Satisfy legacy exercise FKs within this test's rolled-back transaction."""
-    for exercise in get_default_builder().exercises:
-        db.add(ContentLibrary(
-            id=exercise.id,
-            content_version=1,
-            internal_name=exercise.title or exercise.id,
-            category="test",
-            difficulty=1,
-            energy_cost="test",
-            logic_tags={},
-            content_payload={"title": exercise.title},
-            is_active=exercise.is_active,
-        ))
+    """Load the reviewed versioned exercise catalogue within this test's rolled-back transaction."""
+    from app.content_library import load_content_library
+    load_content_library(db)
     db.flush()
 
 

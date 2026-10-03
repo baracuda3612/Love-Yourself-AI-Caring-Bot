@@ -1,0 +1,76 @@
+{
+  "assets": [
+    {
+      "exercise_id": "breathing_sigh",
+      "content_version": 1,
+      "asset_version": 1,
+      "revision": "design-A-motion-v06",
+      "path": "resource/assets/content_library/media/breathing_sigh.gif",
+      "sha256": "2af25310553ca95613538f91d5b74b00fedee4d13c577d7d0124eb47892ffb2f",
+      "role": "instructional",
+      "alt_text": "Горизонтальна стрілка демонструє повільний вдих, другий коротший вдих без видиху між ними та довгий видих.",
+      "approval": {
+        "status": "approved",
+        "approver": "founder",
+        "approved_on": "2026-10-01",
+        "evidence": "docs/implementation/work_packages/WP-03.1_versioned_content_library.md",
+        "mobile_review": "Founder visual sign-off on canonical GIF; packaged mobile preview at 320 px verified in WP-03.1.",
+        "exercise_id": "breathing_sigh",
+        "content_version": 1,
+        "asset_version": 1,
+        "sha256": "2af25310553ca95613538f91d5b74b00fedee4d13c577d7d0124eb47892ffb2f"
+      },
+      "width": 320,
+      "height": 320,
+      "loop_duration_ms": 10720
+    },
+    {
+      "exercise_id": "pmr_fist",
+      "content_version": 1,
+      "asset_version": 1,
+      "revision": "five-poses-2026-10-01",
+      "path": "resource/assets/content_library/media/pmr_fist.gif",
+      "sha256": "afbc74c57134ef46ea46d18c9a163ba1b1fb8ec6447847553ba575e5588a75a9",
+      "role": "instructional",
+      "alt_text": "Рука поступово стискається в кулак, утримує його 5 секунд, розтискається та залишається відкритою 5 секунд. Переходи показані окремо.",
+      "approval": {
+        "status": "approved",
+        "approver": "founder",
+        "approved_on": "2026-10-01",
+        "evidence": "docs/implementation/work_packages/WP-03.1_versioned_content_library.md",
+        "mobile_review": "Founder visual sign-off on canonical GIF; packaged mobile preview at 320 px verified in WP-03.1.",
+        "exercise_id": "pmr_fist",
+        "content_version": 1,
+        "asset_version": 1,
+        "sha256": "afbc74c57134ef46ea46d18c9a163ba1b1fb8ec6447847553ba575e5588a75a9"
+      },
+      "width": 640,
+      "height": 640,
+      "loop_duration_ms": 12900
+    },
+    {
+      "exercise_id": "cold_water_face",
+      "content_version": 1,
+      "asset_version": 1,
+      "revision": "v03",
+      "path": "resource/assets/content_library/media/cold_water_face.gif",
+      "sha256": "a808a46206ed10b75558070114a33f2f20ec1aebb0fdb9472025f96824bc12bd",
+      "role": "instructional",
+      "alt_text": "Людина набирає прохолодну воду в долоні, затримує дихання перед контактом, занурює обличчя, піднімає голову та повертається до звичайного дихання.",
+      "approval": {
+        "status": "approved",
+        "approver": "founder",
+        "approved_on": "2026-10-01",
+        "evidence": "docs/implementation/work_packages/WP-03.1_versioned_content_library.md",
+        "mobile_review": "Founder visual sign-off on canonical GIF; packaged mobile preview at 320 px verified in WP-03.1.",
+        "exercise_id": "cold_water_face",
+        "content_version": 1,
+        "asset_version": 1,
+        "sha256": "a808a46206ed10b75558070114a33f2f20ec1aebb0fdb9472025f96824bc12bd"
+      },
+      "width": 320,
+      "height": 320,
+      "loop_duration_ms": 6580
+    }
+  ]
+}

@@ -17,7 +17,6 @@ Critical invariants (product_internal_spec.md v2.0):
 
 from __future__ import annotations
 
-import json
 import random
 import uuid
 from dataclasses import dataclass, field
@@ -25,6 +24,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import yaml
+from sqlalchemy.orm import Session
+from app.content_library import eligible_catalogue
 
 
 # ─── Data structures ────────────────────────────────────────────────────────
@@ -32,33 +33,19 @@ import yaml
 
 @dataclass
 class ExerciseV5:
-    """Exercise from content library v5 schema."""
-
+    """An eligible exact DB version supplied to the bounded builder adapter."""
     id: str
-    mechanic: str          # "switch" | "unload"
+    content_version: int
+    mechanic: str
     cooldown_days: int
-    weight: float
     is_active: bool
-    # display fields — for rendering, not used by builder selection logic
-    title: str
-    steps: List[str]
-    duration_minutes: int
-    extended_minutes: Optional[int]
+    payload: dict
 
     @staticmethod
     def from_library_item(item: dict) -> "ExerciseV5":
-        display = item.get("display", {})
-        return ExerciseV5(
-            id=item["id"],
-            mechanic=item["mechanic"],
-            cooldown_days=item["cooldown_days"],
-            weight=float(item.get("weight", 1.0)),
-            is_active=bool(item.get("is_active", True)),
-            title=display.get("title", ""),
-            steps=list(display.get("steps", [])),
-            duration_minutes=int(item.get("duration_minutes", 1)),
-            extended_minutes=item.get("extended_minutes"),
-        )
+        return ExerciseV5(id=item["id"], content_version=item["content_version"],
+            mechanic=item["mechanic"], cooldown_days=item["cooldown_days"],
+            is_active=item["is_active"], payload=item)
 
 
 @dataclass
@@ -70,6 +57,8 @@ class PlanStepV5:
     time_slot: str         # "DAY" | "EVENING"
     mechanic: str          # snapshot from exercise.mechanic — never recomputed
     exercise_id: str
+    content_version: int
+    content_snapshot: dict
 
 
 @dataclass
@@ -113,28 +102,17 @@ class PlanBuilderV5:
     Mechanic-based plan builder — config-driven, deterministic.
 
     Reads plan recipes from plan_context_template.yaml.
-    Reads exercises from the content library JSON.
+    Reads eligible exact versions from the database Content Library.
     Does NOT use Focus, Load, StepType, SlotType, or DifficultyLevel.
     """
 
-    def __init__(
-        self,
-        library_path: str | Path,
-        recipe_path: str | Path,
-    ) -> None:
-        self.exercises: List[ExerciseV5] = self._load_library(Path(library_path))
-        self.recipes: dict = self._load_recipe(Path(recipe_path))
+    def __init__(self, db: Session, recipe_path: str | Path) -> None:
+        self.db = db
+        self.recipes = self._load_recipe(Path(recipe_path))
 
-    # ── Loading ──────────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _load_library(path: Path) -> List[ExerciseV5]:
-        with path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-        return [
-            ExerciseV5.from_library_item(item)
-            for item in data.get("inventory", [])
-        ]
+    @property
+    def exercises(self) -> List[ExerciseV5]:
+        return [ExerciseV5.from_library_item(item) for item in eligible_catalogue(self.db)]
 
     @staticmethod
     def _load_recipe(path: Path) -> dict:
@@ -221,6 +199,8 @@ class PlanBuilderV5:
                     time_slot=slot,
                     mechanic=exercise.mechanic,   # Invariant 6: snapshotted here
                     exercise_id=exercise.id,
+                    content_version=exercise.content_version,
+                    content_snapshot=exercise.payload,
                 ))
 
                 last_used[exercise.id] = day  # track cooldown
@@ -288,30 +268,25 @@ class PlanBuilderV5:
                 f"Library may be too small or all exercises are in cooldown."
             )
 
-        return self._weighted_choice(candidates, seed_key=seed_key)
+        return self._choice(candidates, seed_key=seed_key)
 
     @staticmethod
-    def _weighted_choice(exercises: List[ExerciseV5], seed_key: str = "") -> ExerciseV5:
-        """Seeded weighted random selection — same seed produces same result."""
+    def _choice(exercises: List[ExerciseV5], seed_key: str = "") -> ExerciseV5:
+        """Uniform seeded choice; legacy content weights are removed."""
         pool = sorted(exercises, key=lambda e: e.id)  # deterministic sort before rng
-        weights = [e.weight for e in pool]
         rng = random.Random(seed_key)
-        return rng.choices(pool, weights=weights, k=1)[0]
+        return rng.choice(pool)
 
 
 # ─── Default paths ───────────────────────────────────────────────────────────
 
 _ROOT = Path(__file__).resolve().parents[2]
 
-DEFAULT_LIBRARY_PATH: Path = (
-    _ROOT / "resource" / "assets" / "content_library" / "tasks"
-    / "burnout_combined_content_library.json"
-)
 DEFAULT_RECIPE_PATH: Path = (
     _ROOT / "resource" / "assets" / "plan" / "plan_context_template.yaml"
 )
 
 
-def get_default_builder() -> PlanBuilderV5:
-    """Return a PlanBuilderV5 loaded from the default asset paths."""
-    return PlanBuilderV5(DEFAULT_LIBRARY_PATH, DEFAULT_RECIPE_PATH)
+def get_default_builder(db: Session) -> PlanBuilderV5:
+    """Return a builder reading the current DB release authority."""
+    return PlanBuilderV5(db, DEFAULT_RECIPE_PATH)

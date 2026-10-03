@@ -1,293 +1,362 @@
 {
-  "_meta": {
-    "version": "v5",
-    "approved": "2026-05",
-    "exercises_active": 8,
-    "mechanics": [
-      "switch",
-      "unload"
-    ],
-    "slot_rules": {
-      "switch": [
-        "DAY",
-        "EVENING"
-      ],
-      "unload": [
-        "EVENING"
-      ]
-    },
-    "note": "slot eligibility is derived from mechanic. MORNING is not used in P1 plan recipes."
-  },
+  "schema_version": 1,
   "inventory": [
     {
-      "id": "somatic_004_v2",
+      "id": "breathing_sigh",
+      "content_version": 1,
       "is_active": true,
       "mechanic": "switch",
+      "modality": "breathing",
+      "requirements": {
+        "capabilities": [
+          "breath_control"
+        ],
+        "environment": [],
+        "friction": []
+      },
+      "duration_seconds": 30,
       "cooldown_days": 1,
-      "weight": 1.5,
+      "review_required": false,
+      "review_status": "unreviewed",
+      "review_evidence": null,
       "display": {
         "title": "Дихання",
         "steps": [
-          "Вдих — повільно, на 4 рахунки.",
-          "Затримай подих на 7.",
-          "Видих — повільно, на 8.",
-          "Повтори 4 рази."
+          "Повільно вдихни носом.",
+          "Не видихаючи, зроби ще один коротший вдих.",
+          "Повільно видихни ротом до кінця.",
+          "Повтори ще двічі."
         ],
-        "duration_label": "30–60 сек"
+        "duration_label": "Тривалість: 30 секунд"
       },
-      "variations": [],
-      "duration_minutes": 1,
-      "extended_minutes": 2
+      "media": {
+        "exercise_id": "breathing_sigh",
+        "content_version": 1,
+        "asset_version": 1,
+        "revision": "design-A-motion-v06",
+        "path": "resource/assets/content_library/media/breathing_sigh.gif",
+        "sha256": "2af25310553ca95613538f91d5b74b00fedee4d13c577d7d0124eb47892ffb2f",
+        "role": "instructional",
+        "alt_text": "Горизонтальна стрілка демонструє повільний вдих, другий коротший вдих без видиху між ними та довгий видих.",
+        "approval": {
+          "status": "approved",
+          "approver": "founder",
+          "approved_on": "2026-10-01",
+          "evidence": "docs/implementation/work_packages/WP-03.1_versioned_content_library.md",
+          "mobile_review": "Founder visual sign-off on canonical GIF; packaged mobile preview at 320 px verified in WP-03.1.",
+          "exercise_id": "breathing_sigh",
+          "content_version": 1,
+          "asset_version": 1,
+          "sha256": "2af25310553ca95613538f91d5b74b00fedee4d13c577d7d0124eb47892ffb2f"
+        },
+        "width": 320,
+        "height": 320,
+        "loop_duration_ms": 10720
+      }
     },
     {
-      "id": "somatic_005_v2",
+      "id": "pmr_fist",
+      "content_version": 1,
       "is_active": true,
       "mechanic": "switch",
+      "modality": "muscle",
+      "requirements": {
+        "capabilities": [
+          "hand_use"
+        ],
+        "environment": [],
+        "friction": []
+      },
+      "duration_seconds": 30,
       "cooldown_days": 1,
-      "weight": 1.4,
+      "review_required": false,
+      "review_status": "unreviewed",
+      "review_evidence": null,
+      "display": {
+        "title": "Кулак",
+        "steps": [
+          "Стисни один кулак із помірною силою на 5 секунд.",
+          "На видиху повністю розтисни й зачекай 5 секунд.",
+          "Повтори ще двічі."
+        ],
+        "duration_label": "Тривалість: 30 секунд"
+      },
+      "media": {
+        "exercise_id": "pmr_fist",
+        "content_version": 1,
+        "asset_version": 1,
+        "revision": "five-poses-2026-10-01",
+        "path": "resource/assets/content_library/media/pmr_fist.gif",
+        "sha256": "afbc74c57134ef46ea46d18c9a163ba1b1fb8ec6447847553ba575e5588a75a9",
+        "role": "instructional",
+        "alt_text": "Рука поступово стискається в кулак, утримує його 5 секунд, розтискається та залишається відкритою 5 секунд. Переходи показані окремо.",
+        "approval": {
+          "status": "approved",
+          "approver": "founder",
+          "approved_on": "2026-10-01",
+          "evidence": "docs/implementation/work_packages/WP-03.1_versioned_content_library.md",
+          "mobile_review": "Founder visual sign-off on canonical GIF; packaged mobile preview at 320 px verified in WP-03.1.",
+          "exercise_id": "pmr_fist",
+          "content_version": 1,
+          "asset_version": 1,
+          "sha256": "afbc74c57134ef46ea46d18c9a163ba1b1fb8ec6447847553ba575e5588a75a9"
+        },
+        "width": 640,
+        "height": 640,
+        "loop_duration_ms": 12900
+      }
+    },
+    {
+      "id": "tactile_surface",
+      "content_version": 1,
+      "is_active": true,
+      "mechanic": "switch",
+      "modality": "tactile",
+      "requirements": {
+        "capabilities": [
+          "hand_use"
+        ],
+        "environment": [
+          "touchable_surface"
+        ],
+        "friction": []
+      },
+      "duration_seconds": 20,
+      "cooldown_days": 1,
+      "review_required": false,
+      "review_status": "unreviewed",
+      "review_evidence": null,
+      "display": {
+        "title": "Дотик",
+        "steps": [
+          "Поклади долоню на поверхню поруч.",
+          "Зверни увагу на її температуру.",
+          "Потім — на текстуру."
+        ],
+        "duration_label": "Тривалість: 20 секунд"
+      },
+      "media": null
+    },
+    {
+      "id": "visual_distance",
+      "content_version": 1,
+      "is_active": true,
+      "mechanic": "switch",
+      "modality": "visual",
+      "requirements": {
+        "capabilities": [
+          "vision"
+        ],
+        "environment": [
+          "distant_focus_target"
+        ],
+        "friction": []
+      },
+      "duration_seconds": 20,
+      "cooldown_days": 1,
+      "review_required": false,
+      "review_status": "unreviewed",
+      "review_evidence": null,
+      "display": {
+        "title": "Погляд вдалину",
+        "steps": [
+          "Відведи погляд від екрана.",
+          "Знайди найдальший об'єкт, який бачиш.",
+          "Дай очам сфокусуватися на ньому."
+        ],
+        "duration_label": "Тривалість: 20 секунд"
+      },
+      "media": null
+    },
+    {
+      "id": "auditory_sound",
+      "content_version": 1,
+      "is_active": true,
+      "mechanic": "switch",
+      "modality": "auditory",
+      "requirements": {
+        "capabilities": [
+          "hearing"
+        ],
+        "environment": [
+          "audible_sound"
+        ],
+        "friction": [
+          "headphones_may_interfere"
+        ]
+      },
+      "duration_seconds": 20,
+      "cooldown_days": 1,
+      "review_required": false,
+      "review_status": "unreviewed",
+      "review_evidence": null,
+      "display": {
+        "title": "Один звук",
+        "steps": [
+          "Знайди один фоновий звук, який уже чуєш.",
+          "Залиш увагу на ньому.",
+          "Поміть, чи він рівний, чи змінюється."
+        ],
+        "duration_label": "Тривалість: 20 секунд"
+      },
+      "media": null
+    },
+    {
+      "id": "cold_water_face",
+      "content_version": 1,
+      "is_active": true,
+      "mechanic": "switch",
+      "modality": "thermal",
+      "requirements": {
+        "capabilities": [
+          "hand_use",
+          "breath_hold",
+          "facial_water_contact"
+        ],
+        "environment": [
+          "sink",
+          "water"
+        ],
+        "friction": [
+          "leave_desk",
+          "shared_resource",
+          "socially_visible"
+        ]
+      },
+      "duration_seconds": 15,
+      "cooldown_days": 1,
+      "review_required": true,
+      "review_status": "unreviewed",
+      "review_evidence": null,
       "display": {
         "title": "Холодна вода",
         "steps": [
-          "Підійди до раковини.",
-          "Вмий обличчя прохолодною водою — 15–30 секунд.",
-          "Зроби 3 повільних видихи.",
-          "Відчуй різницю."
+          "Набери в долоні прохолодну воду.",
+          "Затримай дихання й занур обличчя у воду на 2–3 секунди.",
+          "Підніми голову й повернися до звичайного дихання.",
+          "Повтори ще двічі."
         ],
-        "duration_label": "30–60 сек"
+        "duration_label": "Тривалість: 15 секунд"
       },
-      "variations": [],
-      "duration_minutes": 1,
-      "extended_minutes": 2
+      "media": {
+        "exercise_id": "cold_water_face",
+        "content_version": 1,
+        "asset_version": 1,
+        "revision": "v03",
+        "path": "resource/assets/content_library/media/cold_water_face.gif",
+        "sha256": "a808a46206ed10b75558070114a33f2f20ec1aebb0fdb9472025f96824bc12bd",
+        "role": "instructional",
+        "alt_text": "Людина набирає прохолодну воду в долоні, затримує дихання перед контактом, занурює обличчя, піднімає голову та повертається до звичайного дихання.",
+        "approval": {
+          "status": "approved",
+          "approver": "founder",
+          "approved_on": "2026-10-01",
+          "evidence": "docs/implementation/work_packages/WP-03.1_versioned_content_library.md",
+          "mobile_review": "Founder visual sign-off on canonical GIF; packaged mobile preview at 320 px verified in WP-03.1.",
+          "exercise_id": "cold_water_face",
+          "content_version": 1,
+          "asset_version": 1,
+          "sha256": "a808a46206ed10b75558070114a33f2f20ec1aebb0fdb9472025f96824bc12bd"
+        },
+        "width": 320,
+        "height": 320,
+        "loop_duration_ms": 6580
+      }
     },
     {
-      "id": "somatic_006_v2",
-      "is_active": true,
-      "mechanic": "switch",
-      "cooldown_days": 1,
-      "weight": 1.3,
-      "display": {
-        "title": "Мікроходьба",
-        "steps": [
-          "Встань.",
-          "Пройди хоча б в інший кут або коридор.",
-          "Повернись."
-        ],
-        "duration_label": "30–60 сек"
-      },
-      "variations": [
-        {
-          "id": "somatic_006_v2_remote",
-          "label": "remote",
-          "steps": [
-            "Встань.",
-            "Пройди в інше приміщення і назад.",
-            "Без телефону."
-          ],
-          "duration_minutes": 2,
-          "duration_label": "2 хв"
-        },
-        {
-          "id": "somatic_006_v2_office",
-          "label": "office",
-          "steps": [
-            "Встань.",
-            "Пройди до кулера, принтера або виходу і назад — у тебе є привід.",
-            "Природно, не поспішай."
-          ],
-          "duration_minutes": 2,
-          "duration_label": "2 хв"
-        },
-        {
-          "id": "somatic_006_v2_stuck",
-          "label": "nowhere_to_go",
-          "steps": [
-            "Встань поруч зі столом.",
-            "Зроби 10 кроків на місці або потягнись."
-          ],
-          "duration_minutes": 1,
-          "duration_label": "1 хв"
-        }
-      ],
-      "duration_minutes": 1,
-      "extended_minutes": 2
-    },
-    {
-      "id": "somatic_001_combined",
-      "is_active": true,
-      "mechanic": "switch",
-      "cooldown_days": 1,
-      "weight": 1.3,
-      "display": {
-        "title": "Перезавантаження тіла",
-        "steps": [
-          "Обери зону: плечі, щелепа або кулак.",
-          "Напружи максимально — 5 секунд.",
-          "Різко розслаб.",
-          "Відчуй 10 секунд."
-        ],
-        "duration_label": "30–60 сек"
-      },
-      "variations": [
-        {
-          "id": "somatic_001_combined_active",
-          "label": "active",
-          "steps": [
-            "Обери зону: кулак, плечі або щелепа.",
-            "Напружи максимально — 5 секунд.",
-            "Різко розслаб.",
-            "Слідкуй за відчуттями 10 секунд."
-          ],
-          "duration_minutes": 1,
-          "duration_label": "30–60 сек"
-        },
-        {
-          "id": "somatic_001_combined_passive",
-          "label": "passive",
-          "steps": [
-            "Обери зону: шия, плечі або щелепа.",
-            "Відчуй де є напруга — просто помітити.",
-            "Один глибокий видих.",
-            "Слідкуй за відчуттями 10 секунд."
-          ],
-          "duration_minutes": 1,
-          "duration_label": "30–60 сек"
-        }
-      ],
-      "duration_minutes": 1,
-      "extended_minutes": null
-    },
-    {
-      "id": "somatic_003_v2",
-      "is_active": true,
-      "mechanic": "switch",
-      "cooldown_days": 1,
-      "weight": 1.2,
-      "display": {
-        "title": "Сенсорний якір",
-        "steps": [
-          "Обери канал: зір, дотик, слух, запах або відчуття в тілі.",
-          "30 секунд — тільки це.",
-          "Нічого більше."
-        ],
-        "duration_label": "30–60 сек"
-      },
-      "variations": [
-        {
-          "id": "somatic_003_v2_sight",
-          "label": "sight",
-          "steps": [
-            "Обери один об'єкт перед собою.",
-            "Дивись на нього не відриваючись 30 секунд.",
-            "Просто дивись — не аналізуй."
-          ],
-          "duration_minutes": 1,
-          "duration_label": "30 сек"
-        },
-        {
-          "id": "somatic_003_v2_touch",
-          "label": "touch",
-          "steps": [
-            "Торкнись поверхні — стіл, рука, одяг.",
-            "Відчувай текстуру 20–30 секунд.",
-            "Тільки це відчуття — нічого більше."
-          ],
-          "duration_minutes": 1,
-          "duration_label": "30 сек"
-        },
-        {
-          "id": "somatic_003_v2_sound",
-          "label": "sound",
-          "steps": [
-            "Зупинись і прислухайся.",
-            "Знайди один звук навколо — або слухай тишу.",
-            "30 секунд тільки цього."
-          ],
-          "duration_minutes": 1,
-          "duration_label": "30 сек"
-        },
-        {
-          "id": "somatic_003_v2_smell",
-          "label": "smell",
-          "steps": [
-            "Зроби один повільний вдих через ніс.",
-            "Відчуй що є у повітрі.",
-            "Ще раз — той самий вдих."
-          ],
-          "duration_minutes": 1,
-          "duration_label": "30 сек"
-        },
-        {
-          "id": "somatic_003_v2_body",
-          "label": "body",
-          "steps": [
-            "Обери одну ділянку тіла — руки, стопи, спина.",
-            "Думай тільки про цю ділянку 30 секунд.",
-            "Що там відбувається прямо зараз?"
-          ],
-          "duration_minutes": 1,
-          "duration_label": "30 сек"
-        }
-      ],
-      "duration_minutes": 1,
-      "extended_minutes": null
-    },
-    {
-      "id": "rest_104_v2",
+      "id": "brain_dump",
+      "content_version": 1,
       "is_active": true,
       "mechanic": "unload",
+      "modality": "writing",
+      "requirements": {
+        "capabilities": [
+          "text_entry"
+        ],
+        "environment": [
+          "chat_or_note"
+        ],
+        "friction": [
+          "written_response"
+        ]
+      },
+      "duration_seconds": 60,
       "cooldown_days": 1,
-      "weight": 1.4,
+      "review_required": false,
+      "review_status": "unreviewed",
+      "review_evidence": null,
       "display": {
         "title": "Brain Dump",
         "steps": [
-          "Відкрий чат або нотатку.",
-          "Напиши 1–3 речі що зараз крутяться в голові.",
-          "Без структури. Без фільтрації. Як є.",
-          "Відправ або збережи — і все."
+          "Напиши сюди або в нотатку одну річ, яка зараз крутиться в голові.",
+          "Без структури. Як є."
         ],
-        "duration_label": "2–3 хв"
+        "duration_label": "Тривалість: 1 хвилина"
       },
-      "variations": [],
-      "duration_minutes": 3,
-      "extended_minutes": null
+      "media": null
     },
     {
-      "id": "cognitive_008_v2",
+      "id": "one_thing",
+      "content_version": 1,
       "is_active": true,
       "mechanic": "unload",
+      "modality": "writing",
+      "requirements": {
+        "capabilities": [
+          "text_entry"
+        ],
+        "environment": [
+          "chat_or_note"
+        ],
+        "friction": [
+          "written_response"
+        ]
+      },
+      "duration_seconds": 30,
       "cooldown_days": 1,
-      "weight": 1.3,
+      "review_required": false,
+      "review_status": "unreviewed",
+      "review_evidence": null,
       "display": {
         "title": "Одна річ",
         "steps": [
-          "Одна річ що сьогодні вдалась — будь-яка.",
-          "Завʼязати шнурки — теж підходить.",
-          "Напиши або просто подумай."
+          "Напиши сюди або в нотатку одну річ, яка сьогодні вдалася — будь-яку.",
+          "Зав'язати шнурки теж підходить."
         ],
-        "duration_label": "1–2 хв"
+        "duration_label": "Тривалість: 30 секунд"
       },
-      "variations": [],
-      "duration_minutes": 2,
-      "extended_minutes": null
+      "media": null
     },
     {
-      "id": "cognitive_001_v2",
+      "id": "first_step_tomorrow",
+      "content_version": 1,
       "is_active": true,
       "mechanic": "unload",
-      "cooldown_days": 1,
-      "weight": 1.2,
-      "display": {
-        "title": "Думка",
-        "steps": [
-          "Згадай будь-яку думку яка крутилась — сьогодні або раніше.",
-          "Це думка чи факт? Поміркуй.",
-          "Повернись до того що робив."
+      "modality": "writing",
+      "requirements": {
+        "capabilities": [
+          "text_entry"
         ],
-        "duration_label": "1–2 хв"
+        "environment": [
+          "chat_or_note"
+        ],
+        "friction": [
+          "written_response"
+        ]
       },
-      "variations": [],
-      "duration_minutes": 2,
-      "extended_minutes": null
+      "duration_seconds": 60,
+      "cooldown_days": 1,
+      "review_required": false,
+      "review_status": "unreviewed",
+      "review_evidence": null,
+      "display": {
+        "title": "Перший крок завтра",
+        "steps": [
+          "Напиши сюди або в нотатку перший конкретний крок, з якого почнеш наступний робочий день."
+        ],
+        "duration_label": "Тривалість: 1 хвилина"
+      },
+      "media": null
     }
   ]
 }

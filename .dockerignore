@@ -15,6 +15,15 @@
 !resource/assets/content_library/
 !resource/assets/content_library/tasks/
 !resource/assets/content_library/tasks/burnout_combined_content_library.json
+!resource/assets/content_library/media/
+resource/assets/content_library/media/**
+!resource/assets/content_library/media/manifest.json
+!resource/assets/content_library/media/breathing_sigh.gif
+!resource/assets/content_library/media/pmr_fist.gif
+!resource/assets/content_library/media/cold_water_face.gif
+!scripts/
+scripts/**
+!scripts/load_content_library.py
 !resource/assets/plan/
 !resource/assets/plan/plan_context_template.yaml
 !resource/assets/product/

@@ -23,7 +23,7 @@ from sqlalchemy.orm import sessionmaker
 from scripts.inspect_database_schema import inspect_database
 
 
-EXPECTED_REVISION = "20260905_event_privacy"
+EXPECTED_REVISION = "20261003_content_library"
 EXPECTED_APPLICATION_TABLES = {
     "access_entitlements",
     "access_identities",
@@ -437,7 +437,7 @@ def _assert_event_privacy_operations(target_url: str) -> None:
             )
             assert linked.event.plan_id == step.day.plan.id
             assert linked.event.plan_step_id == step.id
-            assert linked.event.exercise_id == "migration-seed"
+            assert linked.event.exercise_id == "tactile_surface"
             assert linked.event.content_version == 1
             assert linked.event.step_id is None
             assert linked.event.context is None
@@ -1414,9 +1414,9 @@ def _seed_authoritative_plan(
             cursor.execute(
                 """
                 INSERT INTO ai_plan_steps (
-                  day_id, title, order_in_day, exercise_id, mechanic,
+                  day_id, title, order_in_day, exercise_id, content_version, mechanic,
                   step_status, terminal_at, version, slot_type
-                ) VALUES (%s, %s, 0, 'migration-seed', 'switch',
+                ) VALUES (%s, %s, 0, 'tactile_surface', 1, 'switch',
                           %s, %s::timestamptz, 1, 'CORE')
                 RETURNING id
                 """,
@@ -1431,6 +1431,8 @@ def _seed_authoritative_plan(
 
 def _seed_activation_draft(connection, *, tg_id: int) -> tuple[int, str]:
     draft_id = str(uuid4())
+    seed_path = Path(__file__).resolve().parents[1] / "resource/assets/content_library/tasks/burnout_combined_content_library.json"
+    protocol = next(record for record in json.loads(seed_path.read_text())["inventory"] if record["id"] == "tactile_surface")
     with connection.cursor() as cursor:
         cursor.execute(
             "INSERT INTO users (tg_id, timezone, is_active) "
@@ -1438,6 +1440,11 @@ def _seed_activation_draft(connection, *, tg_id: int) -> tuple[int, str]:
             (tg_id,),
         )
         user_id = cursor.fetchone()[0]
+        cursor.execute(
+            "INSERT INTO user_profiles (user_id, daily_time_slots, active_days) "
+            "VALUES (%s, '{\"DAY\":\"14:00\"}', '[\"MON\",\"TUE\",\"WED\",\"THU\",\"FRI\"]')",
+            (user_id,),
+        )
         cursor.execute(
             "INSERT INTO onboarding_progress (user_id, stage, started_at) "
             "VALUES (%s, 'START', now())",
@@ -1456,10 +1463,10 @@ def _seed_activation_draft(connection, *, tg_id: int) -> tuple[int, str]:
             cursor.execute(
                 """
                 INSERT INTO plan_draft_steps (
-                  id, draft_id, day_number, exercise_id, mechanic, time_slot
-                ) VALUES (%s::uuid, %s::uuid, %s, 'migration-seed', 'switch', 'DAY')
+                  id, draft_id, day_number, exercise_id, content_version, content_snapshot, mechanic, time_slot
+                ) VALUES (%s::uuid, %s::uuid, %s, 'tactile_surface', 1, %s::jsonb, 'switch', 'DAY')
                 """,
-                (str(uuid4()), draft_id, day_number),
+                (str(uuid4()), draft_id, day_number, json.dumps(protocol)),
             )
     connection.commit()
     return user_id, draft_id
@@ -1491,6 +1498,12 @@ def _assert_lifecycle_concurrency(target_url: str) -> None:
         transition_plan_step,
     )
     from app.plan_finalization import finalize_plan
+
+    from app.content_library import load_content_library
+    seed_engine = create_engine(sqlalchemy_url)
+    with sessionmaker(bind=seed_engine).begin() as seed_db:
+        load_content_library(seed_db)
+    seed_engine.dispose()
 
     connection = psycopg2.connect(
         target_url,
@@ -1929,6 +1942,12 @@ def main() -> None:
         finally:
             target_connection.close()
 
+        # Rehearse prior B1 backfill separately from the zero-user WP-03.1 cutover.
+        _run_alembic(target_url, "20260905_event_privacy")
+        with psycopg2.connect(target_url) as scratch:
+            _assert_seeded_backfill(scratch)
+            with scratch.cursor() as cursor:
+                cursor.execute("TRUNCATE users CASCADE")
         _run_alembic(target_url, "head")
         _run_alembic(target_url, "head")
         target_connection = psycopg2.connect(
@@ -1937,10 +1956,13 @@ def main() -> None:
         )
         try:
             _assert_inventory(inspect_database(target_connection))
-            _assert_seeded_backfill(target_connection)
         finally:
             target_connection.close()
         _assert_lifecycle_concurrency(target_url)
+        with psycopg2.connect(target_url) as scratch:
+            _seed_authoritative_plan(scratch, tg_id=9000001, step_status="completed")
+            with scratch.cursor() as cursor:
+                cursor.execute("INSERT INTO users (tg_id,timezone,is_active,first_seen_at,first_seen_at_source) VALUES (9000099,'Europe/Kyiv',true,NULL,NULL)")
         _assert_event_privacy_operations(target_url)
 
         _run_alembic(resume_target_url, "20260827_schema_baseline")
@@ -1973,6 +1995,10 @@ def main() -> None:
         finally:
             resume_connection.close()
 
+        _run_alembic(resume_target_url, "20260905_event_privacy")
+        with psycopg2.connect(resume_target_url) as scratch:
+            with scratch.cursor() as cursor:
+                cursor.execute("TRUNCATE users CASCADE")
         _run_alembic(resume_target_url, "head")
         _run_alembic(resume_target_url, "head")
         resume_connection = psycopg2.connect(

@@ -30,7 +30,7 @@ def _migration_module():
 
 
 def test_runtime_requires_the_event_privacy_schema_head() -> None:
-    assert database.EXPECTED_ALEMBIC_REVISION == "20260905_event_privacy"
+    assert database.EXPECTED_ALEMBIC_REVISION == "20261003_content_library"
     source = MIGRATION_PATH.read_text(encoding="utf-8")
     assert 'down_revision = "20260902_plan_lifecycle"' in source
     assert "apscheduler_jobs" not in source

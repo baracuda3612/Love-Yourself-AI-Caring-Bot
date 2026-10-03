@@ -1,6 +1,6 @@
-# Love Yourself — Product Internal Spec (v2.0)
+# Love Yourself — Product Internal Spec (content contract 2026-10-03)
 
-> травень 2026 · внутрішній документ для Codex / builder / internal agents
+> Content Library synchronized 2026-10-03 · other sections retain their separately owned scope
 > conceptual_map.md — user-facing версія для Coach
 
 ---
@@ -15,65 +15,66 @@ Love Yourself — система щоденної підтримки, яка д�
 
 ---
 
-## 2. Дві механіки — вся бібліотека
+## 2. Версійована бібліотека
 
-В бібліотеці v5 **8 вправ** і **2 механіки**. Більше нічого.
+FD-10 визначає дев’ять незалежних вправ: шість `switch`, три `unload`.
+DB `content_library` — єдине джерело актуального контенту. JSON є перевіреним
+seed, а не runtime-каталогом. Початкові тексти й вимоги точно зберігають
+[FD-10 / CONTENT-02…04](../../../docs/audit/pre_mvp_code_audit_findings.md#accepted-exercise-catalogue).
 
-### state_switch
-Фізично або сенсорно вирвати з поточного стану. Працює і при "втомився", і при "застряг".
-Слоти: **DAY, EVENING**
+Рішення засновника від **2026-10-01** замінює вимогу дев’яти GIF від
+2026-09-27: обов’язкові тільки три навчальні GIF для `breathing_sigh`,
+`pmr_fist`, `cold_water_face`. Шість інших вправ доступні з повним текстом.
+DG-08 візуально погоджено; DG-02 лишається відкритим, тому холодна вода
+не доступна користувачам. Початковий доступний каталог: 8 вправ, 5 `switch`.
 
-### unload
-Вивантажити шум або закрити день. Особливо ввечері.
-Слоти: **EVENING тільки**
+## 3. Схема та читання
 
-> **Правило слотів — derived, не stored:**
-> `switch` → може бути в DAY і EVENING
-> `unload` → тільки EVENING
-> MORNING не використовується в P1 plan recipes. DAY і EVENING — внутрішні технічні теги. Юзер ніколи не бачить назв слотів — тільки конкретний час HH:MM.
+Composite key: `(exercise_id, content_version)`. Запис містить `display.title`,
+впорядковані `display.steps`, плоский `display.duration_label`, `duration_seconds`,
+`mechanic`, `modality`, `requirements.capabilities/environment/friction`,
+`cooldown_days`, `review_required`, `review_status`, `review_evidence`, `is_active`
+та погоджені `media` з alt text, SHA-256 і точною версією контенту.
 
----
+Опубліковані інструкції, час, вимоги, ідентичність та медіа незмінні. Зміна —
+нова версія. Лише activation/review controls можна змінити; медичне погодження
+повинно відповідати версії протоколу та digest GIF. Seed тієї самої версії —
+no-op або явний conflict. Немає parent/variation, weight, minute durations,
+category, difficulty, energy cost, logic tags чи office/remote класифікації.
 
-## 3. Схема вправи (exercise)
+Builder читає `eligible_catalogue(db)`: остання опублікована версія кожної вправи,
+active/review/media gates; стару доступну версію не підставляємо замість нової
+недоступної. Draft і plan step зберігають точну версію та immutable snapshot.
+Activation повторно перевіряє версію й ресурс під row lock. Renderer читає
+`selected_content(db, id, version)`; усі кроки доступні без GIF I/O.
+Деактивація не змінює старий snapshot, але блокує наступне відображення вправи.
+Нові версії не змінюють історичної ідентичності подій.
 
-```
-id                  str        унікальний ідентифікатор
-is_active           bool
-mechanic            switch | unload
-duration_minutes    int        default — для scheduled channel (30–60 сек)
-extended_minutes    int|null   extended — для reactive / user-initiated channel (до 2 хв)
-cooldown_days       int        мінімум між повтореннями
-weight              float      для зваженого random у plan builder
+Рішення засновника 2026-10-03: 0 користувачів і 0 paused-планів. Старий
+каталог замінюється без архіву та перенесення старих планів; нові опубліковані
+версії й snapshots незмінні. Автоматичне відкликання queued delivery,
+send-time rechecks і перебудова планів відкладені; зміни поки ручні.
+Requirements описують виконання, не профіль
+користувача. Cooldown — beta hypothesis; on-demand selection належить WP-06.1.
 
-display:
-  title             str        один рядок
-  steps             list[str]  2–4 кроки — саме те що йде в Telegram
-  duration_label    str        "30–60 сек" — для юзера
+## 4. Дев’ять початкових версій
 
-variations:                  опціонально
-  id                str
-  label             str       "remote", "office", "active", "passive", ...
-  steps             list[str]
-  duration_minutes  int
-  duration_label    str
-```
+| ID | Назва | Секунди | Механіка | GIF |
+|---|---|---:|---|---|
+| `breathing_sigh` | Дихання | 30 | `switch` | навчальна |
+| `pmr_fist` | Кулак | 30 | `switch` | навчальна |
+| `tactile_surface` | Дотик | 20 | `switch` | не потрібна |
+| `visual_distance` | Погляд вдалину | 20 | `switch` | не потрібна |
+| `auditory_sound` | Один звук | 20 | `switch` | не потрібна |
+| `cold_water_face` | Холодна вода | 15 | `switch` | навчальна; DG-02 відкритий |
+| `brain_dump` | Brain Dump | 60 | `unload` | не потрібна |
+| `one_thing` | Одна річ | 30 | `unload` | не потрібна |
+| `first_step_tomorrow` | Перший крок завтра | 60 | `unload` | не потрібна |
 
-**Не в схемі (прибрано):** `focus`, `load`, `difficulty`, `energy_cost`, `impact_areas`, `priority_tier`, `category`, `allowed_slots`
-
----
-
-## 4. Бібліотека v5 — 8 вправ
-
-| ID | Назва | Механіка | Хв | Варіації |
-|----|-------|----------|----|----------|
-| `somatic_004_v2` | Дихання | switch | 30–60 сек (ext: 2 хв) | — |
-| `somatic_005_v2` | Холодна вода | switch | 30–60 сек (ext: 2 хв) | — |
-| `somatic_006_v2` | Мікроходьба | switch | 30–60 сек (ext: 2 хв) | remote / office / stuck |
-| `somatic_001_combined` | Перезавантаження тіла | switch | 30–60 сек | active / passive |
-| `somatic_003_v2` | Сенсорний якір | switch | 30–60 сек | sight / touch / sound / smell / body |
-| `rest_104_v2` | Brain Dump | unload | 3 | — |
-| `cognitive_008_v2` | Одна річ | unload | 2 | — |
-| `cognitive_001_v2` | Думка | unload | 2 | — |
+GIF — демонстрація, не timer; `pmr_fist` зберігає 5 секунд стиснутого кулака та
+5 секунд відкритої долоні плюс переходи. Повний текст завжди авторитетний.
+Canonical ExercisePresentation/sendAnimation/fallback та delivery-variant
+snapshots належать WP-03.3; алгоритм плану — WP-03.2; durable send — WP-03.4.
 
 ---
 

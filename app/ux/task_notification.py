@@ -4,65 +4,38 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.db import AIPlan, AIPlanDay, ContentLibrary
+from app.db import AIPlan, AIPlanDay
+from app.content_library import selected_content, ContentValidationError
+from html import escape
 
 SLOT_EMOJI = {"MORNING": "🌅", "DAY": "☀️", "EVENING": "🌙"}
 SLOT_LABEL = {"MORNING": "Ранок", "DAY": "День", "EVENING": "Вечір"}
 
 
-def _extract_rationale(payload: dict) -> str:
-    """
-    Single source of truth for reading scientific_rationale from content payload.
-    Checks display sub-dict first (normalized format), then root level (legacy).
-    """
-    display = payload.get("display")
-    if isinstance(display, dict):
-        val = display.get("scientific_rationale")
-        if val:
-            return val
-    return payload.get("scientific_rationale", "")
-
-
 def format_task_notification(db: Session, step, day, plan_day_number: int, task_index: int, task_total: int) -> str:
-    content = db.get(ContentLibrary, step.exercise_id) if step.exercise_id else None
-
-    payload = {}
-    title = step.title or "Завдання"
-    if content and isinstance(content.content_payload, dict):
-        payload = content.content_payload
-        title = payload.get("title") or title
-
+    if step.exercise_id:
+        version = getattr(step, "content_version", None)
+        if version is None:
+            raise ContentValidationError("selected content version missing")
+        display = selected_content(db, step.exercise_id, version)["display"]
+    else:
+        # Rows with no catalogue identity keep their original historical copy.
+        display = {"title": step.title or "Завдання", "steps": [step.description or ""], "duration_label": ""}
     slot = (step.time_slot or "").upper()
     emoji = SLOT_EMOJI.get(slot, "🔔")
     label = SLOT_LABEL.get(slot, slot.capitalize() if slot else "День")
-
-    instructions = payload.get("instructions", "")
-    rationale = _extract_rationale(payload)
-    duration = payload.get("duration_estimate") or payload.get("duration_minutes")
-
-    lines = [
-        "━━━━━━━━━━━━━━━━━━",
-        f"{emoji} <b>{title}</b>",
-        f"День {plan_day_number} · {label} · {task_index} з {task_total}",
-    ]
-    if instructions:
-        lines += ["", "📋 <b>Що робити:</b>", instructions]
-    if rationale:
-        lines += ["", "🧠 <b>Чому це працює:</b>", rationale]
-    if duration:
-        lines += ["", f"⏱ {duration}"]
+    lines = ["━━━━━━━━━━━━━━━━━━", f"{emoji} <b>{escape(display['title'])}</b>",
+        f"День {plan_day_number} · {label} · {task_index} з {task_total}"]
+    lines += ["", "📋 <b>Що робити:</b>", *[escape(text) for text in display["steps"]]]
+    if display["duration_label"]:
+        lines += ["", f"⏱ {escape(display['duration_label'])}"]
     lines.append("━━━━━━━━━━━━━━━━━━")
     return "\n".join(lines)
 
 
 def get_step_rationale(db: Session, step) -> str | None:
-    if not step.exercise_id:
-        return None
-    content = db.get(ContentLibrary, step.exercise_id)
-    if not content or not isinstance(content.content_payload, dict):
-        return None
-    val = _extract_rationale(content.content_payload)
-    return val or None
+    # The new exact-copy contract carries no outcome/rationale claims.
+    return None
 
 
 def _is_step_delivered(step) -> bool:

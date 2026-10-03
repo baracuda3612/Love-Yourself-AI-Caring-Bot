@@ -127,7 +127,7 @@ def create_plan_for_lifecycle(
     else:
         resolved_evening = None
 
-    builder = get_default_builder()
+    builder = get_default_builder(db)
     draft_v5: PlanDraftV5 = builder.build(
         plan_type=plan_type,
         user_id=str(user_id),
@@ -183,6 +183,8 @@ def _persist_v5_draft(
                     "time_slot": s.time_slot,
                     "mechanic": s.mechanic,
                     "exercise_id": s.exercise_id,
+                    "content_version": s.content_version,
+                    "content_snapshot": s.content_snapshot,
                 }
                 for s in draft.steps
             ],
@@ -200,6 +202,8 @@ def _persist_v5_draft(
                 draft_id=record.id,
                 day_number=step.day_number,
                 exercise_id=step.exercise_id,
+                content_version=step.content_version,
+                content_snapshot=step.content_snapshot,
                 time_slot=step.time_slot,
                 mechanic=step.mechanic,
                 # Legacy columns — not used in v5, set to safe defaults

@@ -22,7 +22,7 @@ EVENT_PRIVACY_PATH = Path(
 def test_baseline_is_the_single_authoritative_root() -> None:
     versions = sorted(Path("migrations/alembic/versions").glob("*.py"))
 
-    assert versions == [BASELINE_PATH, LIFECYCLE_PATH, EVENT_PRIVACY_PATH]
+    assert versions == [BASELINE_PATH, LIFECYCLE_PATH, EVENT_PRIVACY_PATH, Path("migrations/alembic/versions/20261003_versioned_content_library.py")]
     source = BASELINE_PATH.read_text(encoding="utf-8")
     assert 'revision = "20260827_schema_baseline"' in source
     assert "down_revision = None" in source

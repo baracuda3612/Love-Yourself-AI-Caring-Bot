@@ -12,11 +12,12 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.content_library import selected_content, ContentValidationError
+
 from app.db import (
     AIPlan,
     AIPlanDay,
     AIPlanStep,
-    ContentLibrary,
     PlanDraftRecord,
     User,
     UserProfile,
@@ -110,26 +111,6 @@ _FIXED_TIME_SLOTS: dict[str, time] = {
 
 # _map_step_type and _map_difficulty removed in T5.2.
 # v5 plans: step_type is always ACTION, difficulty is always EASY.
-
-
-def _build_step_title(content: ContentLibrary | None) -> str:
-    if content and content.content_payload:
-        title = content.content_payload.get("title")
-        if title:
-            return str(title)
-    if content and content.internal_name:
-        return str(content.internal_name)
-    return "Завдання"
-
-
-def _build_step_description(content: ContentLibrary | None) -> str:
-    if not content or not content.content_payload:
-        return ""
-    payload = content.content_payload
-    for key in ("description", "text", "instructions"):
-        if payload.get(key):
-            return str(payload[key])
-    return ""
 
 
 def _resolve_time_slot(value: str, slot_time_mapping: dict[str, time]) -> time:
@@ -321,23 +302,6 @@ def finalize_plan(
         if locked_draft.total_steps and len(step_rows) < locked_draft.total_steps:
             raise FinalizationError("draft_steps_incomplete")
 
-        exercise_ids = {str(step.exercise_id) for step in step_rows if step.exercise_id}
-        content_entries = {
-            content.id: content
-            for content in db.query(ContentLibrary)
-            .filter(ContentLibrary.id.in_(exercise_ids))
-            .all()
-        }
-        # T5.2: v5 exercise IDs may not be in DB content_library (sourced from JSON).
-        # Log a warning instead of hard-failing.
-        missing_from_db = exercise_ids - set(content_entries.keys())
-        if missing_from_db:
-            logger.warning(
-                "content_library: %d exercises not in DB (v5 JSON source): %s",
-                len(missing_from_db),
-                missing_from_db,
-            )
-
         day_orders: dict[int, int] = defaultdict(int)
         for step_row in step_rows:
             day_number = int(step_row.day_number or 0)
@@ -347,7 +311,15 @@ def finalize_plan(
             if not day_record:
                 raise FinalizationError("day_not_found")
             exercise_id = str(step_row.exercise_id or "")
-            content = content_entries.get(exercise_id)
+            content_version = step_row.content_version
+            if content_version is None:
+                raise FinalizationError("draft_content_version_unavailable")
+            try:
+                content = selected_content(db, exercise_id, content_version, lock=True)
+            except ContentValidationError as exc:
+                raise FinalizationError("draft_content_unavailable") from exc
+            if step_row.content_snapshot != content:
+                raise FinalizationError("draft_content_snapshot_mismatch")
             time_slot = normalize_time_slot(step_row.time_slot)
 
             # Use the real active calendar date for this logical day.
@@ -382,8 +354,10 @@ def finalize_plan(
                 AIPlanStep(
                     day_id=day_record.id,
                     exercise_id=exercise_id,
-                    title=_build_step_title(content),
-                    description=_build_step_description(content),
+                    content_version=content_version,
+                    content_snapshot=content,
+                    title=content["display"]["title"],
+                    description="\n".join(content["display"]["steps"]),
                     step_type=step_type,
                     difficulty=difficulty,
                     mechanic=mechanic,
