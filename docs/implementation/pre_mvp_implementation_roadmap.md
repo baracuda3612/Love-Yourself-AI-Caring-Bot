@@ -784,6 +784,12 @@ FD-10/FD-16 and the merged 2026-09-27 decision remain traceable in Git history;
 
 ### WP-03.1 — Migrate the versioned Content Library
 
+**Status:** `VERIFIED` — founder merged [PR #260](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/260)
+on 2026-10-03 as `c76e5489fed7c9db7342f49104a834e2be423328`.
+Nine versioned records, three approved GIFs and 45 focused checks are complete;
+review findings have recorded fixes or founder dispositions. Runtime GIF byte/hash
+checks are removed; DG-02 remains open for cold-water eligibility only.
+
 **Scope**
 
 * implement nine FD-10 records with composite version identity and immutable copy;
@@ -809,6 +815,11 @@ FD-10/FD-16 and the merged 2026-09-27 decision remain traceable in Git history;
 
 ### WP-03.2 — Correct deterministic plan generation
 
+**Status:** `VERIFIED` — founder merged [PR #261](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/261)
+on 2026-10-07 as `758b119773c62dbbd7f2c5f725cfb6e65f42aaeb`.
+Cycle-stable selection, cross-cycle cooldown and non-replay, scheduled-only
+provenance, exact content snapshots, and failure-path response checks are complete.
+
 **Scope**
 
 * stable per-cycle discriminator;
@@ -829,6 +840,10 @@ FD-10/FD-16 and the merged 2026-09-27 decision remain traceable in Git history;
 * created steps snapshot correct content identity/version.
 
 ### WP-03.3 — Introduce canonical `ExercisePresentation` and media delivery
+
+**Status:** `READY` — WP-03.1 and WP-01.4 dependencies are verified; WP-03.2
+is founder-merged. Prepare its bounded execution contract in a fresh package
+session before implementation. See `work_packages/WP-03.3_start_message.md`.
 
 **Scope**
 
@@ -1470,7 +1485,7 @@ policy.
 | `DG-05` | WP-08.1 | Remove `MORNING` or retain one frozen guarded definition | Keep frozen; add no new behavior |
 | `DG-06` | WP-10.1 | First pilot pricing and unit of sale | Build no billing system |
 | `DG-07` | Gate G4 | Legal roles, notice, contract, cross-border, DPIA determination | No company production launch |
-| `DG-08` | WP-03.1 | Three instructional GIFs visually approved 2026-10-01; packaging/version evidence in WP-03.1 | Only the three instructional records require media; six others are text-only |
+| `DG-08` | WP-03.1 | Closed: three instructional GIFs approved 2026-10-01 and packaged/versioned in founder-merged PR #260 | Only the three instructional records require media; six others are text-only |
 
 ---
 
@@ -1573,8 +1588,8 @@ block exit gate passes.
   - [x] WP-02.2 — Build the authoritative lifecycle service
   - [x] WP-02.3 — Complete runtime controls and plan-format behavior
 - [ ] B3 — Content, plan generation, presentation, and scheduled delivery
-  - [ ] WP-03.1 — Migrate the versioned Content Library
-  - [ ] WP-03.2 — Correct deterministic plan generation
+  - [x] WP-03.1 — Migrate the versioned Content Library
+  - [x] WP-03.2 — Correct deterministic plan generation
   - [ ] WP-03.3 — Introduce canonical ExercisePresentation and media delivery
   - [ ] WP-03.4 — Make scheduled delivery and callbacks reconcilable
   - [ ] WP-03.5 — Implement durable completion and automatic continuation
@@ -1615,10 +1630,10 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | `WP-03.1 — Migrate the versioned Content Library` |
-| Status | `IMPLEMENTATION_CANDIDATE` — versioned content and asset packaging implemented; acceptance/review evidence in WP-03.1 |
-| Next action | Complete WP-03.1 acceptance and independent review, then open its PR into implementation/pre-mvp; founder owns merge |
-| Current blockers | `DG-08` visual approval is complete for the three required instructional GIFs; six other exercises need no GIF. `DG-02` remains open for cool water only. Paid backup/restore remains deferred to Gate G1 before durable data or market launch |
+| Current package | `WP-03.3 — Introduce canonical ExercisePresentation and media delivery` |
+| Status | `READY` — WP-03.2 merged in PR #261 (`758b119`); WP-03.1 and WP-01.4 dependencies are verified |
+| Next action | Start a fresh WP-03.3 session from the latest founder-merged `implementation/pre-mvp`, form its bounded contract, then implement presentation and media delivery only |
+| Current blockers | No package dependency blocks WP-03.3. `DG-02` keeps cold water unavailable; `DG-03` real-device preview copy is provisional. Gate G1 remains required before durable-data rollout |
 
 ### Private founder log
 
@@ -1669,7 +1684,7 @@ behavior.
 ## 22. Historical first steps after roadmap approval
 
 The sequence below was the initial handoff and has been completed through B2.
-The current next step is WP-03.1, as recorded in the current-package table
+The current next step is WP-03.3, as recorded in the current-package table
 above; do not restart WP-00.4 or WP-01.1 from this historical list.
 
 1. Complete WP-00.4 repository hardening and targeted verification.
