@@ -765,6 +765,7 @@ def _context_message(payload: Dict[str, Any]) -> str:
         "plan_type": payload.get("plan_type"),
         "evening_time_configured": bool(payload.get("evening_slot_collected")),
         "pending_runtime_action": payload.get("pending_action"),
+        "current_exercise_context": payload.get("current_exercise_context"),
     }
     completion_context = payload.get("completion_context")
     if completion_context is not None:

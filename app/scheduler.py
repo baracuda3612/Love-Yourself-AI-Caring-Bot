@@ -23,7 +23,9 @@ from app.ux.catalog import get_trigger_message
 from app.ux.persona import get_persona
 from app.ux.pulse_prompt import generate_pulse_message
 from app.ux.rate_limit import can_send_auto_message
-from app.ux.task_notification import format_task_notification, maybe_advance_current_day
+from app.ux.task_notification import maybe_advance_current_day
+from app.exercise_presentation import step_presentation
+from app.exercise_delivery import ExerciseSendResult, send_exercise
 from app.lifecycle import (
     LifecycleTransitionError,
     derive_current_day,
@@ -189,38 +191,57 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
         plan_id = plan.id
         user_id = user.id
         send_chat_id = user.tg_id
+        day_number = step.day.day_number
+        try:
+            presentation = step_presentation(db, step, user_timezone=user_tz)
+        except ValueError:
+            logger.exception("Invalid exercise presentation for step %s", plan_step_id)
+            return
+        if not presentation.available_actions:
+            return
+
+    # Persisted jobs may contain old baked text. The exact selected DB version
+    # supplies the presentation; the job's text argument is compatibility only.
+    from app.telegram import bot as tg_bot
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✅ Виконано",
+                    text="Виконано",
                     callback_data=f"task_complete:{plan_step_id}",
                 ),
                 InlineKeyboardButton(
-                    text="⏭️ Пропустити",
+                    text="Пропустити",
                     callback_data=f"task_skip:{plan_step_id}",
                 ),
             ]
         ]
     )
 
-    future = _submit_coroutine(_send_message_async(send_chat_id, text, reply_markup=keyboard))
+    if _event_loop is None:
+        return
+    future = _submit_coroutine(send_exercise(tg_bot, send_chat_id, presentation, reply_markup=keyboard))
     if not future:
         return
 
     delivery_error = None
+    result = None
     try:
         result = future.result(timeout=30)
-        if result is None:
-            delivery_error = "send_failed"
+        if not isinstance(result, ExerciseSendResult):
+            result = ExerciseSendResult('uncertain', None, presentation, '', failure_code='missing_send_result')
+        if not result.delivered:
+            delivery_error = result.failure_code or result.outcome
     except Exception:
-        delivery_error = "send_exception"
+        # The coroutine may still send successfully. No fallback or retry here.
+        result = ExerciseSendResult('uncertain', None, presentation, '', failure_code='send_result_uncertain')
+        delivery_error = result.failure_code
 
     with SessionLocal() as db:
         try:
             base_context = {
-                "day_number": step.day.day_number if step.day else None,
+                "day_number": day_number,
             }
             base_context = {
                 key: value for key, value in base_context.items() if value is not None
@@ -243,7 +264,7 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
                     source_operation_id=f"scheduler:delivery:{plan_step_id}",
                 )
                 db_step = db.query(AIPlanStep).filter(AIPlanStep.id == plan_step_id).first()
-                if db_step and result is not None and hasattr(result, "message_id"):
+                if db_step and result.delivered:
                     db_step.tg_message_id = result.message_id
                 day_number = base_context.get("day_number")
                 if day_number is not None:
@@ -267,6 +288,7 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
                 _maybe_schedule_plan_completion(user_id, plan_id)
         except Exception:
             logger.exception("Failed to log scheduler telemetry.")
+    return result
 
 
 def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
@@ -301,41 +323,12 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
 
     logger.info("Scheduling job %s (replace_existing=True)", job_id)
 
-    # Use replace_existing=True to avoid conflicts
-    with SessionLocal() as _db:
-        db_step = _db.query(AIPlanStep).filter(AIPlanStep.id == step.id).first()
-        all_today = (
-            _db.query(AIPlanStep)
-            .filter(AIPlanStep.day_id == step.day_id)
-            .order_by(AIPlanStep.order_in_day)
-            .all()
-        )
-        task_total = len(all_today)
-        task_index = next((i + 1 for i, s in enumerate(all_today) if s.id == step.id), 1)
-
-        # TECH-DEBT TD-4:
-        # Task notification must be formatted at delivery time.
-        # Adaptation layer can mutate step content after scheduling.
-        # TODO: notification_text is baked at schedule time, not delivery time.
-        # If adaptation changes step title/content between scheduling and delivery,
-        # user will see stale text. Fix when adaptation layer is stable:
-        # move format_task_notification() into send_scheduled_message() where
-        # step is re-fetched from DB fresh at delivery time.
-        notification_text = format_task_notification(
-            db=_db,
-            step=db_step or step,
-            day=(db_step.day if db_step else step.day),
-            plan_day_number=(db_step.day.day_number if db_step and db_step.day else step.day.day_number),
-            task_index=task_index,
-            task_total=task_total,
-        )
-
     scheduler.add_job(
         "app.scheduler:send_scheduled_message",
         "date",
         id=job_id,
         run_date=run_date,
-        args=[user.tg_id, notification_text, step.id],
+        args=[user.tg_id, "", step.id],
         replace_existing=True,
         misfire_grace_time=None,
         coalesce=False,
