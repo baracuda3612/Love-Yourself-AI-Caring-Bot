@@ -170,9 +170,9 @@ def _next_cycle_context(db: Session, user_id: int) -> tuple[int, PriorCycleConte
     rows = (
         db.query(
             AIPlanDay.day_number,
+            AIPlanStep.id,
             AIPlanStep.exercise_id,
             AIPlanStep.time_slot,
-            AIPlanStep.step_status,
         )
         .join(AIPlanStep, AIPlanStep.day_id == AIPlanDay.id)
         .filter(AIPlanDay.plan_id == previous.id)
@@ -180,12 +180,20 @@ def _next_cycle_context(db: Session, user_id: int) -> tuple[int, PriorCycleConte
         .all()
     )
     day_sequence = tuple(
-        exercise_id for _, exercise_id, slot, _ in rows
+        exercise_id for _, _, exercise_id, slot in rows
         if slot == "DAY" and exercise_id
     )
+    delivered_ids = {
+        step_id for (step_id,) in db.query(PlanLifecycleOperation.plan_step_id)
+        .filter(
+            PlanLifecycleOperation.plan_id == previous.id,
+            PlanLifecycleOperation.operation == "step_delivered",
+        )
+        .all()
+    }
     shown = [
-        (day, exercise_id) for day, exercise_id, _, status in rows
-        if exercise_id and status in {"delivered", "completed", "skipped", "expired"}
+        (day, exercise_id) for day, step_id, exercise_id, _ in rows
+        if exercise_id and step_id in delivered_ids
     ]
     last_shown_day = max((day for day, _ in shown), default=0)
     last_used: dict[str, int] = {}
