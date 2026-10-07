@@ -769,7 +769,8 @@ MVP merge blocker; this does not claim that path is fixed.
 
 ## 9. Block 3 — Content, plan generation, presentation, and scheduled delivery
 
-**Status:** `NOT STARTED`  
+**Status:** `IN PROGRESS` — WP-03.1 and WP-03.2 are founder-merged; WP-03.3 is next.
+
 **Depends on:** B2 and canonical identity from B1  
 **Objective:** make the primary product touchpoint deterministic, versioned,
 and reliable without live OpenAI dependency.
