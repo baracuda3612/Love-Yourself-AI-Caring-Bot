@@ -843,8 +843,8 @@ provenance, exact content snapshots, and failure-path response checks are comple
 ### WP-03.3 — Introduce canonical `ExercisePresentation` and media delivery
 
 **Status:** `IN PROGRESS` — canonical presentation and media delivery are
-implemented. A second independent review found a Coach context P2, repaired
-locally and awaiting independent delta review. Disposable PostgreSQL acceptance
+implemented. A second independent review found a Coach context P2; the local
+repair passed a fresh independent delta review. Disposable PostgreSQL acceptance
 remains blocked by the local Docker VM startup failure;
 the package is not verified or ready for merge. See
 `work_packages/WP-03.3_exercise_presentation_media_delivery.md` for its bounded
