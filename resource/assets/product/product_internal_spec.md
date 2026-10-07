@@ -73,8 +73,10 @@ Requirements описують виконання, не профіль
 
 GIF — демонстрація, не timer; `pmr_fist` зберігає 5 секунд стиснутого кулака та
 5 секунд відкритої долоні плюс переходи. Повний текст завжди авторитетний.
-Canonical ExercisePresentation/sendAnimation/fallback та delivery-variant
-snapshots належать WP-03.3; алгоритм плану — WP-03.2; durable send — WP-03.4.
+Canonical ExercisePresentation/sendAnimation/fallback і фактичний результат
+відправлення належать WP-03.3; алгоритм плану — WP-03.2. WP-03.4 зберігає
+delivery-variant snapshot після підтвердженої доставки й узгоджує невизначений
+результат відправлення.
 
 ---
 

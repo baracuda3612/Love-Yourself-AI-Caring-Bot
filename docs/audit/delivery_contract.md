@@ -4,6 +4,14 @@ Status: design contract (2026-07-22). This is the *contract* the renderer
 rewrite must satisfy, not an audit finding. Findings (DEL-01…DEL-08) check
 the code against it.
 
+**Current delivery boundary — 2026-10-07:** Later FD-14 supersedes the
+original title-in-push-preview rule: the notification preview is neutral, while
+the in-chat message contains the title, duration and complete instructions.
+FD-16 and the 2026-10-01 founder override add an instructional GIF to only
+three exercises; the other six use complete text. WP-03.3 returns the observed
+GIF/text send result, and WP-03.4 persists the successful delivery snapshot.
+The exact released exercise wording comes from the versioned DB Content Library.
+
 ## Why this document exists
 
 The exercise notification is the single, daily, primary product touchpoint.
@@ -25,26 +33,17 @@ title · duration_label
 [Виконано] [Пропустити]
 ```
 
-Example:
+For scheduled Telegram delivery, prepend a neutral preview line to the
+rendered text or caption; the complete exercise follows in chat.
 
-```
-Дихання · 30–60 сек
-
-1. Вдихни повільно на 4 рахунки.
-2. Затримай подих на 7.
-3. Повільно видихни на 8.
-4. Повтори 4 рази.
-
-[Виконано] [Пропустити]
-```
-
-Ordering rationale: title says what it is → duration removes effort
+Ordering rationale for the in-chat body: title says what it is → duration removes effort
 uncertainty → steps let the user start without a further hop → buttons
 capture the result after the action.
 
-**First line must be self-sufficient** (title · duration): it is what the
-user sees in the push preview. Never rely on the preview showing the full
-text or being enabled at all (`Margin of Safety`).
+**In-chat exercise content must be self-sufficient** (title · duration · exact
+steps). The OS notification preview uses a short neutral label under FD-14;
+never rely on it showing the full exercise or being enabled at all. Verify the
+actual text, truncation and media thumbnail on supported devices before beta.
 
 ## MUST contain
 
@@ -72,8 +71,9 @@ compliance/pressure frame:
 
 ## On tap — edit the same message, do not send a new one
 
-Use `editMessageText` / `editMessageReplyMarkup`. One durable message, not
-a growing chat. Buttons change with state.
+Edit the delivered message's text or media caption and reply markup as
+applicable. Keep one durable action message, not a growing chat. Buttons
+change with state; WP-03.4 owns the callback and edit reconciliation.
 
 * **Виконано** → remove Done/Skip, show a short durable `Виконано ✓`
   status, and surface the **optional feedback tap** ("Допомогло?"). This
@@ -92,14 +92,20 @@ finished step).
 
 ## Channel capabilities and limits
 
-* **Bot messages** (Telegram/Slack): formatted text + inline buttons only.
-  No custom OS-tray action buttons — Done/Skip require opening the chat.
+* **Bot messages:** Telegram uses formatted text or, for the three FD-16
+  exercises, the versioned instructional GIF with complete caption text and
+  inline buttons. If the complete caption does not fit Telegram's media limit,
+  send the complete text variant rather than truncate instructions. No custom
+  OS-tray action buttons — Done/Skip require opening the chat.
+  Bound the two variants separately against the [Telegram Bot API text and
+  caption limits](https://core.telegram.org/bots/api#sendanimation).
   True act-from-notification needs a native app; do not promise it for
   Telegram/Slack beta.
 * **Rich "cards"**: not a native bot-message capability. Possible only via
   a server-rendered image (heavy; loses selectable/accessible text; push
   may show only "Photo") or a native app. Not MVP → on Telegram the
-  message is text, so progress counters would read as raw text = cringe →
+  action message is text or an instructional GIF with caption, so progress
+  counters would read as raw text = cringe →
   **cut for MVP**.
 * **Telegram Mini App** is real (HTML/JS UI, timers, haptics, result back
   to the bot, opened via an inline button). But for a 30-second exercise a

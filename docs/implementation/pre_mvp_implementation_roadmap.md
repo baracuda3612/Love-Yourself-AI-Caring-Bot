@@ -855,6 +855,9 @@ session before implementation. See `work_packages/WP-03.3_start_message.md`.
 * no internal scheduling/category/rationale metadata;
 * versioned per-exercise GIF delivery for the three required instructional exercises, with
   complete text fallback;
+* complete instructions remain readable with the GIF; a definite GIF-send
+  failure falls back to text, while an uncertain send outcome is handed to
+  WP-03.4 for reconciliation rather than sending a possible duplicate;
 * renderer contains no plan selection or lifecycle ownership.
 
 **Primary audit coverage:** `DEL-01…02`, `DEL-07…08`, `UX-03`, `UX-15…16`,
@@ -864,9 +867,13 @@ session before implementation. See `work_packages/WP-03.3_start_message.md`.
 
 * scheduled and on-demand render the same content truth without sharing state
   aggregates;
-* media failure cannot block the exercise;
-* the send result identifies the actual GIF or text variant for WP-03.4 to
-  persist with the successful `exercise_deliveries` presentation snapshot;
+* a definite media-send failure attempts the same complete text exercise;
+  failure of both sends is reported as failure, never as delivered;
+* the send result identifies the actual GIF or text variant and Telegram
+  message on success, or reports definite/uncertain failure to WP-03.4;
+  WP-03.4 persists the successful `exercise_deliveries` snapshot;
+* Telegram text/caption limits and neutral notification previews are checked
+  for both variants; device behavior remains subject to DG-03 verification;
 * no LLM call is introduced into scheduled delivery (`OPS-12`).
 
 ### WP-03.4 — Make scheduled delivery and callbacks reconcilable
@@ -876,7 +883,7 @@ session before implementation. See `work_packages/WP-03.3_start_message.md`.
 * bounded send retry and stable source-operation identity;
 * durable delivered/retryable/terminal-failure states;
 * atomic Done/Skip/expiry transitions and event write;
-* same-message visible terminal states;
+* same-message visible terminal states through text or media-caption edits;
 * completed-only `better / same / worse` feedback linked to content and step;
 * pause preserves already-delivered action until deadline; cancel closes it;
 * late/duplicate taps return factual state;

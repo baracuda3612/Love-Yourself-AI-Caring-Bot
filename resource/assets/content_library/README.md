@@ -35,11 +35,15 @@ exercises still require no GIF.
 
 Builder calls `eligible_catalogue(db)` (latest version per ID); activation locks
 and rechecks `selected_content(db, id, version, lock=True)`. Renderer resolves
-that same exact version with full text. Builder, activation and renderer never
-read GIF bytes or verify file hashes; those checks occur only in the release
-loader. Runtime rejects inactive and medically gated content. The narrow adapter retains the
-existing notification layout; ExercisePresentation, sendAnimation, actual media
-fallback and delivery-variant snapshots belong to WP-03.3.
+that same exact version with full text. Builder, activation and presentation
+construction never read GIF bytes or verify file hashes; those checks occur
+only in the release loader. Runtime rejects inactive and medically gated
+content. WP-03.1's narrow adapter retained the existing notification layout;
+ExercisePresentation, sendAnimation, definite media-failure fallback and the
+observed send variant belong to WP-03.3. The delivery adapter reads the
+packaged GIF to upload it, without repeating the
+release loader's hash verification. WP-03.4 persists the successful variant and
+payload in `exercise_deliveries` and reconciles uncertain send outcomes.
 
 ## Rollout and rollback
 
