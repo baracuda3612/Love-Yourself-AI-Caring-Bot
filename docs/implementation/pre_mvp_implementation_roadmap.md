@@ -865,7 +865,8 @@ session before implementation. See `work_packages/WP-03.3_start_message.md`.
 * scheduled and on-demand render the same content truth without sharing state
   aggregates;
 * media failure cannot block the exercise;
-* presentation snapshot records the actual delivered variant;
+* the send result identifies the actual GIF or text variant for WP-03.4 to
+  persist with the successful `exercise_deliveries` presentation snapshot;
 * no LLM call is introduced into scheduled delivery (`OPS-12`).
 
 ### WP-03.4 — Make scheduled delivery and callbacks reconcilable
