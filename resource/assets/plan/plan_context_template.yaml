@@ -30,7 +30,7 @@ MEDIUM:
 #                 if ex.mechanic == preferred_mechanic
 #                 and cooldown_ok]
 #   if not candidates: fallback to fallback_mechanic
-#   selected = weighted_random(candidates, weight=ex.weight)
+#   selected = uniform_seeded_choice(candidates, user_id, cycle_number, day, slot)
 #
 # allowed_slots — derived від mechanic, не stored в вправі:
 #   switch → [DAY, EVENING]

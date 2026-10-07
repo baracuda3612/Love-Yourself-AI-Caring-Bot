@@ -21,6 +21,7 @@ if str(ROOT) not in sys.path:
 from app import db as database
 from app import lifecycle, orchestrator
 from app.lifecycle import LifecycleEntitlementError, LifecycleResult
+from app.plan_drafts.plan_builder_v5 import NoCandidatesError
 
 
 class DummyMemory:
@@ -45,6 +46,54 @@ class PendingActionMemory:
     async def clear_pending_action(self, _user_id):
         self.pending = None
         self.cleared = True
+
+
+def _no_candidates(*_args, **_kwargs):
+    raise NoCandidatesError("disposable unavailable content pool")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("tool_name", ["switch_plan_format", "retry_switch_plan_format"])
+async def test_switch_generation_failure_reports_old_plan_unchanged(monkeypatch, tool_name):
+    monkeypatch.setattr(orchestrator, "_build_tool_registry", lambda: {tool_name: _no_candidates})
+    response = await orchestrator._execute_plan_tool(
+        7, {"name": tool_name, "arguments": {"plan_type": "MEDIUM"}, "call_id": "switch-failed"},
+    )
+    assert "Поточний план не змінено" in response
+    assert "пізніше" in response
+    assert "Спробуй ще раз" not in response
+
+
+@pytest.mark.anyio
+async def test_retained_switch_generation_failure_keeps_pending_action(monkeypatch):
+    memory = PendingActionMemory("collect_evening_time_for_switch:switch-failed")
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(orchestrator, "_recover_retained_switch", _no_candidates)
+    monkeypatch.setattr(orchestrator, "_build_tool_registry", lambda: {
+        "record_evening_time": lambda *_args, **_kwargs: pytest.fail("must not write time twice")
+    })
+    response = await orchestrator._execute_plan_tool(
+        7, {"name": "record_evening_time", "arguments": {"hhmm": "20:30"}, "call_id": "evening-failed"},
+    )
+    assert "Поточний план не змінено" in response
+    assert memory.pending == "collect_evening_time_for_switch:switch-failed"
+
+
+@pytest.mark.anyio
+async def test_evening_cascade_generation_failure_says_old_plan_unchanged(monkeypatch):
+    memory = PendingActionMemory("collect_evening_time_for_switch:switch-failed")
+    monkeypatch.setattr(orchestrator, "session_memory", memory)
+    monkeypatch.setattr(orchestrator, "_recover_retained_switch", lambda *_a, **_k: {"status": "not_ready"})
+    monkeypatch.setattr(orchestrator, "_build_tool_registry", lambda: {
+        "record_evening_time": lambda *_a, **_k: {"status": "ok"},
+        "switch_plan_format": _no_candidates,
+    })
+    response = await orchestrator._execute_plan_tool(
+        7, {"name": "record_evening_time", "arguments": {"hhmm": "20:30"}, "call_id": "evening-failed"},
+    )
+    assert "Вечірній час збережено" in response
+    assert "Поточний план не змінено" in response
+    assert memory.pending == "collect_evening_time_for_switch:switch-failed"
 
 
 @pytest.fixture(autouse=True)

@@ -25,6 +25,7 @@ from app.ux.persona import get_persona
 from app.workers.coach_agent import _build_idle_finished_context, coach_agent
 from app.workers.mock_workers import mock_onboarding_agent
 from app.telemetry import log_user_event
+from app.plan_drafts.plan_builder_v5 import NoCandidatesError
 from app.lifecycle import (
     CompletionDeliveryResult,
     CurrentMode,
@@ -40,6 +41,11 @@ session_memory = SessionMemory(limit=20)
 logger = logging.getLogger(__name__)
 _completion_delivery_locks: dict[tuple[int, int], tuple[asyncio.Lock, int]] = {}
 _completion_known_sends: dict[tuple[int, int], str] = {}
+
+_SWITCH_UNAVAILABLE_REPLY = (
+    "⚠️ Новий формат зараз недоступний. Поточний план не змінено. "
+    "Спробуй змінити формат пізніше."
+)
 
 
 @asynccontextmanager
@@ -831,6 +837,9 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
                 retained_source,
                 str(tool_args.get("hhmm") or ""),
             )
+        except NoCandidatesError:
+            logger.exception("[TOOL] retained switch generation unavailable user=%s", user_id)
+            return _SWITCH_UNAVAILABLE_REPLY
         except ValueError as exc:
             raw_error = str(exc)
             logger.warning(
@@ -889,6 +898,11 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
     except ValueError as exc:
         logger.warning("[TOOL] tool=%s user=%s failed: %s", tool_name, user_id, exc)
         return _humanize_tool_error(tool_name, str(exc))
+    except NoCandidatesError:
+        logger.exception("[TOOL] plan generation unavailable tool=%s user=%s", tool_name, user_id)
+        if tool_name in {"switch_plan_format", "retry_switch_plan_format"}:
+            return _SWITCH_UNAVAILABLE_REPLY
+        return "⚠️ Новий план зараз недоступний. Спробуй запустити його пізніше."
     except Exception as exc:
         logger.error("[TOOL] tool=%s user=%s error: %s", tool_name, user_id, exc, exc_info=True)
         return "⚠️ Не вдалось виконати дію. Спробуй ще раз."
@@ -1074,6 +1088,11 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
                     if cascade_tool == "switch_plan_format"
                     else _followup_success_reply(activation)
                 )
+            except NoCandidatesError:
+                logger.exception("[TOOL] cascade plan generation unavailable user=%s", user_id)
+                if cascade_tool == "switch_plan_format":
+                    return "Вечірній час збережено. " + _SWITCH_UNAVAILABLE_REPLY
+                return "⚠️ Вечірній час збережено, але новий план зараз недоступний. Спробуй пізніше."
             except Exception as exc:
                 logger.error("[TOOL] cascade create_followup_plan(MEDIUM) user=%s: %s", user_id, exc, exc_info=True)
                 # pending_action preserved — user can retry

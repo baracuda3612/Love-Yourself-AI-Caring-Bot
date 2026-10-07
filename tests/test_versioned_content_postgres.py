@@ -2,6 +2,7 @@
 from copy import deepcopy
 from datetime import datetime, timezone
 from hashlib import sha256
+from html import escape
 import json
 import os
 from pathlib import Path
@@ -21,11 +22,11 @@ from app.content_library import (
     ContentValidationError, DEFAULT_SEED_PATH, ROOT, eligible_catalogue,
     load_content_library, record_payload, selected_content, validate_record,
 )
-from app.db import AIPlanDay, AIPlanStep, ContentLibrary, User, UserProfile
-from app.plan_drafts.plan_builder_v5 import get_default_builder
-from app.plan_drafts.service import _persist_v5_draft
+from app.db import AIPlan, AIPlanDay, AIPlanStep, ContentLibrary, PlanDraftRecord, PlanLifecycleOperation, User, UserProfile
+from app.plan_drafts.plan_builder_v5 import NoCandidatesError, get_default_builder
+from app.plan_drafts.service import _next_cycle_context, _persist_v5_draft
 from app.plan_finalization import FinalizationError, finalize_plan
-from app.lifecycle import _activation_receipt_status
+from app.lifecycle import _activation_receipt_status, switch_plan_format, transition_plan_step
 from app.telemetry import write_event_operation
 from app.ux.task_notification import format_task_notification
 from scripts.test_migrations import _run_alembic
@@ -128,6 +129,104 @@ def activate(db,user,draft):
         activation_receipt_status=_activation_receipt_status('SHORT','14:00',None))
 
 
+def test_wp032_cycle_context_and_persisted_next_plan(db):
+    user, draft = make_draft(db)
+    first = activate(db, user, draft).plan
+    steps = db.execute(
+        select(AIPlanStep, AIPlanDay.day_number).join(AIPlanDay)
+        .where(AIPlanDay.plan_id == first.id)
+        .order_by(AIPlanDay.day_number)
+    ).all()
+    # Delivery remains shown after switch cancels this unanswered step. A
+    # pending step can expire without ever having been shown.
+    day_six = steps[-2][0]
+    day_seven = steps[-1][0]
+    transition_plan_step(db, user_id=user.id, step_id=day_six.id,
+        target_status='delivered', source_operation_id='wp032:delivered')
+    transition_plan_step(db, user_id=user.id, step_id=day_seven.id,
+        target_status='expired', source_operation_id='wp032:expired')
+    db.flush()
+    cycle, context = _next_cycle_context(db, user.id)
+    assert cycle == 2
+    assert context.last_shown_day_by_exercise == {day_six.exercise_id: 0}
+    assert len(context.day_sequence) == 7
+    profile = db.query(UserProfile).filter(UserProfile.user_id == user.id).one()
+    profile.daily_time_slots = {'DAY': '14:00', 'EVENING': '21:00'}
+    profile.evening_slot_collected = True
+    db.flush()
+    second = get_default_builder(db).build('MEDIUM', user_id=str(user.id),
+        evening_time='21:00', cycle_number=cycle, prior_cycle=context)
+    assert second.steps[0].exercise_id != day_six.exercise_id
+    assert tuple(s.exercise_id for s in second.steps if s.time_slot == 'DAY')[:7] != context.day_sequence
+    switched = switch_plan_format(db, user_id=user.id, target_plan_type='MEDIUM',
+        source_operation_id='wp032:switch')
+    assert day_six.step_status == 'canceled'
+    assert first.status == 'abandoned'
+    activated_plan = db.get(type(first), switched.plan_id)
+    assert activated_plan.cycle_number == cycle
+    persisted = db.execute(
+        select(AIPlanStep).join(AIPlanDay)
+        .where(AIPlanDay.plan_id == activated_plan.id)
+        .order_by(AIPlanDay.day_number, AIPlanStep.order_in_day)
+    ).scalars().all()
+    assert [(s.exercise_id, s.content_version, s.content_snapshot) for s in persisted] == [
+        (s.exercise_id, s.content_version, s.content_snapshot) for s in second.steps
+    ]
+    saved_draft = db.query(PlanDraftRecord).filter(
+        PlanDraftRecord.user_id == user.id, PlanDraftRecord.duration == 'MEDIUM'
+    ).one()
+    assert saved_draft.draft_data['source_exercises'] == list(dict.fromkeys(
+        s.exercise_id for s in persisted
+    ))
+    replay = switch_plan_format(db, user_id=user.id, target_plan_type='MEDIUM',
+        source_operation_id='wp032:switch')
+    assert replay.duplicate and replay.plan_id == activated_plan.id
+    assert db.query(AIPlan).filter(AIPlan.user_id == user.id).count() == 2
+
+
+def test_wp032_response_outcome_does_not_change_shown_context(db):
+    user, draft = make_draft(db)
+    first = activate(db, user, draft).plan
+    step = db.execute(select(AIPlanStep).join(AIPlanDay)
+        .where(AIPlanDay.plan_id == first.id).order_by(AIPlanDay.day_number)).scalars().first()
+    transition_plan_step(db, user_id=user.id, step_id=step.id,
+        target_status='delivered', source_operation_id='wp032:outcome-delivered')
+    db.flush()
+    before = _next_cycle_context(db, user.id)
+    transition_plan_step(db, user_id=user.id, step_id=step.id,
+        target_status='skipped', source_operation_id='wp032:outcome-skipped')
+    db.flush()
+    assert _next_cycle_context(db, user.id) == before
+
+
+def test_wp032_failed_switch_leaves_old_plan_intact(db):
+    user, draft = make_draft(db)
+    first = activate(db, user, draft).plan
+    profile = db.query(UserProfile).filter(UserProfile.user_id == user.id).one()
+    profile.daily_time_slots = {'DAY': '14:00', 'EVENING': '21:00'}
+    profile.evening_slot_collected = True
+    for content in db.query(ContentLibrary).filter(ContentLibrary.mechanic == 'switch'):
+        content.is_active = False
+    db.flush()
+
+    with pytest.raises(NoCandidatesError):
+        with db.begin_nested():
+            switch_plan_format(db, user_id=user.id, target_plan_type='MEDIUM',
+                source_operation_id='wp032:failed-switch')
+            db.flush()
+
+    db.refresh(first)
+    assert first.status == 'active' and first.cycle_number == 1
+    assert db.query(AIPlan).filter(AIPlan.user_id == user.id).count() == 1
+    assert db.query(AIPlanStep).join(AIPlanDay).filter(
+        AIPlanDay.plan_id == first.id, AIPlanStep.step_status == 'canceled'
+    ).count() == 0
+    assert db.query(PlanLifecycleOperation).filter(
+        PlanLifecycleOperation.user_id == user.id,
+        PlanLifecycleOperation.source_operation_id == 'wp032:failed-switch',
+    ).count() == 0
+
+
 def test_builder_activation_renderer_and_event_use_exact_version(db):
     user,draft=make_draft(db); result=activate(db,user,draft)
     step=db.execute(select(AIPlanStep).join(AIPlanDay).where(AIPlanDay.plan_id==result.plan.id).order_by(AIPlanStep.id)).scalars().first()
@@ -145,7 +244,7 @@ def test_builder_activation_renderer_and_event_use_exact_version(db):
     assert event.event.content_version==1 and event.event.exercise_id==step.exercise_id
     message=format_task_notification(db,step,None,1,1,1)
     assert before['display']['title'] in message and 'new version' not in message
-    assert all(s in message for s in before['display']['steps'])
+    assert all(escape(s) in message for s in before['display']['steps'])
     content.is_active=False; db.flush(); db.refresh(step)
     assert step.content_snapshot==before
     with pytest.raises(ContentValidationError):
