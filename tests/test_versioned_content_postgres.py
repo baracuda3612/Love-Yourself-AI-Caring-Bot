@@ -23,7 +23,9 @@ from app.content_library import (
 )
 from app.db import AIPlanDay, AIPlanStep, ContentLibrary, User, UserProfile
 from app.plan_drafts.plan_builder_v5 import get_default_builder
-from app.plan_drafts.service import _persist_v5_draft
+from app.plan_drafts.service import (
+    _next_cycle_context, _persist_v5_draft, create_plan_for_lifecycle,
+)
 from app.plan_finalization import FinalizationError, finalize_plan
 from app.lifecycle import _activation_receipt_status
 from app.telemetry import write_event_operation
@@ -126,6 +128,49 @@ def activate(db,user,draft):
         activation_time_utc=datetime(2026,10,3,8,tzinfo=timezone.utc),
         source_operation_id='wp031:test-activation',
         activation_receipt_status=_activation_receipt_status('SHORT','14:00',None))
+
+
+def test_wp032_cycle_context_and_persisted_next_plan(db):
+    user, draft = make_draft(db)
+    first = activate(db, user, draft).plan
+    steps = db.execute(
+        select(AIPlanStep, AIPlanDay.day_number).join(AIPlanDay)
+        .where(AIPlanDay.plan_id == first.id)
+        .order_by(AIPlanDay.day_number)
+    ).all()
+    # An early switch must carry only shown steps, not the pending final day.
+    day_six = steps[-2][0]
+    day_six.step_status = 'delivered'
+    db.flush()
+    cycle, context = _next_cycle_context(db, user.id)
+    assert cycle == 2
+    assert context.last_shown_day_by_exercise == {day_six.exercise_id: 0}
+    assert len(context.day_sequence) == 7
+
+    # All response outcomes carry the same shown history, never a score.
+    day_six.step_status = 'skipped'
+    day_six.terminal_at = datetime(2026, 10, 3, 9, tzinfo=timezone.utc)
+    db.flush()
+    assert _next_cycle_context(db, user.id) == (cycle, context)
+
+    first.status = 'completed'
+    second = get_default_builder(db).build('MEDIUM', user_id=str(user.id),
+        evening_time='21:00', cycle_number=cycle, prior_cycle=context)
+    assert second.steps[0].exercise_id != day_six.exercise_id
+    assert tuple(s.exercise_id for s in second.steps if s.time_slot == 'DAY')[:7] != context.day_sequence
+    activated = create_plan_for_lifecycle(db, user.id, 'MEDIUM',
+        day_time='14:00', evening_time='21:00',
+        source_operation_id='wp032:next-cycle',
+        activation_receipt_status=_activation_receipt_status('MEDIUM','14:00','21:00'))
+    assert activated.plan.cycle_number == cycle
+    persisted = db.execute(
+        select(AIPlanStep).join(AIPlanDay)
+        .where(AIPlanDay.plan_id == activated.plan.id)
+        .order_by(AIPlanDay.day_number, AIPlanStep.order_in_day)
+    ).scalars().all()
+    assert [(s.exercise_id, s.content_version, s.content_snapshot) for s in persisted] == [
+        (s.exercise_id, s.content_version, s.content_snapshot) for s in second.steps
+    ]
 
 
 def test_builder_activation_renderer_and_event_use_exact_version(db):

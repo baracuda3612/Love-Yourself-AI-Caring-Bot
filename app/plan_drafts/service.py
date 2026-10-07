@@ -18,13 +18,15 @@ from sqlalchemy.orm import Session
 
 from app.db import (
     AIPlan,
+    AIPlanDay,
+    AIPlanStep,
     PlanDraftRecord,
     PlanDraftStep,
     PlanLifecycleOperation,
     User,
     UserProfile,
 )
-from app.plan_drafts.plan_builder_v5 import PlanDraftV5, get_default_builder
+from app.plan_drafts.plan_builder_v5 import PriorCycleContext, PlanDraftV5, get_default_builder
 
 
 # SHORT = 7 active days, MEDIUM = 14 active days
@@ -127,12 +129,15 @@ def create_plan_for_lifecycle(
     else:
         resolved_evening = None
 
+    cycle_number, prior_cycle = _next_cycle_context(db, user_id)
     builder = get_default_builder(db)
     draft_v5: PlanDraftV5 = builder.build(
         plan_type=plan_type,
         user_id=str(user_id),
         day_time=resolved_day_time,
         evening_time=resolved_evening,
+        cycle_number=cycle_number,
+        prior_cycle=prior_cycle,
     )
 
     draft_record = _persist_v5_draft(db, user_id, draft_v5)
@@ -150,6 +155,44 @@ def create_plan_for_lifecycle(
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
+
+def _next_cycle_context(db: Session, user_id: int) -> tuple[int, PriorCycleContext]:
+    """Read the prior scheduled sequence and shown-only cooldown under the user lock."""
+    previous = (
+        db.query(AIPlan)
+        .filter(AIPlan.user_id == user_id)
+        .order_by(AIPlan.cycle_number.desc())
+        .first()
+    )
+    if previous is None:
+        return 1, PriorCycleContext()
+
+    rows = (
+        db.query(
+            AIPlanDay.day_number,
+            AIPlanStep.exercise_id,
+            AIPlanStep.time_slot,
+            AIPlanStep.step_status,
+        )
+        .join(AIPlanStep, AIPlanStep.day_id == AIPlanDay.id)
+        .filter(AIPlanDay.plan_id == previous.id)
+        .order_by(AIPlanDay.day_number, AIPlanStep.order_in_day)
+        .all()
+    )
+    day_sequence = tuple(
+        exercise_id for _, exercise_id, slot, _ in rows
+        if slot == "DAY" and exercise_id
+    )
+    shown = [
+        (day, exercise_id) for day, exercise_id, _, status in rows
+        if exercise_id and status in {"delivered", "completed", "skipped", "expired"}
+    ]
+    last_shown_day = max((day for day, _ in shown), default=0)
+    last_used: dict[str, int] = {}
+    for day, exercise_id in shown:
+        last_used[exercise_id] = day - last_shown_day
+    return int(previous.cycle_number) + 1, PriorCycleContext(day_sequence, last_used)
+
 
 def _persist_v5_draft(
     db: Session,

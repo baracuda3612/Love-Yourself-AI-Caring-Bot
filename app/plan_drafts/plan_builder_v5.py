@@ -11,8 +11,8 @@ Critical invariants (product_internal_spec.md v2.0):
   4. MEDIUM requires both DAY and EVENING slots for every active day.
   5. MEDIUM requires an existing valid EVENING HH:MM; no silent default.
   6. mechanic on ai_plan_steps is a snapshot — never recomputed at delivery.
-  7. Pause is not an adaptation and does not rewrite the plan.
-  8. No new adaptation records while ADAPTATIONS_ENABLED=False.
+  7. Pause does not rewrite the plan.
+  8. Selection is independent of responses and feedback.
 """
 
 from __future__ import annotations
@@ -94,6 +94,15 @@ class MissingEveningSlotError(ValueError):
     """MEDIUM plan requires evening_time but none was provided (invariant 5)."""
 
 
+@dataclass(frozen=True)
+class PriorCycleContext:
+    """Scheduled DAY sequence and shown-step cooldown from the previous cycle."""
+
+    day_sequence: tuple[str, ...] = ()
+    # Previous shown days are relative to the last shown day (0, -1, ...).
+    last_shown_day_by_exercise: dict[str, int] = field(default_factory=dict)
+
+
 # ─── Builder ─────────────────────────────────────────────────────────────────
 
 
@@ -130,6 +139,8 @@ class PlanBuilderV5:
         day_time: str = "14:00",
         evening_time: Optional[str] = None,
         active_days: Optional[List[str]] = None,  # reserved for scheduling layer
+        cycle_number: int = 1,
+        prior_cycle: Optional[PriorCycleContext] = None,
     ) -> PlanDraftV5:
         """
         Build a plan draft.
@@ -137,6 +148,8 @@ class PlanBuilderV5:
         Args:
             plan_type:    "SHORT" or "MEDIUM"
             user_id:      used for deterministic seed per user
+            cycle_number: stable positive lifecycle cycle number
+            prior_cycle: previous sequence and shown-step cooldown only
             day_time:     HH:MM from user_profiles.daily_time_slots["DAY"]
             evening_time: HH:MM from user_profiles.daily_time_slots["EVENING"]
                           Required for MEDIUM. Must not be None or empty.
@@ -151,6 +164,9 @@ class PlanBuilderV5:
             NoCandidatesError        if no exercise is available for any slot
         """
         plan_type = plan_type.upper()
+
+        if cycle_number < 1:
+            raise ValueError("cycle_number must be positive")
 
         if plan_type not in self.recipes:
             raise InvalidRecipeError(
@@ -174,46 +190,56 @@ class PlanBuilderV5:
         if not active:
             raise NoCandidatesError("Content library has no active exercises")
 
-        last_used: Dict[str, int] = {}
-        steps: List[PlanStepV5] = []
+        previous = prior_cycle or PriorCycleContext()
+        for attempt in range(32):
+            last_used: Dict[str, int] = dict(previous.last_shown_day_by_exercise)
+            steps: List[PlanStepV5] = []
 
-        for day in range(1, active_days_count + 1):
-            for slot_config in slot_configs:
-                slot: str = slot_config["slot"]                # "DAY" | "EVENING"
-                preferred: str = slot_config["preferred_mechanic"]
-                fallback: Optional[str] = slot_config.get("fallback_mechanic")
+            for day in range(1, active_days_count + 1):
+                for slot_config in slot_configs:
+                    slot: str = slot_config["slot"]                # "DAY" | "EVENING"
+                    preferred: str = slot_config["preferred_mechanic"]
+                    fallback: Optional[str] = slot_config.get("fallback_mechanic")
 
-                exercise = self._pick_exercise(
-                    active=active,
-                    preferred_mechanic=preferred,
-                    fallback_mechanic=fallback,
-                    current_day=day,
-                    last_used=last_used,
-                    seed_key=f"{user_id}:{day}:{slot}",
-                    context=f"plan_type={plan_type}, day={day}, slot={slot}",
-                )
+                    exercise = self._pick_exercise(
+                        active=active,
+                        preferred_mechanic=preferred,
+                        fallback_mechanic=fallback,
+                        current_day=day,
+                        last_used=last_used,
+                        seed_key=f"{user_id}:{cycle_number}:{attempt}:{day}:{slot}",
+                        context=f"plan_type={plan_type}, day={day}, slot={slot}",
+                    )
 
-                steps.append(PlanStepV5(
-                    step_id=f"d{day}_{slot.lower()}",
-                    day_number=day,
-                    time_slot=slot,
-                    mechanic=exercise.mechanic,   # Invariant 6: snapshotted here
-                    exercise_id=exercise.id,
-                    content_version=exercise.content_version,
-                    content_snapshot=exercise.payload,
-                ))
+                    steps.append(PlanStepV5(
+                        step_id=f"d{day}_{slot.lower()}",
+                        day_number=day,
+                        time_slot=slot,
+                        mechanic=exercise.mechanic,   # Invariant 6: snapshotted here
+                        exercise_id=exercise.id,
+                        content_version=exercise.content_version,
+                        content_snapshot=exercise.payload,
+                    ))
 
-                last_used[exercise.id] = day  # track cooldown
+                    last_used[exercise.id] = day  # track cooldown
+
+            day_sequence = tuple(s.exercise_id for s in steps if s.time_slot == "DAY")
+            comparable = min(len(day_sequence), len(previous.day_sequence))
+            if not comparable or day_sequence[:comparable] != previous.day_sequence[:comparable]:
+                break
+        else:
+            raise NoCandidatesError("Could not generate a distinct next-cycle DAY sequence")
 
         return PlanDraftV5(
             id=str(uuid.uuid4()),
             plan_type=plan_type,
             active_days_count=active_days_count,
             steps=steps,
-            source_exercises=[e.id for e in active],
+            source_exercises=list(dict.fromkeys(s.exercise_id for s in steps)),
             metadata={
                 "builder_version": "v5",
                 "user_id": user_id,
+                "cycle_number": cycle_number,
                 "day_time": day_time,
                 "evening_time": evening_time,
             },
@@ -272,7 +298,7 @@ class PlanBuilderV5:
 
     @staticmethod
     def _choice(exercises: List[ExerciseV5], seed_key: str = "") -> ExerciseV5:
-        """Uniform seeded choice; legacy content weights are removed."""
+        """Uniform seeded choice among eligible cooldown candidates."""
         pool = sorted(exercises, key=lambda e: e.id)  # deterministic sort before rng
         rng = random.Random(seed_key)
         return rng.choice(pool)

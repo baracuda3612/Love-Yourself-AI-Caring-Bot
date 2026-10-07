@@ -8,8 +8,8 @@ Critical invariants verified:
   4. MEDIUM requires both DAY and EVENING steps for every active day.
   5. MEDIUM requires an existing valid EVENING HH:MM; no silent default.
   6. mechanic on each step is a snapshot matching the exercise's mechanic.
-  7. Pause is not an adaptation and does not rewrite the plan; lifecycle owns it.
-  8. No new adaptation records while ADAPTATIONS_ENABLED=False (guarded elsewhere).
+  7. Pause does not rewrite the plan; lifecycle owns it.
+  8. Selection is independent of response outcomes and feedback.
 """
 
 from pathlib import Path
@@ -26,6 +26,7 @@ from app.plan_drafts.plan_builder_v5 import (
     NoCandidatesError,
     PlanBuilderV5,
     PlanDraftV5,
+    PriorCycleContext,
 )
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -184,3 +185,54 @@ def test_deterministic_with_same_user_id(builder: PlanBuilderV5) -> None:
             f"{sa.exercise_id!r} vs {sb.exercise_id!r}"
         )
         assert sa.mechanic == sb.mechanic
+
+
+def _day_ids(draft: PlanDraftV5) -> tuple[str, ...]:
+    return tuple(s.exercise_id for s in draft.steps if s.time_slot == "DAY")
+
+
+def test_cycle_rebuild_and_next_cycle_are_distinct(builder: PlanBuilderV5) -> None:
+    first = builder.build("SHORT", user_id="cycle", cycle_number=1)
+    prior = PriorCycleContext(day_sequence=_day_ids(first))
+    second = builder.build("SHORT", user_id="cycle", cycle_number=2, prior_cycle=prior)
+    rebuilt = builder.build("SHORT", user_id="cycle", cycle_number=2, prior_cycle=prior)
+    assert _day_ids(second) == _day_ids(rebuilt)
+    assert [(s.content_version, s.content_snapshot) for s in second.steps] == [
+        (s.content_version, s.content_snapshot) for s in rebuilt.steps
+    ]
+    assert _day_ids(second) != _day_ids(first)
+
+
+def test_short_to_medium_does_not_replay_first_week(builder: PlanBuilderV5) -> None:
+    short = builder.build("SHORT", user_id="upgrade", cycle_number=1)
+    medium = builder.build(
+        "MEDIUM", user_id="upgrade", cycle_number=2, evening_time="21:00",
+        prior_cycle=PriorCycleContext(day_sequence=_day_ids(short)),
+    )
+    assert _day_ids(medium)[:7] != _day_ids(short)
+
+
+def test_shown_cooldown_crosses_cycle_boundary(builder: PlanBuilderV5) -> None:
+    first = builder.build("SHORT", user_id="cooldown", cycle_number=1)
+    last = first.steps[-1].exercise_id
+    prior = PriorCycleContext(_day_ids(first), {last: 0})
+    next_plan = builder.build("SHORT", user_id="cooldown", cycle_number=2, prior_cycle=prior)
+    assert next_plan.steps[0].exercise_id != last
+    # With five DAY exercises and seven days, accepted within-week reuse remains.
+    assert len(set(_day_ids(next_plan))) < len(_day_ids(next_plan))
+
+
+def test_sources_are_only_scheduled_exact_versions(builder: PlanBuilderV5) -> None:
+    draft = builder.build("SHORT", user_id="sources", cycle_number=1)
+    assert draft.source_exercises == list(dict.fromkeys(s.exercise_id for s in draft.steps))
+    assert len(draft.source_exercises) < len(builder.exercises)
+    assert "cold_water_face" not in draft.source_exercises
+    by_id = {e.id: e for e in builder.exercises}
+    for step in draft.steps:
+        assert step.content_version == by_id[step.exercise_id].content_version
+        assert step.content_snapshot == by_id[step.exercise_id].payload
+
+
+def test_invalid_cycle_rejected(builder: PlanBuilderV5) -> None:
+    with pytest.raises(ValueError, match="cycle_number"):
+        builder.build("SHORT", user_id="bad", cycle_number=0)

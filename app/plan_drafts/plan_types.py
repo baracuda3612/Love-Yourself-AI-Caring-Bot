@@ -226,7 +226,6 @@ class Exercise:
     energy_cost: str
     cooldown_days: int
     is_active: bool
-    base_weight: float
 
     @staticmethod
     def from_library_item(item: dict) -> "Exercise":
@@ -245,5 +244,4 @@ class Exercise:
             energy_cost=logic["energy_cost"],
             cooldown_days=balancing["cooldown_days"],
             is_active=balancing["is_active"],
-            base_weight=balancing["base_weight"],
         )
