@@ -95,7 +95,11 @@ def step_presentation(db: Session, step, *, user_timezone=None) -> ExercisePrese
 
 
 def current_exercise_context(db: Session, user_id: int, plan_id: int, *, user_timezone=None) -> dict | None:
-    """Only an actually delivered message on the user's named current plan."""
+    """Only a receipt-proven delivery on the user's named current plan.
+
+    ``tg_message_id`` is cleared after terminal keyboard cleanup, so it is
+    not a durable marker that an exercise was shown.
+    """
     from app.db import AIPlan, AIPlanDay, AIPlanStep, PlanLifecycleOperation
 
     step = (
@@ -105,7 +109,6 @@ def current_exercise_context(db: Session, user_id: int, plan_id: int, *, user_ti
         .join(PlanLifecycleOperation, PlanLifecycleOperation.plan_step_id == AIPlanStep.id)
         .filter(
             AIPlan.user_id == user_id, AIPlan.id == plan_id,
-            AIPlanStep.tg_message_id.isnot(None),
             PlanLifecycleOperation.user_id == user_id,
             PlanLifecycleOperation.plan_id == plan_id,
             PlanLifecycleOperation.operation == 'step_delivered',

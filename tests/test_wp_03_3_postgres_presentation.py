@@ -4,6 +4,7 @@ from concurrent.futures import Future
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
@@ -35,8 +36,9 @@ def retained_session(db):
     yield db
 
 
-async def test_coach_context_is_owned_and_receipt_proven(db,monkeypatch):
-    from app import orchestrator
+@pytest.mark.parametrize('terminal',['completed','skipped'])
+async def test_coach_context_is_owned_and_receipt_proven(db,monkeypatch,terminal):
+    from app import orchestrator, telegram
     user,plan,step = active_step(db)
     assert current_exercise_context(db,user.id,plan.id) is None
     step.tg_message_id=77; db.flush()
@@ -55,9 +57,16 @@ async def test_coach_context_is_owned_and_receipt_proven(db,monkeypatch):
     monkeypatch.setattr(orchestrator.session_memory,'get_pending_action',AsyncMock(return_value=None))
     payload = await orchestrator.build_user_context(user.id,'Як виконати вправу?')
     assert payload['current_exercise_context']['steps'] == context['steps']
-    transition_plan_step(db,user_id=user.id,step_id=step.id,target_status='completed',source_operation_id='wp033:test-complete')
+    transition_plan_step(db,user_id=user.id,step_id=step.id,target_status=terminal,source_operation_id=f'wp033:test-{terminal}')
+    monkeypatch.setattr(telegram,'SessionLocal',lambda:retained_session(db))
+    callback=SimpleNamespace(message=SimpleNamespace(message_id=77,edit_reply_markup=AsyncMock()))
+    assert await telegram._clear_terminal_callback_keyboard(callback,step.id)
+    db.refresh(step)
+    assert step.tg_message_id is None
     terminal = current_exercise_context(db,user.id,plan.id)
-    assert terminal['status'] == 'completed' and terminal['available_actions'] == []
+    assert terminal['status'] == step.step_status and terminal['available_actions'] == []
+    next_message = await orchestrator.build_user_context(user.id,'Нагадай вправу')
+    assert next_message['current_exercise_context']['steps'] == terminal['steps']
 
 
 @pytest.mark.parametrize('outcome',['success','definite_failure','uncertain'])
