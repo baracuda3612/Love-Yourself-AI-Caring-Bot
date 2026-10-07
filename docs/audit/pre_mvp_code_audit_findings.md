@@ -686,6 +686,12 @@ Its product contract is `docs/audit/delivery_contract.md`, adopted here as
 an authoritative source of truth (see Source of truth #3). The delivery
 findings (DEL-01…DEL-08) check the code against it.
 
+Later decision FD-14 supersedes the original push-preview first-line rule
+below: scheduled previews are neutral, with the complete exercise in chat.
+FD-16 and the 2026-10-01 founder override add three instructional GIFs; the
+current delivery contract carries these dated clarifications. The bullets
+below remain the historical FD-06 decision record.
+
 Key accepted points (full text in the contract):
 
 * channel-neutral shape `title · duration · ordered steps · Done/Skip`;

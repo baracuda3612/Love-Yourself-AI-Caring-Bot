@@ -68,8 +68,8 @@ forward migration and compatibility tests.
 | Table | Disposition and target columns | Foreign keys and deletion |
 |---|---|---|
 | `content_library` | `RESHAPE`: composite identity `(exercise_id, content_version)`; exact title/steps/duration, `mechanic`, modality, structured requirements, optional media/alt text, `review_required`, `review_status`, review evidence, `is_active`, and timestamps. Released content fields are append-only; controlled review/activation fields may change. | Referenced versions use `ON DELETE RESTRICT`; a new instruction set is a new version, never an in-place rewrite. |
-| `plan_drafts` | `RETAIN/DEFER`: remains a pre-activation artifact. Its simplification and removal of duplicated `draft_data` are owned by WP-03.2, not WP-01.2. | `user_id -> users.id ON DELETE CASCADE`. |
-| `plan_draft_steps` | `RETAIN/DEFER`: remains owned by its draft until WP-03.2 locks the final builder record shape. It is never current content or lifecycle truth. | `draft_id -> plan_drafts.id ON DELETE CASCADE`; target content identity becomes a composite FK when WP-03.2 reshapes it. |
+| `plan_drafts` | `RETAIN/DEFER`: remains a pre-activation artifact. WP-03.2 kept the existing duplicated `draft_data`; simplification is deferred and has no assigned package in the current roadmap. | `user_id -> users.id ON DELETE CASCADE`. |
+| `plan_draft_steps` | `RETAIN/DEFER`: remains owned by its draft. WP-03.2 preserves exact versioned content snapshots and does not remove the draft record. It is never current content or lifecycle truth. | `draft_id -> plan_drafts.id ON DELETE CASCADE`; WP-03.1 added the `(exercise_id, content_version)` composite FK to `content_library`. |
 | `ai_plans` | `RESHAPE`: `id`, `user_id`, `cycle_number`, `status`, `activated_at`, `abandoned_at`, immutable plan parameters such as `total_days`, and creation timestamps. | `user_id -> users.id ON DELETE CASCADE`. One current plan per user is mandatory. |
 | `ai_plan_days` | `RESHAPE`: `id`, `plan_id`, `day_number`, optional immutable generation snapshot. Completion is calculated from child steps. | `plan_id -> ai_plans.id ON DELETE CASCADE`; unique `(plan_id, day_number)`. |
 | `ai_plan_steps` | `RESHAPE`: `id`, `day_id`, `exercise_id`, `content_version`, immutable content/mechanic snapshot, `order_in_day`, `time_slot`, `scheduled_for`, `expires_at`, `step_status`, terminal timestamp, and version for conditional updates. | `day_id -> ai_plan_days.id ON DELETE CASCADE`; `(exercise_id, content_version) -> content_library` with `ON DELETE RESTRICT`. |
@@ -258,7 +258,7 @@ Only the three classifications below are permitted:
 | `user_profiles.pause_count` | `calculate` | Count accepted `plan_paused` events; it is telemetry, never lifecycle. |
 | `user_profiles.pulse_sent_indices` | `calculate` | Use canonical delivery events/operations, not a mutable JSON cursor. |
 | `user_profiles.evening_slot_collected` | `calculate` | Presence of the required allow-listed schedule value is sufficient. |
-| `plan_drafts.total_steps`, `is_valid` | `calculate` | Derive from normalized draft steps/validation when WP-03.2 removes duplicated draft payloads. |
+| `plan_drafts.total_steps`, `is_valid` | `calculate` | Target simplification remains deferred after WP-03.2; no package is assigned to remove the duplicated draft payload. |
 | invitation/entitlement/enrollment/report-grant active state | `calculate` | Use explicit issued/granted/enrolled, expiry/end, and revocation facts. |
 | `deployment.eligible_count_at_launch` and roster/as-of binding | `immutable_snapshot` | Freeze the accepted launch denominator; later roster reconciliation cannot rewrite it. |
 | feedback category/extracted text | `immutable_snapshot` | Secondary capture metadata never replaces authoritative source wording. |
@@ -305,7 +305,7 @@ Current namespaces are migration inputs, not target exceptions:
 | `resource_efficiency_hardening` | Do not add speculative partitioning, cold-storage infrastructure, broad query rewrites, or a cache redesign for the small beta. WP-09.2 must expose database/Redis saturation and backlog signals, and WP-09.4 must test the launch burst; only a failed launch gate promotes the smallest evidenced fix (explicit connection/socket/statement bounds, bounded/keyset batches, removal of a proven N+1 path, or bounded task fan-out). Otherwise these remain post-beta unit-economics and storage-efficiency improvements. | WP-09.2/WP-09.4 evidence; post-beta backlog when launch gates pass. |
 | `scheduler_leader_election` | Preserve exactly one bot replica/scheduler writer; do not add database or Redis leadership primitives. | Multi-replica requirement; WP-09.2/DB-20. |
 | `harmless_legacy_table_cleanup` | Stop legacy readers/writers first; leave inert non-sensitive tables until row/use evidence and compatibility boundaries permit removal. | WP-08.1 after WP-01.3/WP-01.4/WP-02.1 switches. |
-| `plan_draft_simplification` | Do not resolve `draft_data`/step duplication in this package. | WP-03.2 builder migration. |
+| `plan_draft_simplification` | WP-03.2 retained `draft_data`/step duplication while correcting selection; no further draft reshaping is required for WP-03.3. | Later schema-simplification decision; no package assigned in the current roadmap. |
 | `universal_outbox_or_lock_framework` | Define only stable source operations and critical reconciliation records; no generic framework. | Specific delivery/scheduling need in WP-03.4 or later. |
 | `lifecycle_migration` | Contract only: no lifecycle column, enum, reader, or writer changes in WP-01.2. | WP-01.3. |
 | `event_privacy_deployment_primitives` | Contract only: do not add target tables or mixed event columns in WP-01.2. | WP-01.4. |
