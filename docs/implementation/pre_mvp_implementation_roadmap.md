@@ -769,7 +769,8 @@ MVP merge blocker; this does not claim that path is fixed.
 
 ## 9. Block 3 — Content, plan generation, presentation, and scheduled delivery
 
-**Status:** `IN PROGRESS` — WP-03.1 and WP-03.2 are founder-merged; WP-03.3 is next.
+**Status:** `IN PROGRESS` — WP-03.1, WP-03.2, and WP-03.3 are founder-merged;
+WP-03.4 is next.
 
 **Depends on:** B2 and canonical identity from B1  
 **Objective:** make the primary product touchpoint deterministic, versioned,
@@ -842,14 +843,15 @@ provenance, exact content snapshots, and failure-path response checks are comple
 
 ### WP-03.3 — Introduce canonical `ExercisePresentation` and media delivery
 
-**Status:** `IN PROGRESS` — canonical presentation and media delivery are
-implemented. A second independent review found a Coach context P2; the local
-repair passed a fresh independent delta review. Disposable PostgreSQL acceptance
-remains blocked by the local Docker VM startup failure;
-the package is not verified or ready for merge. See
-`work_packages/WP-03.3_exercise_presentation_media_delivery.md` for its bounded
-execution contract and candidate evidence; the original handoff remains at
-`work_packages/WP-03.3_start_message.md`.
+**Status:** `VERIFIED` — founder merged [PR #263](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/263)
+on 2026-10-08 as `ac3abd3bade3521e0d4328ab1d9555468ae53286`. The Coach
+context P2 was repaired and independently re-reviewed; all 23 disposable
+PostgreSQL acceptance cases passed. The configured GitHub review's sole P2
+suggestion to suppress actions on pause was rejected by the founder: WP-03.4
+must instead keep an already-delivered exercise actionable through expiry.
+DG-03 real-device preview and weak-network verification remains open before
+beta. See [the package record](work_packages/WP-03.3_exercise_presentation_media_delivery.md)
+for evidence and the [WP-03.4 handoff](work_packages/WP-03.4_start_message.md).
 
 **Scope**
 
@@ -883,6 +885,10 @@ execution contract and candidate evidence; the original handoff remains at
 * no LLM call is introduced into scheduled delivery (`OPS-12`).
 
 ### WP-03.4 — Make scheduled delivery and callbacks reconcilable
+
+**Status:** `READY` — WP-03.3 is founder-merged. Start in a fresh task from the
+then-current `implementation/pre-mvp` after this documentation handoff merges;
+form the bounded execution contract before implementation.
 
 **Scope**
 
@@ -1604,7 +1610,7 @@ block exit gate passes.
 - [ ] B3 — Content, plan generation, presentation, and scheduled delivery
   - [x] WP-03.1 — Migrate the versioned Content Library
   - [x] WP-03.2 — Correct deterministic plan generation
-  - [ ] WP-03.3 — Introduce canonical ExercisePresentation and media delivery
+  - [x] WP-03.3 — Introduce canonical ExercisePresentation and media delivery
   - [ ] WP-03.4 — Make scheduled delivery and callbacks reconcilable
   - [ ] WP-03.5 — Implement durable completion and automatic continuation
 - [ ] B4 — Access, privacy minimum, onboarding, and deterministic controls
@@ -1644,10 +1650,10 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | `WP-03.3 — Introduce canonical ExercisePresentation and media delivery` |
-| Status | `READY` — WP-03.2 merged in PR #261 (`758b119`); WP-03.1 and WP-01.4 dependencies are verified |
-| Next action | Start a fresh WP-03.3 session from the latest founder-merged `implementation/pre-mvp`, form its bounded contract, then implement presentation and media delivery only |
-| Current blockers | No package dependency blocks WP-03.3. `DG-02` keeps cold water unavailable; `DG-03` real-device preview copy is provisional. Gate G1 remains required before durable-data rollout |
+| Current package | `WP-03.4 — Make scheduled delivery and callbacks reconcilable` |
+| Status | `READY` after WP-03.3 founder merge PR #263 (`ac3abd3`); documentation handoff PR must merge before the next package starts |
+| Next action | On 2026-10-10, start a fresh WP-03.4 task, fetch and verify the then-current `implementation/pre-mvp`, form its bounded contract, then implement delivery/callback reconciliation only |
+| Current blockers | No package dependency blocks WP-03.4. `DG-02` keeps cold water unavailable; `DG-03` real-device preview and weak-network checks remain before beta. Gate G1 remains required before durable-data rollout |
 
 ### Private founder log
 
@@ -1698,7 +1704,7 @@ behavior.
 ## 22. Historical first steps after roadmap approval
 
 The sequence below was the initial handoff and has been completed through B2.
-The current next step is WP-03.3, as recorded in the current-package table
+The current next step is WP-03.4, as recorded in the current-package table
 above; do not restart WP-00.4 or WP-01.1 from this historical list.
 
 1. Complete WP-00.4 repository hardening and targeted verification.
