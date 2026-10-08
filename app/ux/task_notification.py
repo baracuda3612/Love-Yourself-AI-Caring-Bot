@@ -5,32 +5,13 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.db import AIPlan, AIPlanDay
-from app.content_library import selected_content, ContentValidationError
-from html import escape
-
-SLOT_EMOJI = {"MORNING": "🌅", "DAY": "☀️", "EVENING": "🌙"}
-SLOT_LABEL = {"MORNING": "Ранок", "DAY": "День", "EVENING": "Вечір"}
+from app.exercise_presentation import step_presentation
+from app.ux.exercise_renderer import render_exercise
 
 
 def format_task_notification(db: Session, step, day, plan_day_number: int, task_index: int, task_total: int) -> str:
-    if step.exercise_id:
-        version = getattr(step, "content_version", None)
-        if version is None:
-            raise ContentValidationError("selected content version missing")
-        display = selected_content(db, step.exercise_id, version)["display"]
-    else:
-        # Rows with no catalogue identity keep their original historical copy.
-        display = {"title": step.title or "Завдання", "steps": [step.description or ""], "duration_label": ""}
-    slot = (step.time_slot or "").upper()
-    emoji = SLOT_EMOJI.get(slot, "🔔")
-    label = SLOT_LABEL.get(slot, slot.capitalize() if slot else "День")
-    lines = ["━━━━━━━━━━━━━━━━━━", f"{emoji} <b>{escape(display['title'])}</b>",
-        f"День {plan_day_number} · {label} · {task_index} з {task_total}"]
-    lines += ["", "📋 <b>Що робити:</b>", *[escape(text) for text in display["steps"]]]
-    if display["duration_label"]:
-        lines += ["", f"⏱ {escape(display['duration_label'])}"]
-    lines.append("━━━━━━━━━━━━━━━━━━")
-    return "\n".join(lines)
+    # Retain the old callable signature for direct callers and persisted jobs.
+    return render_exercise(step_presentation(db, step))
 
 
 def get_step_rationale(db: Session, step) -> str | None:

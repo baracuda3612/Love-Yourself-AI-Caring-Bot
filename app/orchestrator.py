@@ -540,6 +540,7 @@ async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
     plan_type = None
     evening_slot_collected = False
     latest_plan_status = None
+    exercise_context = None
     with SessionLocal() as db:
         user = db.query(User).filter(User.id == user_id).first()
         if user is not None:
@@ -555,6 +556,14 @@ async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
             if latest_plan is not None:
                 latest_plan_status = str(latest_plan.status)
                 plan_type = "MEDIUM" if int(latest_plan.total_days) == 14 else "SHORT"
+                if latest_plan.status in ('active', 'paused'):
+                    from app.active_days import resolve_timezone
+                    from app.exercise_presentation import current_exercise_context
+
+                    exercise_context = current_exercise_context(
+                        db, user_id, latest_plan.id,
+                        user_timezone=resolve_timezone(user.timezone),
+                    )
 
     return {
         "message_text": message_text,
@@ -565,6 +574,7 @@ async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
         "evening_slot_collected": evening_slot_collected,
         "latest_plan_status": latest_plan_status,
         "pending_action": pending_action,
+        "current_exercise_context": exercise_context,
     }
 
 
