@@ -5,8 +5,8 @@ the disposable founder testnet into production and does not satisfy Gate G1.
 
 ## Ownership
 
-Alembic owns the 33 application tables represented by revision
-`20260905_event_privacy`. The physical baseline deliberately preserves the
+Alembic owns the 34 application tables represented by revision
+`20261010_scheduled_delivery`. The physical baseline deliberately preserves the
 inspected starting schema, including legacy columns, duplicate indexes, and
 unused enum types. Target cleanup belongs to the packages that define the new
 schema and must arrive as reviewed forward revisions.
@@ -122,3 +122,36 @@ For the future Gate G1 restore drill:
 RPO/RTO are intentionally not measured for the disposable founder testnet.
 They remain required Gate G1 evidence before company enrollment, durable data,
 production migration, or market launch.
+
+## Scheduled delivery reconciliation (WP-03.4)
+
+Apply `20261010_scheduled_delivery` before starting this application build; the
+startup audit requires that exact head. It adds scheduled attempt receipts and
+completed-only efficacy uniqueness/value guards without backfilling send facts.
+Downgrade is refused: preserve receipts and use forward repair.
+
+Startup performs one restoration pass. A concrete send/projection failure arms
+a failure-only alarm at the next retry/quarantine deadline; pending UI edits
+wait at least 30 seconds. Each recovery pass rearms only while actionable work
+remains, and aligned historical receipts never take user locks. The alarm uses
+an isolated memory job store to survive a failed DB-dependent run; PostgreSQL
+owns durable work for restart. No alarm runs during ordinary successful traffic.
+Definitive forbidden/missing/uneditable messages and invalid snapshots store
+projection diagnostics and stop automatic edit retries without marking false
+visible success. Paused retries
+wait for resume or closure of their delivery window. At most three definite
+rate-limit rejections can retry within the
+two-hour grace and action deadline; permanent rejection is terminal. An
+interrupted in-flight attempt becomes `uncertain` after two minutes and cannot
+resend. A late Bot API receipt or a matching owned callback can confirm it.
+Telegram supplies neither send idempotency nor a safe message lookup: after a
+process crash, an unknown send with no callback remains unresolved. Do not reset
+its attempt state or create a new source operation to force a retry.
+
+Confirmed payload, content/presentation snapshot and chat/message identity are
+immutable in `exercise_deliveries`. `AIPlanStep.tg_message_id` remains only a
+compatibility cleanup marker and may be cleared. Pending terminal edits are
+retried from the receipt, including after cancellation and restart. Text and
+GIF caption edits preserve the originally delivered instructions. Real-device
+preview, thumbnail, caption placement and weak-network verification remain DG-03
+checks before beta.

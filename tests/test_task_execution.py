@@ -1,590 +1,68 @@
-import os
-from datetime import datetime, timezone
+"""Transport contract; authoritative state/concurrency is covered by WP-03.4 PG tests."""
+from contextlib import nullcontext
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-os.environ.setdefault("BOT_TOKEN", "test-token")
-os.environ.setdefault(
-    "DATABASE_URL",
-    "postgresql://test-user:test-pass@localhost:5432/test-db",
-)
-os.environ.setdefault("OPENAI_API_KEY", "test-key")
-
 from app import telegram
-from app.lifecycle import (
-    LifecycleEntitlementError,
-    LifecycleOwnershipError,
-    LifecycleResult,
-    LifecycleTransitionError,
-)
-
-
-class DummyUser:
-    def __init__(
-        self,
-        tg_id: int,
-        user_id: int,
-        current_state: str = "ACTIVE",
-        *,
-        is_active: bool = True,
-    ) -> None:
-        self.tg_id = tg_id
-        self.id = user_id
-        self.current_state = current_state
-        self.is_active = is_active
-        self.profile = None
-        self.first_name = "Test"
-
-
-class DummyPlan:
-    def __init__(self, user: DummyUser, status: str = "active") -> None:
-        self.user = user
-        self.user_id = user.id
-        self.status = status
-
-
-class DummyDay:
-    def __init__(self, plan: DummyPlan, day_number: int = 1) -> None:
-        self.plan = plan
-        self.day_number = day_number
-
-
-class DummyStep:
-    def __init__(
-        self,
-        step_id: int,
-        day: DummyDay,
-        exercise_id: str = "exercise-1",
-        is_completed: bool = False,
-        skipped: bool = False,
-        completed_at: datetime | None = None,
-    ) -> None:
-        self.id = step_id
-        self.day = day
-        self.exercise_id = exercise_id
-        self.step_status = (
-            "completed" if is_completed else "skipped" if skipped else "pending"
-        )
-        self.terminal_at = completed_at
-
-    @property
-    def is_completed(self) -> bool:
-        return self.step_status == "completed"
-
-    @property
-    def skipped(self) -> bool:
-        return self.step_status == "skipped"
-
-    @property
-    def completed_at(self) -> datetime | None:
-        return self.terminal_at if self.step_status == "completed" else None
-
-
-class DummyMessage:
-    def __init__(self) -> None:
-        self.edited_reply_markup = None
-        self.answers = []
-
-    async def edit_reply_markup(self, reply_markup=None):
-        self.edited_reply_markup = reply_markup
-
-    async def answer(self, text: str, **_kwargs):
-        self.answers.append(text)
-
-
-class DummyFromUser:
-    def __init__(self, user_id: int) -> None:
-        self.id = user_id
-
-
-class DummyCallbackQuery:
-    def __init__(self, data: str, user_id: int, message: DummyMessage | None = None) -> None:
-        self.data = data
-        self.from_user = DummyFromUser(user_id)
-        self.message = message
-        self.answers = []
-        self.id = f"callback-{data}"
-
-    async def answer(self, text: str | None = None):
-        self.answers.append(text)
-
-
-class FakeQuery:
-    def __init__(self, step: DummyStep | None) -> None:
-        self.step = step
-
-    def filter(self, *_args, **_kwargs):
-        return self
-
-    def first(self):
-        return self.step
-
-
-class FakeSession:
-    def __init__(self, step: DummyStep | None) -> None:
-        self.step = step
-        self.committed = False
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-    def query(self, _model):
-        return FakeQuery(self.step)
-
-    def commit(self):
-        self.committed = True
-
-    def rollback(self):
-        pass
-
-
-@pytest.mark.anyio
-async def test_completed_keyboard_marker_clears_only_after_telegram_success(monkeypatch):
-    user = DummyUser(tg_id=123, user_id=42)
-    step = DummyStep(101, DummyDay(DummyPlan(user)), is_completed=True)
-    step.tg_message_id = 555
-    session = FakeSession(step)
-    monkeypatch.setattr(telegram, "SessionLocal", lambda: session)
-
-    message = DummyMessage()
-    message.message_id = 555
-    callback = DummyCallbackQuery("task_complete:101", 123, message)
-    await telegram._clear_terminal_callback_keyboard(callback, step.id)
-    assert step.tg_message_id is None
-
-    step.tg_message_id = 555
-
-    async def failed_edit(**_kwargs):
-        raise RuntimeError("Telegram unavailable")
-
-    message.edit_reply_markup = failed_edit
-    await telegram._clear_terminal_callback_keyboard(callback, step.id)
-    assert step.tg_message_id == 555
-    assert "Натисни їх ще раз" in message.answers[-1]
-
-
-@pytest.mark.anyio
-async def test_duplicate_click_retries_only_button_cleanup(monkeypatch):
-    user = DummyUser(tg_id=123, user_id=42)
-    step = DummyStep(101, DummyDay(DummyPlan(user)), is_completed=True)
-    step.tg_message_id = 555
-    message = DummyMessage()
-    message.message_id = 555
-    callback = DummyCallbackQuery("task_complete:101", 123, message)
-    monkeypatch.setattr(telegram, "SessionLocal", lambda: FakeSession(step))
-    monkeypatch.setattr(
-        telegram, "log_user_event", lambda *_a, **_k: pytest.fail("duplicate event"),
-    )
-
-    async def failed_edit(**_kwargs):
-        raise RuntimeError("Telegram unavailable")
-
-    message.edit_reply_markup = failed_edit
-    await telegram.handle_task_completed(callback)
-    assert step.tg_message_id == 555
-    assert "Натисни їх ще раз" in message.answers[-1]
-
-    message.edit_reply_markup = DummyMessage().edit_reply_markup
-    await telegram.handle_task_completed(callback)
-    assert step.tg_message_id is None
-    assert callback.answers[-1] == "Завдання вже виконано"
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize("status", ("expired", "canceled", "skipped"))
-async def test_stale_terminal_button_retries_cleanup_without_action(monkeypatch, status):
-    user = DummyUser(tg_id=123, user_id=42)
-    plan = DummyPlan(user, status="abandoned" if status == "canceled" else "active")
-    step = DummyStep(101, DummyDay(plan), skipped=status == "skipped")
-    step.step_status = status
-    step.tg_message_id = 555
-    message = DummyMessage()
-    message.message_id = 555
-    callback = DummyCallbackQuery("task_complete:101", 123, message)
-    monkeypatch.setattr(telegram, "SessionLocal", lambda: FakeSession(step))
-    monkeypatch.setattr(
-        telegram, "log_user_event", lambda *_a, **_k: pytest.fail("new event"),
-    )
-
-    await telegram.handle_task_completed(callback)
-
-    assert step.step_status == status
-    assert step.tg_message_id is None
-    assert message.edited_reply_markup is None
-    assert callback.answers
-
-@pytest.fixture(autouse=True)
-def _authoritative_step_boundary(monkeypatch):
-    def transition(
-        db,
-        *,
-        telegram_user_id,
-        step_id,
-        target_status,
-        source_operation_id,
-    ):
-        step = db.step
-        if step is None or step.id != step_id:
-            raise LifecycleTransitionError("plan_step_missing")
-        owner = step.day.plan.user
-        if owner.tg_id != telegram_user_id:
-            raise LifecycleOwnershipError("plan_step_not_owned")
-        if owner.is_active is not True:
-            raise LifecycleEntitlementError("user_not_entitled")
-        if step.day.plan.status != "active":
-            raise LifecycleTransitionError("plan_not_active")
-        if step.step_status in {"completed", "skipped", "expired", "canceled"}:
-            if step.step_status != target_status:
-                raise LifecycleTransitionError(
-                    f"terminal step already won with {step.step_status}"
-                )
-            return LifecycleResult(
-                user_id=owner.id,
-                plan_id=1,
-                step_id=step.id,
-                status=step.step_status,
-                operation=f"step_{target_status}",
-                duplicate=True,
-                day_number=step.day.day_number,
-            )
-        step.step_status = target_status
-        step.terminal_at = datetime.now(timezone.utc)
-        return LifecycleResult(
-            user_id=owner.id,
-            plan_id=1,
-            step_id=step.id,
-            status=target_status,
-            operation=f"step_{target_status}",
-            day_number=step.day.day_number,
-        )
-
-    monkeypatch.setattr(telegram, "transition_owned_plan_step", transition)
-
-
-@pytest.mark.anyio
-async def test_task_completed_happy_path(monkeypatch):
-    user = DummyUser(tg_id=123, user_id=42)
-    plan = DummyPlan(user=user)
-    day = DummyDay(plan=plan, day_number=3)
-    step = DummyStep(step_id=101, day=day)
-    message = DummyMessage()
-    callback_query = DummyCallbackQuery(
-        data="task_complete:101",
-        user_id=123,
-        message=message,
-    )
-
-    fake_session = FakeSession(step)
-    monkeypatch.setattr(telegram, "SessionLocal", lambda: fake_session)
-
-    logged_events = []
-
-    def fake_log_user_event(db, user_id, event_type, plan_step_id=None, context=None, **_kwargs):
-        logged_events.append(
-            {
-                "db": db,
-                "user_id": user_id,
-                "event_type": event_type,
-                "plan_step_id": plan_step_id,
-                "context": context,
-            }
-        )
-
-    monkeypatch.setattr(telegram, "log_user_event", fake_log_user_event)
-
-    await telegram.handle_task_completed(callback_query)
-
-    assert step.is_completed is True
-    assert step.skipped is False
-    assert step.completed_at is not None
-    assert step.completed_at.tzinfo == timezone.utc
-    assert fake_session.committed is True
-    assert logged_events == [
-        {
-            "db": fake_session,
-            "user_id": 42,
-            "event_type": "task_completed",
-            "plan_step_id": 101,
-            "context": {"day_number": 3},
-        }
-    ]
-    assert callback_query.answers[-1] == "✅ Чудово! Завдання виконано."
-    assert message.edited_reply_markup is None
-    assert message.answers[-1] == "✅ Виконано!"
-
-
-@pytest.mark.anyio
-async def test_task_skipped_happy_path(monkeypatch):
-    user = DummyUser(tg_id=321, user_id=24)
-    plan = DummyPlan(user=user)
-    day = DummyDay(plan=plan, day_number=2)
-    step = DummyStep(step_id=202, day=day)
-    message = DummyMessage()
-    callback_query = DummyCallbackQuery(
-        data="task_skip:202",
-        user_id=321,
-        message=message,
-    )
-
-    fake_session = FakeSession(step)
-    monkeypatch.setattr(telegram, "SessionLocal", lambda: fake_session)
-
-    logged_events = []
-
-    def fake_log_user_event(db, user_id, event_type, plan_step_id=None, context=None, **_kwargs):
-        logged_events.append(
-            {
-                "db": db,
-                "user_id": user_id,
-                "event_type": event_type,
-                "plan_step_id": plan_step_id,
-                "context": context,
-            }
-        )
-
-    monkeypatch.setattr(telegram, "log_user_event", fake_log_user_event)
-
-    await telegram.handle_task_skipped(callback_query)
-
-    assert step.skipped is True
-    assert step.is_completed is False
-    assert step.completed_at is None
-    assert fake_session.committed is True
-    assert logged_events == [
-        {
-            "db": fake_session,
-            "user_id": 24,
-            "event_type": "task_skipped",
-            "plan_step_id": 202,
-            "context": {"day_number": 2},
-        }
-    ]
-    assert callback_query.answers[-1] == "⏭️ Завдання пропущено"
-    assert message.edited_reply_markup is None
-    assert message.answers[-1] == "⏭️ Пропущено"
-
-
-@pytest.mark.anyio
-async def test_cannot_complete_others_task(monkeypatch):
-    owner = DummyUser(tg_id=111, user_id=1)
-    other_user_id = 222
-    plan = DummyPlan(user=owner)
-    day = DummyDay(plan=plan, day_number=1)
-    step = DummyStep(step_id=303, day=day)
-    callback_query = DummyCallbackQuery(
-        data="task_complete:303",
-        user_id=other_user_id,
-        message=DummyMessage(),
-    )
-
-    fake_session = FakeSession(step)
-    monkeypatch.setattr(telegram, "SessionLocal", lambda: fake_session)
-
-    logged_events = []
-
-    def fake_log_user_event(*_args, **_kwargs):
-        logged_events.append("logged")
-
-    monkeypatch.setattr(telegram, "log_user_event", fake_log_user_event)
-
-    await telegram.handle_task_completed(callback_query)
-
-    assert callback_query.answers[-1] == "Це не ваше завдання"
-    assert fake_session.committed is False
-    assert logged_events == []
-
-
-@pytest.mark.anyio
-async def test_already_completed(monkeypatch):
-    user = DummyUser(tg_id=555, user_id=5)
-    plan = DummyPlan(user=user)
-    day = DummyDay(plan=plan, day_number=1)
-    step = DummyStep(step_id=404, day=day, is_completed=True)
-    callback_query = DummyCallbackQuery(
-        data="task_complete:404",
-        user_id=555,
-        message=DummyMessage(),
-    )
-
-    fake_session = FakeSession(step)
-    monkeypatch.setattr(telegram, "SessionLocal", lambda: fake_session)
-
-    logged_events = []
-
-    def fake_log_user_event(*_args, **_kwargs):
-        logged_events.append("logged")
-
-    monkeypatch.setattr(telegram, "log_user_event", fake_log_user_event)
-
-    await telegram.handle_task_completed(callback_query)
-
-    assert callback_query.answers[-1] == "Завдання вже виконано"
-    assert fake_session.committed is True
-    assert logged_events == []
-
-
-@pytest.mark.anyio
-async def test_cannot_complete_when_plan_paused(monkeypatch):
-    """Plan in paused state → no state changes."""
-    user = DummyUser(tg_id=123, user_id=42)
-    plan = DummyPlan(user=user, status="paused")
-    day = DummyDay(plan=plan, day_number=1)
-    step = DummyStep(step_id=101, day=day)
-    callback_query = DummyCallbackQuery(
-        data="task_complete:101",
-        user_id=123,
-        message=DummyMessage(),
-    )
-
-    fake_session = FakeSession(step)
-    monkeypatch.setattr(telegram, "SessionLocal", lambda: fake_session)
-
-    logged_events = []
-
-    def fake_log_user_event(*_args, **_kwargs):
-        logged_events.append("logged")
-
-    monkeypatch.setattr(telegram, "log_user_event", fake_log_user_event)
-
-    await telegram.handle_task_completed(callback_query)
-
-    assert step.is_completed is False
-    assert fake_session.committed is False
-    assert logged_events == []
-    assert callback_query.answers[-1] == "План зараз не активний"
-
-
-@pytest.mark.anyio
-async def test_cannot_complete_when_user_not_active(monkeypatch):
-    """Inactive current entitlement blocks the transition."""
-    user = DummyUser(tg_id=123, user_id=42, is_active=False)
-    plan = DummyPlan(user=user, status="active")
-    day = DummyDay(plan=plan, day_number=1)
-    step = DummyStep(step_id=101, day=day)
-    callback_query = DummyCallbackQuery(
-        data="task_complete:101",
-        user_id=123,
-        message=DummyMessage(),
-    )
-
-    fake_session = FakeSession(step)
-    monkeypatch.setattr(telegram, "SessionLocal", lambda: fake_session)
-
-    logged_events = []
-
-    def fake_log_user_event(*_args, **_kwargs):
-        logged_events.append("logged")
-
-    monkeypatch.setattr(telegram, "log_user_event", fake_log_user_event)
-
-    await telegram.handle_task_completed(callback_query)
-
-    assert step.is_completed is False
-    assert fake_session.committed is False
-    assert logged_events == []
-    assert callback_query.answers[-1] == "Дія зараз недоступна"
-
-
-@pytest.mark.anyio
-async def test_cannot_skip_completed_task(monkeypatch):
-    """Terminal step (completed) → skip is noop."""
-    user = DummyUser(tg_id=123, user_id=42)
-    plan = DummyPlan(user=user)
-    day = DummyDay(plan=plan, day_number=1)
-    step = DummyStep(
-        step_id=101,
-        day=day,
-        is_completed=True,
-        completed_at=datetime.now(timezone.utc),
-    )
-    callback_query = DummyCallbackQuery(
-        data="task_skip:101",
-        user_id=123,
-        message=DummyMessage(),
-    )
-
-    fake_session = FakeSession(step)
-    monkeypatch.setattr(telegram, "SessionLocal", lambda: fake_session)
-
-    logged_events = []
-
-    def fake_log_user_event(*_args, **_kwargs):
-        logged_events.append("logged")
-
-    monkeypatch.setattr(telegram, "log_user_event", fake_log_user_event)
-
-    await telegram.handle_task_skipped(callback_query)
-
-    assert step.is_completed is True
-    assert step.skipped is False
-    assert step.completed_at is not None
-    assert fake_session.committed is False
-    assert logged_events == []
-    assert callback_query.answers[-1] == "Завдання вже виконано"
-
-
-@pytest.mark.anyio
-async def test_cannot_complete_skipped_task(monkeypatch):
-    """Terminal step (skipped) → complete is noop."""
-    user = DummyUser(tg_id=123, user_id=42)
-    plan = DummyPlan(user=user)
-    day = DummyDay(plan=plan, day_number=1)
-    step = DummyStep(step_id=101, day=day, skipped=True)
-    callback_query = DummyCallbackQuery(
-        data="task_complete:101",
-        user_id=123,
-        message=DummyMessage(),
-    )
-
-    fake_session = FakeSession(step)
-    monkeypatch.setattr(telegram, "SessionLocal", lambda: fake_session)
-
-    logged_events = []
-
-    def fake_log_user_event(*_args, **_kwargs):
-        logged_events.append("logged")
-
-    monkeypatch.setattr(telegram, "log_user_event", fake_log_user_event)
-
-    await telegram.handle_task_completed(callback_query)
-
-    assert step.is_completed is False
-    assert step.skipped is True
-    assert fake_session.committed is False
-    assert logged_events == []
-    assert callback_query.answers[-1] == "Завдання вже пропущено"
-
-
-@pytest.mark.anyio
-async def test_idempotency_multiple_clicks(monkeypatch):
-    """Multiple clicks on same action → only first has effect."""
-    user = DummyUser(tg_id=123, user_id=42)
-    plan = DummyPlan(user=user)
-    day = DummyDay(plan=plan, day_number=1)
-    step = DummyStep(step_id=101, day=day)
-    callback_query = DummyCallbackQuery(
-        data="task_complete:101",
-        user_id=123,
-        message=DummyMessage(),
-    )
-
-    fake_session = FakeSession(step)
-    monkeypatch.setattr(telegram, "SessionLocal", lambda: fake_session)
-
-    logged_events = []
-
-    def fake_log_user_event(*_args, **_kwargs):
-        logged_events.append("logged")
-
-    monkeypatch.setattr(telegram, "log_user_event", fake_log_user_event)
-
-    await telegram.handle_task_completed(callback_query)
-    assert step.is_completed is True
-    assert len(logged_events) == 1
-
-    await telegram.handle_task_completed(callback_query)
-    assert step.is_completed is True
-    assert len(logged_events) == 1
+from app.lifecycle import LifecycleResult, LifecycleOwnershipError, LifecycleEntitlementError, LifecycleTransitionError
+
+
+def callback(data='task_complete:10'):
+    return SimpleNamespace(id='update-1', data=data, from_user=SimpleNamespace(id=123),
+                           message=SimpleNamespace(answer=AsyncMock()), answer=AsyncMock())
+
+
+@pytest.mark.parametrize('target,status', [('completed','completed'), ('skipped','skipped'), ('completed','expired'), ('skipped','canceled'), ('skipped','completed')])
+@pytest.mark.parametrize('duplicate', [False, True])
+async def test_action_reports_winning_state_and_projects_same_message(monkeypatch, target, status, duplicate):
+    cb = callback('task_complete:10' if target == 'completed' else 'task_skip:10')
+    db = SimpleNamespace(commit=Mock())
+    boundary = Mock(return_value=LifecycleResult(user_id=1, plan_id=2, step_id=10, status=status, operation='step_'+target, duplicate=duplicate))
+    project = AsyncMock()
+    monkeypatch.setattr(telegram, 'SessionLocal', lambda: nullcontext(db))
+    monkeypatch.setattr(telegram, 'transition_owned_plan_step', boundary)
+    monkeypatch.setattr(telegram, '_project_step_status', project)
+    monkeypatch.setattr(telegram, 'log_user_event', Mock(side_effect=AssertionError('event belongs inside lifecycle')))
+    await telegram._handle_step_action(cb, target)
+    assert boundary.call_args.kwargs['telegram_user_id'] == 123
+    assert boundary.call_args.kwargs['telegram_message'] is cb.message
+    db.commit.assert_called_once()
+    cb.answer.assert_awaited_once_with(telegram._STEP_REPLIES[status])
+    project.assert_awaited_once_with(10)
+    cb.message.answer.assert_not_awaited()
+
+
+@pytest.mark.parametrize('error,reply', [(LifecycleOwnershipError('owner'), 'Це не ваше завдання'), (LifecycleEntitlementError('inactive'), 'Дія зараз недоступна'), (LifecycleTransitionError('step_not_delivered'), 'Доставку ще не підтверджено'), (RuntimeError('DB unavailable'), 'Не вдалося зберегти дію. Спробуй ще раз')])
+async def test_failed_action_does_not_claim_success_or_edit(monkeypatch, error, reply):
+    db = SimpleNamespace(commit=Mock())
+    cb = callback()
+    monkeypatch.setattr(telegram, 'SessionLocal', lambda: nullcontext(db))
+    monkeypatch.setattr(telegram, 'transition_owned_plan_step', Mock(side_effect=error))
+    project = AsyncMock(); monkeypatch.setattr(telegram, '_project_step_status', project)
+    await telegram.handle_task_completed(cb)
+    cb.answer.assert_awaited_once_with(reply)
+    project.assert_not_awaited(); db.commit.assert_not_called()
+
+
+@pytest.mark.parametrize('data', ['task_complete:bad', 'task_skip:', 'task_complete'])
+async def test_malformed_action_is_factual(data):
+    cb = callback(data)
+    await telegram.handle_task_completed(cb)
+    cb.answer.assert_awaited_once_with('Завдання не знайдено')
+
+
+@pytest.mark.parametrize('duplicate', [False, True])
+async def test_feedback_reports_stored_answer_and_removes_controls(monkeypatch, duplicate):
+    from app import lifecycle
+    cb = callback('task_feedback:10:worse')
+    db = SimpleNamespace(commit=Mock())
+    monkeypatch.setattr(telegram, 'SessionLocal', lambda: nullcontext(db))
+    boundary = Mock(return_value=('better', duplicate)); monkeypatch.setattr(lifecycle, 'submit_step_feedback', boundary)
+    project = AsyncMock(); monkeypatch.setattr(telegram, '_project_step_status', project)
+    await telegram.handle_task_feedback(cb)
+    cb.answer.assert_awaited_once_with('Відгук збережено: краще')
+    assert boundary.call_args.kwargs['value'] == 'worse'
+    db.commit.assert_called_once(); project.assert_awaited_once_with(10)
+    cb.message.answer.assert_not_awaited()

@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from test_versioned_content_postgres import db, migrated_engine, make_draft, activate
 from test_exercise_presentation_delivery import bot, presentation, rejection
-from app.db import AIPlanDay, AIPlanStep, ContentLibrary, PlanLifecycleOperation
+from app.db import AIPlanDay, AIPlanStep, ContentLibrary, PlanLifecycleOperation, UserEvent
 from app.exercise_presentation import current_exercise_context, step_presentation
 from app.lifecycle import transition_plan_step
 
@@ -85,8 +85,7 @@ def test_scheduler_uses_canonical_send_and_only_confirms_success(db,monkeypatch,
     monkeypatch.setattr(scheduler,'_event_loop',object())
     monkeypatch.setattr(active_days,'is_active_day',lambda *_args:True)
     monkeypatch.setattr(scheduler,'_maybe_schedule_plan_completion',lambda *_args:None)
-    events=[]
-    monkeypatch.setattr(scheduler,'log_user_event',lambda *_args,**kwargs:events.append(kwargs['event_type']))
+
     def submit(coro):
         future=Future(); future.set_result(asyncio.run(coro)); return future
     monkeypatch.setattr(scheduler,'_submit_coroutine',submit)
@@ -94,6 +93,7 @@ def test_scheduler_uses_canonical_send_and_only_confirms_success(db,monkeypatch,
     assert result.outcome == {'success':'delivered','definite_failure':'failed','uncertain':'uncertain'}[outcome]
     db.refresh(step)
     receipt=db.execute(select(PlanLifecycleOperation).where(PlanLifecycleOperation.plan_step_id==step.id,PlanLifecycleOperation.operation=='step_delivered')).scalar_one_or_none()
+    events=[e.event_name for e in db.query(UserEvent).filter(UserEvent.plan_step_id == step.id).all()]
     if outcome == 'success':
         assert receipt is not None and step.step_status=='delivered' and step.tg_message_id==77
         assert events==['task_delivered']
@@ -102,7 +102,7 @@ def test_scheduler_uses_canonical_send_and_only_confirms_success(db,monkeypatch,
         assert result.presentation.steps == step_presentation(db,step).steps
     else:
         assert receipt is None and step.step_status=='pending' and step.tg_message_id is None
-        assert events==['task_delivery_failed']
+        assert events==(['task_delivery_failed'] if outcome=='definite_failure' else [])
 
 
 def test_old_persisted_job_signature_and_new_job_has_no_baked_copy(db,monkeypatch):

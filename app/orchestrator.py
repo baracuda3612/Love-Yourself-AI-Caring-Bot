@@ -842,7 +842,8 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
     ):
         retained_source = tool_args["_evening_collection_source_id"]
         try:
-            recovery = _recover_retained_switch(
+            recovery = await asyncio.to_thread(
+                _recover_retained_switch,
                 user_id,
                 retained_source,
                 str(tool_args.get("hhmm") or ""),
@@ -903,7 +904,9 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
             return "⚠️ Цей запит уже застарів; поточний стан плану змінився."
 
     try:
-        result = handler(user_id, tool_args)
+        # Runtime handlers reconcile synchronous DB/scheduler/Telegram effects.
+        # Keep their worker-owned edit loop outside the polling event loop.
+        result = await asyncio.to_thread(handler, user_id, tool_args)
         log_metric("plan_tool_executed", extra={"user_id": user_id, "tool": tool_name})
     except ValueError as exc:
         logger.warning("[TOOL] tool=%s user=%s failed: %s", tool_name, user_id, exc)
@@ -1047,7 +1050,8 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
                     if str(pending).startswith(switch_prefix)
                     else "create_followup_plan"
                 )
-                activation = registry[cascade_tool](
+                activation = await asyncio.to_thread(
+                    registry[cascade_tool],
                     user_id,
                     {
                         "plan_type": "MEDIUM",

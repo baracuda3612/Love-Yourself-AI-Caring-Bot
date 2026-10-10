@@ -43,7 +43,7 @@ SessionLocal = sessionmaker(
 Base = declarative_base()
 logger = logging.getLogger(__name__)
 
-EXPECTED_ALEMBIC_REVISION = "20261003_content_library"
+EXPECTED_ALEMBIC_REVISION = "20261010_scheduled_delivery"
 
 
 class SchemaVersionError(RuntimeError):
@@ -893,11 +893,44 @@ class UserEvent(Base):
     plan_execution_window = relationship("PlanExecutionWindow", back_populates="events")
 
 
+class ExerciseDelivery(Base):
+    """Scheduled attempt facts; step lifecycle stays in AIPlanStep."""
+    __tablename__ = "exercise_deliveries"
+    __table_args__ = (
+        UniqueConstraint("source_operation_id", "attempt", name="uq_exercise_delivery_attempt"),
+        CheckConstraint("attempt BETWEEN 1 AND 3", name="ck_exercise_delivery_attempt"),
+        CheckConstraint("state IN ('in_flight','uncertain','delivered','retryable','terminal_failure')", name="ck_exercise_delivery_state"),
+        CheckConstraint("state <> 'delivered' OR (variant IS NOT NULL AND variant IN ('gif','text') AND message_id IS NOT NULL AND message_id > 0 AND rendered_payload IS NOT NULL AND length(rendered_payload) > 0 AND confirmed_at IS NOT NULL)", name="ck_exercise_delivery_receipt"),
+        CheckConstraint("source_operation_id = 'scheduler:delivery:' || plan_step_id::text", name="ck_exercise_delivery_source"),
+        Index("ux_exercise_deliveries_one_sent", "plan_step_id", unique=True, postgresql_where=text("state = 'delivered'")),
+        Index("ux_exercise_deliveries_one_open", "plan_step_id", unique=True, postgresql_where=text("state IN ('in_flight','uncertain','delivered')")),
+        Index("ix_exercise_deliveries_recovery", "state", "next_attempt_at"),
+    )
+    id = Column(BigInteger, primary_key=True)
+    plan_step_id = Column(Integer, ForeignKey("ai_plan_steps.id", ondelete="CASCADE"), nullable=False)
+    source_operation_id = Column(String(160), nullable=False)
+    attempt = Column(Integer, nullable=False)
+    state = Column(String(32), nullable=False)
+    presentation_snapshot = Column(JSONB, nullable=False)
+    rendered_payload = Column(Text)
+    variant = Column(String(8))
+    chat_id = Column(BigInteger, nullable=False)
+    message_id = Column(BigInteger)
+    failure_code = Column(String(64))
+    started_at = Column(DateTime(timezone=True), nullable=False)
+    confirmed_at = Column(DateTime(timezone=True))
+    next_attempt_at = Column(DateTime(timezone=True))
+    visible_status = Column(String(32))
+    visible_feedback = Column(String(64))
+    projection_failure_code = Column(String(64))
+
+
 class FeedbackEvent(Base):
     __tablename__ = "feedback_events"
     __table_args__ = (
         UniqueConstraint("source", "source_operation_id", name="uq_feedback_events_source_operation"),
         Index("ix_feedback_user_time", "user_id", text("created_at DESC")),
+        Index("ux_feedback_exercise_plan_step", "user_id", "plan_step_id", unique=True, postgresql_where=text("source = 'exercise_efficacy' AND plan_step_id IS NOT NULL")),
     )
 
     id = Column(BigInteger, primary_key=True)

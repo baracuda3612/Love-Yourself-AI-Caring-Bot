@@ -2,6 +2,7 @@
 # Спрощена версія для роботи з новою БД та агентною архітектурою
 
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -12,10 +13,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from app.config import settings
 from app.db import AIPlanStep, ChatHistory, SessionLocal, User, UserEvent, UserProfile
 from app.orchestrator import handle_incoming_message
-from app.ux.catalog import get_trigger_message
-from app.ux.persona import get_persona
-from app.ux.task_notification import get_step_rationale
-from app.telemetry import get_success_streak, log_user_event
+from app.telemetry import log_user_event
 from app.lifecycle import (
     CurrentMode,
     LifecycleEntitlementError,
@@ -233,253 +231,98 @@ async def on_text(message: Message):
     await _send_agent_response(message, user.id, response)
 
 
-@router.callback_query(F.data.startswith("task_complete:"))
-async def handle_task_completed(callback_query: CallbackQuery):
-    """
-    User clicked ✅ Виконано button.
-    """
-    if not callback_query.data:
+_STEP_REPLIES = {
+    "completed": "Виконано", "skipped": "Пропущено",
+    "expired": "Час дії завершився", "canceled": "Скасовано",
+}
+
+
+async def _project_step_status(step_id):
+    import asyncio
+    from app.scheduler import reconcile_terminal_step_keyboards
+    return await asyncio.to_thread(reconcile_terminal_step_keyboards, [step_id])
+
+
+async def _handle_step_action(callback_query: CallbackQuery, target: str):
+    import asyncio
+    received_at = datetime.now(timezone.utc)
+    try:
+        step_id = int((callback_query.data or '').split(':')[1])
+    except (ValueError, IndexError):
         await callback_query.answer("Завдання не знайдено")
         return
-
-    step_id = int(callback_query.data.split(":")[1])
-    user_id = callback_query.from_user.id
-
-    with SessionLocal() as db:
-        try:
+    def commit_action():
+        with SessionLocal() as db:
             transition = transition_owned_plan_step(
-                db,
-                telegram_user_id=user_id,
-                step_id=step_id,
-                target_status="completed",
-                source_operation_id=f"telegram:{callback_query.id}:complete:{step_id}",
+                db, telegram_user_id=callback_query.from_user.id, step_id=step_id,
+                target_status=target, source_operation_id=f"telegram:{callback_query.id}:{target}:{step_id}",
+                telegram_message=callback_query.message,
+                occurred_at=received_at,
             )
-        except LifecycleOwnershipError:
-            await callback_query.answer("Це не ваше завдання")
-            return
-        except LifecycleEntitlementError:
-            await callback_query.answer("Дія зараз недоступна")
-            return
-        except LifecycleTransitionError as exc:
-            reason = str(exc)
-            db.rollback()
-            if await _answer_stale_terminal_callback(callback_query, step_id):
-                return
-            if reason == "plan_step_missing":
-                await callback_query.answer("Завдання не знайдено")
-            elif reason == "plan_not_active":
-                await callback_query.answer("План зараз не активний")
-            elif "expired" in reason or "canceled" in reason:
-                await callback_query.answer()
-            elif "completed" in reason:
-                await callback_query.answer("Завдання вже виконано")
-            elif "skipped" in reason:
-                await callback_query.answer("Завдання вже пропущено")
-            else:
-                await callback_query.answer("Завдання вже завершене")
-            return
-        if transition.duplicate:
-            # A semantic replay with a new callback ID records its own receipt
-            # even though the authoritative terminal state is unchanged.
             db.commit()
-            if transition.status in {"expired", "canceled"}:
-                await callback_query.answer()
-            elif transition.status == "completed":
-                await callback_query.answer("Завдання вже виконано")
-            else:
-                await callback_query.answer("Завдання вже пропущено")
-            if callback_query.message:
-                await _clear_terminal_callback_keyboard(callback_query, step_id)
-            return
+            return transition
+    try:
+        transition = await asyncio.to_thread(commit_action)
+    except LifecycleOwnershipError:
+        await callback_query.answer("Це не ваше завдання")
+        return
+    except LifecycleEntitlementError:
+        await callback_query.answer("Дія зараз недоступна")
+        return
+    except LifecycleTransitionError as exc:
+        replies = {"plan_step_missing": "Завдання не знайдено", "plan_not_active": "План зараз не активний",
+                   "step_not_delivered": "Доставку ще не підтверджено"}
+        await callback_query.answer(replies.get(str(exc), "Дія зараз недоступна"))
+        return
+    except Exception:
+        logger.exception("Exercise action failed step=%s", step_id)
+        await callback_query.answer("Не вдалося зберегти дію. Спробуй ще раз")
+        return
+    await callback_query.answer(_STEP_REPLIES[transition.status])
+    await _project_step_status(step_id)
 
-        log_user_event(
-            db,
-            user_id=int(transition.user_id),
-            event_type="task_completed",
-            event_source="telegram",
-            source_operation_id=(
-                f"telegram:{callback_query.id}:complete:{step_id}"
-            ),
-            plan_step_id=step_id,
-            context={"day_number": transition.day_number},
-        )
 
-        db.commit()
-
-    await callback_query.answer("✅ Чудово! Завдання виконано.")
-    if callback_query.message:
-        await _clear_terminal_callback_keyboard(callback_query, step_id)
-
-        try:
-            with SessionLocal() as db:
-                step = db.query(AIPlanStep).filter(AIPlanStep.id == step_id).first()
-                if not step:
-                    return
-
-                day = step.day
-                plan = day.plan
-                user = plan.user
-                persona = get_persona(user.profile)
-                streak = get_success_streak(db, user.id)
-                rationale = get_step_rationale(db, step)
-
-                all_today = db.query(AIPlanStep).filter(
-                    AIPlanStep.day_id == day.id,
-                ).all()
-                all_done = all(s.step_status == "completed" for s in all_today)
-
-                total_completed = db.query(UserEvent).filter(
-                    UserEvent.user_id == user.id,
-                    UserEvent.event_name == "task_completed",
-                ).count()
-                last_two = db.query(UserEvent).filter(
-                    UserEvent.user_id == user.id,
-                    UserEvent.event_name.in_(["task_completed", "task_skipped"]),
-                ).order_by(UserEvent.occurred_at.desc()).limit(2).all()
-                prev_event = last_two[1] if len(last_two) > 1 else None
-
-                is_comeback = prev_event and prev_event.event_name == "task_skipped"
-                is_first = total_completed == 1
-
-                if is_comeback:
-                    trigger_id = "comeback_after_skip"
-                elif is_first:
-                    trigger_id = "first_task_ever"
-                elif streak == 3:
-                    trigger_id = "streak_3"
-                elif streak == 7:
-                    trigger_id = "streak_7"
-                elif all_done:
-                    trigger_id = "day_all_done"
-                else:
-                    trigger_id = "task_completed"
-
-                context = {
-                    "name": user.first_name,
-                    "exercise": step.title,
-                    "day": day.day_number,
-                    "streak": streak,
-                    "focus": getattr(plan, "focus", None),
-                    "rationale": rationale,
-                }
-                msg = get_trigger_message(trigger_id, persona, context)
-        except Exception:
-            logger.exception("Failed to build completion trigger message")
-            msg = None
-
-        if msg:
-            await callback_query.message.answer(msg, parse_mode="HTML")
-        else:
-            await callback_query.message.answer("✅ Виконано!")
+@router.callback_query(F.data.startswith("task_complete:"))
+async def handle_task_completed(callback_query: CallbackQuery):
+    await _handle_step_action(callback_query, "completed")
 
 
 @router.callback_query(F.data.startswith("task_skip:"))
 async def handle_task_skipped(callback_query: CallbackQuery):
-    """
-    User clicked ⏭️ Пропустити button.
-    """
-    if not callback_query.data:
-        await callback_query.answer("Завдання не знайдено")
+    await _handle_step_action(callback_query, "skipped")
+
+
+@router.callback_query(F.data.startswith("task_feedback:"))
+async def handle_task_feedback(callback_query: CallbackQuery):
+    import asyncio
+    from app.lifecycle import submit_step_feedback
+    try:
+        _, identity, value = (callback_query.data or '').split(':')
+        step_id = int(identity)
+    except (ValueError, IndexError):
+        await callback_query.answer("Некоректний відгук")
         return
-
-    step_id = int(callback_query.data.split(":")[1])
-    user_id = callback_query.from_user.id
-
-    with SessionLocal() as db:
-        try:
-            transition = transition_owned_plan_step(
-                db,
-                telegram_user_id=user_id,
-                step_id=step_id,
-                target_status="skipped",
-                source_operation_id=f"telegram:{callback_query.id}:skip:{step_id}",
-            )
-        except LifecycleOwnershipError:
-            await callback_query.answer("Це не ваше завдання")
-            return
-        except LifecycleEntitlementError:
-            await callback_query.answer("Дія зараз недоступна")
-            return
-        except LifecycleTransitionError as exc:
-            reason = str(exc)
-            db.rollback()
-            if await _answer_stale_terminal_callback(callback_query, step_id):
-                return
-            if reason == "plan_step_missing":
-                await callback_query.answer("Завдання не знайдено")
-            elif reason == "plan_not_active":
-                await callback_query.answer("План зараз не активний")
-            elif "expired" in reason or "canceled" in reason:
-                await callback_query.answer()
-            elif "completed" in reason:
-                await callback_query.answer("Завдання вже виконано")
-            elif "skipped" in reason:
-                await callback_query.answer("Завдання вже пропущено")
-            else:
-                await callback_query.answer("Завдання вже завершене")
-            return
-        if transition.duplicate:
-            # Preserve the source receipt for an already-authoritative result.
+    def commit_feedback():
+        with SessionLocal() as db:
+            recorded, duplicate = submit_step_feedback(db, telegram_user_id=callback_query.from_user.id,
+                                                       step_id=step_id, value=value)
             db.commit()
-            if transition.status in {"expired", "canceled"}:
-                await callback_query.answer()
-            elif transition.status == "completed":
-                await callback_query.answer("Завдання вже виконано")
-            else:
-                await callback_query.answer("Завдання вже пропущено")
-            if callback_query.message:
-                await _clear_terminal_callback_keyboard(callback_query, step_id)
-            return
-
-        log_user_event(
-            db,
-            user_id=int(transition.user_id),
-            event_type="task_skipped",
-            event_source="telegram",
-            source_operation_id=f"telegram:{callback_query.id}:skip:{step_id}",
-            plan_step_id=step_id,
-            context={"day_number": transition.day_number},
-        )
-
-        db.commit()
-
-    await callback_query.answer("⏭️ Завдання пропущено")
-    if callback_query.message:
-        await _clear_terminal_callback_keyboard(callback_query, step_id)
-
-        try:
-            with SessionLocal() as db:
-                step = db.query(AIPlanStep).filter(AIPlanStep.id == step_id).first()
-                if not step:
-                    return
-
-                user = step.day.plan.user
-                persona = get_persona(user.profile)
-                recent_actions = db.query(UserEvent).filter(
-                    UserEvent.user_id == user.id,
-                    UserEvent.event_name.in_(["task_completed", "task_skipped"]),
-                ).order_by(UserEvent.occurred_at.desc()).limit(2).all()
-                two_skips = len(recent_actions) >= 2 and all(
-                    event.event_name == "task_skipped" for event in recent_actions
-                )
-                trigger_id = "skip_2_in_row" if two_skips else "task_skipped"
-                context = {"name": user.first_name, "exercise": step.title, "day": step.day.day_number}
-                msg = get_trigger_message(trigger_id, persona, context)
-        except Exception:
-            logger.exception("Failed to build skip trigger message")
-            msg = None
-            trigger_id = "task_skipped"
-
-        keyboard = None
-        if trigger_id == "skip_2_in_row":
-            keyboard = InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text="🔧 Переглянути план", callback_data="adapt_suggest")]]
-            )
-
-        if msg:
-            await callback_query.message.answer(msg, parse_mode="HTML", reply_markup=keyboard)
-        else:
-            await callback_query.message.answer("⏭️ Пропущено", reply_markup=keyboard)
+            return recorded, duplicate
+    try:
+        recorded, duplicate = await asyncio.to_thread(commit_feedback)
+    except LifecycleOwnershipError:
+        await callback_query.answer("Це не ваша вправа")
+        return
+    except (LifecycleEntitlementError, LifecycleTransitionError):
+        await callback_query.answer("Відгук доступний після виконання")
+        return
+    except Exception:
+        logger.exception("Exercise feedback failed step=%s", step_id)
+        await callback_query.answer("Не вдалося зберегти відгук. Спробуй ще раз")
+        return
+    label = {"better": "краще", "same": "так само", "worse": "гірше"}[recorded]
+    await callback_query.answer(f"Відгук збережено: {label}")
+    await _project_step_status(step_id)
 
 
 @router.callback_query(F.data == "adapt_suggest")

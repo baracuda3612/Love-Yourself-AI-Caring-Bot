@@ -36,6 +36,7 @@ class ExerciseSendResult:
     chat_id: int | None = None
     message_id: int | None = None
     failure_code: str | None = None
+    retry_after: int | None = None
 
     @property
     def delivered(self) -> bool:
@@ -116,6 +117,8 @@ async def send_exercise(
         message = await bot.send_message(
             chat_id=chat_id, text=text, parse_mode='HTML', reply_markup=reply_markup,
         )
+    except TelegramRetryAfter as exc:
+        return ExerciseSendResult('failed', 'text', presentation, text, failure_code='telegram_rate_limit', retry_after=max(1, exc.retry_after))
     except _DEFINITE_REJECTIONS:
         return ExerciseSendResult('failed', 'text', presentation, text, failure_code='text_send_rejected')
     except Exception:
