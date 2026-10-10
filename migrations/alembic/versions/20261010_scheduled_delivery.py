@@ -28,6 +28,7 @@ def upgrade():
         sa.Column('next_attempt_at', sa.DateTime(timezone=True)),
         sa.Column('visible_status', sa.String(32)),
         sa.Column('visible_feedback', sa.String(64)),
+        sa.Column('projection_failure_code', sa.String(64)),
         sa.UniqueConstraint('source_operation_id', 'attempt', name='uq_exercise_delivery_attempt'),
         sa.CheckConstraint('attempt BETWEEN 1 AND 3', name='ck_exercise_delivery_attempt'),
         sa.CheckConstraint("state IN ('in_flight','uncertain','delivered','retryable','terminal_failure')", name='ck_exercise_delivery_state'),

@@ -1,5 +1,6 @@
 # app/scheduler.py
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import logging
 from threading import Lock
@@ -8,8 +9,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import pytz
-from sqlalchemy import and_, case, func
+from sqlalchemy import and_, case, func, or_
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+from apscheduler.jobstores.memory import MemoryJobStore
 from apscheduler.schedulers.background import BackgroundScheduler
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -34,7 +36,7 @@ from app.lifecycle import (
 DATABASE_URL = settings.DATABASE_URL
 jobstore_url = DATABASE_URL
 
-jobstores = {"default": SQLAlchemyJobStore(url=jobstore_url)}
+jobstores = {"default": SQLAlchemyJobStore(url=jobstore_url), "delivery_recovery": MemoryJobStore()}
 scheduler = BackgroundScheduler(jobstores=jobstores, timezone="UTC")
 
 logger = logging.getLogger(__name__)
@@ -103,41 +105,61 @@ def _submit_coroutine(coro):
 
 
 def _enable_delivery_recovery():
-    """Arm one failure-driven wakeup at the next actionable recovery time."""
-    from app.db import ExerciseDelivery
-    from app.exercise_status import pending_status_step_ids
-    from app.scheduled_delivery import IN_FLIGHT_GRACE, LATE_GRACE
+    """Arm a failure-only alarm independent of DB availability; park on success."""
     now = datetime.now(timezone.utc)
     # Serialize the final DB check with wakeups, so a concurrently committed
     # failure cannot lose its recovery job during shutdown of the worker.
     with _recovery_job_lock:
-        with SessionLocal() as db:
-            retry_at = db.query(func.min(case(
+        try:
+            run_at = _delivery_recovery_time(now)
+        except Exception:
+            # Durable work stays in PostgreSQL; the small fault alarm must run
+            # even while that database/job store cannot accept a new timer.
+            logger.exception('Delivery recovery database temporarily unavailable')
+            run_at = now + timedelta(seconds=30)
+        if run_at is None:
+            try:
+                scheduler.remove_job('scheduled_delivery_recovery', jobstore='delivery_recovery')
+            except Exception:
+                pass
+            return
+        job = scheduler.get_job('scheduled_delivery_recovery', jobstore='delivery_recovery')
+        existing_at = getattr(job, 'next_run_time', None)
+        if existing_at is not None and _to_utc(existing_at) <= run_at and run_at <= now + timedelta(seconds=31):
+            return
+        if job is not None:
+            scheduler.modify_job('scheduled_delivery_recovery', jobstore='delivery_recovery', next_run_time=run_at)
+        else:
+            # Retain the alarm when a run raises; removal is explicit only after
+            # DB proof that pending work is repaired, quarantined or terminal.
+            scheduler.add_job('app.scheduler:reconcile_scheduled_deliveries', 'interval',
+                              seconds=30, start_date=run_at, next_run_time=run_at,
+                              id='scheduled_delivery_recovery', jobstore='delivery_recovery',
+                              replace_existing=True, max_instances=1, coalesce=True, misfire_grace_time=None)
+
+
+def _delivery_recovery_time(now):
+    from app.db import ExerciseDelivery
+    from app.exercise_status import pending_status_step_ids
+    from app.scheduled_delivery import IN_FLIGHT_GRACE, LATE_GRACE
+    with SessionLocal() as db:
+        retry_at = db.query(func.min(case(
                 (AIPlanStep.step_status != 'pending', now),
                 (and_(AIPlan.status == 'active', User.is_active.is_(True)), func.greatest(ExerciseDelivery.next_attempt_at, AIPlanStep.scheduled_for)),
                 else_=func.least(AIPlanStep.expires_at, AIPlanStep.scheduled_for + LATE_GRACE),
             ))).select_from(ExerciseDelivery).join(AIPlanStep, AIPlanStep.id == ExerciseDelivery.plan_step_id).join(
                 AIPlanDay, AIPlanDay.id == AIPlanStep.day_id).join(AIPlan, AIPlan.id == AIPlanDay.plan_id).join(
                 User, User.id == AIPlan.user_id).filter(ExerciseDelivery.state == 'retryable').scalar()
-            started_at = db.query(func.min(ExerciseDelivery.started_at)).filter(
-                ExerciseDelivery.state == 'in_flight').scalar()
-            times = []
-            if retry_at is not None:
-                times.append(_to_utc(retry_at))
-            if started_at is not None:
-                times.append(_to_utc(started_at) + IN_FLIGHT_GRACE)
-            if pending_status_step_ids(db):
-                times.append(now + timedelta(seconds=30))
-        if not times:
-            remove_job('scheduled_delivery_recovery')
-            return
-        run_at = max(now + timedelta(seconds=30), min(times))
-        job = scheduler.get_job('scheduled_delivery_recovery')
-        existing_at = getattr(job, 'next_run_time', None)
-        if existing_at is not None and _to_utc(existing_at) <= run_at:
-            return
-        scheduler.add_job('app.scheduler:reconcile_scheduled_deliveries', 'date', run_date=run_at,
-                          id='scheduled_delivery_recovery', replace_existing=True, max_instances=1)
+        started_at = db.query(func.min(ExerciseDelivery.started_at)).filter(
+            ExerciseDelivery.state == 'in_flight').scalar()
+        times = []
+        if retry_at is not None:
+            times.append(_to_utc(retry_at))
+        if started_at is not None:
+            times.append(_to_utc(started_at) + IN_FLIGHT_GRACE)
+        if pending_status_step_ids(db) or _due_delivery_steps(db, now).first() is not None:
+            times.append(now + timedelta(seconds=30))
+    return max(now + timedelta(seconds=30), min(times)) if times else None
 
 
 def can_deliver_tasks(user: User, plan: AIPlan | None = None) -> bool:
@@ -251,26 +273,20 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None)
 
 
 def reconcile_scheduled_deliveries():
+    try:
+        _recover_scheduled_deliveries()
+    finally:
+        _enable_delivery_recovery()
+
+
+def _recover_scheduled_deliveries():
     """Recover due work and pending UI effects; never resend uncertain attempts."""
     from app.db import ExerciseDelivery
     from app.exercise_status import pending_status_step_ids
-    from sqlalchemy.orm import aliased
     from app.scheduled_delivery import LATE_GRACE, IN_FLIGHT_GRACE
-    later_attempt = aliased(ExerciseDelivery)
     now = datetime.now(timezone.utc)
     with SessionLocal() as db:
-        due_ids = [row[0] for row in db.query(AIPlanStep.id).join(AIPlanDay).join(AIPlan).filter(
-            AIPlan.status == 'active', AIPlanStep.step_status == 'pending',
-            AIPlanStep.scheduled_for <= now,
-            AIPlanStep.scheduled_for >= now - LATE_GRACE,
-            ~db.query(ExerciseDelivery.id).filter(
-                ExerciseDelivery.plan_step_id == AIPlanStep.id,
-                ExerciseDelivery.state != 'retryable',
-                ~db.query(later_attempt.id).filter(
-                    later_attempt.plan_step_id == ExerciseDelivery.plan_step_id,
-                    later_attempt.attempt > ExerciseDelivery.attempt
-                ).correlate(ExerciseDelivery).exists()).exists(),
-        ).all()]
+        due_ids = [row[0] for row in _due_delivery_steps(db, now).all()]
         # Quarantine interrupted sends independently of plan status or expiry.
         stale_ids = [row[0] for row in db.query(ExerciseDelivery.id).filter(
             ExerciseDelivery.state == 'in_flight', ExerciseDelivery.started_at <= now - IN_FLIGHT_GRACE,
@@ -298,13 +314,36 @@ def reconcile_scheduled_deliveries():
                     attempt.state = 'uncertain'
                     attempt.failure_code = 'interrupted_send'
                     db.commit()
-    for step_id in due_ids:
+    def recover_step(step_id):
         try:
             send_scheduled_message(0, '', step_id)
         except Exception:
             logger.exception("Scheduled recovery failed step=%s", step_id)
+    if due_ids:
+        # Reuse the same durable claim path with bounded parallel send waits.
+        # One slow user cannot hold every subsequent due user behind it.
+        with ThreadPoolExecutor(max_workers=8, thread_name_prefix='delivery-recovery') as workers:
+            list(workers.map(recover_step, due_ids))
     reconcile_terminal_step_keyboards(ui_ids)
-    _enable_delivery_recovery()
+
+
+def _due_delivery_steps(db, now):
+    from app.db import ExerciseDelivery
+    from app.scheduled_delivery import LATE_GRACE
+    from sqlalchemy.orm import aliased
+    later_attempt = aliased(ExerciseDelivery)
+    return db.query(AIPlanStep.id).join(AIPlanDay).join(AIPlan).join(User).filter(
+        AIPlan.status == 'active', User.is_active.is_(True), AIPlanStep.step_status == 'pending',
+        AIPlanStep.expires_at > now,
+        AIPlanStep.scheduled_for <= now, AIPlanStep.scheduled_for >= now - LATE_GRACE,
+        ~db.query(ExerciseDelivery.id).filter(
+            ExerciseDelivery.plan_step_id == AIPlanStep.id,
+            or_(ExerciseDelivery.state != 'retryable', ExerciseDelivery.next_attempt_at > now),
+            ~db.query(later_attempt.id).filter(
+                later_attempt.plan_step_id == ExerciseDelivery.plan_step_id,
+                later_attempt.attempt > ExerciseDelivery.attempt
+            ).correlate(ExerciseDelivery).exists()).exists(),
+    )
 
 
 def schedule_plan_step(step: AIPlanStep, user: User) -> bool:

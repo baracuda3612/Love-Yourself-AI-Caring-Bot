@@ -663,6 +663,9 @@ def test_plan_schedule_reconciliation_fences_newer_lifecycle_decision(
                     user_id=3,
                     status=shared["status"],
                 )
+            from app.db import ExerciseDelivery
+            if self.model is ExerciseDelivery.id:
+                return None
             raise AssertionError(self.model)
 
         def all(self):
@@ -745,6 +748,7 @@ def test_plan_schedule_reconciliation_fences_newer_lifecycle_decision(
     second.join(timeout=2)
     assert not first.is_alive()
     assert not second.is_alive()
+    assert len(results) == 2
     assert all(result.failed_ids == () for result in results)
 
     job_id = "plan_20_day_30_step_11"

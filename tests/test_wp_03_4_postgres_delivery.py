@@ -409,8 +409,9 @@ async def test_coach_control_projects_terminal_message_before_return(migrated_en
     monkeypatch.setattr(orchestrator, 'SessionLocal', factory)
     jobs = {}
     class FakeScheduler:
-        def remove_job(self, job_id): jobs.pop(job_id, None)
-        def get_job(self, job_id): return jobs.get(job_id)
+        def remove_job(self, job_id, **kwargs): jobs.pop(job_id, None)
+        def get_job(self, job_id, **kwargs): return jobs.get(job_id)
+        def modify_job(self, job_id, **kwargs): jobs[job_id].next_run_time = kwargs['next_run_time']
         def add_job(self, *args, **kwargs): jobs[kwargs['id']] = SimpleNamespace(next_run_time=kwargs.get('run_date'))
     monkeypatch.setattr(scheduler, 'scheduler', FakeScheduler())
     edits = []
@@ -477,9 +478,10 @@ def test_recovery_only_locks_stale_ui_and_stops_when_repaired(db, monkeypatch, v
     db.flush()
     jobs = {}
     class FakeScheduler:
-        def get_job(self, job_id): return jobs.get(job_id)
-        def add_job(self, *args, **kwargs): jobs[kwargs['id']] = SimpleNamespace(next_run_time=kwargs['run_date'], trigger=args[1])
-        def remove_job(self, job_id): jobs.pop(job_id, None)
+        def get_job(self, job_id, **kwargs): return jobs.get(job_id)
+        def modify_job(self, job_id, **kwargs): jobs[job_id].next_run_time = kwargs['next_run_time']
+        def add_job(self, *args, **kwargs): jobs[kwargs['id']] = SimpleNamespace(next_run_time=kwargs.get('next_run_time', kwargs.get('run_date')), trigger=args[1], jobstore=kwargs.get('jobstore'))
+        def remove_job(self, job_id, **kwargs): jobs.pop(job_id, None)
     monkeypatch.setattr(scheduler, 'scheduler', FakeScheduler())
     monkeypatch.setattr(scheduler, 'SessionLocal', lambda: nullcontext(db))
     monkeypatch.setattr(db, 'commit', db.flush)
@@ -526,9 +528,10 @@ def test_recovery_is_dormant_for_success_and_wakes_for_definite_retry(db, monkey
     user, _, step = active_step(db)
     jobs = {}
     class FakeScheduler:
-        def get_job(self, job_id): return jobs.get(job_id)
-        def add_job(self, *args, **kwargs): jobs[kwargs['id']] = SimpleNamespace(next_run_time=kwargs['run_date'], trigger=args[1])
-        def remove_job(self, job_id): jobs.pop(job_id, None)
+        def get_job(self, job_id, **kwargs): return jobs.get(job_id)
+        def modify_job(self, job_id, **kwargs): jobs[job_id].next_run_time = kwargs['next_run_time']
+        def add_job(self, *args, **kwargs): jobs[kwargs['id']] = SimpleNamespace(next_run_time=kwargs.get('next_run_time', kwargs.get('run_date')), trigger=args[1], jobstore=kwargs.get('jobstore'))
+        def remove_job(self, job_id, **kwargs): jobs.pop(job_id, None)
     monkeypatch.setattr(scheduler, 'scheduler', FakeScheduler())
     monkeypatch.setattr(scheduler, 'SessionLocal', lambda: nullcontext(db))
     monkeypatch.setattr(db, 'commit', db.flush)
@@ -557,12 +560,13 @@ def test_recovery_is_dormant_for_success_and_wakes_for_definite_retry(db, monkey
         scheduler.send_scheduled_message(0, '', other.id)
         assert latest_attempt(db, other.id).attempt == number
         assert 'scheduled_delivery_recovery' in jobs
-        assert jobs['scheduled_delivery_recovery'].trigger == 'date'
+        assert jobs['scheduled_delivery_recovery'].trigger == 'interval'
+        assert jobs['scheduled_delivery_recovery'].jobstore == 'delivery_recovery'
         latest_attempt(db, other.id).next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
         db.flush()
         if number == 1:
             transition_current_plan(db, user_id=user.id, operation='pause', source_operation_id='pause-retry')
-            jobs.pop('scheduled_delivery_recovery')  # APScheduler consumes a date job before calling it.
+            jobs.pop('scheduled_delivery_recovery')  # Simulate a fresh alarm after restart.
             scheduler.reconcile_scheduled_deliveries()
             assert remaining[0] == 1
             assert jobs['scheduled_delivery_recovery'].next_run_time >= utc(other.expires_at)
@@ -639,3 +643,114 @@ async def test_real_callback_on_paused_plan_accepts_done_and_preserves_deadline(
     finally:
         with Session(migrated_engine) as db:
             db.execute(text('TRUNCATE users CASCADE')); db.commit()
+
+
+@pytest.mark.parametrize('reason', ['missing', 'forbidden', 'snapshot'])
+def test_permanent_projection_is_diagnostic_not_an_infinite_repair(db, monkeypatch, reason):
+    from app import scheduler, exercise_status
+    from app.lifecycle import transition_plan_step
+    from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+    from aiogram.methods import EditMessageText
+    user, _, step = active_step(db)
+    if reason == 'snapshot':
+        transition_plan_step(db, user_id=user.id, step_id=step.id, target_status='delivered', source_operation_id='manual-import')
+        db.add(ExerciseDelivery(plan_step_id=step.id, source_operation_id=f'scheduler:delivery:{step.id}', attempt=1,
+                               state='delivered', presentation_snapshot={}, chat_id=user.tg_id, message_id=777,
+                               variant='text', rendered_payload='imported', started_at=datetime.now(timezone.utc), confirmed_at=datetime.now(timezone.utc)))
+        db.flush()
+    else:
+        deliver(db, step)
+    action(db, user, step, 'completed')
+    method = EditMessageText(chat_id=user.tg_id, message_id=777, text='status')
+    error = TelegramForbiddenError(method=method, message='bot was blocked by the user') if reason == 'forbidden' else TelegramBadRequest(method=method, message='message to edit not found')
+    edit = AsyncMock(side_effect=error)
+    class FakeBot:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        edit_message_text = edit
+    monkeypatch.setattr(exercise_status, 'Bot', FakeBot)
+    monkeypatch.setattr(db, 'commit', db.flush)
+    assert exercise_status.reconcile_status(db, step.id) is False
+    receipt = sent_receipt(db, step.id)
+    assert receipt.projection_failure_code == {'missing':'message_uneditable', 'forbidden':'chat_inaccessible', 'snapshot':'invalid_snapshot'}[reason]
+    assert receipt.visible_status is None and receipt.state == 'delivered'
+    assert not exercise_status.pending_status_step_ids(db)
+    monkeypatch.setattr(scheduler, 'SessionLocal', lambda: nullcontext(db))
+    monkeypatch.setattr(scheduler, '_enable_delivery_recovery', lambda: None)
+    scheduler.reconcile_scheduled_deliveries()
+    assert edit.await_count == (0 if reason == 'snapshot' else 1)
+    if reason != 'snapshot':
+        # Explicit user activity after access restoration may retry once.
+        edit.side_effect = None
+        assert exercise_status.reconcile_status(db, step.id) is True
+        assert receipt.projection_failure_code is None and receipt.visible_status == 'completed'
+
+
+def test_due_backlog_dispatches_with_bounded_concurrency(db, monkeypatch):
+    from app import scheduler
+    from app.db import AIPlanDay
+    user, plan, _ = active_step(db)
+    steps = db.query(AIPlanStep).join(AIPlanDay).filter(AIPlanDay.plan_id == plan.id).all()
+    for step in steps:
+        step.scheduled_for = datetime.now(timezone.utc)-timedelta(minutes=1)
+        step.expires_at = datetime.now(timezone.utc)+timedelta(hours=1)
+    db.flush()
+    barrier = Barrier(len(steps)); errors = []; called = []
+    def send(_chat, _text, step_id):
+        called.append(step_id)
+        try: barrier.wait(timeout=3)
+        except Exception as exc: errors.append(exc)
+    monkeypatch.setattr(scheduler, 'SessionLocal', lambda: nullcontext(db))
+    monkeypatch.setattr(scheduler, 'send_scheduled_message', send)
+    monkeypatch.setattr(scheduler, '_enable_delivery_recovery', lambda: None)
+    scheduler.reconcile_scheduled_deliveries()
+    assert set(called) == {step.id for step in steps} and not errors
+
+
+@pytest.mark.parametrize('operation', ['completed', 'skipped', 'feedback'])
+async def test_real_callback_lock_wait_does_not_block_polling_or_lose_arrival_time(migrated_engine, monkeypatch, operation):
+    from threading import Event, Thread, Timer
+    from time import monotonic
+    from sqlalchemy.orm import sessionmaker
+    from app import telegram, scheduler, exercise_status
+    with Session(migrated_engine) as db:
+        user, _, step = active_step(db)
+        step.expires_at = datetime.now(timezone.utc)+timedelta(seconds=.3)
+        db.flush(); deliver(db, step)
+        if operation == 'feedback': action(db, user, step, 'completed')
+        db.commit(); user_id, tg_id, step_id, deadline = user.id, user.tg_id, step.id, step.expires_at
+    factory = sessionmaker(bind=migrated_engine, expire_on_commit=False)
+    monkeypatch.setattr(telegram, 'SessionLocal', factory); monkeypatch.setattr(scheduler, 'SessionLocal', factory)
+    class FakeBot:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        edit_message_text = AsyncMock()
+    monkeypatch.setattr(exercise_status, 'Bot', FakeBot)
+    held = Event(); release = Event()
+    def hold():
+        with Session(migrated_engine) as db:
+            db.query(User).filter_by(id=user_id).with_for_update().one()
+            held.set(); release.wait(3); db.commit()
+    holder = Thread(target=hold); holder.start(); assert held.wait(3)
+    timer = Timer(.6, release.set); timer.start()
+    cb = SimpleNamespace(id='waiting-tap', data=f'task_feedback:{step_id}:better' if operation == 'feedback' else f'task_complete:{step_id}',
+                         from_user=SimpleNamespace(id=tg_id), message=SimpleNamespace(answer=AsyncMock()), answer=AsyncMock())
+    try:
+        handler = telegram.handle_task_feedback if operation == 'feedback' else lambda cb: telegram._handle_step_action(cb, operation)
+        task = asyncio.create_task(handler(cb))
+        started = monotonic(); await asyncio.sleep(.03)
+        assert monotonic()-started < .3  # Another polling coroutine remains responsive while the row is locked.
+        await task
+        with Session(migrated_engine) as db:
+            step = db.get(AIPlanStep, step_id)
+            assert step.step_status == ('completed' if operation == 'feedback' else operation)
+            if operation != 'feedback':
+                assert step.terminal_at < deadline < datetime.now(timezone.utc)
+                event = next(e for e in events(db, step) if e.event_name == 'task_'+operation)
+                assert event.occurred_at == step.terminal_at
+            else: assert db.query(FeedbackEvent).filter_by(plan_step_id=step_id).one().value == 'better'
+    finally:
+        release.set(); holder.join(3); timer.cancel()
+        with Session(migrated_engine) as db: db.execute(text('TRUNCATE users CASCADE')); db.commit()

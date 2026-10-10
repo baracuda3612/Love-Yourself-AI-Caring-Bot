@@ -2,6 +2,7 @@
 # Спрощена версія для роботи з новою БД та агентною архітектурою
 
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -243,19 +244,25 @@ async def _project_step_status(step_id):
 
 
 async def _handle_step_action(callback_query: CallbackQuery, target: str):
+    import asyncio
+    received_at = datetime.now(timezone.utc)
     try:
         step_id = int((callback_query.data or '').split(':')[1])
     except (ValueError, IndexError):
         await callback_query.answer("Завдання не знайдено")
         return
-    try:
+    def commit_action():
         with SessionLocal() as db:
             transition = transition_owned_plan_step(
                 db, telegram_user_id=callback_query.from_user.id, step_id=step_id,
                 target_status=target, source_operation_id=f"telegram:{callback_query.id}:{target}:{step_id}",
                 telegram_message=callback_query.message,
+                occurred_at=received_at,
             )
             db.commit()
+            return transition
+    try:
+        transition = await asyncio.to_thread(commit_action)
     except LifecycleOwnershipError:
         await callback_query.answer("Це не ваше завдання")
         return
@@ -287,6 +294,7 @@ async def handle_task_skipped(callback_query: CallbackQuery):
 
 @router.callback_query(F.data.startswith("task_feedback:"))
 async def handle_task_feedback(callback_query: CallbackQuery):
+    import asyncio
     from app.lifecycle import submit_step_feedback
     try:
         _, identity, value = (callback_query.data or '').split(':')
@@ -294,11 +302,14 @@ async def handle_task_feedback(callback_query: CallbackQuery):
     except (ValueError, IndexError):
         await callback_query.answer("Некоректний відгук")
         return
-    try:
+    def commit_feedback():
         with SessionLocal() as db:
             recorded, duplicate = submit_step_feedback(db, telegram_user_id=callback_query.from_user.id,
                                                        step_id=step_id, value=value)
             db.commit()
+            return recorded, duplicate
+    try:
+        recorded, duplicate = await asyncio.to_thread(commit_feedback)
     except LifecycleOwnershipError:
         await callback_query.answer("Це не ваша вправа")
         return

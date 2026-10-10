@@ -3,6 +3,7 @@ from dataclasses import replace
 import asyncio
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import String, and_, or_
 
@@ -20,6 +21,7 @@ def pending_status_step_ids(db):
             .outerjoin(FeedbackEvent, and_(FeedbackEvent.plan_step_id == AIPlanStep.id,
                                           FeedbackEvent.source == 'exercise_efficacy'))
             .filter(ExerciseDelivery.state == 'delivered',
+                    ExerciseDelivery.projection_failure_code.is_(None),
                     AIPlanStep.step_status.in_(('completed', 'skipped', 'expired', 'canceled')),
                     or_(ExerciseDelivery.visible_status.is_distinct_from(AIPlanStep.step_status.cast(String)),
                         ExerciseDelivery.visible_feedback.is_distinct_from(FeedbackEvent.value)))
@@ -44,8 +46,13 @@ def reconcile_status(db, step_id):
         return True
     if receipt.visible_status == status and receipt.visible_feedback == value:
         return True
-    presentation = replace(presentation_from_snapshot(receipt.presentation_snapshot), status=status, available_actions=())
-    payload = render_exercise(presentation, caption=receipt.variant == 'gif')
+    try:
+        presentation = replace(presentation_from_snapshot(receipt.presentation_snapshot), status=status, available_actions=())
+        payload = render_exercise(presentation, caption=receipt.variant == 'gif')
+    except (KeyError, TypeError, ValueError):
+        receipt.projection_failure_code = 'invalid_snapshot'
+        db.commit()
+        return False
     keyboard = None
     if status == 'completed' and feedback is None:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[
@@ -67,7 +74,18 @@ def reconcile_status(db, step_id):
         asyncio.run(edit())
     except Exception as exc:
         if 'message is not modified' not in str(exc).lower():
+            # Definitive access/message rejection cannot improve by polling.
+            # A later explicit action may try again, without falsifying markers.
+            if isinstance(exc, TelegramForbiddenError):
+                receipt.projection_failure_code = 'chat_inaccessible'
+            elif isinstance(exc, TelegramBadRequest) and any(reason in str(exc).lower() for reason in (
+                'message to edit not found', "message can't be edited", 'message can not be edited', 'chat not found',
+            )):
+                receipt.projection_failure_code = 'message_uneditable'
+            if receipt.projection_failure_code:
+                db.commit()
             return False
+    receipt.projection_failure_code = None
     receipt.visible_status = status
     receipt.visible_feedback = value
     # Compatibility marker may be cleared; the durable receipt never is.

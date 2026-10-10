@@ -922,6 +922,7 @@ class ExerciseDelivery(Base):
     next_attempt_at = Column(DateTime(timezone=True))
     visible_status = Column(String(32))
     visible_feedback = Column(String(64))
+    projection_failure_code = Column(String(64))
 
 
 class FeedbackEvent(Base):

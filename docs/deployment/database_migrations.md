@@ -131,9 +131,14 @@ completed-only efficacy uniqueness/value guards without backfilling send facts.
 Downgrade is refused: preserve receipts and use forward repair.
 
 Startup performs one restoration pass. A concrete send/projection failure arms
-a one-shot recovery job at the next retry/quarantine deadline; pending UI edits
+a failure-only alarm at the next retry/quarantine deadline; pending UI edits
 wait at least 30 seconds. Each recovery pass rearms only while actionable work
-remains, and aligned historical receipts never take user locks. Paused retries
+remains, and aligned historical receipts never take user locks. The alarm uses
+an isolated memory job store to survive a failed DB-dependent run; PostgreSQL
+owns durable work for restart. No alarm runs during ordinary successful traffic.
+Definitive forbidden/missing/uneditable messages and invalid snapshots store
+projection diagnostics and stop automatic edit retries without marking false
+visible success. Paused retries
 wait for resume or closure of their delivery window. At most three definite
 rate-limit rejections can retry within the
 two-hour grace and action deadline; permanent rejection is terminal. An
