@@ -573,6 +573,9 @@ def test_plan_schedule_reconciliation_removes_past_job_and_repairs_future(
                 return _OneQuery(user)
             if model is scheduler.AIPlanStep:
                 return _StepsQuery()
+            from app.db import ExerciseDelivery
+            if model is ExerciseDelivery.id:
+                return _OneQuery(None)
             raise AssertionError(model)
 
     class _Scheduler:

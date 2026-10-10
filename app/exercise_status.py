@@ -4,12 +4,26 @@ import asyncio
 
 from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from sqlalchemy import String, and_, or_
 
 from app.config import settings
-from app.db import AIPlanStep
+from app.db import AIPlanStep, ExerciseDelivery, FeedbackEvent
 from app.lifecycle import _lock_user
 from app.scheduled_delivery import efficacy, presentation_from_snapshot, sent_receipt
 from app.ux.exercise_renderer import render_exercise
+
+
+def pending_status_step_ids(db):
+    """Select stale terminal projections before opening per-user lock sessions."""
+    return [row[0] for row in db.query(ExerciseDelivery.plan_step_id)
+            .join(AIPlanStep, AIPlanStep.id == ExerciseDelivery.plan_step_id)
+            .outerjoin(FeedbackEvent, and_(FeedbackEvent.plan_step_id == AIPlanStep.id,
+                                          FeedbackEvent.source == 'exercise_efficacy'))
+            .filter(ExerciseDelivery.state == 'delivered',
+                    AIPlanStep.step_status.in_(('completed', 'skipped', 'expired', 'canceled')),
+                    or_(ExerciseDelivery.visible_status.is_distinct_from(AIPlanStep.step_status.cast(String)),
+                        ExerciseDelivery.visible_feedback.is_distinct_from(FeedbackEvent.value)))
+            .all()]
 
 
 def reconcile_status(db, step_id):

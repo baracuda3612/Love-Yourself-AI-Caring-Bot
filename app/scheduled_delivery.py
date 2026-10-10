@@ -73,6 +73,11 @@ def claim_send(db, step_id, *, now=None):
         return None
     if prior and (prior.attempt >= MAX_ATTEMPTS or (prior.next_attempt_at and now < utc(prior.next_attempt_at))):
         return None
+    if prior:
+        # This definite failed attempt has consumed its retry. Only the newest
+        # attempt may remain live recovery work; keep the original failure code.
+        prior.state = 'terminal_failure'
+        prior.next_attempt_at = None
     # Revalidate exact DB version and medical gate at each attempted send.
     from app.active_days import resolve_timezone
     try:

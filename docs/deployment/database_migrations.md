@@ -130,8 +130,12 @@ startup audit requires that exact head. It adds scheduled attempt receipts and
 completed-only efficacy uniqueness/value guards without backfilling send facts.
 Downgrade is refused: preserve receipts and use forward repair.
 
-The scheduler recovers due work and retries status edits every 30 seconds and on
-startup. At most three definite rate-limit rejections can retry within the
+Startup performs one restoration pass. A concrete send/projection failure arms
+a one-shot recovery job at the next retry/quarantine deadline; pending UI edits
+wait at least 30 seconds. Each recovery pass rearms only while actionable work
+remains, and aligned historical receipts never take user locks. Paused retries
+wait for resume or closure of their delivery window. At most three definite
+rate-limit rejections can retry within the
 two-hour grace and action deadline; permanent rejection is terminal. An
 interrupted in-flight attempt becomes `uncertain` after two minutes and cannot
 resend. A late Bot API receipt or a matching owned callback can confirm it.

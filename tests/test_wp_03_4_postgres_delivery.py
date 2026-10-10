@@ -411,7 +411,7 @@ async def test_coach_control_projects_terminal_message_before_return(migrated_en
     class FakeScheduler:
         def remove_job(self, job_id): jobs.pop(job_id, None)
         def get_job(self, job_id): return jobs.get(job_id)
-        def add_job(self, *args, **kwargs): jobs[kwargs['id']] = SimpleNamespace(next_run_time=kwargs['run_date'])
+        def add_job(self, *args, **kwargs): jobs[kwargs['id']] = SimpleNamespace(next_run_time=kwargs.get('run_date'))
     monkeypatch.setattr(scheduler, 'scheduler', FakeScheduler())
     edits = []
     polling_thread = get_ident()
@@ -452,6 +452,151 @@ async def test_coach_control_projects_terminal_message_before_return(migrated_en
     finally:
         with Session(migrated_engine) as db:
             db.execute(text('TRUNCATE users CASCADE')); db.commit()
+
+
+@pytest.mark.parametrize('variant', ['text', 'gif'])
+def test_recovery_only_locks_stale_ui_and_stops_when_repaired(db, monkeypatch, variant):
+    from app import scheduler, exercise_status
+    from app.db import AIPlanDay
+    from app.lifecycle import transition_plan_step
+    user, plan, _ = active_step(db)
+    steps = db.query(AIPlanStep).join(AIPlanDay).filter(AIPlanDay.plan_id == plan.id).order_by(AIPlanStep.id).all()
+    assert len(steps) == 7
+    statuses = ['completed', 'skipped', 'expired', 'canceled', 'completed', 'completed', 'delivered']
+    for i, (step, status) in enumerate(zip(steps, statuses)):
+        step.scheduled_for = datetime.now(timezone.utc) - timedelta(minutes=1)
+        step.expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+        db.flush(); deliver(db, step, variant)
+        if status != 'delivered':
+            transition_plan_step(db, user_id=user.id, step_id=step.id, target_status=status,
+                                 source_operation_id='history:' + str(step.id))
+        if i < 4 or i == 5:
+            sent_receipt(db, step.id).visible_status = status
+    submit_step_feedback(db, telegram_user_id=user.tg_id, step_id=steps[5].id, value='better')
+    transition_current_plan(db, user_id=user.id, operation='pause', source_operation_id='pause-history')
+    db.flush()
+    jobs = {}
+    class FakeScheduler:
+        def get_job(self, job_id): return jobs.get(job_id)
+        def add_job(self, *args, **kwargs): jobs[kwargs['id']] = SimpleNamespace(next_run_time=kwargs['run_date'], trigger=args[1])
+        def remove_job(self, job_id): jobs.pop(job_id, None)
+    monkeypatch.setattr(scheduler, 'scheduler', FakeScheduler())
+    monkeypatch.setattr(scheduler, 'SessionLocal', lambda: nullcontext(db))
+    monkeypatch.setattr(db, 'commit', db.flush)
+    locks = []
+    real_lock = exercise_status._lock_user
+    def lock(*args, **kwargs):
+        locks.append(args[1]); return real_lock(*args, **kwargs)
+    monkeypatch.setattr(exercise_status, '_lock_user', lock)
+    calls = []
+    fail_once = [True]
+    class FakeBot:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def edit_message_text(self, **kwargs):
+            calls.append(kwargs)
+            if fail_once[0]:
+                fail_once[0] = False
+                raise TimeoutError('temporary edit failure')
+        edit_message_caption = edit_message_text
+    monkeypatch.setattr(exercise_status, 'Bot', FakeBot)
+    assert set(exercise_status.pending_status_step_ids(db)) == {steps[4].id, steps[5].id}
+    scheduler.reconcile_scheduled_deliveries()
+    assert len(locks) == 2 and len(calls) == 2
+    assert 'scheduled_delivery_recovery' in jobs
+    scheduler.reconcile_scheduled_deliveries()
+    assert len(locks) == 3 and len(calls) == 3
+    assert 'scheduled_delivery_recovery' not in jobs
+    scheduler.reconcile_scheduled_deliveries()
+    assert len(locks) == 3 and len(calls) == 3
+    assert steps[6].step_status == 'delivered' and plan.status == 'paused'
+    # A later answer on a previously aligned completed message wakes only that
+    # message; NULL/NULL feedback on the remaining history stays aligned.
+    submit_step_feedback(db, telegram_user_id=user.tg_id, step_id=steps[4].id, value='same')
+    assert exercise_status.pending_status_step_ids(db) == [steps[4].id]
+    scheduler.reconcile_scheduled_deliveries()
+    assert len(locks) == 4 and len(calls) == 4
+    assert not jobs and not exercise_status.pending_status_step_ids(db)
+
+
+def test_recovery_is_dormant_for_success_and_wakes_for_definite_retry(db, monkeypatch):
+    from app import scheduler, active_days, telegram
+    from test_exercise_presentation_delivery import bot
+    user, _, step = active_step(db)
+    jobs = {}
+    class FakeScheduler:
+        def get_job(self, job_id): return jobs.get(job_id)
+        def add_job(self, *args, **kwargs): jobs[kwargs['id']] = SimpleNamespace(next_run_time=kwargs['run_date'], trigger=args[1])
+        def remove_job(self, job_id): jobs.pop(job_id, None)
+    monkeypatch.setattr(scheduler, 'scheduler', FakeScheduler())
+    monkeypatch.setattr(scheduler, 'SessionLocal', lambda: nullcontext(db))
+    monkeypatch.setattr(db, 'commit', db.flush)
+    monkeypatch.setattr(scheduler, '_maybe_schedule_plan_completion', lambda *_a: None)
+    monkeypatch.setattr(scheduler, '_event_loop', object())
+    monkeypatch.setattr(active_days, 'is_active_day', lambda *_a: True)
+    monkeypatch.setattr(telegram, 'bot', bot(chat_id=user.tg_id))
+    def submit(coro):
+        future = Future(); future.set_result(asyncio.run(coro)); return future
+    monkeypatch.setattr(scheduler, '_submit_coroutine', submit)
+    scheduler.send_scheduled_message(0, '', step.id)
+    assert not jobs
+    # Rehearse a separate delivery's definite failure, then two retries. Only
+    # the newest failed attempt remains recovery work after it succeeds.
+    from app.db import AIPlanDay
+    other = db.query(AIPlanStep).join(AIPlanDay).filter(AIPlanDay.plan_id == step.day.plan_id, AIPlanStep.id != step.id).first()
+    other.scheduled_for = step.scheduled_for; other.expires_at = step.expires_at; db.flush()
+    remaining = [2]
+    async def send(_bot, _chat, presentation, **kwargs):
+        if remaining[0]:
+            remaining[0] -= 1
+            return ExerciseSendResult('failed', 'text', presentation, 'x', failure_code='rate_limit', retry_after=30)
+        return ExerciseSendResult('delivered', 'text', presentation, render_exercise(presentation), user.tg_id, 888)
+    monkeypatch.setattr(scheduler, 'send_exercise', send)
+    for number in (1, 2):
+        scheduler.send_scheduled_message(0, '', other.id)
+        assert latest_attempt(db, other.id).attempt == number
+        assert 'scheduled_delivery_recovery' in jobs
+        assert jobs['scheduled_delivery_recovery'].trigger == 'date'
+        latest_attempt(db, other.id).next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        db.flush()
+        if number == 1:
+            transition_current_plan(db, user_id=user.id, operation='pause', source_operation_id='pause-retry')
+            jobs.pop('scheduled_delivery_recovery')  # APScheduler consumes a date job before calling it.
+            scheduler.reconcile_scheduled_deliveries()
+            assert remaining[0] == 1
+            assert jobs['scheduled_delivery_recovery'].next_run_time >= utc(other.expires_at)
+            transition_current_plan(db, user_id=user.id, operation='resume', source_operation_id='resume-retry')
+            scheduler.reconcile_plan_schedule(other.day.plan_id)
+            jobs.pop('scheduled_delivery_recovery')
+            scheduler._enable_delivery_recovery()
+            assert utc(other.scheduled_for) <= jobs['scheduled_delivery_recovery'].next_run_time < utc(other.expires_at)
+            # Resume moves pending slots into the future. Advance the test clock
+            # to that real slot instead of bypassing the eligibility gate.
+            moment = utc(other.scheduled_for) + timedelta(seconds=1)
+            class ClockDatetime(datetime):
+                @classmethod
+                def now(cls, tz=None): return moment if tz else moment.replace(tzinfo=None)
+            from app import scheduled_delivery
+            monkeypatch.setattr(scheduler, 'datetime', ClockDatetime)
+            monkeypatch.setattr(scheduled_delivery, 'datetime', ClockDatetime)
+    scheduler.reconcile_scheduled_deliveries()
+    assert latest_attempt(db, other.id).attempt == 3 and sent_receipt(db, other.id)
+    assert db.query(ExerciseDelivery).filter_by(state='retryable').count() == 0
+    assert 'scheduled_delivery_recovery' not in jobs
+
+
+def test_startup_retires_permanent_recovery_interval(monkeypatch):
+    from app import scheduler
+    added = {}; removed = []
+    class FakeScheduler:
+        running = True
+        def remove_job(self, job_id): removed.append(job_id)
+        def add_job(self, func, trigger, **kwargs): added[kwargs['id']] = trigger
+    monkeypatch.setattr(scheduler, 'scheduler', FakeScheduler())
+    scheduler.init_scheduler()
+    assert 'scheduled_delivery_recovery' in removed
+    assert 'scheduled_delivery_recovery' not in added
 
 
 @pytest.mark.parametrize('variant', ['text', 'gif'])
