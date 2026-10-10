@@ -769,8 +769,8 @@ MVP merge blocker; this does not claim that path is fixed.
 
 ## 9. Block 3 — Content, plan generation, presentation, and scheduled delivery
 
-**Status:** `IN PROGRESS` — WP-03.1, WP-03.2, and WP-03.3 are founder-merged;
-WP-03.4 is next.
+**Status:** `IN PROGRESS` — WP-03.1 through WP-03.4 are founder-merged;
+WP-03.5 is the final package in this block.
 
 **Depends on:** B2 and canonical identity from B1  
 **Objective:** make the primary product touchpoint deterministic, versioned,
@@ -886,9 +886,14 @@ for evidence and the [WP-03.4 handoff](work_packages/WP-03.4_start_message.md).
 
 ### WP-03.4 — Make scheduled delivery and callbacks reconcilable
 
-**Status:** `READY` — WP-03.3 is founder-merged. Start in a fresh task from the
-then-current `implementation/pre-mvp` after this documentation handoff merges;
-form the bounded execution contract before implementation.
+**Status:** `VERIFIED` — founder merged [PR #265](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/265)
+on 2026-10-10 as `4b064e55b78fa8a6b36d2219e3ea76b95c837b28`.
+Final independent local remediation review passed; configured GitHub review of
+`884df659231099c7d3c99c5a7438a20d0a4e9eb4` completed without new findings.
+The historical-receipt-rescan P1 was accepted, fixed and resolved. Recovery is
+failure-driven, isolated and dormant in ordinary successful traffic; pause
+preserves delivered actions through their existing deadline. See
+[the package record](work_packages/WP-03.4_reconcilable_scheduled_delivery.md).
 
 **Scope**
 
@@ -914,6 +919,11 @@ form the bounded execution contract before implementation.
 
 ### WP-03.5 — Implement durable completion and automatic continuation
 
+**Status:** `READY` — all package dependencies are founder-merged. Start in a
+fresh task from the then-current integration after this documentation handoff
+merges; first form a bounded execution contract from this scope and live code.
+See [the start message](work_packages/WP-03.5_start_message.md).
+
 **Depends on:** WP-02.2, WP-02.3, WP-03.2, and WP-03.4.
 
 **Scope**
@@ -924,7 +934,9 @@ form the bounded execution contract before implementation.
 * finalize the explicit plan before creating the summary obligation;
 * create exactly one same-format successor through the target plan builder for
   the next active day at DAY time;
-* guarantee no same-day successor collision;
+* guarantee no same-day successor collision: day 1 is the next active day
+  strictly after the completion/report day; the report precedes the first task
+  and states its real scheduled datetime;
 * make summary delivery obligation durable and retryable;
 * remove dead legacy CTA/copy;
 * preserve scheduled-only plan denominator and correct 14-day facts;
@@ -1611,7 +1623,7 @@ block exit gate passes.
   - [x] WP-03.1 — Migrate the versioned Content Library
   - [x] WP-03.2 — Correct deterministic plan generation
   - [x] WP-03.3 — Introduce canonical ExercisePresentation and media delivery
-  - [ ] WP-03.4 — Make scheduled delivery and callbacks reconcilable
+  - [x] WP-03.4 — Make scheduled delivery and callbacks reconcilable
   - [ ] WP-03.5 — Implement durable completion and automatic continuation
 - [ ] B4 — Access, privacy minimum, onboarding, and deterministic controls
   - [ ] WP-04.1 — Implement deployment, entitlement, and enrollment authority
@@ -1650,10 +1662,10 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | `WP-03.4 — Make scheduled delivery and callbacks reconcilable` |
-| Status | `READY` after WP-03.3 founder merge PR #263 (`ac3abd3`); documentation handoff PR must merge before the next package starts |
-| Next action | On 2026-10-10, start a fresh WP-03.4 task, fetch and verify the then-current `implementation/pre-mvp`, form its bounded contract, then implement delivery/callback reconciliation only |
-| Current blockers | No package dependency blocks WP-03.4. `DG-02` keeps cold water unavailable; `DG-03` real-device preview and weak-network checks remain before beta. Gate G1 remains required before durable-data rollout |
+| Current package | `WP-03.5 — Implement durable completion and automatic continuation` |
+| Status | `READY` after WP-03.4 founder merge PR #265 (`4b064e5`); documentation handoff must merge before implementation starts |
+| Next action | Start a fresh WP-03.5 task after the documentation handoff merges; fetch and verify integration, preserve local changes, create a separate package branch, then form the completion/continuation contract |
+| Current blockers | No package dependency blocks WP-03.5; the documentation handoff merge is pending. `DG-02` keeps cold water unavailable; `DG-03` device checks remain before beta. Final summary payload is WP-07.4; Gate G1 remains required before durable-data rollout |
 
 ### Private founder log
 
@@ -1704,7 +1716,7 @@ behavior.
 ## 22. Historical first steps after roadmap approval
 
 The sequence below was the initial handoff and has been completed through B2.
-The current next step is WP-03.4, as recorded in the current-package table
+The current next step is WP-03.5, as recorded in the current-package table
 above; do not restart WP-00.4 or WP-01.1 from this historical list.
 
 1. Complete WP-00.4 repository hardening and targeted verification.

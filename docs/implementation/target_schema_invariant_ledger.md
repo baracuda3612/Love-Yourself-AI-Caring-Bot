@@ -333,3 +333,19 @@ Every owning package must:
    founder data.
 
 WP-01.2 itself ends at this reviewed contract and its validation tests.
+
+## Implemented scheduled delivery / next completion boundary — 2026-10-10
+
+WP-03.4 was founder-merged in PR #265 as
+`4b064e55b78fa8a6b36d2219e3ea76b95c837b28`; its required application revision
+is `20261010_scheduled_delivery`. Scheduled `exercise_deliveries`, immutable
+confirmed facts, completed-only efficacy uniqueness and mutable projection
+diagnostics above are implemented. No on-demand occurrence linkage is added.
+
+WP-03.5 must define only the necessary plan-scoped durable completion/summary
+obligation and successor identity in its execution contract and forward
+migration. Lifecycle operations remain canonical; a delivery receipt, event,
+process cache, scheduler job or summary retry never owns plan finalization.
+No completion-obligation table or successor constraint is invented by this
+documentation handoff. Preserve the scheduled-only denominator and authoritative
+14-day step/day facts; final summary payload belongs to WP-07.4.
