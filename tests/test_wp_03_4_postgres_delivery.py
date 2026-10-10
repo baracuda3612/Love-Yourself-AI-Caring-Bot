@@ -645,17 +645,22 @@ async def test_real_callback_on_paused_plan_accepts_done_and_preserves_deadline(
             db.execute(text('TRUNCATE users CASCADE')); db.commit()
 
 
-@pytest.mark.parametrize('reason', ['missing', 'forbidden', 'snapshot'])
+@pytest.mark.parametrize('reason', ['missing', 'forbidden', 'snapshot', 'typed_snapshot'])
 def test_permanent_projection_is_diagnostic_not_an_infinite_repair(db, monkeypatch, reason):
     from app import scheduler, exercise_status
     from app.lifecycle import transition_plan_step
     from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
     from aiogram.methods import EditMessageText
     user, _, step = active_step(db)
-    if reason == 'snapshot':
+    invalid_snapshot = reason in ('snapshot', 'typed_snapshot')
+    if invalid_snapshot:
+        from app.exercise_presentation import step_presentation
+        snapshot = step_presentation(db, step).to_payload() if reason == 'typed_snapshot' else {}
+        if reason == 'typed_snapshot':
+            snapshot['steps'] = [1]
         transition_plan_step(db, user_id=user.id, step_id=step.id, target_status='delivered', source_operation_id='manual-import')
         db.add(ExerciseDelivery(plan_step_id=step.id, source_operation_id=f'scheduler:delivery:{step.id}', attempt=1,
-                               state='delivered', presentation_snapshot={}, chat_id=user.tg_id, message_id=777,
+                               state='delivered', presentation_snapshot=snapshot, chat_id=user.tg_id, message_id=777,
                                variant='text', rendered_payload='imported', started_at=datetime.now(timezone.utc), confirmed_at=datetime.now(timezone.utc)))
         db.flush()
     else:
@@ -673,14 +678,14 @@ def test_permanent_projection_is_diagnostic_not_an_infinite_repair(db, monkeypat
     monkeypatch.setattr(db, 'commit', db.flush)
     assert exercise_status.reconcile_status(db, step.id) is False
     receipt = sent_receipt(db, step.id)
-    assert receipt.projection_failure_code == {'missing':'message_uneditable', 'forbidden':'chat_inaccessible', 'snapshot':'invalid_snapshot'}[reason]
+    assert receipt.projection_failure_code == ('invalid_snapshot' if invalid_snapshot else {'missing':'message_uneditable', 'forbidden':'chat_inaccessible'}[reason])
     assert receipt.visible_status is None and receipt.state == 'delivered'
     assert not exercise_status.pending_status_step_ids(db)
     monkeypatch.setattr(scheduler, 'SessionLocal', lambda: nullcontext(db))
     monkeypatch.setattr(scheduler, '_enable_delivery_recovery', lambda: None)
     scheduler.reconcile_scheduled_deliveries()
-    assert edit.await_count == (0 if reason == 'snapshot' else 1)
-    if reason != 'snapshot':
+    assert edit.await_count == (0 if invalid_snapshot else 1)
+    if not invalid_snapshot:
         # Explicit user activity after access restoration may retry once.
         edit.side_effect = None
         assert exercise_status.reconcile_status(db, step.id) is True

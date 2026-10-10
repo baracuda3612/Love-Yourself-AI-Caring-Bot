@@ -49,7 +49,7 @@ def reconcile_status(db, step_id):
     try:
         presentation = replace(presentation_from_snapshot(receipt.presentation_snapshot), status=status, available_actions=())
         payload = render_exercise(presentation, caption=receipt.variant == 'gif')
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError, AttributeError):
         receipt.projection_failure_code = 'invalid_snapshot'
         db.commit()
         return False
