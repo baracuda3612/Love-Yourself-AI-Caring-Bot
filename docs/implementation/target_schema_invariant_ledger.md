@@ -73,7 +73,7 @@ forward migration and compatibility tests.
 | `ai_plans` | `RESHAPE`: `id`, `user_id`, `cycle_number`, `status`, `activated_at`, `abandoned_at`, immutable plan parameters such as `total_days`, and creation timestamps. | `user_id -> users.id ON DELETE CASCADE`. One current plan per user is mandatory. |
 | `ai_plan_days` | `RESHAPE`: `id`, `plan_id`, `day_number`, optional immutable generation snapshot. Completion is calculated from child steps. | `plan_id -> ai_plans.id ON DELETE CASCADE`; unique `(plan_id, day_number)`. |
 | `ai_plan_steps` | `RESHAPE`: `id`, `day_id`, `exercise_id`, `content_version`, immutable content/mechanic snapshot, `order_in_day`, `time_slot`, `scheduled_for`, `expires_at`, `step_status`, terminal timestamp, and version for conditional updates. | `day_id -> ai_plan_days.id ON DELETE CASCADE`; `(exercise_id, content_version) -> content_library` with `ON DELETE RESTRICT`. |
-| `exercise_deliveries` | `ADD LATER`: retry/reconciliation record with exactly one of `plan_step_id` or `on_demand_request_id`, stable source operation, attempt, delivery state, Telegram message identity, and immutable presentation snapshot. | Added by WP-03.4 for scheduled delivery; occurrence FK is added by WP-06.1. No delivery row owns step/request lifecycle. |
+| `exercise_deliveries` | `ADD` (WP-03.4 scheduled): required `plan_step_id`, stable source operation, numbered attempt (1–3), `in_flight` / `uncertain` / `delivered` / `retryable` / `terminal_failure`, Telegram chat/message identity, immutable presentation snapshot and confirmed variant/payload. Separate mutable status/feedback projection markers own only Telegram edit reconciliation. | Added by WP-03.4 for scheduled delivery; occurrence FK is added by WP-06.1. No delivery row owns step/request lifecycle. |
 
 ### Deployment, identity, entitlement, and enrolment
 
@@ -164,6 +164,8 @@ change.
 | `ux_on_demand_exercise_requests_one_open` | Unique `on_demand_exercise_requests(user_id)` where `status IN ('pending_delivery','delivered')`. | WP-06.1 |
 | `uq_on_demand_exercise_requests_source_operation` | Unique `on_demand_exercise_requests(source_operation_id)`. | WP-06.1 |
 | `ux_exercise_deliveries_one_sent` | Unique source occurrence where delivery state is successful; retries remain separate attempts. | WP-03.4/WP-06.2 |
+| `ux_exercise_deliveries_one_open` | One in-flight, uncertain or successful attempt per scheduled step; an unknown send blocks further sends. | WP-03.4 |
+| `uq_exercise_delivery_attempt` | Unique `(source_operation_id, attempt)`; scheduled source is `scheduler:delivery:<step_id>`. | WP-03.4 |
 | `uq_user_events_source_operation` | Unique `(event_source, source_operation_id, event_name)`. | WP-01.4 |
 | `uq_feedback_events_source_operation` | Unique `(source, source_operation_id)`. | WP-01.4 |
 | `uq_notice_ack_source_operation` | Unique `source_operation_id` and unique `(user_id, deployment_id, notice_version_id)`. | WP-01.4 |

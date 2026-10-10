@@ -13,7 +13,6 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.config import settings
-from app.delivery_guards import can_send_step_status
 from app.active_days import resolve_timezone, step_expires_at
 from app.plan_completion.tokens import make_report_token
 from app.db import AIPlan, AIPlanDay, AIPlanStep, SessionLocal, User, UserEvent
@@ -23,14 +22,11 @@ from app.ux.catalog import get_trigger_message
 from app.ux.persona import get_persona
 from app.ux.pulse_prompt import generate_pulse_message
 from app.ux.rate_limit import can_send_auto_message
-from app.ux.task_notification import maybe_advance_current_day
-from app.exercise_presentation import step_presentation
 from app.exercise_delivery import ExerciseSendResult, send_exercise
 from app.lifecycle import (
     LifecycleTransitionError,
     derive_current_day,
     expire_plan_step,
-    transition_plan_step,
 )
 
 # Configure JobStore
@@ -48,10 +44,6 @@ logger = logging.getLogger(__name__)
 
 _scheduler_started = False
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
-
-# Deliver a task up to 2 hours after its scheduled_for time.
-# Protects against brief server downtime without delivering stale tasks (e.g. at 23:00).
-_DELIVERY_LATE_GRACE = timedelta(hours=2)
 
 def _to_utc(dt: datetime) -> datetime:
     """Safely convert datetime to UTC-aware, handling both naive and aware inputs."""
@@ -82,8 +74,8 @@ def init_scheduler():
             scheduler.remove_job(retired_job_id)
         except Exception:
             pass
-    # Run every hour at :05 — 1 h max lag for any timezone, not just UTC+0.
-    scheduler.add_job("app.scheduler:expire_overdue_steps", "cron", minute=5, id="expire_steps", replace_existing=True, max_instances=1)
+    scheduler.add_job("app.scheduler:reconcile_scheduled_deliveries", "interval", seconds=30, id="scheduled_delivery_recovery", replace_existing=True, max_instances=1)
+    scheduler.add_job("app.scheduler:expire_overdue_steps", "interval", seconds=30, id="expire_steps", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_silent_users", "cron", hour=12, minute=0, id="silent_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_plan_completions", "cron", hour=10, minute=30, id="plan_completion_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:send_plan_pulse_snapshots", "cron", hour=10, minute=0, id="pulse_snapshot_check", replace_existing=True, max_instances=1)
@@ -147,148 +139,115 @@ async def _send_message_async(
 
 
 def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None):
-    """
-    Callback function executed by APScheduler.
-    """
-    if step_id is None:
+    """Claim once before Telegram; persist late results inside the send coroutine."""
+    if step_id is None or _event_loop is None:
         return
-
+    from app.scheduled_delivery import claim_send, finish_send
+    from app.active_days import resolve_active_days, is_active_day
     with SessionLocal() as db:
-        step = db.query(AIPlanStep).filter(AIPlanStep.id == step_id).first()
-        if not step or not step.day or not step.day.plan:
+        step = db.get(AIPlanStep, step_id)
+        if step is None:
             return
-
-        plan = step.day.plan
-        user = plan.user
-        if not user or not user.is_active:
+        user = step.day.plan.user
+        user_id, plan_id = user.id, step.day.plan_id
+        today = datetime.now(timezone.utc).astimezone(resolve_timezone(user.timezone)).date()
+        if not is_active_day(today, resolve_active_days(user.profile)):
             return
-        if not can_deliver_tasks(user, plan):
-            return
-
-        if plan.status != "active":
-            return
-        if not can_send_step_status(step.step_status):
-            return
-        if not step.scheduled_for:
-            return
-
-        # Check active_days: skip delivery on non-active days.
-        from app.active_days import resolve_active_days, is_active_day
-        user_tz = resolve_timezone(getattr(user, "timezone", None))
-        today_local = datetime.now(pytz.UTC).astimezone(user_tz).date()
-        active_days = resolve_active_days(user.profile)
-        if not is_active_day(today_local, active_days):
-            return
-
-        scheduled_for = step.scheduled_for.astimezone(pytz.UTC)
-        now_utc = datetime.now(pytz.UTC)
-        if now_utc < scheduled_for:
-            return
-        if now_utc - scheduled_for > _DELIVERY_LATE_GRACE:
-            return
-
-        plan_step_id = step.id
-        plan_id = plan.id
-        user_id = user.id
-        send_chat_id = user.tg_id
-        day_number = step.day.day_number
         try:
-            presentation = step_presentation(db, step, user_timezone=user_tz)
-        except ValueError:
-            logger.exception("Invalid exercise presentation for step %s", plan_step_id)
-            return
-        if not presentation.available_actions:
-            return
-
-    # Persisted jobs may contain old baked text. The exact selected DB version
-    # supplies the presentation; the job's text argument is compatibility only.
-    from app.telegram import bot as tg_bot
-
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="Виконано",
-                    callback_data=f"task_complete:{plan_step_id}",
-                ),
-                InlineKeyboardButton(
-                    text="Пропустити",
-                    callback_data=f"task_skip:{plan_step_id}",
-                ),
-            ]
-        ]
-    )
-
-    if _event_loop is None:
-        return
-    future = _submit_coroutine(send_exercise(tg_bot, send_chat_id, presentation, reply_markup=keyboard))
-    if not future:
-        return
-
-    delivery_error = None
-    result = None
-    try:
-        result = future.result(timeout=30)
-        if not isinstance(result, ExerciseSendResult):
-            result = ExerciseSendResult('uncertain', None, presentation, '', failure_code='missing_send_result')
-        if not result.delivered:
-            delivery_error = result.failure_code or result.outcome
-    except Exception:
-        # The coroutine may still send successfully. No fallback or retry here.
-        result = ExerciseSendResult('uncertain', None, presentation, '', failure_code='send_result_uncertain')
-        delivery_error = result.failure_code
-
-    with SessionLocal() as db:
-        try:
-            base_context = {
-                "day_number": day_number,
-            }
-            base_context = {
-                key: value for key, value in base_context.items() if value is not None
-            }
-            if delivery_error is None:
-                log_user_event(
-                    db,
-                    user_id=user_id,
-                    event_type="task_delivered",
-                    event_source="scheduler",
-                    source_operation_id=f"scheduler:delivery:{plan_step_id}",
-                    plan_step_id=plan_step_id,
-                    context=base_context,
-                )
-                delivery_transition = transition_plan_step(
-                    db,
-                    user_id=user_id,
-                    step_id=plan_step_id,
-                    target_status="delivered",
-                    source_operation_id=f"scheduler:delivery:{plan_step_id}",
-                )
-                db_step = db.query(AIPlanStep).filter(AIPlanStep.id == plan_step_id).first()
-                if db_step and result.delivered:
-                    db_step.tg_message_id = result.message_id
-                day_number = base_context.get("day_number")
-                if day_number is not None:
-                    maybe_advance_current_day(db, plan_id, day_number)
-            else:
-                error_context = {**base_context, "failure_code": delivery_error}
-                log_user_event(
-                    db,
-                    user_id=user_id,
-                    event_type="task_delivery_failed",
-                    event_source="scheduler",
-                    source_operation_id=(
-                        f"scheduler:delivery-failed:{plan_step_id}:"
-                        f"{scheduled_for.isoformat()}"
-                    ),
-                    plan_step_id=plan_step_id,
-                    context=error_context,
-                )
+            claim = claim_send(db, step_id)
             db.commit()
-            if delivery_error is None:
-                _maybe_schedule_plan_completion(user_id, plan_id)
+        except ValueError:
+            db.rollback()
+            logger.exception("Invalid scheduled presentation step=%s", step_id)
+            return
+    if claim is None:
+        return
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="Виконано", callback_data=f"task_complete:{step_id}"),
+        InlineKeyboardButton(text="Пропустити", callback_data=f"task_skip:{step_id}"),
+    ]])
+
+    def persist(result):
+        with SessionLocal() as db:
+            finish_send(db, claim.attempt_id, result)
+            db.commit()
+
+    async def send_and_record():
+        from app.telegram import bot as tg_bot
+        result = await send_exercise(tg_bot, claim.chat_id, claim.presentation, reply_markup=keyboard)
+        # Even if the scheduler wait expires, this coroutine retains the receipt.
+        for attempt in range(3):
+            try:
+                await asyncio.to_thread(persist, result)
+                break
+            except Exception:
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(attempt + 1)
+        if result.delivered:
+            await asyncio.to_thread(reconcile_terminal_step_keyboards, [step_id])
+            # Preserve the inherited completion job seam; WP-03.5 replaces it.
+            try:
+                await asyncio.to_thread(_maybe_schedule_plan_completion, user_id, plan_id)
+            except Exception:
+                logger.exception("Inherited completion scheduling failed after confirmed send step=%s", step_id)
+        return result
+
+    future = _submit_coroutine(send_and_record())
+    if future is None:
+        # The durable claim is deliberately quarantined if submission is lost.
+        return
+    try:
+        return future.result(timeout=30)
+    except Exception:
+        logger.warning("Scheduled send outcome pending/unknown step=%s", step_id, exc_info=True)
+        return ExerciseSendResult('uncertain', None, claim.presentation, '', failure_code='send_result_uncertain')
+
+
+def reconcile_scheduled_deliveries():
+    """Recover due work and pending UI effects; never resend uncertain attempts."""
+    from app.db import ExerciseDelivery
+    from app.scheduled_delivery import LATE_GRACE, IN_FLIGHT_GRACE
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        due_ids = [row[0] for row in db.query(AIPlanStep.id).join(AIPlanDay).join(AIPlan).filter(
+            AIPlan.status == 'active', AIPlanStep.step_status == 'pending',
+            AIPlanStep.scheduled_for <= now,
+            AIPlanStep.scheduled_for >= now - LATE_GRACE,
+        ).all()]
+        # Quarantine interrupted sends independently of plan status or expiry.
+        stale_ids = [row[0] for row in db.query(ExerciseDelivery.id).filter(
+            ExerciseDelivery.state == 'in_flight', ExerciseDelivery.started_at <= now - IN_FLIGHT_GRACE,
+        ).all()]
+        retry_ids = [row[0] for row in db.query(ExerciseDelivery.plan_step_id).filter(ExerciseDelivery.state == 'retryable').distinct().all()]
+        ui_ids = [row[0] for row in db.query(ExerciseDelivery.plan_step_id).filter(ExerciseDelivery.state == 'delivered').all()]
+    from app.scheduled_delivery import claim_send
+    for step_id in set(retry_ids):
+        with SessionLocal() as db:
+            # claim_send also closes retries whose delivery window has ended.
+            # Sending belongs to send_scheduled_message, not this cleanup pass.
+            step = db.get(AIPlanStep, step_id)
+            if step is not None and (step.step_status != 'pending' or not step.scheduled_for or now > _to_utc(step.scheduled_for) + LATE_GRACE or (step.expires_at and now >= _to_utc(step.expires_at))):
+                claim_send(db, step_id, now=now)
+                db.commit()
+    for attempt_id in stale_ids:
+        with SessionLocal() as db:
+            attempt = db.get(ExerciseDelivery, attempt_id)
+            if attempt:
+                from app.lifecycle import _lock_user
+                step = db.get(AIPlanStep, attempt.plan_step_id)
+                _lock_user(db, step.day.plan.user_id, require_entitlement=False)
+                db.refresh(attempt)
+                if attempt.state == 'in_flight':
+                    attempt.state = 'uncertain'
+                    attempt.failure_code = 'interrupted_send'
+                    db.commit()
+    for step_id in due_ids:
+        try:
+            send_scheduled_message(0, '', step_id)
         except Exception:
-            logger.exception("Failed to log scheduler telemetry.")
-    return result
+            logger.exception("Scheduled recovery failed step=%s", step_id)
+    reconcile_terminal_step_keyboards(ui_ids)
 
 
 def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
@@ -581,6 +540,9 @@ async def schedule_daily_loop():
             db.commit()
             logger.info(f"Restored {count} scheduled plan steps.")
 
+    await asyncio.to_thread(expire_overdue_steps)
+    await asyncio.to_thread(reconcile_scheduled_deliveries)
+
     # Keep the loop alive
     await asyncio.Event().wait()
 
@@ -773,6 +735,16 @@ def reconcile_terminal_step_keyboards(
     succeeded_ids: list[int] = []
     failed_ids: list[int] = []
     for step_id in ordered_ids:
+        from app.exercise_status import reconcile_status
+        try:
+            with SessionLocal() as db:
+                projected = reconcile_status(db, step_id)
+        except Exception:
+            logger.exception("Exercise status projection pending step=%s", step_id)
+            projected = False
+        if projected is not None:
+            (succeeded_ids if projected else failed_ids).append(step_id)
+            continue
         message_id, tg_id = by_id.get(step_id, (None, None))
         if message_id is None:
             succeeded_ids.append(step_id)
@@ -829,8 +801,7 @@ def reconcile_expired_step_keyboards(
 
 def expire_overdue_steps() -> None:
     """
-    Runs every hour at :05.
-    Max lag = 1 h — safe for all timezones (not just UTC).
+    Runs every 30 seconds and at restart, using persisted deadlines.
 
     Expiry rule:
     - Primary: expires_at IS NOT NULL AND expires_at < now
@@ -935,7 +906,7 @@ def expire_overdue_steps() -> None:
         reconciliation = SchedulerReconciliation(attempted=0, succeeded=0)
     if reconciliation.failed_ids:
         logger.warning(
-            "[EXPIRE] Button removal failed for step ids: %s; no background retry",
+            "[EXPIRE] Status projection pending for step ids: %s",
             reconciliation.failed_ids,
         )
 

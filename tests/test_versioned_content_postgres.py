@@ -281,7 +281,7 @@ def test_downgrade_is_refused_without_losing_versions(migrated_engine):
         env={**os.environ,'DATABASE_URL':migrated_engine.url.render_as_string(hide_password=False)},capture_output=True,text=True)
     assert result.returncode!=0 and 'forward repair' in result.stderr
     with migrated_engine.connect() as connection:
-        assert connection.execute(text('SELECT version_num FROM alembic_version')).scalar_one()=='20261003_content_library'
+        assert connection.execute(text('SELECT version_num FROM alembic_version')).scalar_one()=='20261010_scheduled_delivery'
         assert connection.execute(text('SELECT count(*) FROM content_library')).scalar_one()==9
 
 

@@ -23,7 +23,7 @@ from sqlalchemy.orm import sessionmaker
 from scripts.inspect_database_schema import inspect_database
 
 
-EXPECTED_REVISION = "20261003_content_library"
+EXPECTED_REVISION = "20261010_scheduled_delivery"
 EXPECTED_APPLICATION_TABLES = {
     "access_entitlements",
     "access_identities",
@@ -40,6 +40,7 @@ EXPECTED_APPLICATION_TABLES = {
     "deployment_roster_versions",
     "deployments",
     "event_catalog",
+    "exercise_deliveries",
     "failure_signals",
     "feedback_events",
     "notice_acknowledgements",
@@ -770,7 +771,7 @@ def _assert_event_privacy_operations(target_url: str) -> None:
                 """
                 INSERT INTO feedback_events (
                   user_id, source, source_operation_id, plan_step_id, value
-                ) VALUES (%s, 'exercise_efficacy', 'rehearsal:cross-step', %s, 'helpful')
+                ) VALUES (%s, 'exercise_efficacy', 'rehearsal:cross-step', %s, 'better')
                 """,
                 (raw_user_id, completed_step_id),
                 "exercise feedback target is not a completed step owned by user",
@@ -812,7 +813,7 @@ def _assert_event_privacy_operations(target_url: str) -> None:
                   plan_step_id, source_message_id, value
                 ) VALUES (
                   %s, 'exercise_efficacy', 'rehearsal:extra-exercise-target',
-                  %s, %s, 'helpful'
+                  %s, %s, 'better'
                 )
                 """,
                 (feedback_owner_id, completed_step_id, other_user_message_id),
@@ -848,7 +849,7 @@ def _assert_event_privacy_operations(target_url: str) -> None:
                       plan_step_id, value, context
                     ) VALUES (
                       %s, 'exercise_efficacy', 'rehearsal:unsafe-context',
-                      %s, 'helpful', '{"email": "user@example.com"}'::jsonb
+                      %s, 'better', '{"email": "user@example.com"}'::jsonb
                     )
                     """,
                     (feedback_owner_id, completed_step_id),
@@ -865,7 +866,7 @@ def _assert_event_privacy_operations(target_url: str) -> None:
                     """
                     INSERT INTO feedback_events (
                       user_id, source, source_operation_id, plan_step_id, value
-                    ) VALUES (%s, 'exercise_efficacy', '  ', %s, 'helpful')
+                    ) VALUES (%s, 'exercise_efficacy', '  ', %s, 'better')
                     """,
                     (feedback_owner_id, completed_step_id),
                 )
@@ -881,7 +882,7 @@ def _assert_event_privacy_operations(target_url: str) -> None:
                 INSERT INTO feedback_events (
                   user_id, source, source_operation_id, plan_step_id, value
                 ) VALUES (
-                  %s, 'exercise_efficacy', 'rehearsal:owned-step', %s, 'helpful'
+                  %s, 'exercise_efficacy', 'rehearsal:owned-step', %s, 'better'
                 )
                 """,
                 (feedback_owner_id, completed_step_id),

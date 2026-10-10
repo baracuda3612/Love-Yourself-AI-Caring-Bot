@@ -420,8 +420,16 @@ def test_owned_step_transition_resolves_actor_inside_the_service(monkeypatch):
         )
 
     monkeypatch.setattr(lifecycle, "transition_plan_step", _transition)
+    from app import scheduled_delivery
+    from unittest.mock import Mock
+    db = Mock()
+    db.query.return_value.filter.return_value.populate_existing.return_value.first.return_value = SimpleNamespace(
+        day=SimpleNamespace(plan=SimpleNamespace(user_id=17)), step_status='delivered', expires_at=None,
+    )
+    monkeypatch.setattr(scheduled_delivery, 'reconcile_callback_receipt', lambda *_a: None)
+    monkeypatch.setattr(telemetry, 'write_event_operation', lambda *_a, **_k: None)
     result = lifecycle.transition_owned_plan_step(
-        object(),
+        db,
         telegram_user_id=700,
         step_id=9,
         target_status="completed",
@@ -1089,6 +1097,7 @@ def test_keyboard_sweep_accepts_already_removed_markup_and_clears_marker(monkeyp
     monkeypatch.setattr(scheduler, "SessionLocal", _DB)
     monkeypatch.setattr(scheduler, "_submit_coroutine", submit)
 
+    monkeypatch.setattr('app.exercise_status.reconcile_status', lambda *_a: None)
     outcome = scheduler.reconcile_terminal_step_keyboards([41])
 
     assert outcome.failed_ids == ()

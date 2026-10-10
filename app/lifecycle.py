@@ -1064,6 +1064,23 @@ def abandon_current_plan(
     )
 
 
+def accept_confirmed_step_delivery(db: Session, *, step_id: int, source_operation_id: str, message_id: int):
+    """Accept an external send fact without reopening a concurrently closed step."""
+    step = db.get(AIPlanStep, step_id)
+    _lock_user(db, step.day.plan.user_id, require_entitlement=False)
+    db.refresh(step)
+    step.tg_message_id = message_id
+    if step.step_status == "pending":
+        step.step_status = "delivered"
+        step.version = (step.version or 0) + 1
+    if not find_lifecycle_operation(db, step.day.plan.user_id, source_operation_id):
+        record_lifecycle_operation(
+            db, user_id=step.day.plan.user_id, plan_id=step.day.plan_id, step_id=step.id,
+            source_operation_id=source_operation_id, operation="step_delivered", result_status="delivered",
+        )
+    return step
+
+
 def transition_plan_step(
     db: Session,
     *,
@@ -1122,7 +1139,9 @@ def transition_plan_step(
             raise LifecycleOwnershipError("plan_step_not_owned")
         raise LifecycleTransitionError("plan_step_missing")
     step, plan = row
-    if str(plan.status) != "active":
+    if str(plan.status) != "active" and not (
+        str(plan.status) == "paused" and target_status in {"completed", "skipped", "expired"}
+    ):
         raise LifecycleTransitionError("plan_not_active")
 
     current = str(step.step_status)
@@ -1219,10 +1238,31 @@ def transition_owned_plan_step(
     target_status: str,
     source_operation_id: str,
     occurred_at: datetime | None = None,
+    telegram_message=None,
 ) -> LifecycleResult:
     """Resolve a Telegram actor, then enforce aggregate ownership in one boundary."""
     actor = _lock_telegram_actor(db, telegram_user_id)
-    return transition_plan_step(
+    step = db.query(AIPlanStep).filter(AIPlanStep.id == step_id).populate_existing().first()
+    if step is None:
+        raise LifecycleTransitionError("plan_step_missing")
+    if step.day.plan.user_id != actor.id:
+        raise LifecycleOwnershipError("plan_step_not_owned")
+    from app.scheduled_delivery import reconcile_callback_receipt, utc
+    reconcile_callback_receipt(db, step_id, telegram_message)
+    now = occurred_at or datetime.now(timezone.utc)
+    if step.step_status in {"pending", "delivered"} and step.expires_at and utc(step.expires_at) <= now:
+        return expire_plan_step(
+            db, user_id=actor.id, step_id=step_id,
+            source_operation_id=f"scheduler:expiry:{step_id}:{utc(step.expires_at).isoformat()}",
+            occurred_at=utc(step.expires_at),
+        )
+    if step.step_status in TERMINAL_STEP_STATUSES:
+        return LifecycleResult(user_id=actor.id, plan_id=step.day.plan_id, step_id=step_id,
+                               status=step.step_status, operation=f"step_{target_status}", duplicate=True,
+                               day_number=step.day.day_number)
+    if target_status in {"completed", "skipped"} and step.step_status != "delivered":
+        raise LifecycleTransitionError("step_not_delivered")
+    result = transition_plan_step(
         db,
         user_id=actor.id,
         step_id=step_id,
@@ -1230,6 +1270,42 @@ def transition_owned_plan_step(
         source_operation_id=source_operation_id,
         occurred_at=occurred_at,
     )
+    if not result.duplicate and target_status in {"completed", "skipped"}:
+        from app.telemetry import write_event_operation
+        write_event_operation(
+            db, user_id=actor.id, event_name=f"task_{target_status}", event_source="telegram",
+            source_operation_id=f"step:terminal:{step_id}", plan_step_id=step_id,
+            occurred_at=now, properties={"day_number": result.day_number},
+        )
+    return result
+
+
+def submit_step_feedback(db: Session, *, telegram_user_id: int, step_id: int, value: str):
+    """One immutable efficacy answer; user lock serializes submissions and actions."""
+    if value not in {"better", "same", "worse"}:
+        raise LifecycleTransitionError("invalid_feedback_value")
+    actor = _lock_telegram_actor(db, telegram_user_id)
+    step = db.query(AIPlanStep).filter(AIPlanStep.id == step_id).populate_existing().first()
+    if step is None:
+        raise LifecycleTransitionError("plan_step_missing")
+    if step.day.plan.user_id != actor.id:
+        raise LifecycleOwnershipError("plan_step_not_owned")
+    if step.step_status != "completed":
+        raise LifecycleTransitionError("feedback_requires_completed")
+    from app.db import FeedbackEvent
+    from app.scheduled_delivery import efficacy
+    existing = efficacy(db, step_id)
+    if existing:
+        return existing.value, True
+    operation = f"step:efficacy:{step_id}"
+    db.add(FeedbackEvent(user_id=actor.id, source="exercise_efficacy", source_operation_id=operation,
+                         plan_step_id=step_id, value=value, context={"exercise_id": step.exercise_id, "content_version": step.content_version}))
+    db.flush()
+    from app.telemetry import write_event_operation
+    write_event_operation(db, user_id=actor.id, event_name="feedback_submitted", event_source="telegram",
+                          source_operation_id=operation, plan_step_id=step_id,
+                          properties={"source": "exercise_efficacy", "value": value})
+    return value, False
 
 
 def expire_plan_step(
