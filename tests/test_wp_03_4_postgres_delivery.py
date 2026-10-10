@@ -384,3 +384,113 @@ def test_action_cancel_race_and_expiry_have_one_terminal_fact(migrated_engine):
             assert step.step_status in ('completed','canceled')
     finally:
         with Session(migrated_engine) as s: s.execute(text('TRUNCATE users CASCADE')); s.commit()
+
+
+@pytest.mark.parametrize('variant', ['text', 'gif'])
+@pytest.mark.parametrize('tool_name', ['cancel_plan', 'switch_plan_format', 'retry_plan_action'])
+async def test_coach_control_projects_terminal_message_before_return(migrated_engine, monkeypatch, variant, tool_name):
+    """Use real orchestrator -> runtime -> lifecycle -> projection; only Telegram/jobs are fake."""
+    from threading import get_ident
+    from sqlalchemy.orm import sessionmaker
+    from app import db as database, orchestrator, scheduler, exercise_status
+    from app.plan_runtime import tools
+    from app.db import UserProfile
+    with Session(migrated_engine) as db:
+        user, _, step = active_step(db)
+        profile = db.query(UserProfile).filter_by(user_id=user.id).one()
+        profile.daily_time_slots = {'DAY': '14:00', 'EVENING': '20:30'}
+        profile.evening_slot_collected = True
+        claim = deliver(db, step, variant)
+        db.commit()
+        user_id, step_id = user.id, step.id
+    factory = sessionmaker(bind=migrated_engine, expire_on_commit=False)
+    monkeypatch.setattr(database, 'SessionLocal', factory)
+    monkeypatch.setattr(scheduler, 'SessionLocal', factory)
+    monkeypatch.setattr(orchestrator, 'SessionLocal', factory)
+    jobs = {}
+    class FakeScheduler:
+        def remove_job(self, job_id): jobs.pop(job_id, None)
+        def get_job(self, job_id): return jobs.get(job_id)
+        def add_job(self, *args, **kwargs): jobs[kwargs['id']] = SimpleNamespace(next_run_time=kwargs['run_date'])
+    monkeypatch.setattr(scheduler, 'scheduler', FakeScheduler())
+    edits = []
+    polling_thread = get_ident()
+    reject_edit = [tool_name == 'retry_plan_action']
+    class FakeBot:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def edit_message_text(self, **kwargs):
+            assert get_ident() != polling_thread
+            if reject_edit[0]: raise TimeoutError('temporary edit failure')
+            edits.append(('text', kwargs))
+        async def edit_message_caption(self, **kwargs):
+            assert get_ident() != polling_thread
+            if reject_edit[0]: raise TimeoutError('temporary edit failure')
+            edits.append(('gif', kwargs))
+    monkeypatch.setattr(exercise_status, 'Bot', FakeBot)
+    monkeypatch.setattr(orchestrator, 'log_metric', lambda *_a, **_k: None)
+    try:
+        args = {'plan_type': 'MEDIUM'} if tool_name == 'switch_plan_format' else {}
+        if tool_name == 'retry_plan_action':
+            first = await asyncio.to_thread(tools.cancel_plan, user_id, source_operation_id='cancel-before-retry')
+            assert first['keyboard_cleanup_pending'] is True and not edits
+            reject_edit[0] = False
+            args = {'action': 'cancel', 'original_source_operation_id': 'cancel-before-retry'}
+        reply = await orchestrator._execute_plan_tool(user_id, {
+            'name': tool_name, 'arguments': args, 'call_id': 'wp034:' + tool_name,
+        })
+        assert reply and 'Не вдалося прибрати' not in reply and 'Не вдалось виконати' not in reply
+        assert len(edits) == 1
+        kind, kwargs = edits[0]
+        assert kind == variant and kwargs['reply_markup'] is None
+        assert (kwargs['chat_id'], kwargs['message_id']) == (claim.chat_id, 777)
+        assert 'Скасовано' in kwargs.get('text', kwargs.get('caption'))
+        with Session(migrated_engine) as db:
+            assert db.get(AIPlanStep, step_id).step_status == 'canceled'
+            assert sent_receipt(db, step_id).visible_status == 'canceled'
+    finally:
+        with Session(migrated_engine) as db:
+            db.execute(text('TRUNCATE users CASCADE')); db.commit()
+
+
+@pytest.mark.parametrize('variant', ['text', 'gif'])
+async def test_real_callback_on_paused_plan_accepts_done_and_preserves_deadline(migrated_engine, monkeypatch, variant):
+    from sqlalchemy.orm import sessionmaker
+    from app import telegram, scheduler, exercise_status
+    with Session(migrated_engine) as db:
+        user, _, step = active_step(db)
+        claim = deliver(db, step, variant)
+        deadline = step.expires_at
+        transition_current_plan(db, user_id=user.id, operation='pause', source_operation_id='pause')
+        db.commit(); user_id, tg_id, step_id = user.id, user.tg_id, step.id
+    factory = sessionmaker(bind=migrated_engine, expire_on_commit=False)
+    monkeypatch.setattr(telegram, 'SessionLocal', factory)
+    monkeypatch.setattr(scheduler, 'SessionLocal', factory)
+    class FakeBot:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        edit_message_text = AsyncMock()
+        edit_message_caption = AsyncMock()
+    monkeypatch.setattr(exercise_status, 'Bot', FakeBot)
+    callback = SimpleNamespace(id='paused-done', data=f'task_complete:{step_id}',
+                               from_user=SimpleNamespace(id=tg_id), message=SimpleNamespace(answer=AsyncMock()), answer=AsyncMock())
+    try:
+        await telegram.handle_task_completed(callback)
+        await telegram.handle_task_completed(callback)
+        callback.answer.assert_awaited_with('Виконано')
+        callback.message.answer.assert_not_awaited()
+        edit = FakeBot.edit_message_caption if variant == 'gif' else FakeBot.edit_message_text
+        edit.assert_awaited_once()
+        assert 'Виконано' in edit.call_args.kwargs.get('text', edit.call_args.kwargs.get('caption'))
+        assert edit.call_args.kwargs['reply_markup'] is not None
+        with Session(migrated_engine) as db:
+            step = db.get(AIPlanStep, step_id)
+            assert step.day.plan.status == 'paused' and step.step_status == 'completed'
+            assert step.expires_at == deadline
+            assert sum(e.event_name == 'task_completed' for e in events(db, step)) == 1
+            assert sent_receipt(db, step_id).presentation_snapshot == claim.presentation.to_payload()
+    finally:
+        with Session(migrated_engine) as db:
+            db.execute(text('TRUNCATE users CASCADE')); db.commit()
