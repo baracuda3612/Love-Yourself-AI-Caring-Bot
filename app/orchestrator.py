@@ -669,7 +669,7 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
         if code == "schedule_reconciliation_failed":
             return (
                 "⚠️ Час збережено, але розклад ще не узгоджено. "
-                "Повтори цю саму дію."
+                "Повтори цю саму дію." + retry_note
             )
         if code == "superseded":
             if tool_name in {
