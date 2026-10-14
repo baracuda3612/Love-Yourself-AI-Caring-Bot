@@ -591,12 +591,16 @@ def test_startup_retires_permanent_recovery_interval(monkeypatch):
     added = {}; removed = []
     class FakeScheduler:
         running = True
+        def get_jobs(self): return [SimpleNamespace(id=x) for x in ['completion_1','completion_retry_1','completion_receipt_retry_1','plan_1_day_1_step_1']]
+        def resume(self): pass
         def remove_job(self, job_id): removed.append(job_id)
         def add_job(self, func, trigger, **kwargs): added[kwargs['id']] = trigger
     monkeypatch.setattr(scheduler, 'scheduler', FakeScheduler())
     scheduler.init_scheduler()
     assert 'scheduled_delivery_recovery' in removed
     assert 'scheduled_delivery_recovery' not in added
+    assert all(x in removed for x in ['completion_1','completion_retry_1','completion_receipt_retry_1'])
+    assert 'plan_1_day_1_step_1' not in removed
 
 
 @pytest.mark.parametrize('variant', ['text', 'gif'])
