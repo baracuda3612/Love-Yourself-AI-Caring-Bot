@@ -192,27 +192,36 @@ def recompute_future_steps(
     active_step_ids: list[int] = []
     for plan in plans:
         is_active = plan.status == "active"
+        updates = []
         for day, step in iter_future_steps(plan, effective_from):
             if step.step_status != "pending":
                 continue
             plan_start = plan.start_date or effective_from
             anchor_date = resolve_step_date(
-                plan_start=plan_start,
-                day_number=day.day_number,
-                scheduled_for=step.scheduled_for,
-                timezone_name=user.timezone,
+                plan_start=plan_start, day_number=day.day_number,
+                scheduled_for=step.scheduled_for, timezone_name=user.timezone,
             )
-            step.time_slot = normalize_time_slot(step.time_slot)
-            step.scheduled_for = compute_scheduled_for(
-                plan_start=plan_start,
-                day_number=1,
-                time_slot=step.time_slot,
-                timezone_name=user.timezone,
-                daily_time_slots=daily_time_slots,
+            slot = normalize_time_slot(step.time_slot)
+            scheduled = compute_scheduled_for(
+                plan_start=plan_start, day_number=1, time_slot=slot,
+                timezone_name=user.timezone, daily_time_slots=daily_time_slots,
                 anchor_date=anchor_date,
             )
-            from app.active_days import step_expires_at
-            step.expires_at = step_expires_at(step.scheduled_for, _normalize_timezone(user.timezone))
+            updates.append((step, slot, scheduled))
+        if any(scheduled <= effective_from for _, _, scheduled in updates):
+            # Founder-approved missed-time rule: carry all remaining pending
+            # groups to consecutive selected days, starting strictly tomorrow.
+            # Delivered work keeps its existing schedule/deadline/actionability.
+            plan_ids = reanchor_pending_plan_steps(user, plan, resumed_at=effective_from)
+            updated_step_ids.extend(plan_ids)
+            if is_active:
+                active_step_ids.extend(plan_ids)
+            continue
+        from app.active_days import step_expires_at
+        for step, slot, scheduled in updates:
+            step.time_slot = slot
+            step.scheduled_for = scheduled
+            step.expires_at = step_expires_at(scheduled, _normalize_timezone(user.timezone))
             updated_step_ids.append(step.id)
             if is_active:
                 active_step_ids.append(step.id)

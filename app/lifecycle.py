@@ -1395,8 +1395,9 @@ def complete_current_plan_if_ready(
     plan = get_current_plan(db, user_id, lock=True)
     if plan is None or plan.id != plan_id:
         return None
-    if str(plan.status) != "active":
+    if str(plan.status) not in {"active", "paused"}:
         return None
+    carry_pause = str(plan.status) == "paused"
 
     total_steps = (
         db.query(func.count(AIPlanStep.id))
@@ -1436,7 +1437,9 @@ def complete_current_plan_if_ready(
     now = now or datetime.now(timezone.utc)
     last_terminal = (db.query(AIPlanStep).join(AIPlanDay)
         .filter(AIPlanDay.plan_id == plan.id)
-        .order_by(AIPlanStep.terminal_at.desc(), AIPlanStep.id.desc()).first())
+        .order_by(AIPlanStep.terminal_at.desc().nullslast(), AIPlanStep.id.desc()).first())
+    if carry_pause and last_terminal.step_status not in {"completed", "skipped"}:
+        return None
     user = db.get(User, user_id)
     report_at = report_due_at(user, last_terminal, now=now)
     slots = getattr(user.profile, "daily_time_slots", None) or {}
@@ -1455,6 +1458,12 @@ def complete_current_plan_if_ready(
         activation_receipt_status="active",
         start_after_local_date=max(now, report_at).astimezone(resolve_timezone(user.timezone)).date(),
     ).plan
+    if carry_pause:
+        successor.status = "paused"
+        successor.version = int(successor.version or 0) + 1
+        record_lifecycle_operation(db, user_id=user_id, plan_id=successor.id,
+            source_operation_id=f"continuation:pause:{plan.id}",
+            operation="pause", result_status="paused")
     db.add(PlanCompletion(
         plan_id=plan.id, successor_plan_id=successor.id,
         report_at=report_at, wake_at=max(now, report_at), state="pending", attempts=0,

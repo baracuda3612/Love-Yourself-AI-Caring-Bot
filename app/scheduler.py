@@ -1139,8 +1139,13 @@ _completion_source_failure = False
 def _terminal_completion_sources(db):
     from app.lifecycle import TERMINAL_STEP_STATUSES
     child = db.query(AIPlanStep.id).join(AIPlanDay).filter(AIPlanDay.plan_id == AIPlan.id)
+    last_action = (child.with_entities(AIPlanStep.step_status)
+        .filter(AIPlanStep.terminal_at.isnot(None))
+        .order_by(AIPlanStep.terminal_at.desc(), AIPlanStep.id.desc())
+        .limit(1).correlate(AIPlan).scalar_subquery())
     return db.query(AIPlan.user_id, AIPlan.id).join(User).filter(
-        AIPlan.status == 'active', User.is_active.is_(True), child.exists(),
+        or_(AIPlan.status == 'active', and_(AIPlan.status == 'paused', last_action.in_(['completed','skipped']))),
+        User.is_active.is_(True), child.exists(),
         ~child.filter(AIPlanStep.step_status.notin_(TERMINAL_STEP_STATUSES)).exists(),
     )
 

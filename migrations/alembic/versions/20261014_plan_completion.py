@@ -28,12 +28,12 @@ def upgrade():
         sa.Column('release_payload', sa.Text()),
         sa.Column('release_message_id', sa.BigInteger()),
         sa.Column('released_at', sa.DateTime(timezone=True)),
-        sa.CheckConstraint("state <> 'released' OR (release_message_id > 0 AND release_payload IS NOT NULL AND released_at IS NOT NULL)", name='ck_plan_completion_release'),
+        sa.CheckConstraint("state <> 'released' OR (release_message_id IS NOT NULL AND release_message_id > 0 AND release_payload IS NOT NULL AND released_at IS NOT NULL)", name='ck_plan_completion_release'),
         sa.UniqueConstraint('successor_plan_id', name='uq_plan_completion_successor'),
         sa.CheckConstraint('plan_id <> successor_plan_id', name='ck_plan_completion_distinct'),
         sa.CheckConstraint("state IN ('pending','in_flight','uncertain','sent','failed','release_in_flight','release_uncertain','released','sent_held')", name='ck_plan_completion_state'),
         sa.CheckConstraint('attempts BETWEEN 0 AND 3', name='ck_plan_completion_attempts'),
-        sa.CheckConstraint("state NOT IN ('sent','sent_held') OR (message_id > 0 AND chat_id IS NOT NULL AND sent_at IS NOT NULL AND payload IS NOT NULL)", name='ck_plan_completion_receipt'),
+        sa.CheckConstraint("state NOT IN ('sent','sent_held') OR (message_id IS NOT NULL AND message_id > 0 AND chat_id IS NOT NULL AND sent_at IS NOT NULL AND payload IS NOT NULL)", name='ck_plan_completion_receipt'),
     )
     op.create_index('ix_plan_completions_work', 'plan_completions', ['state', 'wake_at'], postgresql_where=sa.text("state IN ('pending','in_flight','release_in_flight') OR schedule_pending"))
     op.execute("""

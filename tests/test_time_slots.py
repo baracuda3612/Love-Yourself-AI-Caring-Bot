@@ -203,3 +203,21 @@ def test_resume_invalid_slot_time_leaves_every_pending_step_unchanged():
 
     assert first.scheduled_for == original
     assert second.scheduled_for == original
+
+
+def test_retiming_into_today_past_reanchors_all_pending_groups_to_next_workday():
+    now = datetime(2030,1,4,10,tzinfo=timezone.utc)  # Friday
+    delivered = SimpleNamespace(id=10,step_status='delivered',time_slot='DAY',scheduled_for=now-timedelta(days=1),expires_at=now+timedelta(hours=2),order_in_day=0)
+    first = SimpleNamespace(id=11,step_status='pending',time_slot='DAY',scheduled_for=now.replace(hour=14),order_in_day=0)
+    second = SimpleNamespace(id=12,step_status='pending',time_slot='DAY',scheduled_for=now.replace(hour=14)+timedelta(days=3),order_in_day=0)
+    plan=SimpleNamespace(status='active',start_date=now-timedelta(days=1),days=[
+        SimpleNamespace(day_number=1,steps=[delivered]),
+        SimpleNamespace(day_number=2,steps=[first]),SimpleNamespace(day_number=3,steps=[second])])
+    user=SimpleNamespace(timezone='UTC',profile=SimpleNamespace(daily_time_slots={'DAY':'07:00'},active_days=['MON','TUE','WED','THU','FRI']))
+    before=(delivered.scheduled_for,delivered.expires_at)
+    updated,active=time_slots.recompute_future_steps(user,[plan],{'DAY':'07:00'},effective_from=now)
+    assert updated==active==[11,12]
+    assert first.scheduled_for==datetime(2030,1,7,7,tzinfo=timezone.utc)
+    assert second.scheduled_for==datetime(2030,1,8,7,tzinfo=timezone.utc)
+    assert (delivered.scheduled_for,delivered.expires_at)==before
+    assert first.expires_at==datetime(2030,1,7,23,59,59,tzinfo=timezone.utc)

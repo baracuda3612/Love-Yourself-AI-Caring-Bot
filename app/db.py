@@ -933,8 +933,8 @@ class PlanCompletion(Base):
         CheckConstraint("plan_id <> successor_plan_id", name="ck_plan_completion_distinct"),
         CheckConstraint("state IN ('pending','in_flight','uncertain','sent','failed','release_in_flight','release_uncertain','released','sent_held')", name="ck_plan_completion_state"),
         CheckConstraint("attempts BETWEEN 0 AND 3", name="ck_plan_completion_attempts"),
-        CheckConstraint("state NOT IN ('sent','sent_held') OR (message_id > 0 AND chat_id IS NOT NULL AND sent_at IS NOT NULL AND payload IS NOT NULL)", name="ck_plan_completion_receipt"),
-        CheckConstraint("state <> 'released' OR (release_message_id > 0 AND release_payload IS NOT NULL AND released_at IS NOT NULL)", name="ck_plan_completion_release"),
+        CheckConstraint("state NOT IN ('sent','sent_held') OR (message_id IS NOT NULL AND message_id > 0 AND chat_id IS NOT NULL AND sent_at IS NOT NULL AND payload IS NOT NULL)", name="ck_plan_completion_receipt"),
+        CheckConstraint("state <> 'released' OR (release_message_id IS NOT NULL AND release_message_id > 0 AND release_payload IS NOT NULL AND released_at IS NOT NULL)", name="ck_plan_completion_release"),
         Index("ix_plan_completions_work", "state", "wake_at", postgresql_where=text("state IN ('pending','in_flight','release_in_flight') OR schedule_pending")),
     )
     plan_id = Column(Integer, ForeignKey("ai_plans.id", ondelete="CASCADE"), primary_key=True)

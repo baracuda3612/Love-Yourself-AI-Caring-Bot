@@ -35,7 +35,7 @@ def lock_obligation(db, user_id, plan_id):
 
 def refresh_report_time(db, user, successor_id):
     """A saved DAY change also updates a not-yet-attempted no-action report."""
-    from app.plan_completion.chronology import report_due_at
+    from app.plan_completion.chronology import report_due_at, next_workday_day_at
     row = db.query(PlanCompletion).filter(
         PlanCompletion.successor_plan_id == successor_id,
         PlanCompletion.state == 'pending', PlanCompletion.attempts == 0).first()
@@ -44,9 +44,16 @@ def refresh_report_time(db, user, successor_id):
     last = db.query(AIPlanStep).join(AIPlanDay).filter(AIPlanDay.plan_id == row.plan_id).order_by(
         AIPlanStep.terminal_at.desc(), AIPlanStep.id.desc()).first()
     if last is not None and last.step_status == 'expired':
+        saved_day = (user.profile.daily_time_slots or {}).get('DAY')
+        previous = utc(row.report_at)
+        if previous.astimezone(resolve_timezone(user.timezone)).strftime('%H:%M') == saved_day:
+            return
         now = datetime.now(timezone.utc)
-        row.report_at = report_due_at(user, last, now=now)
-        row.wake_at = max(now, utc(row.report_at))
+        due = report_due_at(user, last, now=now)
+        if utc(due) <= now < previous:
+            due = next_workday_day_at(user, now)
+        row.report_at = due
+        row.wake_at = max(now, utc(due))
 
 
 def continuation_text(db, row, user, now):
@@ -55,7 +62,9 @@ def continuation_text(db, row, user, now):
     if successor.status == 'abandoned':
         return 'Автоматичне продовження скасовано або замінено за твоїм запитом.'
     if successor.status == 'paused':
-        return f'Наступні {successor.total_days} робочих днів підготовлено. Доставку призупинено.'
+        return ('У цьому плані більше немає незавершених вправ. '
+            'Автоматичне продовження залишається на паузі. '
+            'Щоб отримувати нові вправи, зніми паузу.')
     if successor.status != 'active':
         return 'Налаштування наступного плану вже змінено.'
     first = refresh_completion_successor(db, user=user, plan=successor, report_at=now)

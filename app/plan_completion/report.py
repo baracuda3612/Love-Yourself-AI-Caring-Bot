@@ -11,7 +11,7 @@ def build_completion_report(metrics: CompletionMetrics, persona: str = '', *, co
     text = (
         f"✅ План на {metrics.total_days} робочих днів завершено.\n"
         f"Виконано вправ: {metrics.total_completed} із {metrics.total_delivered}.\n"
-        f"Пропущено: {metrics.total_skipped}. Без відповіді: {metrics.total_ignored}."
+        f"Пропущено: {metrics.total_skipped}. Термін дії минув: {metrics.total_ignored}."
     )
     if continuation:
         text += '\n\n' + continuation

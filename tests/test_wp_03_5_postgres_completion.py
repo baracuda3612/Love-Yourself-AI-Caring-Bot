@@ -200,7 +200,7 @@ def test_controls_survive_completion_replay_without_false_promise(db,control):
         switch_plan_format(db,user_id=user.id,target_plan_type='MEDIUM',source_operation_id='control')
     assert close(db,user,plan).duplicate
     claim=claim_report(db,user.id,plan.id,now=now)
-    if control=='pause': assert 'призупинено' in claim.payload and 'Перша вправа прийде' not in claim.payload
+    if control=='pause': assert 'на паузі' in claim.payload and 'Перша вправа прийде' not in claim.payload
     elif control in ('cancel','switch'): assert 'замінено' in claim.payload and 'Перша вправа прийде' not in claim.payload
     else: assert '16:30' in claim.payload
     assert successor.status == ('paused' if control=='pause' else 'abandoned' if control in ('cancel','switch') else 'active')
@@ -276,6 +276,8 @@ def test_two_database_workers_finalize_and_claim_once(pg_engine):
         row=db.get(PlanCompletion,plan_id)
         assert row.state=='in_flight' and row.attempts==1
         assert db.query(AIPlan).filter(AIPlan.user_id==user_id).count()==2
+        claim_report(db,user_id,plan_id,now=datetime.now(timezone.utc)+SEND_TIMEOUT)
+        db.commit()  # leave no automatic work from this standalone race fixture
 
 
 def test_confirmed_summary_releases_exact_successor_jobs_and_parks_recovery(db,monkeypatch):
@@ -303,3 +305,97 @@ def test_confirmed_summary_releases_exact_successor_jobs_and_parks_recovery(db,m
     from app.db import UserEvent
     assert db.query(UserEvent).filter(UserEvent.event_name=='plan_completion_sent',UserEvent.plan_id==plan.id).count()==1
     assert db.query(UserEvent).filter(UserEvent.event_name=='plan_activated',UserEvent.plan_id==row.successor_plan_id).count()==1
+
+
+@pytest.mark.parametrize('target',['completed','skipped'])
+def test_final_delivered_action_while_paused_closes_and_carries_pause(db,target):
+    from app.lifecycle import transition_owned_plan_step
+    from app import scheduler
+    user,plan=source_plan(db); now=datetime.now(timezone.utc)
+    steps=terminalize(db,user,plan,at=now,leave=1)
+    last=steps[-1]; last.scheduled_for=now-timedelta(hours=1); last.expires_at=now+timedelta(hours=1)
+    transition_plan_step(db,user_id=user.id,step_id=last.id,target_status='delivered',source_operation_id='paused:last-delivery',occurred_at=now-timedelta(minutes=1))
+    transition_current_plan(db,user_id=user.id,operation='pause',source_operation_id='paused:control')
+    transition_owned_plan_step(db,telegram_user_id=user.tg_id,step_id=last.id,target_status=target,source_operation_id='paused:last-action',occurred_at=now)
+    assert scheduler._terminal_completion_sources(db).all()==[(user.id,plan.id)]
+    close(db,user,plan,now=now)
+    row=db.get(PlanCompletion,plan.id); successor=db.get(AIPlan,row.successor_plan_id)
+    assert plan.status=='completed' and successor.status=='paused' and row.report_at==now
+    assert scheduler._terminal_completion_sources(db).all()==[]
+    claim=claim_report(db,user.id,plan.id,now=now)
+    assert 'більше немає незавершених вправ' in claim.payload
+    assert 'на паузі' in claim.payload and 'зніми паузу' in claim.payload
+    assert 'Перша вправа прийде' not in claim.payload
+    finish_report(db,user.id,claim,outcome='sent',message_id=77,now=now)
+    assert not scheduler.can_deliver_tasks(user,successor)
+    assert close(db,user,plan,now=now).duplicate
+
+
+def test_paused_no_action_does_not_create_automatic_paused_cycles(db):
+    from app import scheduler
+    user,plan=source_plan(db)
+    transition_current_plan(db,user_id=user.id,operation='pause',source_operation_id='pause')
+    terminalize(db,user,plan,status='expired')
+    assert close(db,user,plan) is None
+    assert scheduler._terminal_completion_sources(db).all()==[]
+
+
+@pytest.mark.parametrize('state',['sent','sent_held','released'])
+def test_database_rejects_null_message_identity_in_confirmed_states(db,state):
+    user,plan=source_plan(db); terminalize(db,user,plan); close(db,user,plan)
+    row=db.get(PlanCompletion,plan.id)
+    with pytest.raises(DBAPIError), db.begin_nested():
+        row.state=state
+        row.chat_id=user.tg_id
+        row.payload='summary'; row.sent_at=datetime.now(timezone.utc)
+        row.release_payload='confirmation'; row.released_at=datetime.now(timezone.utc)
+        row.message_id=None; row.release_message_id=None
+        db.flush()
+
+
+def test_delivery_time_into_past_moves_pending_successor_groups_to_next_workday(db,monkeypatch):
+    from app import time_slots
+    from app.active_days import next_active_date
+    class Clock(datetime):
+        @classmethod
+        def now(cls,tz=None): return datetime(2030,1,4,10,tzinfo=timezone.utc)
+    user,plan=source_plan(db); terminalize(db,user,plan); close(db,user,plan)
+    row=db.get(PlanCompletion,plan.id); successor=db.get(AIPlan,row.successor_plan_id)
+    cursor=datetime(2030,1,4,tzinfo=timezone.utc).date()
+    for day in successor.days:
+        cursor=next_active_date(cursor,user.profile.active_days)
+        for step in day.steps:
+            step.scheduled_for=datetime.combine(cursor,datetime.min.time(),tzinfo=timezone.utc)+timedelta(hours=14)
+            step.expires_at=step.scheduled_for.replace(hour=23,minute=59,second=59)
+        cursor+=timedelta(days=1)
+    db.flush()
+    monkeypatch.setattr(time_slots,'datetime',Clock)
+    change_delivery_time(db,user_id=user.id,slot='DAY',hhmm='07:00',source_operation_id='earlier:day')
+    steps=[s for d in successor.days for s in d.steps]
+    assert len(steps)==7 and all(s.scheduled_for>Clock.now() for s in steps)
+    assert min(s.scheduled_for for s in steps)==datetime(2030,1,7,7,tzinfo=timezone.utc)
+    assert len({s.scheduled_for.date() for s in steps})==7
+    assert all(s.scheduled_for < s.expires_at for s in steps)
+
+
+def test_retiming_unattempted_no_action_report_into_past_uses_next_day_and_moves_seam(db,monkeypatch):
+    from app.plan_completion import workflow
+    class Clock(datetime):
+        @classmethod
+        def now(cls,tz=None): return datetime(2026,11,9,10,tzinfo=timezone.utc)
+    user,plan=source_plan(db)
+    expiry=datetime(2026,11,6,23,59,59,tzinfo=timezone.utc)
+    terminalize(db,user,plan,status='expired',at=expiry); close(db,user,plan,now=expiry+timedelta(seconds=1))
+    row=db.get(PlanCompletion,plan.id)
+    assert row.report_at==datetime(2026,11,9,14,tzinfo=timezone.utc)
+    user.profile.daily_time_slots={'DAY':'07:00','EVENING':'20:30'};db.flush()
+    monkeypatch.setattr(workflow,'datetime',Clock)
+    refresh_report_time(db,user,row.successor_plan_id);db.flush()
+    assert row.report_at==datetime(2026,11,10,7,tzinfo=timezone.utc)
+    # Reconciliation alone must not keep rolling an unchanged preference.
+    refresh_report_time(db,user,row.successor_plan_id)
+    assert row.report_at==datetime(2026,11,10,7,tzinfo=timezone.utc)
+    assert claim_report(db,user.id,plan.id,now=Clock.now()) is None
+    claim=claim_report(db,user.id,plan.id,now=row.report_at)
+    assert first_step(db,row.successor_plan_id).scheduled_for==datetime(2026,11,11,7,tzinfo=timezone.utc)
+    assert '11.11.2026 о 07:00' in claim.payload
