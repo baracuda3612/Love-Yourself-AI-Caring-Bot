@@ -88,25 +88,21 @@ def test_skip_streak_scheduler_failure(monkeypatch):
     assert plan_metrics.calculate_skip_streak(db=None, user_id=1, plan_id=1) == 0
 
 
-@pytest.mark.parametrize(
-    ("delivered", "expected"),
-    [
-        ([], 0.0),
-        ([(DummyStep("completed"), _ts(1))], 1.0),
-        (
-            [
-                (DummyStep("completed"), _ts(3)),
-                (DummyStep("pending"), _ts(2)),
-                (DummyStep("pending"), _ts(1)),
-            ],
-            1 / 3,
-        ),
-    ],
-)
-def test_completion_rate(monkeypatch, delivered, expected):
-    monkeypatch.setattr(plan_metrics, "fetch_delivered_steps", lambda *_args, **_kwargs: delivered)
-
-    assert plan_metrics.get_completion_rate(db=None, user_id=1, plan_id=1) == expected
+@pytest.mark.parametrize("statuses,expected", [([],0.0),(['completed'],1.0),(['completed','skipped','expired'],1/3)])
+def test_completion_rate_uses_scheduled_terminal_denominator(statuses,expected):
+    clauses=[]
+    class Query:
+        def join(self,*args): return self
+        def filter(self,*args):
+            clauses.extend(str(a.compile(compile_kwargs={"literal_binds":True})) for a in args)
+            return self
+        def all(self): return [DummyStep(s) for s in statuses]
+    class DB:
+        def query(self,*args): return Query()
+    assert plan_metrics.get_completion_rate(DB(),1,1)==expected
+    assert any("scheduled_for <=" in c for c in clauses)
+    assert any("'completed', 'skipped', 'expired'" in c for c in clauses)
+    assert not any('user_events' in c for c in clauses)
 
 
 def test_get_recent_tasks(monkeypatch):

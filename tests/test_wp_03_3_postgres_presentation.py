@@ -84,7 +84,6 @@ def test_scheduler_uses_canonical_send_and_only_confirms_success(db,monkeypatch,
     monkeypatch.setattr(db,'commit',db.flush)
     monkeypatch.setattr(scheduler,'_event_loop',object())
     monkeypatch.setattr(active_days,'is_active_day',lambda *_args:True)
-    monkeypatch.setattr(scheduler,'_maybe_schedule_plan_completion',lambda *_args:None)
 
     def submit(coro):
         future=Future(); future.set_result(asyncio.run(coro)); return future

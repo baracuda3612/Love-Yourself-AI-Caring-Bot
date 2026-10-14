@@ -156,6 +156,7 @@ def finalize_plan(
     activation_time_utc: datetime,
     source_operation_id: str,
     activation_receipt_status: str,
+    start_after_local_date: date | None = None,
 ) -> PlanActivationResult:
     try:
         user = (
@@ -225,6 +226,15 @@ def finalize_plan(
             user_timezone=user.timezone,
             slot_time_mapping=slot_time_mapping,
         )
+        if start_after_local_date is not None:
+            # Completion has its own exclusive seam, independent of activation's
+            # inclusive day mapping. Never create a past or same-day first task.
+            tz = _normalize_timezone(user.timezone)
+            first_date = next_active_date(
+                max(plan_start.astimezone(tz).date(), start_after_local_date + timedelta(days=1)),
+                resolve_active_days(profile),
+            )
+            plan_start = tz.localize(datetime.combine(first_date, time.min)).astimezone(timezone.utc)
         latest_cycle = (
             db.query(func.max(AIPlan.cycle_number))
             .filter(AIPlan.user_id == user_id)
@@ -236,7 +246,7 @@ def finalize_plan(
             module_id=PlanModule.BURNOUT_RECOVERY.value,
             status="active",
             cycle_number=int(latest_cycle or 0) + 1,
-            activated_at=plan_start,
+            activated_at=activation_time_utc,
             version=1,
             start_date=plan_start,
         )

@@ -1,684 +1,105 @@
-import asyncio
-import os
-import pathlib
-import sys
-from datetime import datetime
+"""Target completion entrances; durable/concurrency evidence lives in PG rehearsal."""
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
-import pytz
-
-os.environ.setdefault("BOT_TOKEN", "test-token")
-os.environ.setdefault(
-    "DATABASE_URL",
-    "postgresql://test-user:test-pass@localhost:5432/test-db",
-)
-os.environ.setdefault("OPENAI_API_KEY", "test-key")
-
-ROOT = pathlib.Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.append(str(ROOT))
-
 from app import orchestrator, scheduler
-from app.lifecycle import CompletionDeliveryResult, LifecycleResult
+from app.plan_completion import workflow
 
 
-class _SessionCtx:
-    def __init__(self, db):
-        self.db = db
+def test_no_two_hour_trigger_or_process_local_send_authority():
+    assert not hasattr(scheduler, '_maybe_schedule_plan_completion')
+    assert not hasattr(orchestrator, '_completion_known_sends')
+    assert not hasattr(orchestrator, '_completion_delivery_locks')
+    assert 'start_plan:' not in Path('app/orchestrator.py').read_text()
 
-    def __enter__(self):
-        return self.db
 
-    def __exit__(self, exc_type, exc, tb):
-        return False
+def test_done_skip_and_expiry_reach_explicit_completion():
+    source=Path('app/telegram.py').read_text()
+    assert 'request_plan_completion, transition.user_id, transition.plan_id' in source
+    expiry=Path('app/scheduler.py').read_text().split('def expire_overdue_steps()',1)[1].split('def check_plan_completions()',1)[0]
+    assert expiry.index('candidate_db.commit()') < expiry.index('request_plan_completion(')
 
 
-class _FakeNowDateTime:
-    current = None
-
-    @classmethod
-    def now(cls, tz=None):
-        if tz is None:
-            return cls.current
-        return cls.current.astimezone(tz)
-
-
-class _RecordingActiveUsersQuery:
-    def __init__(self):
-        self.joins = []
-        self.filters = []
-
-    def join(self, *args):
-        self.joins.append(args)
-        return self
-
-    def filter(self, *criteria):
-        self.filters.extend(criteria)
-        return self
-
-
-class _RecordingActiveUsersDB:
-    def __init__(self):
-        self.user_query = _RecordingActiveUsersQuery()
-
-    def query(self, model):
-        assert model is scheduler.User
-        return self.user_query
-
-
-def test_scheduler_user_scan_requires_an_authoritative_active_plan():
-    db = _RecordingActiveUsersDB()
-
-    query = scheduler._active_plan_users_query(db)
-
-    assert query is db.user_query
-    assert db.user_query.joins
-    assert db.user_query.joins[0][0] is scheduler.AIPlan
-    assert any(
-        criterion.compare(scheduler.AIPlan.status == "active")
-        for criterion in db.user_query.filters
-    )
-
-
-class _FakeStepQuery:
-    def __init__(self, count_value):
-        self._count = count_value
-
-    def join(self, *_args, **_kwargs):
-        return self
-
-    def filter(self, *_args, **_kwargs):
-        return self
-
-    def count(self):
-        return self._count
-
-
-class _FakeUserQuery:
-    def __init__(self, user):
-        self._user = user
-
-    def filter(self, *_args, **_kwargs):
-        return self
-
-    def first(self):
-        return self._user
-
-
-class _DBForMaybeSchedule:
-    def __init__(self, future_steps, user):
-        self.future_steps = future_steps
-        self.user = user
-
-    def query(self, model):
-        if model is scheduler.AIPlanStep:
-            return _FakeStepQuery(self.future_steps)
-        if model is scheduler.User:
-            return _FakeUserQuery(self.user)
-        raise AssertionError("unexpected model")
-
-
-def test_maybe_schedule_plan_completion_schedules_on_last_step(monkeypatch):
-    user = type("U", (), {"id": 1, "timezone": "Europe/Kyiv"})()
-    fake_db = _DBForMaybeSchedule(future_steps=0, user=user)
-    monkeypatch.setattr(scheduler, "SessionLocal", lambda: _SessionCtx(fake_db))
-
-    calls = []
-    monkeypatch.setattr(scheduler.scheduler, "add_job", lambda *a, **k: calls.append((a, k)))
-
-    _FakeNowDateTime.current = datetime(2026, 1, 1, 16, 0, tzinfo=pytz.UTC)
-    monkeypatch.setattr(scheduler, "datetime", _FakeNowDateTime)
-
-    scheduler._maybe_schedule_plan_completion(user_id=1, plan_id=10)
-
-    assert len(calls) == 1
-    assert calls[0][1]["id"] == "completion_10"
-
-
-def test_maybe_schedule_plan_completion_skips_when_future_steps(monkeypatch):
-    user = type("U", (), {"id": 1, "timezone": "Europe/Kyiv"})()
-    fake_db = _DBForMaybeSchedule(future_steps=2, user=user)
-    monkeypatch.setattr(scheduler, "SessionLocal", lambda: _SessionCtx(fake_db))
-
-    calls = []
-    monkeypatch.setattr(scheduler.scheduler, "add_job", lambda *a, **k: calls.append((a, k)))
-
-    _FakeNowDateTime.current = datetime(2026, 1, 1, 16, 0, tzinfo=pytz.UTC)
-    monkeypatch.setattr(scheduler, "datetime", _FakeNowDateTime)
-
-    scheduler._maybe_schedule_plan_completion(user_id=1, plan_id=10)
-
-    assert calls == []
-
-
-def test_maybe_schedule_plan_completion_run_date_plus_two_hours(monkeypatch):
-    user = type("U", (), {"id": 1, "timezone": "Europe/Kyiv"})()
-    fake_db = _DBForMaybeSchedule(future_steps=0, user=user)
-    monkeypatch.setattr(scheduler, "SessionLocal", lambda: _SessionCtx(fake_db))
-
-    calls = []
-    monkeypatch.setattr(scheduler.scheduler, "add_job", lambda *a, **k: calls.append((a, k)))
-
-    _FakeNowDateTime.current = datetime(2026, 1, 1, 15, 0, tzinfo=pytz.UTC)  # 17:00 local
-    monkeypatch.setattr(scheduler, "datetime", _FakeNowDateTime)
-
-    scheduler._maybe_schedule_plan_completion(user_id=1, plan_id=10)
-
-    run_date = calls[0][1]["run_date"]
-    assert run_date == datetime(2026, 1, 1, 17, 0, tzinfo=pytz.UTC)
-
-
-def test_maybe_schedule_plan_completion_run_date_next_day_10_local(monkeypatch):
-    user = type("U", (), {"id": 1, "timezone": "Europe/Kyiv"})()
-    fake_db = _DBForMaybeSchedule(future_steps=0, user=user)
-    monkeypatch.setattr(scheduler, "SessionLocal", lambda: _SessionCtx(fake_db))
-
-    calls = []
-    monkeypatch.setattr(scheduler.scheduler, "add_job", lambda *a, **k: calls.append((a, k)))
-
-    _FakeNowDateTime.current = datetime(2026, 1, 1, 19, 30, tzinfo=pytz.UTC)  # 21:30 local
-    monkeypatch.setattr(scheduler, "datetime", _FakeNowDateTime)
-
-    scheduler._maybe_schedule_plan_completion(user_id=1, plan_id=10)
-
-    run_date = calls[0][1]["run_date"]
-    assert run_date == datetime(2026, 1, 2, 8, 0, tzinfo=pytz.UTC)
-
-
-def test_maybe_schedule_plan_completion_moves_to_next_day_if_candidate_after_21(monkeypatch):
-    user = type("U", (), {"id": 1, "timezone": "Europe/Kyiv"})()
-    fake_db = _DBForMaybeSchedule(future_steps=0, user=user)
-    monkeypatch.setattr(scheduler, "SessionLocal", lambda: _SessionCtx(fake_db))
-
-    calls = []
-    monkeypatch.setattr(scheduler.scheduler, "add_job", lambda *a, **k: calls.append((a, k)))
-
-    _FakeNowDateTime.current = datetime(2026, 1, 1, 18, 30, tzinfo=pytz.UTC)  # 20:30 local; +2h => 22:30 local
-    monkeypatch.setattr(scheduler, "datetime", _FakeNowDateTime)
-
-    scheduler._maybe_schedule_plan_completion(user_id=1, plan_id=10)
-
-    run_date = calls[0][1]["run_date"]
-    assert run_date == datetime(2026, 1, 2, 8, 0, tzinfo=pytz.UTC)
-
-
-class _FakeEventQuery:
-    def __init__(self, existing):
-        self._existing = existing
-
-    def filter(self, *_args, **_kwargs):
-        return self
-
-    def first(self):
-        return self._existing
-
-
-class _DBForCompletionMessage:
-    def __init__(self, user, existing_event, plan=None):
-        self.user = user
-        self.existing_event = existing_event
-        self.plan = plan or type("Plan", (), {"id": 99, "status": "completed"})()
-        self.commits = 0
-
-    def query(self, model):
-        if model is orchestrator.User:
-            return _FakeUserQuery(self.user)
-        if model is orchestrator.UserEvent:
-            return _FakeEventQuery(self.existing_event)
-        if model is orchestrator.AIPlan:
-            return _FakeUserQuery(self.plan)
-        raise AssertionError("unexpected model")
-
-    def commit(self):
-        self.commits += 1
-
-    def rollback(self):
-        pass
-
-
-class _SubmittedFuture:
-    def result(self, timeout=None):
-        return None
-
-
-def test_trigger_plan_completion_skips_report_when_plan_is_not_ready(monkeypatch):
-    user = type("U", (), {"id": 1})()
-    db = _DBForCompletionMessage(user=user, existing_event=None)
-    monkeypatch.setattr(orchestrator, "SessionLocal", lambda: _SessionCtx(db))
-    expected_plan_ids = []
-
-    def _fake_complete(_db, _user, *, expected_plan_id=None):
-        expected_plan_ids.append(expected_plan_id)
-        return None
-
-    monkeypatch.setattr(orchestrator, "_auto_complete_plan_if_needed", _fake_complete)
-
-    submitted = []
-    monkeypatch.setattr(
-        "app.scheduler._submit_coroutine",
-        lambda coro: submitted.append(coro),
-    )
-
-    orchestrator._trigger_plan_completion(user_id=1, plan_id=99)
-
-    assert db.commits == 1
-    assert submitted == []
-    assert expected_plan_ids == [99]
-
-
-def test_trigger_plan_completion_reports_the_plan_that_completed(monkeypatch):
-    user = type("U", (), {"id": 1})()
-    db = _DBForCompletionMessage(user=user, existing_event=None)
-    monkeypatch.setattr(orchestrator, "SessionLocal", lambda: _SessionCtx(db))
-    monkeypatch.setattr(
-        orchestrator,
-        "_auto_complete_plan_if_needed",
-        lambda _db, _user, *, expected_plan_id=None: LifecycleResult(
-            user_id=1,
-            plan_id=42,
-            status="completed",
-            operation="complete",
-        )
-        if expected_plan_id == 99
-        else None,
-    )
-
-    submitted = []
-
-    async def _fake_send(user_id, plan_id):
-        submitted.append((user_id, plan_id))
-
-    def _fake_submit(coro):
-        try:
-            coro.send(None)
-        except StopIteration:
-            pass
-        return _SubmittedFuture()
-
-    monkeypatch.setattr(orchestrator, "send_plan_completion_message", _fake_send)
-    monkeypatch.setattr("app.scheduler._submit_coroutine", _fake_submit)
-
-    orchestrator._trigger_plan_completion(user_id=1, plan_id=99)
-
-    assert db.commits == 1
-    assert submitted == [(1, 42)]
-
-
-@pytest.mark.anyio
-async def test_message_entry_completion_wrapper_captures_result_before_send(monkeypatch):
-    user = type("U", (), {"id": 1})()
-    db = _DBForCompletionMessage(user=user, existing_event=None)
-    monkeypatch.setattr(orchestrator, "SessionLocal", lambda: _SessionCtx(db))
-    monkeypatch.setattr(
-        orchestrator,
-        "_auto_complete_plan_if_needed",
-        lambda _db, _user: LifecycleResult(
-            user_id=1,
-            plan_id=42,
-            status="completed",
-            operation="complete",
-        ),
-    )
-
-    sent = []
-
-    async def _fake_send(user_id, plan_id):
-        sent.append((user_id, plan_id))
-        return CompletionDeliveryResult(
-            user_id=user_id,
-            plan_id=plan_id,
-            succeeded=True,
-        )
-
-    monkeypatch.setattr(orchestrator, "send_plan_completion_message", _fake_send)
-
-    await orchestrator._auto_complete_plan_if_needed_for_user_id(1)
-
-    assert db.commits == 1
-    assert sent == [(1, 42)]
-
-
-@pytest.mark.anyio
-async def test_send_plan_completion_message_skips_when_already_sent(monkeypatch):
-    user = type("U", (), {"id": 1, "tg_id": 123, "profile": None})()
-    db = _DBForCompletionMessage(user=user, existing_event=object())
-    monkeypatch.setattr(orchestrator, "SessionLocal", lambda: _SessionCtx(db))
-
-    sent = []
-    monkeypatch.setattr(orchestrator, "log_user_event", lambda *a, **k: sent.append((a, k)))
-
-    async def _fake_send(*_args, **_kwargs):
-        sent.append("sent")
-        return True
-
-    monkeypatch.setattr("app.scheduler._send_message_async", _fake_send)
-
-    await orchestrator.send_plan_completion_message(1, 99)
-
-    assert sent == []
-
-
-@pytest.mark.anyio
-async def test_completion_delivery_serializes_duplicate_in_flight_attempts(monkeypatch):
-    user = type("U", (), {"id": 1, "tg_id": 123, "profile": None})()
-    state = {"receipt": None}
-
-    class _SharedReceiptDB(_DBForCompletionMessage):
-        def query(self, model):
-            if model is orchestrator.UserEvent:
-                return _FakeEventQuery(state["receipt"])
-            return super().query(model)
-
-    monkeypatch.setattr(
-        orchestrator,
-        "SessionLocal",
-        lambda: _SessionCtx(_SharedReceiptDB(user=user, existing_event=None)),
-    )
-    monkeypatch.setattr(
-        "app.plan_completion.metrics.build_completion_metrics",
-        lambda *_args: type("Metrics", (), {"outcome_tier": "STRONG"})(),
-    )
-    monkeypatch.setattr(
-        "app.plan_completion.report.build_completion_report",
-        lambda *_args: "План завершено.",
-    )
-    monkeypatch.setattr(
-        "app.plan_completion.tokens.make_report_token",
-        lambda *_args: "report-token",
-    )
-
-    send_started = asyncio.Event()
-    release_send = asyncio.Event()
-    sends = []
-
-    async def _fake_send(*args, **kwargs):
-        sends.append((args, kwargs))
-        send_started.set()
-        await release_send.wait()
-        return True
-
-    def _record_receipt(*_args, **_kwargs):
-        state["receipt"] = object()
-
-    monkeypatch.setattr("app.scheduler._send_message_async", _fake_send)
-    monkeypatch.setattr(orchestrator, "log_user_event", _record_receipt)
-
-    first = asyncio.create_task(orchestrator.send_plan_completion_message(1, 99))
-    await send_started.wait()
-    second = asyncio.create_task(orchestrator.send_plan_completion_message(1, 99))
-    await asyncio.sleep(0)
-
-    assert len(sends) == 1
-    release_send.set()
-    first_result, second_result = await asyncio.gather(first, second)
-
-    assert len(sends) == 1
-    assert first_result.succeeded is True
-    assert second_result.succeeded is True
-    assert second_result.duplicate is True
-    assert second_result.code == "already_sent"
-
-
-@pytest.mark.anyio
-async def test_completion_receipt_retry_does_not_resend_known_success(monkeypatch):
-    user = type("U", (), {"id": 1, "tg_id": 123, "profile": None})()
-    db = _DBForCompletionMessage(user=user, existing_event=None)
-    monkeypatch.setattr(orchestrator, "SessionLocal", lambda: _SessionCtx(db))
-    monkeypatch.setattr(
-        "app.plan_completion.metrics.build_completion_metrics",
-        lambda *_args: type("Metrics", (), {"outcome_tier": "STRONG"})(),
-    )
-    monkeypatch.setattr(
-        "app.plan_completion.report.build_completion_report",
-        lambda *_args: "План завершено.",
-    )
-    monkeypatch.setattr(
-        "app.plan_completion.tokens.make_report_token",
-        lambda *_args: "report-token",
-    )
-    sends = []
-
-    async def _fake_send(*args, **kwargs):
-        sends.append((args, kwargs))
-        return True
-
-    receipt_attempts = []
-
-    def _record_receipt(*_args, **_kwargs):
-        receipt_attempts.append(True)
-        if len(receipt_attempts) == 1:
-            raise RuntimeError("receipt commit unavailable")
-
-    scheduled = []
-    monkeypatch.setattr("app.scheduler._send_message_async", _fake_send)
-    monkeypatch.setattr(orchestrator, "log_user_event", _record_receipt)
-    monkeypatch.setattr(
-        orchestrator,
-        "_schedule_completion_receipt_retry",
-        lambda user_id, plan_id: scheduled.append((user_id, plan_id)),
-    )
-    orchestrator._completion_known_sends.clear()
-
-    first = await orchestrator.send_plan_completion_message(1, 99)
-    second = await orchestrator.send_plan_completion_message(1, 99)
-
-    assert first.code == "delivery_receipt_failed"
-    assert second.succeeded is True
-    assert len(sends) == 1
-    assert len(receipt_attempts) == 2
-    assert scheduled == [(1, 99)]
-    assert (1, 99) not in orchestrator._completion_known_sends
-
-
-@pytest.mark.anyio
-async def test_send_plan_completion_message_skips_when_no_tg_id(monkeypatch):
-    user = type("U", (), {"id": 1, "tg_id": None, "profile": None})()
-    db = _DBForCompletionMessage(user=user, existing_event=None)
-    monkeypatch.setattr(orchestrator, "SessionLocal", lambda: _SessionCtx(db))
-
-    async def _fake_send(*_args, **_kwargs):
-        raise AssertionError("should not send")
-
-    monkeypatch.setattr("app.scheduler._send_message_async", _fake_send)
-
-    await orchestrator.send_plan_completion_message(1, 99)
-
-
-@pytest.mark.anyio
-async def test_send_plan_completion_message_has_no_dead_start_plan_buttons(monkeypatch):
-    user = type("U", (), {"id": 1, "tg_id": 123, "profile": None})()
-    db = _DBForCompletionMessage(user=user, existing_event=None)
-    monkeypatch.setattr(orchestrator, "SessionLocal", lambda: _SessionCtx(db))
-    monkeypatch.setattr(
-        "app.plan_completion.metrics.build_completion_metrics",
-        lambda *_args: type("Metrics", (), {"outcome_tier": "STRONG"})(),
-    )
-    monkeypatch.setattr(
-        "app.plan_completion.report.build_completion_report",
-        lambda *_args: "План завершено.",
-    )
-    monkeypatch.setattr(
-        "app.plan_completion.tokens.make_report_token",
-        lambda *_args: "report-token",
-    )
-    monkeypatch.setattr(orchestrator, "log_user_event", lambda *_args, **_kwargs: None)
-
-    sent = []
-
-    async def _fake_send(*args, **kwargs):
-        sent.append((args, kwargs))
-        return True
-
-    monkeypatch.setattr("app.scheduler._send_message_async", _fake_send)
-
-    await orchestrator.send_plan_completion_message(1, 99)
-
-    assert len(sent) == 1
-    args, kwargs = sent[0]
-    assert args[0] == 123
-    assert "start_plan:" not in args[1]
-    assert kwargs == {}
-
-
-class _ExpiredUserQuery:
-    def __init__(self, users):
-        self.users = users
-
-    def join(self, *_args, **_kwargs):
-        return self
-
-    def filter(self, *_args, **_kwargs):
-        return self
-
-    def all(self):
-        return self.users
-
-
-class _EmptyPlanQuery:
-    def filter(self, *_args, **_kwargs):
-        return self
-
-    def order_by(self, *_args, **_kwargs):
-        return self
-
-    def first(self):
-        return None
-
-    def all(self):
-        return []
-
-
-class _DBForCron:
-    def __init__(self, users):
-        self.users = users
-        self.committed = False
-
-    def query(self, model):
-        if model is scheduler.User:
-            return _ExpiredUserQuery(self.users)
-        if model is scheduler.AIPlan:
-            return _EmptyPlanQuery()
-        raise AssertionError("unexpected model")
-
-    def commit(self):
-        self.committed = True
-
-    def rollback(self):
-        self.committed = False
-
-
-def test_check_plan_completions_calls_auto_complete(monkeypatch):
-    plans = [
-        type(
-            "P",
-            (),
-            {"id": 10, "user_id": 1, "user": type("U", (), {"id": 1})()},
-        )(),
-        type(
-            "P",
-            (),
-            {"id": 20, "user_id": 2, "user": type("U", (), {"id": 2})()},
-        )(),
-    ]
-
-    class _PlansQuery:
-        def filter(self, *_args, **_kwargs):
-            return self
-
-        def all(self):
-            return plans
-
-    db = _DBForCron([])
-    db.query = lambda _model: _PlansQuery()
-    monkeypatch.setattr(scheduler, "SessionLocal", lambda: _SessionCtx(db))
-
-    calls = []
-
-    def _fake_complete(_db, user, *, expected_plan_id):
-        calls.append((user.id, expected_plan_id))
-        return LifecycleResult(
-            user_id=user.id,
-            plan_id=expected_plan_id,
-            status="completed",
-            operation="complete",
-        )
-
-    monkeypatch.setattr(orchestrator, "_auto_complete_plan_if_needed", _fake_complete)
-    monkeypatch.setattr(scheduler, "_event_loop", None)
-
+def test_fixed_cron_only_enters_recovery(monkeypatch):
+    calls=[]
+    monkeypatch.setattr(scheduler,'reconcile_plan_completions',lambda:calls.append('backstop'))
     scheduler.check_plan_completions()
-
-    assert calls == [(1, 10), (2, 20)]
-    assert db.committed is True
+    assert calls==['backstop']
 
 
+def test_completion_alarm_parks_and_shuts_down(monkeypatch):
+    calls=[]
+    job=SimpleNamespace()
+    fake=SimpleNamespace(
+        get_job=lambda *a,**k:job,
+        modify_job=lambda *a,**k:calls.append(('modify',k)),
+        remove_job=lambda *a,**k:calls.append(('remove',k)),
+    )
+    monkeypatch.setattr(scheduler,'scheduler',fake)
+    future=datetime.now(timezone.utc)+timedelta(days=3)
+    monkeypatch.setattr(scheduler,'_completion_recovery_time',lambda now:future)
+    scheduler.enable_completion_recovery()
+    assert calls[0][1]['next_run_time']==future
+    monkeypatch.setattr(scheduler,'_completion_recovery_time',lambda now:None)
+    scheduler.enable_completion_recovery()
+    assert calls[-1][0]=='remove'
 
-def test_check_plan_completions_submits_completion_messages_when_event_loop_available(monkeypatch):
-    users = [type("U", (), {"id": 1})()]
 
-    class _Plan:
-        def __init__(self, plan_id):
-            self.id = plan_id
-            self.user_id = 1
-            self.user = users[0]
-            self.status = "active"
+def test_database_outage_keeps_an_isolated_short_alarm(monkeypatch):
+    def outage(now): raise OSError('database unavailable')
+    calls=[]
+    monkeypatch.setattr(scheduler,'_completion_recovery_time',outage)
+    monkeypatch.setattr(scheduler,'scheduler',SimpleNamespace(get_job=lambda *a,**k:None,add_job=lambda *a,**k:calls.append(k)))
+    before=datetime.now(timezone.utc)
+    scheduler.enable_completion_recovery()
+    assert calls[0]['jobstore']=='completion_recovery'
+    assert before+timedelta(seconds=29)<calls[0]['next_run_time']<before+timedelta(seconds=32)
 
-    class _PlanQuery:
-        def __init__(self, plan):
-            self.plan = plan
 
-        def filter(self, *_args, **_kwargs):
-            return self
+@pytest.mark.parametrize('outcome',['sent','uncertain','retryable','failed'])
+async def test_transport_retains_telegram_outcome_without_implicit_resend(monkeypatch,outcome):
+    from app import db, telegram
+    from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError
+    from aiogram.methods import SendMessage
+    claim=workflow.ReportClaim(11,22,'factual closing report')
+    class FakeDB:
+        def commit(self): pass
+    @contextmanager
+    def session(): yield FakeDB()
+    monkeypatch.setattr(db,'SessionLocal',session)
+    monkeypatch.setattr(workflow,'claim_report',lambda *a,**k:claim)
+    finishes=[]
+    monkeypatch.setattr(workflow,'finish_report',lambda *a,**k:finishes.append(k))
+    monkeypatch.setattr(scheduler,'enable_completion_recovery',lambda:None)
+    send=AsyncMock(return_value=SimpleNamespace(message_id=44,chat=SimpleNamespace(id=22)))
+    if outcome=='uncertain': send.side_effect=TimeoutError('unknown')
+    elif outcome=='retryable': send.side_effect=TelegramRetryAfter(method=SendMessage(chat_id=22,text='x'),message='slow',retry_after=60)
+    elif outcome=='failed': send.side_effect=TelegramForbiddenError(method=SendMessage(chat_id=22,text='x'),message='blocked')
+    monkeypatch.setattr(telegram,'bot',SimpleNamespace(send_message=send))
+    result=await workflow.deliver_report(1,11)
+    assert send.await_count==1 and finishes[0]['outcome']==outcome
+    assert result.succeeded==(outcome=='sent')
 
-        def order_by(self, *_args, **_kwargs):
-            return self
 
-        def first(self):
-            return self.plan
-
-        def all(self):
-            return [self.plan]
-
-    class _DBForCronWithPlans(_DBForCron):
-        def __init__(self, users, plan):
-            super().__init__(users)
-            self.plan = plan
-
-        def query(self, model):
-            if model is scheduler.User:
-                return _ExpiredUserQuery(self.users)
-            if model is scheduler.AIPlan:
-                return _PlanQuery(self.plan)
-            raise AssertionError("unexpected model")
-
-    plan = _Plan(plan_id=42)
-    db = _DBForCronWithPlans(users, plan)
-    monkeypatch.setattr(scheduler, "SessionLocal", lambda: _SessionCtx(db))
-
-    def _fake_complete(_db, _user, *, expected_plan_id):
-        return LifecycleResult(
-            user_id=1,
-            plan_id=expected_plan_id,
-            status="completed",
-            operation="complete",
-        )
-
-    monkeypatch.setattr(orchestrator, "_auto_complete_plan_if_needed", _fake_complete)
-
-    submitted = []
-
-    class _Future:
-        def result(self, timeout=None):
-            return None
-
-    monkeypatch.setattr(scheduler, "_event_loop", object())
-    def _fake_submit(coro):
-        submitted.append(coro)
-        coro.close()
-        return _Future()
-
-    monkeypatch.setattr(scheduler, "_submit_coroutine", _fake_submit)
-
-    scheduler.check_plan_completions()
-
-    assert len(submitted) == 1
+async def test_receipt_failure_only_retries_receipt(monkeypatch):
+    from app import db, telegram
+    class FakeDB:
+        def commit(self): pass
+    @contextmanager
+    def session(): yield FakeDB()
+    monkeypatch.setattr(db,'SessionLocal',session)
+    monkeypatch.setattr(workflow,'claim_report',lambda *a,**k:workflow.ReportClaim(11,22,'x'))
+    calls=[]
+    def finish(*a,**k):
+        calls.append(k)
+        if len(calls)==1: raise OSError('receipt commit failed')
+    monkeypatch.setattr(workflow,'finish_report',finish)
+    monkeypatch.setattr(scheduler,'enable_completion_recovery',lambda:None)
+    send=AsyncMock(return_value=SimpleNamespace(message_id=44,chat=SimpleNamespace(id=22)))
+    monkeypatch.setattr(telegram,'bot',SimpleNamespace(send_message=send))
+    result=await workflow.deliver_report(1,11)
+    assert result.succeeded and send.await_count==1 and len(calls)==2

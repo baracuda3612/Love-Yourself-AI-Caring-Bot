@@ -1361,8 +1361,9 @@ def complete_current_plan_if_ready(
     user_id: int,
     plan_id: int,
     source_operation_id: str,
+    now: datetime | None = None,
 ) -> LifecycleResult | None:
-    """Complete an active plan only after every child step is terminal."""
+    """Atomically close the explicit plan, obligation, and target successor."""
     _lock_user(db, user_id)
     existing = find_lifecycle_operation(db, user_id, source_operation_id)
     if existing:
@@ -1388,7 +1389,7 @@ def complete_current_plan_if_ready(
                     target_ids=(completed_plan.id,),
                 ),
             ),
-            details={"continuation": "deferred_to_wp_03_5"},
+            details={"continuation": "durable"},
         )
 
     plan = get_current_plan(db, user_id, lock=True)
@@ -1426,8 +1427,39 @@ def complete_current_plan_if_ready(
     if not total_steps or open_steps or unproven_terminal:
         return None
 
+    from app.db import PlanCompletion
+    from app.plan_completion.chronology import report_due_at
+    from app.active_days import resolve_timezone
+    from app.plan_drafts.service import create_plan_for_lifecycle
+    from app.time_slots import canonicalize_hhmm
+
+    now = now or datetime.now(timezone.utc)
+    last_terminal = (db.query(AIPlanStep).join(AIPlanDay)
+        .filter(AIPlanDay.plan_id == plan.id)
+        .order_by(AIPlanStep.terminal_at.desc(), AIPlanStep.id.desc()).first())
+    user = db.get(User, user_id)
+    report_at = report_due_at(user, last_terminal, now=now)
+    slots = getattr(user.profile, "daily_time_slots", None) or {}
+    day_time = canonicalize_hhmm(slots.get("DAY"))
+    plan_type = _plan_type(plan)
+    evening_time = canonicalize_hhmm(slots.get("EVENING")) if plan_type == "MEDIUM" else None
+    if plan_type == "MEDIUM" and not user.profile.evening_slot_collected:
+        raise LifecycleTransitionError("saved_evening_time_missing")
+
     plan.status = "completed"
     plan.version = int(plan.version or 0) + 1
+    db.flush()  # release the one-current-plan constraint before builder activation
+    successor = create_plan_for_lifecycle(
+        db, user_id, plan_type, day_time=day_time, evening_time=evening_time,
+        source_operation_id=f"continuation:{plan.id}",
+        activation_receipt_status="active",
+        start_after_local_date=max(now, report_at).astimezone(resolve_timezone(user.timezone)).date(),
+    ).plan
+    db.add(PlanCompletion(
+        plan_id=plan.id, successor_plan_id=successor.id,
+        report_at=report_at, wake_at=max(now, report_at), state="pending", attempts=0,
+        schedule_pending=False,
+    ))
     record_lifecycle_operation(
         db,
         user_id=user_id,
@@ -1449,7 +1481,7 @@ def complete_current_plan_if_ready(
                 target_ids=(plan.id,),
             ),
         ),
-        details={"continuation": "deferred_to_wp_03_5"},
+        details={"continuation": "durable"},
     )
 
 
@@ -2498,6 +2530,27 @@ def prepare_continuation(
         source_operation_id=source_operation_id,
         duplicate=duplicate,
     )
+
+
+def refresh_completion_successor(db: Session, *, user: User, plan: AIPlan, report_at: datetime) -> datetime:
+    """Re-anchor only unstarted automatic work before a fresh report promise.
+
+    Caller holds the user lock. User controls remain the schedule authority.
+    """
+    from app.active_days import resolve_timezone
+    from app.time_slots import reanchor_pending_plan_steps
+    first = (db.query(func.min(AIPlanStep.scheduled_for)).join(AIPlanDay)
+             .filter(AIPlanDay.plan_id == plan.id, AIPlanStep.step_status == "pending").scalar())
+    if first is None:
+        raise LifecycleInvariantError("continuation_has_no_pending_steps")
+    tz = resolve_timezone(user.timezone)
+    if first.astimezone(tz).date() <= report_at.astimezone(tz).date():
+        reanchor_pending_plan_steps(user, plan, resumed_at=report_at)
+        plan.version = int(plan.version or 0) + 1
+        db.flush()
+        first = (db.query(func.min(AIPlanStep.scheduled_for)).join(AIPlanDay)
+                 .filter(AIPlanDay.plan_id == plan.id, AIPlanStep.step_status == "pending").scalar())
+    return first
 
 
 def plan_completion_at(db: Session, plan_id: int) -> datetime | None:

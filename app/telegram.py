@@ -196,6 +196,44 @@ async def _handle_newplan_deeplink(message: Message, args: str) -> None:
         await message.answer(response["reply_text"])
 
 
+@dp.startup()
+async def register_public_commands(bot: Bot):
+    from aiogram.types import BotCommand
+    try:
+        await bot.set_my_commands([
+            BotCommand(command="start", description="Почати або повернутися"),
+            BotCommand(command="continue_plan", description="Розблокувати продовження після підсумку"),
+        ])
+    except Exception:
+        logger.exception("Could not update Telegram command menu")
+
+
+@router.message(Command("continue_plan"))
+async def handle_continue_plan(message: Message):
+    import asyncio
+    from app.plan_completion.workflow import deliver_report
+    from app.db import AIPlan, PlanCompletion
+    from sqlalchemy.orm import aliased
+
+    def find_source():
+        with SessionLocal() as db:
+            successor = aliased(AIPlan)
+            return (db.query(PlanCompletion.plan_id, User.id).join(AIPlan, AIPlan.id == PlanCompletion.plan_id)
+                .join(successor, successor.id == PlanCompletion.successor_plan_id)
+                .join(User, User.id == AIPlan.user_id)
+                .filter(User.tg_id == message.from_user.id, User.is_active.is_(True),
+                    successor.status.in_(['active','paused']),
+                    PlanCompletion.state.in_(['uncertain', 'release_uncertain', 'failed', 'sent_held']))
+                .order_by(PlanCompletion.plan_id.desc()).first())
+    source = await asyncio.to_thread(find_source)
+    if source is None:
+        await message.answer('Немає продовження, яке потребує розблокування.')
+        return
+    result = await deliver_report(source[1], source[0], release_operation_id=f'telegram:continue:{message.chat.id}:{message.message_id}')
+    if not result.succeeded:
+        await message.answer('Продовження ще заблоковане. Спробуй /continue_plan через 10 хвилин після попередньої спроби. Підсумок повторно не надсилаємо.')
+
+
 @router.message(Command("spawn"))
 async def cmd_spawn(message: Message):
     if not message.from_user or message.from_user.id not in settings.ADMIN_IDS:
@@ -279,6 +317,8 @@ async def _handle_step_action(callback_query: CallbackQuery, target: str):
         await callback_query.answer("Не вдалося зберегти дію. Спробуй ще раз")
         return
     await callback_query.answer(_STEP_REPLIES[transition.status])
+    from app.scheduler import request_plan_completion
+    await asyncio.to_thread(request_plan_completion, transition.user_id, transition.plan_id)
     await _project_step_status(step_id)
 
 

@@ -32,7 +32,7 @@ from app.ux.task_notification import format_task_notification
 from scripts.test_migrations import _run_alembic
 
 pytestmark = pytest.mark.skipif(os.environ.get('WP03_1_POSTGRES_REHEARSAL') != '1', reason='explicit disposable PostgreSQL rehearsal required')
-ADMIN = 'postgresql://love_yourself_test:love_yourself_test@127.0.0.1:55432/love_yourself_test'
+ADMIN = os.environ.get('WP03_1_TEST_ADMIN_URL', 'postgresql://love_yourself_test:love_yourself_test@127.0.0.1:55432/love_yourself_test')
 
 
 @pytest.fixture(scope='module')
@@ -281,7 +281,7 @@ def test_downgrade_is_refused_without_losing_versions(migrated_engine):
         env={**os.environ,'DATABASE_URL':migrated_engine.url.render_as_string(hide_password=False)},capture_output=True,text=True)
     assert result.returncode!=0 and 'forward repair' in result.stderr
     with migrated_engine.connect() as connection:
-        assert connection.execute(text('SELECT version_num FROM alembic_version')).scalar_one()=='20261010_scheduled_delivery'
+        assert connection.execute(text('SELECT version_num FROM alembic_version')).scalar_one()=='20261014_plan_completion'
         assert connection.execute(text('SELECT count(*) FROM content_library')).scalar_one()==9
 
 

@@ -193,6 +193,8 @@ def recompute_future_steps(
     for plan in plans:
         is_active = plan.status == "active"
         for day, step in iter_future_steps(plan, effective_from):
+            if step.step_status != "pending":
+                continue
             plan_start = plan.start_date or effective_from
             anchor_date = resolve_step_date(
                 plan_start=plan_start,
@@ -203,12 +205,14 @@ def recompute_future_steps(
             step.time_slot = normalize_time_slot(step.time_slot)
             step.scheduled_for = compute_scheduled_for(
                 plan_start=plan_start,
-                day_number=day.day_number,
+                day_number=1,
                 time_slot=step.time_slot,
                 timezone_name=user.timezone,
                 daily_time_slots=daily_time_slots,
                 anchor_date=anchor_date,
             )
+            from app.active_days import step_expires_at
+            step.expires_at = step_expires_at(step.scheduled_for, _normalize_timezone(user.timezone))
             updated_step_ids.append(step.id)
             if is_active:
                 active_step_ids.append(step.id)

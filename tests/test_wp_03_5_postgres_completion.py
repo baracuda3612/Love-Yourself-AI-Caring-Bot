@@ -1,0 +1,305 @@
+"""WP-03.5 rehearsal: each module creates/drops a fresh migrated database."""
+import os
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from uuid import uuid4
+
+import psycopg2
+from psycopg2 import sql
+import pytest
+from sqlalchemy import create_engine, func, text
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.orm import Session
+
+from app.content_library import load_content_library
+from app.db import AIPlan, AIPlanDay, AIPlanStep, PlanCompletion, User, UserProfile
+from app.lifecycle import (complete_current_plan_if_ready, transition_plan_step,
+    abandon_current_plan, transition_current_plan, change_delivery_time, switch_plan_format)
+from app.plan_drafts.service import create_plan_for_lifecycle
+from app.plan_completion.workflow import (claim_report, finish_report, blocked_successor,
+    refresh_report_time, UNCERTAIN_TTL, SEND_TIMEOUT)
+from app.plan_completion.chronology import utc
+from scripts.test_migrations import _run_alembic
+
+pytestmark = pytest.mark.skipif(os.environ.get('WP03_5_POSTGRES_REHEARSAL') != '1', reason='explicit fresh disposable PostgreSQL rehearsal')
+
+
+@pytest.fixture(scope='module')
+def pg_engine():
+    admin_url = os.environ['WP03_5_TEST_ADMIN_URL']
+    name = 'ly_wp035_' + uuid4().hex
+    url = admin_url.rsplit('/', 1)[0] + '/' + name
+    admin = psycopg2.connect(admin_url); admin.autocommit = True
+    with admin.cursor() as c:
+        c.execute(sql.SQL('CREATE DATABASE {}').format(sql.Identifier(name)))
+    engine = None
+    try:
+        _run_alembic(url, 'head')
+        engine = create_engine(url)
+        with Session(engine) as db:
+            load_content_library(db); db.commit()
+        yield engine
+    finally:
+        if engine: engine.dispose()
+        with admin.cursor() as c:
+            c.execute('SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=%s AND pid<>pg_backend_pid()', (name,))
+            c.execute(sql.SQL('DROP DATABASE {}').format(sql.Identifier(name)))
+        admin.close()
+
+
+@pytest.fixture
+def db(pg_engine):
+    connection = pg_engine.connect(); tx = connection.begin()
+    session = Session(bind=connection)
+    try:
+        yield session
+    finally:
+        session.close(); tx.rollback(); connection.close()
+
+
+def source_plan(db, *, medium=False, zone='UTC', work_days=None):
+    user = User(tg_id=990350000 + uuid4().int % 10000000, is_active=True, timezone=zone)
+    db.add(user); db.flush()
+    db.add(UserProfile(user_id=user.id, daily_time_slots={'DAY':'14:00','EVENING':'20:30'},
+        evening_slot_collected=medium, active_days=work_days or ['MON','TUE','WED','THU','FRI']))
+    db.flush()
+    # The first plan remains SHORT. MEDIUM source represents an explicitly
+    # selected later cycle; use the same target builder after a historical row.
+    first = create_plan_for_lifecycle(db, user.id, 'SHORT', source_operation_id='seed:first', activation_receipt_status='active').plan
+    if medium:
+        abandon_current_plan(db, user_id=user.id, source_operation_id='seed:abandon')
+        first = create_plan_for_lifecycle(db, user.id, 'MEDIUM', source_operation_id='seed:medium', activation_receipt_status='active').plan
+    return user, first
+
+
+def terminalize(db, user, plan, *, status='completed', at=None, leave=0):
+    at = at or datetime.now(timezone.utc)
+    steps = db.query(AIPlanStep).join(AIPlanDay).filter(AIPlanDay.plan_id == plan.id).order_by(AIPlanStep.id).all()
+    for step in steps[:len(steps)-leave]:
+        # Seed actual scheduled dates before the synthetic terminal instant.
+        step.scheduled_for = at-timedelta(hours=3)
+        step.expires_at = at if status == 'expired' else at+timedelta(hours=3)
+        if status in ('completed','skipped'):
+            transition_plan_step(db,user_id=user.id,step_id=step.id,target_status='delivered',source_operation_id=f'seed:sent:{step.id}',occurred_at=at-timedelta(minutes=1))
+        transition_plan_step(db,user_id=user.id,step_id=step.id,target_status=status,source_operation_id=f'seed:{status}:{step.id}',occurred_at=at)
+    db.flush()
+    return steps
+
+
+def close(db, user, plan, *, now=None):
+    return complete_current_plan_if_ready(db,user_id=user.id,plan_id=plan.id,source_operation_id=f'runtime:complete:{plan.id}',now=now)
+
+
+def first_step(db, plan_id):
+    return db.query(AIPlanStep).join(AIPlanDay).filter(AIPlanDay.plan_id == plan_id).order_by(AIPlanStep.scheduled_for, AIPlanStep.id).first()
+
+
+@pytest.mark.parametrize('medium', [False, True])
+@pytest.mark.parametrize('action', ['completed','skipped'])
+def test_atomic_same_format_explicit_source_and_replay(db, medium, action):
+    user, plan = source_plan(db, medium=medium)
+    now = datetime.now(timezone.utc)
+    terminalize(db,user,plan,status=action,at=now)
+    result = close(db,user,plan,now=now)
+    row = db.get(PlanCompletion,plan.id)
+    successor = db.get(AIPlan,row.successor_plan_id)
+    assert result.plan_id == plan.id and plan.status == 'completed'
+    assert successor.total_days == (14 if medium else 7)
+    assert len([s for d in successor.days for s in d.steps]) == (28 if medium else 7)
+    assert row.state == 'pending' and row.report_at == now
+    assert first_step(db,successor.id).scheduled_for.date() > now.date()
+    assert all(s.exercise_id != 'cold_water_face' and s.content_version == 1 for d in successor.days for s in d.steps)
+    assert close(db,user,plan,now=now).duplicate
+    assert db.query(PlanCompletion).count() == 1
+    assert db.query(AIPlan).filter(AIPlan.user_id == user.id, AIPlan.status == 'active').count() == 1
+
+
+def test_medium_second_exercise_blocks_completion(db):
+    user,plan = source_plan(db,medium=True)
+    terminalize(db,user,plan,leave=1)
+    assert close(db,user,plan) is None
+    assert plan.status == 'active' and not db.query(PlanCompletion).first()
+
+
+def test_builder_error_rolls_back_completion_but_not_action(db,monkeypatch):
+    user,plan = source_plan(db); terminalize(db,user,plan)
+    def fail(*a,**k): raise ValueError('builder unavailable')
+    monkeypatch.setattr('app.plan_drafts.service.create_plan_for_lifecycle', fail)
+    with pytest.raises(ValueError), db.begin_nested(): close(db,user,plan)
+    db.refresh(plan)
+    assert plan.status == 'active' and not db.query(PlanCompletion).first()
+    assert all(s.step_status == 'completed' for d in plan.days for s in d.steps)
+
+
+@pytest.mark.parametrize('zone', ['Europe/Kyiv','America/New_York','Asia/Kolkata'])
+def test_expiry_report_saved_day_then_distinct_next_workday(db,zone):
+    import pytz
+    user,plan = source_plan(db,zone=zone,work_days=['MON','FRI'])
+    # Future Friday expiry, after the real builder activation date.
+    tz = pytz.timezone(zone)
+    expiry = tz.localize(datetime(2026,11,6,23,59,59)).astimezone(timezone.utc)
+    terminalize(db,user,plan,status='expired',at=expiry)
+    close(db,user,plan,now=expiry+timedelta(seconds=1))
+    row=db.get(PlanCompletion,plan.id)
+    assert utc(row.report_at).astimezone(tz).strftime('%Y-%m-%d %H:%M') == '2026-11-09 14:00'
+    first=first_step(db,row.successor_plan_id)
+    assert utc(first.scheduled_for).astimezone(tz).strftime('%Y-%m-%d %H:%M') == '2026-11-13 14:00'
+    assert claim_report(db,user.id,plan.id,now=expiry+timedelta(minutes=1)) is None
+
+
+def test_claim_is_durable_unknown_never_resends_and_ttl_user_release(db):
+    user,plan=source_plan(db); now=datetime.now(timezone.utc)
+    terminalize(db,user,plan,at=now); close(db,user,plan,now=now)
+    claim=claim_report(db,user.id,plan.id,now=now)
+    assert claim and claim_report(db,user.id,plan.id,now=now) is None
+    assert claim_report(db,user.id,plan.id,now=now+SEND_TIMEOUT) is None
+    row=db.get(PlanCompletion,plan.id)
+    assert row.state=='uncertain'
+    assert claim_report(db,user.id,plan.id,now=now+timedelta(days=2)) is None
+    assert db.query(blocked_successor(row.successor_plan_id)).scalar()
+    assert claim_report(db,user.id,plan.id,now=now+timedelta(minutes=9),release_operation_id='release:1') is None
+    release=claim_report(db,user.id,plan.id,now=now+UNCERTAIN_TTL,release_operation_id='release:1')
+    assert release.release and release.payload != claim.payload
+    assert 'Повторно його не надсилаємо' in release.payload
+    finish_report(db,user.id,release,outcome='sent',message_id=998,now=now+UNCERTAIN_TTL)
+    assert row.state=='released' and row.release_message_id==998
+    assert not db.query(blocked_successor(row.successor_plan_id)).scalar()
+    assert claim_report(db,user.id,plan.id,now=now+timedelta(days=2),release_operation_id='release:1') is None
+
+
+def test_known_failure_retry_reanchors_after_late_report(db):
+    user,plan=source_plan(db); now=datetime.now(timezone.utc)
+    terminalize(db,user,plan,at=now); close(db,user,plan,now=now)
+    claim=claim_report(db,user.id,plan.id,now=now)
+    finish_report(db,user.id,claim,outcome='retryable',retry_after=60,now=now)
+    row=db.get(PlanCompletion,plan.id)
+    assert claim_report(db,user.id,plan.id,now=now+timedelta(seconds=59)) is None
+    late=now+timedelta(days=7)
+    again=claim_report(db,user.id,plan.id,now=late)
+    first=first_step(db,row.successor_plan_id)
+    assert first.scheduled_for.date()>late.date()
+    assert first.scheduled_for.strftime('%d.%m.%Y') in again.payload
+    finish_report(db,user.id,again,outcome='sent',message_id=77,now=late)
+    assert row.state=='sent' and row.schedule_pending
+    assert claim_report(db,user.id,plan.id,now=late) is None
+    with pytest.raises(DBAPIError), db.begin_nested():
+        row.message_id=99; db.flush()
+
+
+@pytest.mark.parametrize('control',['pause','cancel','time','switch'])
+def test_controls_survive_completion_replay_without_false_promise(db,control):
+    user,plan=source_plan(db); now=datetime.now(timezone.utc)
+    terminalize(db,user,plan,at=now); close(db,user,plan,now=now)
+    row=db.get(PlanCompletion,plan.id); successor=db.get(AIPlan,row.successor_plan_id)
+    if control=='pause': transition_current_plan(db,user_id=user.id,operation='pause',source_operation_id='control')
+    elif control=='cancel': abandon_current_plan(db,user_id=user.id,source_operation_id='control')
+    elif control=='time': change_delivery_time(db,user_id=user.id,slot='DAY',hhmm='16:30',source_operation_id='control')
+    else:
+        user.profile.evening_slot_collected=True; db.flush()
+        switch_plan_format(db,user_id=user.id,target_plan_type='MEDIUM',source_operation_id='control')
+    assert close(db,user,plan).duplicate
+    claim=claim_report(db,user.id,plan.id,now=now)
+    if control=='pause': assert 'призупинено' in claim.payload and 'Перша вправа прийде' not in claim.payload
+    elif control in ('cancel','switch'): assert 'замінено' in claim.payload and 'Перша вправа прийде' not in claim.payload
+    else: assert '16:30' in claim.payload
+    assert successor.status == ('paused' if control=='pause' else 'abandoned' if control in ('cancel','switch') else 'active')
+
+
+def test_no_action_time_change_moves_unattempted_report(db):
+    user,plan=source_plan(db)
+    expiry=datetime(2026,11,6,23,59,59,tzinfo=timezone.utc)
+    terminalize(db,user,plan,status='expired',at=expiry); close(db,user,plan,now=expiry+timedelta(seconds=1))
+    row=db.get(PlanCompletion,plan.id)
+    change_delivery_time(db,user_id=user.id,slot='DAY',hhmm='09:15',source_operation_id='control')
+    refresh_report_time(db,user,row.successor_plan_id); db.flush()
+    assert row.report_at.hour==9 and row.report_at.minute==15
+
+
+def test_recovery_only_selects_unfinished_sources_and_parks(db,monkeypatch):
+    from app import scheduler
+    user,plan=source_plan(db); terminalize(db,user,plan)
+    assert scheduler._terminal_completion_sources(db).all()==[(user.id,plan.id)]
+    close(db,user,plan)
+    assert scheduler._terminal_completion_sources(db).all()==[]
+    row=db.get(PlanCompletion,plan.id)
+    @contextmanager
+    def retained(): yield db
+    monkeypatch.setattr(scheduler,'SessionLocal',retained)
+    monkeypatch.setattr(scheduler,'_completion_source_failure',False)
+    assert scheduler._completion_recovery_time(datetime.now(timezone.utc)) is not None
+    claim=claim_report(db,user.id,plan.id)
+    finish_report(db,user.id,claim,outcome='uncertain')
+    assert scheduler._completion_recovery_time(datetime.now(timezone.utc)) is None
+
+
+def test_late_confirmation_preserves_receipt_but_requires_future_reconfirmation(db):
+    user,plan=source_plan(db); now=datetime.now(timezone.utc)
+    terminalize(db,user,plan,at=now); close(db,user,plan,now=now)
+    claim=claim_report(db,user.id,plan.id,now=now)
+    row=db.get(PlanCompletion,plan.id)
+    late=utc(first_step(db,row.successor_plan_id).scheduled_for)+timedelta(minutes=1)
+    finish_report(db,user.id,claim,outcome='sent',message_id=77,now=late)
+    assert row.state=='sent_held' and row.sent_at==late and row.message_id==77
+    assert db.query(blocked_successor(row.successor_plan_id)).scalar()
+    release=claim_report(db,user.id,plan.id,now=late,release_operation_id='late:release')
+    assert 'доставлено із затримкою' in release.payload
+    assert first_step(db,row.successor_plan_id).scheduled_for.date()>late.date()
+    finish_report(db,user.id,release,outcome='sent',message_id=78,now=late)
+    assert row.state=='released' and row.payload==claim.payload and row.message_id==77
+
+
+def test_two_database_workers_finalize_and_claim_once(pg_engine):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    with Session(pg_engine) as db:
+        user,plan=source_plan(db); terminalize(db,user,plan)
+        user_id,plan_id=user.id,plan.id
+        db.commit()
+    barrier=Barrier(2)
+    def complete(_):
+        with Session(pg_engine) as db:
+            barrier.wait(timeout=10)
+            result=complete_current_plan_if_ready(db,user_id=user_id,plan_id=plan_id,source_operation_id=f'runtime:complete:{plan_id}')
+            db.commit(); return result.duplicate
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(pool.map(complete,range(2)))==[False,True]
+    barrier=Barrier(2)
+    def claim(_):
+        with Session(pg_engine) as db:
+            barrier.wait(timeout=10)
+            result=claim_report(db,user_id,plan_id)
+            db.commit(); return result is not None
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(pool.map(claim,range(2)))==[False,True]
+    with Session(pg_engine) as db:
+        row=db.get(PlanCompletion,plan_id)
+        assert row.state=='in_flight' and row.attempts==1
+        assert db.query(AIPlan).filter(AIPlan.user_id==user_id).count()==2
+
+
+def test_confirmed_summary_releases_exact_successor_jobs_and_parks_recovery(db,monkeypatch):
+    from app import scheduler
+    user,plan=source_plan(db); terminalize(db,user,plan); close(db,user,plan)
+    claim=claim_report(db,user.id,plan.id)
+    finish_report(db,user.id,claim,outcome='sent',message_id=77)
+    row=db.get(PlanCompletion,plan.id)
+    @contextmanager
+    def retained(): yield db
+    jobs={}
+    fake=SimpleNamespace(get_job=lambda job_id,**kw:jobs.get(job_id),
+        remove_job=lambda job_id,**kw:jobs.pop(job_id,None),
+        modify_job=lambda *a,**k:None,add_job=lambda *a,**k:None)
+    def schedule(step,user):
+        jobs[scheduler._generate_step_job_id(step)]=SimpleNamespace(next_run_time=step.scheduled_for)
+        return True
+    monkeypatch.setattr(scheduler,'SessionLocal',retained)
+    monkeypatch.setattr(scheduler,'scheduler',fake)
+    monkeypatch.setattr(scheduler,'schedule_plan_step',schedule)
+    monkeypatch.setattr(scheduler,'_completion_source_failure',False)
+    scheduler.reconcile_plan_completions()
+    assert len(jobs)==7 and not row.schedule_pending
+    assert scheduler._completion_recovery_time(datetime.now(timezone.utc)) is None
+    from app.db import UserEvent
+    assert db.query(UserEvent).filter(UserEvent.event_name=='plan_completion_sent',UserEvent.plan_id==plan.id).count()==1
+    assert db.query(UserEvent).filter(UserEvent.event_name=='plan_activated',UserEvent.plan_id==row.successor_plan_id).count()==1

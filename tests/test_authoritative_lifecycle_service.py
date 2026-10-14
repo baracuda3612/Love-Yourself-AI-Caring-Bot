@@ -532,6 +532,7 @@ def test_scheduler_reconciliation_removes_job_with_stale_run_date(monkeypatch):
 def test_plan_schedule_reconciliation_removes_past_job_and_repairs_future(
     monkeypatch,
 ):
+    monkeypatch.setattr("app.plan_completion.workflow.successor_delivery_blocked", lambda *_: False)
     past = datetime(2020, 1, 1, tzinfo=timezone.utc)
     future = datetime(2030, 1, 1, tzinfo=timezone.utc)
     day = SimpleNamespace(plan_id=20)
@@ -620,6 +621,7 @@ def test_plan_schedule_reconciliation_removes_past_job_and_repairs_future(
 def test_plan_schedule_reconciliation_fences_newer_lifecycle_decision(
     monkeypatch, new_decision
 ):
+    monkeypatch.setattr("app.plan_completion.workflow.successor_delivery_blocked", lambda *_: False)
     time_a = datetime(2030, 1, 1, 14, tzinfo=timezone.utc)
     time_b = datetime(2030, 1, 1, 15, tzinfo=timezone.utc)
     shared = {"status": "active", "scheduled_for": time_a}
@@ -903,6 +905,7 @@ def test_expected_telemetry_rejection_preserves_authoritative_expiry(
 
 
 def test_expiry_sweep_isolates_unexpected_candidate_failure(monkeypatch, caplog):
+    monkeypatch.setattr(scheduler, "request_plan_completion", lambda *_: None)
     past = datetime(2026, 8, 1, 20, 59, 59, tzinfo=timezone.utc)
 
     def _step(step_id):
