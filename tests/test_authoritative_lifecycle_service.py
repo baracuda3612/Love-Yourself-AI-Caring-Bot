@@ -1116,6 +1116,7 @@ def test_keyboard_sweep_accepts_already_removed_markup_and_clears_marker(monkeyp
 
 
 def test_time_change_replay_reconciles_only_currently_schedulable_steps(monkeypatch):
+    monkeypatch.setattr("app.plan_completion.workflow.refresh_report_time", lambda *_: False)
     past = datetime.now(timezone.utc).replace(year=2020)
     future = datetime.now(timezone.utc).replace(year=2030)
     receipt = SimpleNamespace(

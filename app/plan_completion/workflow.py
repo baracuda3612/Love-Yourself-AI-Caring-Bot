@@ -35,25 +35,25 @@ def lock_obligation(db, user_id, plan_id):
 
 def refresh_report_time(db, user, successor_id):
     """A saved DAY change also updates a not-yet-attempted no-action report."""
-    from app.plan_completion.chronology import report_due_at, next_workday_day_at
+    from app.plan_completion.chronology import report_due_at, next_workday_day_at, last_terminal_step
     row = db.query(PlanCompletion).filter(
         PlanCompletion.successor_plan_id == successor_id,
-        PlanCompletion.state == 'pending', PlanCompletion.attempts == 0).first()
+        PlanCompletion.state == 'pending', PlanCompletion.attempts == 0).populate_existing().first()
     if row is None:
-        return
-    last = db.query(AIPlanStep).join(AIPlanDay).filter(AIPlanDay.plan_id == row.plan_id).order_by(
-        AIPlanStep.terminal_at.desc(), AIPlanStep.id.desc()).first()
+        return False
+    last = last_terminal_step(db, row.plan_id)
     if last is not None and last.step_status == 'expired':
         saved_day = (user.profile.daily_time_slots or {}).get('DAY')
         previous = utc(row.report_at)
         if previous.astimezone(resolve_timezone(user.timezone)).strftime('%H:%M') == saved_day:
-            return
+            return True
         now = datetime.now(timezone.utc)
         due = report_due_at(user, last, now=now)
         if utc(due) <= now < previous:
             due = next_workday_day_at(user, now)
         row.report_at = due
         row.wake_at = max(now, utc(due))
+    return True
 
 
 def continuation_text(db, row, user, now):

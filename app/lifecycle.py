@@ -1429,15 +1429,13 @@ def complete_current_plan_if_ready(
         return None
 
     from app.db import PlanCompletion
-    from app.plan_completion.chronology import report_due_at
+    from app.plan_completion.chronology import report_due_at, last_terminal_step
     from app.active_days import resolve_timezone
     from app.plan_drafts.service import create_plan_for_lifecycle
     from app.time_slots import canonicalize_hhmm
 
     now = now or datetime.now(timezone.utc)
-    last_terminal = (db.query(AIPlanStep).join(AIPlanDay)
-        .filter(AIPlanDay.plan_id == plan.id)
-        .order_by(AIPlanStep.terminal_at.desc().nullslast(), AIPlanStep.id.desc()).first())
+    last_terminal = last_terminal_step(db, plan.id)
     if carry_pause and last_terminal.step_status not in {"completed", "skipped"}:
         return None
     user = db.get(User, user_id)
@@ -1597,6 +1595,12 @@ def change_delivery_time(
     operation = f"change_{normalized_slot.lower()}_time"
     user = _lock_user(db, user_id)
 
+    def completion_effects(plan_id):
+        from app.plan_completion.workflow import refresh_report_time
+        if normalized_slot == "DAY" and refresh_report_time(db, user, plan_id):
+            return (ExternalEffect(kind="reconcile_completion_schedule", target_ids=(plan_id,)),)
+        return ()
+
     existing = find_lifecycle_operation(db, user_id, source_operation_id)
     if existing is not None:
         duplicate = _duplicate_operation_result(
@@ -1636,7 +1640,7 @@ def change_delivery_time(
                     target_ids=(context_plan.id,),
                     state=state,
                 ),
-            ),
+            ) + (completion_effects(context_plan.id) if still_authoritative else ()),
             details={
                 "slot": normalized_slot,
                 "value": canonical_hhmm,
@@ -1660,6 +1664,7 @@ def change_delivery_time(
         )
     except TimeSlotError as exc:
         raise LifecycleTransitionError(str(exc)) from exc
+    report_effects = completion_effects(context_plan.id)
     record_lifecycle_operation(
         db,
         user_id=user_id,
@@ -1690,7 +1695,7 @@ def change_delivery_time(
                 target_ids=(context_plan.id,),
                 state=state,
             ),
-        ),
+        ) + report_effects,
         details={
             "slot": normalized_slot,
             "value": canonical_hhmm,

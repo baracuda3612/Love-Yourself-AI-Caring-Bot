@@ -57,7 +57,12 @@ def reconcile_scheduler_effects(result: LifecycleResult) -> LifecycleResult:
             outcomes.append(effect)
             continue
         try:
-            if effect.kind == "reconcile_plan_schedule":
+            if effect.kind == "reconcile_completion_schedule":
+                from app.scheduler import enable_completion_recovery
+                enable_completion_recovery()
+                outcomes.append(replace(effect, state=ExternalEffectState.SUCCEEDED, attempted=1, succeeded=1))
+                continue
+            elif effect.kind == "reconcile_plan_schedule":
                 reconciliation = reconcile_plan_schedule(
                     int(effect.target_ids[0])
                     if effect.target_ids

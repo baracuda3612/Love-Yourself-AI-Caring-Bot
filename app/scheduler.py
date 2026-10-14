@@ -508,10 +508,6 @@ def reconcile_plan_schedule(plan_id: int) -> SchedulerReconciliation:
         )
         from app.plan_completion.workflow import successor_delivery_blocked
         continuation_blocked = successor_delivery_blocked(db, plan.id)
-        if continuation_blocked:
-            from app.plan_completion.workflow import refresh_report_time
-            refresh_report_time(db, user, plan.id)
-            db.flush()
         now_utc = datetime.now(pytz.UTC)
         failed: list[int] = []
         succeeded = 0
@@ -555,10 +551,6 @@ def reconcile_plan_schedule(plan_id: int) -> SchedulerReconciliation:
             from app.db import ExerciseDelivery
             due_retry = db.query(ExerciseDelivery.id).filter(
                 ExerciseDelivery.plan_step_id.in_(pending_ids), ExerciseDelivery.state == 'retryable').first() is not None
-        if continuation_blocked:
-            db.commit()
-    if continuation_blocked:
-        enable_completion_recovery()
     if due_retry:
         _enable_delivery_recovery()
     return SchedulerReconciliation(

@@ -399,3 +399,51 @@ def test_retiming_unattempted_no_action_report_into_past_uses_next_day_and_moves
     claim=claim_report(db,user.id,plan.id,now=row.report_at)
     assert first_step(db,row.successor_plan_id).scheduled_for==datetime(2026,11,11,7,tzinfo=timezone.utc)
     assert '11.11.2026 о 07:00' in claim.payload
+
+
+@pytest.mark.parametrize('paused',[False,True])
+def test_saved_day_atomically_retimes_report_despite_legacy_null_and_paused_effect(db,monkeypatch,paused):
+    from app import scheduler, lifecycle_reconciliation
+    from app.lifecycle import ExternalEffectState
+    user,plan=source_plan(db)
+    expiry=datetime(2026,11,6,23,59,59,tzinfo=timezone.utc)
+    steps=terminalize(db,user,plan,status='expired',at=expiry)
+    db.execute(text("UPDATE ai_plan_steps SET step_status='completed',terminal_at=NULL,version=0 WHERE id=:id"),{'id':steps[0].id})
+    db.expire_all()
+    close(db,user,plan,now=expiry+timedelta(seconds=1))
+    row=db.get(PlanCompletion,plan.id)
+    if paused: transition_current_plan(db,user_id=user.id,operation='pause',source_operation_id='pause:before-time')
+    result=change_delivery_time(db,user_id=user.id,slot='DAY',hhmm='09:15',source_operation_id='time:summary')
+    assert row.report_at==datetime(2026,11,9,9,15,tzinfo=timezone.utc)
+    assert row.wake_at==row.report_at
+    completion=[effect for effect in result.effects if effect.kind=='reconcile_completion_schedule']
+    assert len(completion)==1 and completion[0].state is ExternalEffectState.PENDING
+    if paused:
+        assert result.effects[0].state is ExternalEffectState.DEFERRED
+        calls=[]
+        def fail(): raise OSError('alarm unavailable')
+        monkeypatch.setattr(scheduler,'enable_completion_recovery',fail)
+        failed=lifecycle_reconciliation.reconcile_scheduler_effects(result)
+        assert failed.effects[-1].state is ExternalEffectState.FAILED
+        # Exact replay must preserve the owed alarm even though exercise jobs
+        # are still deferred by pause.
+        replay=change_delivery_time(db,user_id=user.id,slot='DAY',hhmm='09:15',source_operation_id='time:summary')
+        monkeypatch.setattr(scheduler,'enable_completion_recovery',lambda:calls.append('armed'))
+        repaired=lifecycle_reconciliation.reconcile_scheduler_effects(replay)
+        assert repaired.effects[-1].state is ExternalEffectState.SUCCEEDED and calls==['armed']
+        assert db.get(AIPlan,row.successor_plan_id).status=='paused'
+
+
+def test_saved_day_and_report_retime_rollback_together(db,monkeypatch):
+    from app import lifecycle
+    user,plan=source_plan(db)
+    expiry=datetime(2026,11,6,23,59,59,tzinfo=timezone.utc)
+    terminalize(db,user,plan,status='expired',at=expiry); close(db,user,plan,now=expiry+timedelta(seconds=1))
+    row=db.get(PlanCompletion,plan.id)
+    def fail(*args,**kwargs): raise RuntimeError('receipt unavailable')
+    monkeypatch.setattr(lifecycle,'record_lifecycle_operation',fail)
+    with pytest.raises(RuntimeError), db.begin_nested():
+        change_delivery_time(db,user_id=user.id,slot='DAY',hhmm='09:15',source_operation_id='time:rollback')
+    db.refresh(row); db.refresh(user.profile)
+    assert row.report_at==datetime(2026,11,9,14,tzinfo=timezone.utc)
+    assert user.profile.daily_time_slots['DAY']=='14:00'

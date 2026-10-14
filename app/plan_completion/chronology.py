@@ -30,3 +30,11 @@ def next_workday_day_at(user, after):
         plan_start=after, day_number=1, time_slot='DAY', timezone_name=user.timezone,
         daily_time_slots={'DAY': day_time}, anchor_date=report_day,
     )
+
+
+def last_terminal_step(db, plan_id):
+    """Legacy unknown timestamps cannot hide the latest proven terminal fact."""
+    from app.db import AIPlanDay, AIPlanStep
+    return (db.query(AIPlanStep).join(AIPlanDay)
+        .filter(AIPlanDay.plan_id == plan_id)
+        .order_by(AIPlanStep.terminal_at.desc().nullslast(), AIPlanStep.id.desc()).populate_existing().first())
