@@ -983,6 +983,9 @@ and form a bounded execution contract against the then-current code.
 * production roster import and reconciliation with explicit snapshot/delta
   modes;
 * OIDC or verified-email authorization and deployment entitlement check;
+* caller authentication, current entitlement/enrollment and target ownership at
+  existing user-mutating HTTP boundaries; secure or remove `/user/time-slots`
+  in this package, never defer its access gate until privacy cleanup;
 * high-entropy, hashed, expiring, single-use Telegram handoff token;
 * atomic redemption, replay/cross-environment rejection, and revocation;
 * deployment timezone mode and environment isolation;
@@ -999,6 +1002,15 @@ and form a bounded execution contract against the then-current code.
 * roster revocation removes sponsored access without deleting history or
   exposing behavior;
 * already-enrolled users resume idempotently.
+* no anonymous or cross-user/cross-deployment caller can mutate a schedule,
+  even when the requested target user is entitled; a supplied `user_id` or
+  `Idempotency-Key` is not caller identity, and revoked/expired callers fail closed.
+
+**Access/privacy boundary clarified — 2026-10-15:** protecting or removing the
+existing time-slot mutation endpoint is a WP-04.1 exit requirement. The earlier
+WP-04.2 line is consolidated here so production enrollment cannot precede its
+HTTP access control. WP-04.2 retains privacy/data-rights/report-grant work and
+later retirement or minimization of already protected surfaces.
 
 ### WP-04.2 — Implement the minimum privacy and data-rights lifecycle
 
@@ -1011,7 +1023,8 @@ and form a bounded execution contract against the then-current code.
   personal events, and report grants;
 * revocable/expiring bearer grants or retirement of obsolete report routes;
 * removal of unused sensitive-looking schema;
-* remove or authenticate `/user/time-slots`;
+* privacy minimization/retirement of remaining legacy HTTP surfaces; caller
+  authorization or removal of `/user/time-slots` is already required by WP-04.1;
 * Redis cannot become stale business authority.
 
 **Primary audit coverage:** `PRIV-01…05`, `PRIV-08…10`, `DB-16…17`,
