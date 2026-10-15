@@ -1,5 +1,4 @@
 import asyncio
-from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -39,36 +38,10 @@ from app.lifecycle import (
 
 session_memory = SessionMemory(limit=20)
 logger = logging.getLogger(__name__)
-_completion_delivery_locks: dict[tuple[int, int], tuple[asyncio.Lock, int]] = {}
-_completion_known_sends: dict[tuple[int, int], str] = {}
-
 _SWITCH_UNAVAILABLE_REPLY = (
     "⚠️ Новий формат зараз недоступний. Поточний план не змінено. "
     "Спробуй змінити формат пізніше."
 )
-
-
-@asynccontextmanager
-async def _serialize_completion_delivery(user_id: int, plan_id: int):
-    """Serialize one plan's delivery attempts within the single runtime owner."""
-    key = (user_id, plan_id)
-    lock, waiters = _completion_delivery_locks.get(key, (asyncio.Lock(), 0))
-    _completion_delivery_locks[key] = (lock, waiters + 1)
-    acquired = False
-    try:
-        await lock.acquire()
-        acquired = True
-        yield
-    finally:
-        if acquired:
-            lock.release()
-        current = _completion_delivery_locks.get(key)
-        if current is not None and current[0] is lock:
-            remaining = current[1] - 1
-            if remaining:
-                _completion_delivery_locks[key] = (lock, remaining)
-            else:
-                del _completion_delivery_locks[key]
 
 
 def _auto_complete_plan_if_needed(
@@ -141,310 +114,37 @@ def _auto_complete_plan_if_needed(
     return result
 
 
-async def send_plan_completion_message(
-    user_id: int,
-    plan_id: int,
-) -> CompletionDeliveryResult:
-    """
-    Explicitly sends the completion report after a committed transition.
-    Exempt from MAX_AUTO_MESSAGES_PER_DAY — this is a lifecycle event.
-    """
-    async with _serialize_completion_delivery(user_id, plan_id):
-        outcome_tier = _completion_known_sends.get((user_id, plan_id))
-        if outcome_tier is not None:
-            return _persist_completion_delivery_receipt(
-                user_id,
-                plan_id,
-                outcome_tier,
-            )
-        return await _send_plan_completion_message_once(user_id, plan_id)
-
-
-def _persist_completion_delivery_receipt(
-    user_id: int,
-    plan_id: int,
-    outcome_tier: str,
-) -> CompletionDeliveryResult:
-    try:
-        with SessionLocal() as db:
-            log_user_event(
-                db,
-                user_id=user_id,
-                event_type="plan_completion_sent",
-                event_source="runtime",
-                source_operation_id=f"runtime:completion-report:{plan_id}",
-                plan_id=plan_id,
-                context={"outcome_tier": outcome_tier},
-            )
-            db.commit()
-    except Exception:
-        logger.exception(
-            "[COMPLETION_MSG] delivery receipt failed user=%s plan=%s",
-            user_id,
-            plan_id,
-        )
-        _schedule_completion_receipt_retry(user_id, plan_id)
-        return CompletionDeliveryResult(
-            user_id=user_id,
-            plan_id=plan_id,
-            succeeded=False,
-            retry_scheduled=True,
-            code="delivery_receipt_failed",
-        )
-    _completion_known_sends.pop((user_id, plan_id), None)
-    return CompletionDeliveryResult(
-        user_id=user_id,
-        plan_id=plan_id,
-        succeeded=True,
-    )
-
-
-async def _send_plan_completion_message_once(
-    user_id: int,
-    plan_id: int,
-) -> CompletionDeliveryResult:
-    from app.plan_completion.metrics import build_completion_metrics
-    from app.plan_completion.report import build_completion_report
-    from app.plan_completion.tokens import make_report_token
-    from app.scheduler import _send_message_async
-
-    with SessionLocal() as db:
-        user = db.query(User).filter(User.id == user_id).first()
-        if not user or not user.tg_id:
-            logger.warning("[COMPLETION_MSG] user=%s not found or no tg_id", user_id)
-            return CompletionDeliveryResult(
-                user_id=user_id,
-                plan_id=plan_id,
-                succeeded=False,
-                code="user_unavailable",
-            )
-        plan = (
-            db.query(AIPlan)
-            .filter(
-                AIPlan.id == plan_id,
-                AIPlan.user_id == user_id,
-                AIPlan.status == "completed",
-            )
-            .first()
-        )
-        if plan is None:
-            logger.warning(
-                "[COMPLETION_MSG] completed plan not owned user=%s plan=%s",
-                user_id,
-                plan_id,
-            )
-            return CompletionDeliveryResult(
-                user_id=user_id,
-                plan_id=plan_id,
-                succeeded=False,
-                code="completed_plan_not_owned",
-            )
-
-        already_sent = db.query(UserEvent).filter(
-            UserEvent.user_id == user_id,
-            UserEvent.event_name == "plan_completion_sent",
-            UserEvent.plan_id == plan_id,
-        ).first()
-        if already_sent:
-            _completion_known_sends.pop((user_id, plan_id), None)
-            logger.info("[COMPLETION_MSG] already sent for plan=%s", plan_id)
-            return CompletionDeliveryResult(
-                user_id=user_id,
-                plan_id=plan_id,
-                succeeded=True,
-                duplicate=True,
-                code="already_sent",
-            )
-
-        try:
-            metrics = build_completion_metrics(db, user_id, plan_id)
-        except Exception as e:
-            logger.error(
-                "[COMPLETION_MSG] metrics failed user=%s plan=%s: %s",
-                user_id,
-                plan_id,
-                e,
-            )
-            _schedule_completion_retry(user_id, plan_id)
-            return CompletionDeliveryResult(
-                user_id=user_id,
-                plan_id=plan_id,
-                succeeded=False,
-                retry_scheduled=True,
-                code="metrics_failed",
-            )
-
-        persona = "empath"
-        if user.profile:
-            persona = get_persona(user.profile)
-
-        report_text = build_completion_report(metrics, persona)
-        report_url = (
-            f"{settings.APP_BASE_URL}/report/"
-            f"{make_report_token(plan_id, settings.REPORT_TOKEN_SECRET)}"
-        )
-        report_text = report_text + f"\n\n🔗 <a href=\"{report_url}\">Детальний звіт →</a>"
-        tg_id = user.tg_id
-
-    result = await _send_message_async(tg_id, report_text)
-
-    if result:
-        _completion_known_sends[(user_id, plan_id)] = metrics.outcome_tier
-        return _persist_completion_delivery_receipt(
-            user_id,
-            plan_id,
-            metrics.outcome_tier,
-        )
-
-    _schedule_completion_retry(user_id, plan_id)
-    return CompletionDeliveryResult(
-        user_id=user_id,
-        plan_id=plan_id,
-        succeeded=False,
-        retry_scheduled=True,
-        code="send_failed",
-    )
-
-
-def _schedule_completion_retry(user_id: int, plan_id: int) -> None:
-    from app.scheduler import scheduler
-
-    scheduler.add_job(
-        "app.orchestrator:_retry_completion_message",
-        "date",
-        run_date=datetime.now(timezone.utc) + timedelta(minutes=30),
-        args=[user_id, plan_id],
-        id=f"completion_retry_{plan_id}",
-        replace_existing=True,
-    )
-    logger.info("[COMPLETION_MSG] retry scheduled user=%s plan=%s", user_id, plan_id)
-
-
-def _schedule_completion_receipt_retry(user_id: int, plan_id: int) -> None:
-    from app.scheduler import scheduler
-
-    scheduler.add_job(
-        "app.orchestrator:_retry_completion_receipt",
-        "date",
-        run_date=datetime.now(timezone.utc) + timedelta(minutes=30),
-        args=[user_id, plan_id],
-        id=f"completion_receipt_retry_{plan_id}",
-        replace_existing=True,
-    )
-
-
-def _retry_completion_receipt(user_id: int, plan_id: int) -> None:
-    outcome_tier = _completion_known_sends.get((user_id, plan_id))
-    if outcome_tier is None:
-        logger.warning(
-            "[COMPLETION_RECEIPT_RETRY] known send unavailable user=%s plan=%s",
-            user_id,
-            plan_id,
-        )
-        return
-    _persist_completion_delivery_receipt(user_id, plan_id, outcome_tier)
-
-
-def _retry_completion_message(user_id: int, plan_id: int) -> None:
-    """APScheduler sync callback — submits async send to event loop."""
-    from app.scheduler import _submit_coroutine
-
-    future = _submit_coroutine(send_plan_completion_message(user_id, plan_id))
-    if future:
-        try:
-            delivery = future.result(timeout=30)
-            if not delivery.succeeded:
-                logger.warning(
-                    "[COMPLETION_RETRY] pending user=%s plan=%s code=%s",
-                    user_id,
-                    plan_id,
-                    delivery.code,
-                )
-        except Exception as e:
-            logger.error("[COMPLETION_RETRY] failed user=%s: %s", user_id, e)
-            _submit_coroutine(_send_failure_notice(user_id))
-
-
-async def _send_failure_notice(user_id: int) -> None:
-    from app.scheduler import _send_message_async
-
-    with SessionLocal() as db:
-        user = db.query(User).filter(User.id == user_id).first()
-        if user and user.tg_id:
-            await _send_message_async(
-                user.tg_id,
-                "⚠️ Не вдалось надіслати звіт про завершення плану. "
-                "Зверніться в підтримку якщо це повторюється.",
-            )
+async def send_plan_completion_message(user_id: int, plan_id: int) -> CompletionDeliveryResult:
+    from app.plan_completion.workflow import deliver_report
+    return await deliver_report(user_id, plan_id)
 
 
 def _trigger_plan_completion(user_id: int, plan_id: int) -> None:
-    """
-    APScheduler sync callback.
-    Calls _auto_complete_plan_if_needed and submits send_plan_completion_message.
-    """
-    from app.scheduler import _submit_coroutine
-
-    with SessionLocal() as db:
-        user = db.query(User).filter(User.id == user_id).first()
-        if not user:
-            return
-        completion = _auto_complete_plan_if_needed(
-            db,
-            user,
-            expected_plan_id=plan_id,
-        )
-        try:
-            db.commit()
-        except Exception as e:
-            db.rollback()
-            logger.error("[COMPLETION_TRIGGER] db commit failed user=%s: %s", user_id, e)
-            return
-
-    if completion is None:
-        return
-
-    future = _submit_coroutine(
-        send_plan_completion_message(user_id, completion.plan_id)
-    )
-    if future:
-        try:
-            delivery = future.result(timeout=30)
-            if not delivery.succeeded:
-                logger.warning(
-                    "[COMPLETION_TRIGGER] report pending user=%s plan=%s code=%s",
-                    user_id,
-                    completion.plan_id,
-                    delivery.code,
-                )
-        except Exception as e:
-            logger.error("[COMPLETION_TRIGGER] send failed user=%s: %s", user_id, e)
+    """Explicit post-commit entry; scheduler recovery uses the same source identity."""
+    from app.scheduler import request_plan_completion
+    request_plan_completion(user_id, plan_id)
 
 
 async def _auto_complete_plan_if_needed_for_user_id(user_id: int) -> None:
-    with SessionLocal() as db:
-        user: Optional[User] = db.query(User).filter(User.id == user_id).first()
-        if not user:
-            return
-
-        completion = _auto_complete_plan_if_needed(db, user)
-
-        try:
+    def prepare():
+        with SessionLocal() as db:
+            user = db.query(User).filter(User.id == user_id).first()
+            if user is None:
+                return None
+            completion = _auto_complete_plan_if_needed(db, user)
             db.commit()
-        except IntegrityError:
-            db.rollback()
-            logger.error("[LIFECYCLE] Failed to auto-complete plan for user %s", user_id)
-            return
-
+            return completion
+    try:
+        completion = await asyncio.to_thread(prepare)
+    except LifecycleEntitlementError:
+        raise
+    except Exception:
+        logger.exception("Completion preparation pending user=%s", user_id)
+        from app.scheduler import enable_completion_recovery
+        await asyncio.to_thread(enable_completion_recovery)
+        return
     if completion is not None:
-        delivery = await send_plan_completion_message(user_id, completion.plan_id)
-        if not delivery.succeeded:
-            logger.warning(
-                "[COMPLETION] report pending user=%s plan=%s code=%s",
-                user_id,
-                completion.plan_id,
-                delivery.code,
-            )
+        await send_plan_completion_message(user_id, completion.plan_id)
 
 
 def _safe_timezone(name: Optional[str]) -> pytz.BaseTzInfo:
@@ -969,7 +669,7 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
         if code == "schedule_reconciliation_failed":
             return (
                 "⚠️ Час збережено, але розклад ще не узгоджено. "
-                "Повтори цю саму дію."
+                "Повтори цю саму дію." + retry_note
             )
         if code == "superseded":
             if tool_name in {

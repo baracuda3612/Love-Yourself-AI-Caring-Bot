@@ -532,6 +532,7 @@ def test_scheduler_reconciliation_removes_job_with_stale_run_date(monkeypatch):
 def test_plan_schedule_reconciliation_removes_past_job_and_repairs_future(
     monkeypatch,
 ):
+    monkeypatch.setattr("app.plan_completion.workflow.successor_delivery_blocked", lambda *_: False)
     past = datetime(2020, 1, 1, tzinfo=timezone.utc)
     future = datetime(2030, 1, 1, tzinfo=timezone.utc)
     day = SimpleNamespace(plan_id=20)
@@ -573,8 +574,8 @@ def test_plan_schedule_reconciliation_removes_past_job_and_repairs_future(
                 return _OneQuery(user)
             if model is scheduler.AIPlanStep:
                 return _StepsQuery()
-            from app.db import ExerciseDelivery
-            if model is ExerciseDelivery.id:
+            from app.db import ExerciseDelivery, PlanCompletion
+            if model is ExerciseDelivery.id or model is PlanCompletion:
                 return _OneQuery(None)
             raise AssertionError(model)
 
@@ -620,6 +621,7 @@ def test_plan_schedule_reconciliation_removes_past_job_and_repairs_future(
 def test_plan_schedule_reconciliation_fences_newer_lifecycle_decision(
     monkeypatch, new_decision
 ):
+    monkeypatch.setattr("app.plan_completion.workflow.successor_delivery_blocked", lambda *_: False)
     time_a = datetime(2030, 1, 1, 14, tzinfo=timezone.utc)
     time_b = datetime(2030, 1, 1, 15, tzinfo=timezone.utc)
     shared = {"status": "active", "scheduled_for": time_a}
@@ -663,8 +665,8 @@ def test_plan_schedule_reconciliation_fences_newer_lifecycle_decision(
                     user_id=3,
                     status=shared["status"],
                 )
-            from app.db import ExerciseDelivery
-            if self.model is ExerciseDelivery.id:
+            from app.db import ExerciseDelivery, PlanCompletion
+            if self.model is ExerciseDelivery.id or self.model is PlanCompletion:
                 return None
             raise AssertionError(self.model)
 
@@ -903,6 +905,7 @@ def test_expected_telemetry_rejection_preserves_authoritative_expiry(
 
 
 def test_expiry_sweep_isolates_unexpected_candidate_failure(monkeypatch, caplog):
+    monkeypatch.setattr(scheduler, "request_plan_completion", lambda *_: None)
     past = datetime(2026, 8, 1, 20, 59, 59, tzinfo=timezone.utc)
 
     def _step(step_id):
@@ -1113,6 +1116,7 @@ def test_keyboard_sweep_accepts_already_removed_markup_and_clears_marker(monkeyp
 
 
 def test_time_change_replay_reconciles_only_currently_schedulable_steps(monkeypatch):
+    monkeypatch.setattr("app.plan_completion.workflow.refresh_report_time", lambda *_: False)
     past = datetime.now(timezone.utc).replace(year=2020)
     future = datetime.now(timezone.utc).replace(year=2030)
     receipt = SimpleNamespace(

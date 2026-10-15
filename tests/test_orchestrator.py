@@ -1318,3 +1318,14 @@ def test_followup_registry_requires_explicit_plan_type(monkeypatch):
             1,
             {"_source_operation_id": "coach:followup:missing-type"},
         )
+
+
+@pytest.mark.anyio
+async def test_failed_report_alarm_time_change_returns_partial_copy_with_original_retry_reference(monkeypatch):
+    monkeypatch.setattr(orchestrator,'log_metric',lambda *args,**kwargs:None)
+    monkeypatch.setattr(orchestrator,'_build_tool_registry',lambda:{'change_day_time':lambda *args,**kwargs:{
+        'status':'error','code':'schedule_reconciliation_failed','saved':True,
+        'original_source_operation_id':'time:report:retry','disposition':'partial_failure'}})
+    response=await orchestrator._execute_plan_tool(7,{'name':'change_day_time','arguments':{'hhmm':'09:15'},'call_id':'new:call'})
+    assert 'Час збережено' in response and 'ще не узгоджено' in response
+    assert 'Код дії: time:report:retry.' in response and '✅' not in response

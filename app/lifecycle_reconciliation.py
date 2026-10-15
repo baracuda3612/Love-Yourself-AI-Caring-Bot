@@ -24,10 +24,15 @@ def _failed(effect: ExternalEffect, error_code: str) -> ExternalEffect:
 
 
 def _record_activation_event(result: LifecycleResult) -> None:
-    from app.db import SessionLocal
+    from app.db import PlanCompletion, SessionLocal
     from app.telemetry import log_user_event
 
     with SessionLocal() as db:
+        if db.query(PlanCompletion.plan_id).filter(
+                PlanCompletion.successor_plan_id == result.plan_id).first() is not None:
+            # Automatic successors are instrumented only by their locked,
+            # active-and-unblocked scheduler proof (including first resume).
+            return
         log_user_event(
             db,
             user_id=int(result.user_id),
@@ -57,7 +62,12 @@ def reconcile_scheduler_effects(result: LifecycleResult) -> LifecycleResult:
             outcomes.append(effect)
             continue
         try:
-            if effect.kind == "reconcile_plan_schedule":
+            if effect.kind == "reconcile_completion_schedule":
+                from app.scheduler import enable_completion_recovery
+                enable_completion_recovery()
+                outcomes.append(replace(effect, state=ExternalEffectState.SUCCEEDED, attempted=1, succeeded=1))
+                continue
+            elif effect.kind == "reconcile_plan_schedule":
                 reconciliation = reconcile_plan_schedule(
                     int(effect.target_ids[0])
                     if effect.target_ids

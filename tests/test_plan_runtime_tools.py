@@ -773,3 +773,19 @@ def test_mutation_tools_require_source_operation_id():
         tools.change_day_time(1, "09:30")  # type: ignore[call-arg]
     with pytest.raises(TypeError):
         tools.change_evening_time(1, "20:30")  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize('step_state',[lifecycle.ExternalEffectState.SUCCEEDED,lifecycle.ExternalEffectState.DEFERRED])
+def test_day_time_reports_failed_completion_alarm_even_when_step_schedule_succeeded_or_paused(monkeypatch,step_state):
+    fake_db=_DB(user=SimpleNamespace(id=1),profile=SimpleNamespace(user_id=1))
+    monkeypatch.setattr(database,'SessionLocal',lambda:nullcontext(fake_db))
+    result=lifecycle.LifecycleResult(user_id=1,plan_id=11,status='09:15',operation='change_day_time',effects=(
+        lifecycle.ExternalEffect(kind='reconcile_plan_schedule',target_ids=(11,),state=step_state),
+        lifecycle.ExternalEffect(kind='reconcile_completion_schedule',target_ids=(11,),state=lifecycle.ExternalEffectState.FAILED),
+    ))
+    monkeypatch.setattr(lifecycle,'change_delivery_time',lambda *args,**kwargs:result)
+    monkeypatch.setattr(lifecycle_reconciliation,'reconcile_scheduler_effects',lambda value:value)
+    answer=tools.change_day_time(1,'09:15',source_operation_id='time:report:retry')
+    assert answer['status']=='error' and answer['saved']
+    assert not answer['jobs_reconciled'] and answer['disposition']=='partial_failure'
+    assert answer['original_source_operation_id']=='time:report:retry'

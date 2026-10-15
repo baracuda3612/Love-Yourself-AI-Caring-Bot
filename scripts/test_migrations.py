@@ -23,7 +23,7 @@ from sqlalchemy.orm import sessionmaker
 from scripts.inspect_database_schema import inspect_database
 
 
-EXPECTED_REVISION = "20261010_scheduled_delivery"
+EXPECTED_REVISION = "20261014_plan_completion"
 EXPECTED_APPLICATION_TABLES = {
     "access_entitlements",
     "access_identities",
@@ -50,6 +50,7 @@ EXPECTED_APPLICATION_TABLES = {
     "plan_execution_windows",
     "plan_instances",
     "plan_lifecycle_operations",
+    "plan_completions",
     "privacy_notice_versions",
     "organizations",
     "report_access_grants",
@@ -1521,6 +1522,8 @@ def _assert_lifecycle_concurrency(target_url: str) -> None:
             step_status="completed",
         )
         with connection.cursor() as cursor:
+            cursor.execute("INSERT INTO user_profiles (user_id, daily_time_slots, active_days) VALUES (%s, %s::jsonb, %s::jsonb)",
+                (completed_user_id, '{"DAY":"14:00"}', '["MON","TUE","WED","THU","FRI"]'))
             cursor.execute(
                 "UPDATE ai_plan_steps SET terminal_at=NULL, version=0 WHERE id=%s",
                 (grandfathered_step_id,),
@@ -1776,7 +1779,7 @@ def _assert_lifecycle_concurrency(target_url: str) -> None:
                     "completed_user_id": completed_user_id,
                 },
             ).scalar_one()
-            assert receipt_count == 7
+            assert receipt_count == 8
             plan_row = verification.execute(
                 text(
                     "SELECT status::text, abandoned_at IS NOT NULL FROM ai_plans "

@@ -821,6 +821,20 @@ _PLAN_TRANSITIONS = {
 }
 
 
+def _resume_completion_effects(db: Session, plan: AIPlan, *, arm: bool) -> tuple[ExternalEffect, ...]:
+    """Keep a concrete automatic-resume proof recoverable before external work."""
+    from app.db import PlanCompletion
+    row = db.query(PlanCompletion).filter(PlanCompletion.successor_plan_id == plan.id).first()
+    if row is None:
+        return ()
+    if arm:
+        row.schedule_pending = True
+        row.wake_at = datetime.now(timezone.utc)
+    if not row.schedule_pending:
+        return ()
+    return (ExternalEffect(kind="reconcile_completion_schedule", target_ids=(int(plan.id),)),)
+
+
 def transition_current_plan(
     db: Session,
     *,
@@ -863,7 +877,8 @@ def transition_current_plan(
                         else ExternalEffectState.NOT_REQUIRED
                     ),
                 ),
-            ),
+            ) + (_resume_completion_effects(db, recorded_plan, arm=False)
+                 if operation == "resume" and still_authoritative else ()),
         )
 
     plan = get_current_plan(db, user_id, lock=True)
@@ -915,7 +930,7 @@ def transition_current_plan(
                 target_ids=(int(plan.id),),
                 state=ExternalEffectState.PENDING,
             ),
-        ),
+        ) + (_resume_completion_effects(db, plan, arm=True) if operation == "resume" else ()),
         details={"updated_step_ids": updated_step_ids},
     )
 
@@ -1361,8 +1376,9 @@ def complete_current_plan_if_ready(
     user_id: int,
     plan_id: int,
     source_operation_id: str,
+    now: datetime | None = None,
 ) -> LifecycleResult | None:
-    """Complete an active plan only after every child step is terminal."""
+    """Atomically close the explicit plan, obligation, and target successor."""
     _lock_user(db, user_id)
     existing = find_lifecycle_operation(db, user_id, source_operation_id)
     if existing:
@@ -1388,14 +1404,15 @@ def complete_current_plan_if_ready(
                     target_ids=(completed_plan.id,),
                 ),
             ),
-            details={"continuation": "deferred_to_wp_03_5"},
+            details={"continuation": "durable"},
         )
 
     plan = get_current_plan(db, user_id, lock=True)
     if plan is None or plan.id != plan_id:
         return None
-    if str(plan.status) != "active":
+    if str(plan.status) not in {"active", "paused"}:
         return None
+    carry_pause = str(plan.status) == "paused"
 
     total_steps = (
         db.query(func.count(AIPlanStep.id))
@@ -1426,8 +1443,40 @@ def complete_current_plan_if_ready(
     if not total_steps or open_steps or unproven_terminal:
         return None
 
+    from app.db import PlanCompletion
+    from app.plan_completion.chronology import report_due_at, last_terminal_step
+    from app.active_days import resolve_timezone
+    from app.plan_drafts.service import create_plan_for_lifecycle
+
+    now = now or datetime.now(timezone.utc)
+    last_terminal = last_terminal_step(db, plan.id)
+    if carry_pause and last_terminal.step_status not in {"completed", "skipped"}:
+        return None
+    user = db.get(User, user_id)
+    report_at = report_due_at(user, last_terminal, now=now)
+    slots = _completion_time_slots(user, plan)
+    plan_type = _plan_type(plan)
+
     plan.status = "completed"
     plan.version = int(plan.version or 0) + 1
+    db.flush()  # release the one-current-plan constraint before builder activation
+    successor = create_plan_for_lifecycle(
+        db, user_id, plan_type, day_time=slots["DAY"], evening_time=slots.get("EVENING"),
+        source_operation_id=f"continuation:{plan.id}",
+        activation_receipt_status="active",
+        start_after_local_date=max(now, report_at).astimezone(resolve_timezone(user.timezone)).date(),
+    ).plan
+    if carry_pause:
+        successor.status = "paused"
+        successor.version = int(successor.version or 0) + 1
+        record_lifecycle_operation(db, user_id=user_id, plan_id=successor.id,
+            source_operation_id=f"continuation:pause:{plan.id}",
+            operation="pause", result_status="paused")
+    db.add(PlanCompletion(
+        plan_id=plan.id, successor_plan_id=successor.id,
+        report_at=report_at, wake_at=max(now, report_at), state="pending", attempts=0,
+        schedule_pending=False,
+    ))
     record_lifecycle_operation(
         db,
         user_id=user_id,
@@ -1449,7 +1498,7 @@ def complete_current_plan_if_ready(
                 target_ids=(plan.id,),
             ),
         ),
-        details={"continuation": "deferred_to_wp_03_5"},
+        details={"continuation": "durable"},
     )
 
 
@@ -1556,6 +1605,12 @@ def change_delivery_time(
     operation = f"change_{normalized_slot.lower()}_time"
     user = _lock_user(db, user_id)
 
+    def completion_effects(plan_id):
+        from app.plan_completion.workflow import refresh_report_time
+        if normalized_slot == "DAY" and refresh_report_time(db, user, plan_id):
+            return (ExternalEffect(kind="reconcile_completion_schedule", target_ids=(plan_id,)),)
+        return ()
+
     existing = find_lifecycle_operation(db, user_id, source_operation_id)
     if existing is not None:
         duplicate = _duplicate_operation_result(
@@ -1595,7 +1650,7 @@ def change_delivery_time(
                     target_ids=(context_plan.id,),
                     state=state,
                 ),
-            ),
+            ) + (completion_effects(context_plan.id) if still_authoritative else ()),
             details={
                 "slot": normalized_slot,
                 "value": canonical_hhmm,
@@ -1619,6 +1674,7 @@ def change_delivery_time(
         )
     except TimeSlotError as exc:
         raise LifecycleTransitionError(str(exc)) from exc
+    report_effects = completion_effects(context_plan.id)
     record_lifecycle_operation(
         db,
         user_id=user_id,
@@ -1649,7 +1705,7 @@ def change_delivery_time(
                 target_ids=(context_plan.id,),
                 state=state,
             ),
-        ),
+        ) + report_effects,
         details={
             "slot": normalized_slot,
             "value": canonical_hhmm,
@@ -2498,6 +2554,41 @@ def prepare_continuation(
         source_operation_id=source_operation_id,
         duplicate=duplicate,
     )
+
+
+def _completion_time_slots(user: User, plan: AIPlan) -> dict[str, str]:
+    """Use the canonical DAY default without inventing a collected evening."""
+    from app.time_slots import canonicalize_hhmm, normalize_daily_time_slots
+    profile = user.profile
+    raw = getattr(profile, "daily_time_slots", None)
+    slots = {"DAY": normalize_daily_time_slots(raw, require_all=False)["DAY"]}
+    if _plan_type(plan) == "MEDIUM":
+        if not getattr(profile, "evening_slot_collected", False):
+            raise LifecycleTransitionError("saved_evening_time_missing")
+        slots["EVENING"] = canonicalize_hhmm(raw.get("EVENING") if isinstance(raw, dict) else None)
+    return slots
+
+
+def refresh_completion_successor(db: Session, *, user: User, plan: AIPlan, report_at: datetime) -> datetime:
+    """Re-anchor only unstarted automatic work before a fresh report promise.
+
+    Caller holds the user lock. User controls remain the schedule authority.
+    """
+    from app.active_days import resolve_timezone
+    from app.time_slots import reanchor_pending_plan_steps
+    first = (db.query(func.min(AIPlanStep.scheduled_for)).join(AIPlanDay)
+             .filter(AIPlanDay.plan_id == plan.id, AIPlanStep.step_status == "pending").scalar())
+    if first is None:
+        raise LifecycleInvariantError("continuation_has_no_pending_steps")
+    tz = resolve_timezone(user.timezone)
+    if first.astimezone(tz).date() <= report_at.astimezone(tz).date():
+        reanchor_pending_plan_steps(user, plan, resumed_at=report_at,
+            daily_time_slots=_completion_time_slots(user, plan))
+        plan.version = int(plan.version or 0) + 1
+        db.flush()
+        first = (db.query(func.min(AIPlanStep.scheduled_for)).join(AIPlanDay)
+                 .filter(AIPlanDay.plan_id == plan.id, AIPlanStep.step_status == "pending").scalar())
+    return first
 
 
 def plan_completion_at(db: Session, plan_id: int) -> datetime | None:

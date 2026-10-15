@@ -74,6 +74,7 @@ forward migration and compatibility tests.
 | `ai_plan_days` | `RESHAPE`: `id`, `plan_id`, `day_number`, optional immutable generation snapshot. Completion is calculated from child steps. | `plan_id -> ai_plans.id ON DELETE CASCADE`; unique `(plan_id, day_number)`. |
 | `ai_plan_steps` | `RESHAPE`: `id`, `day_id`, `exercise_id`, `content_version`, immutable content/mechanic snapshot, `order_in_day`, `time_slot`, `scheduled_for`, `expires_at`, `step_status`, terminal timestamp, and version for conditional updates. | `day_id -> ai_plan_days.id ON DELETE CASCADE`; `(exercise_id, content_version) -> content_library` with `ON DELETE RESTRICT`. |
 | `exercise_deliveries` | `ADD` (WP-03.4 scheduled): required `plan_step_id`, stable source operation, numbered attempt (1–3), `in_flight` / `uncertain` / `delivered` / `retryable` / `terminal_failure`, Telegram chat/message identity, immutable presentation snapshot and confirmed variant/payload. Separate mutable status/feedback projection markers and terminal `projection_failure_code` own only Telegram edit reconciliation; a permanent edit rejection never falsifies visible success or confirmed send facts. | Added by WP-03.4 for scheduled delivery; occurrence FK is added by WP-06.1. No delivery row owns step/request lifecycle. |
+| `plan_completions` | `ADD` (WP-03.5): one source-plan obligation with immutable source/successor identity, report/wakeup chronology, bounded claim attempts, send uncertainty and confirmed Telegram receipt. The explicit TTL recovery confirmation has its own payload/receipt; neither send path reopens the source or creates another successor. | `plan_id -> ai_plans.id ON DELETE CASCADE` is the primary key; unique `successor_plan_id -> ai_plans.id ON DELETE CASCADE`; a trigger requires an owned completed source. Confirmed receipts require non-null positive message identities and are immutable. |
 
 ### Deployment, identity, entitlement, and enrolment
 
@@ -165,6 +166,8 @@ change.
 | `uq_on_demand_exercise_requests_source_operation` | Unique `on_demand_exercise_requests(source_operation_id)`. | WP-06.1 |
 | `ux_exercise_deliveries_one_sent` | Unique source occurrence where delivery state is successful; retries remain separate attempts. | WP-03.4/WP-06.2 |
 | `ux_exercise_deliveries_one_open` | One in-flight, uncertain or successful attempt per scheduled step; an unknown send blocks further sends. | WP-03.4 |
+| `uq_plan_completion_successor` | One automatic successor identity per completion obligation; source plan is the primary key. | WP-03.5 |
+| `ix_plan_completions_work` | Partial index on state/wakeup for pending/in-flight summary or explicit-release work, plus outstanding schedule reconciliation. Quarantined/repaired history does not wake recovery. | WP-03.5 |
 | `uq_exercise_delivery_attempt` | Unique `(source_operation_id, attempt)`; scheduled source is `scheduler:delivery:<step_id>`. | WP-03.4 |
 | `uq_user_events_source_operation` | Unique `(event_source, source_operation_id, event_name)`. | WP-01.4 |
 | `uq_feedback_events_source_operation` | Unique `(source, source_operation_id)`. | WP-01.4 |
@@ -253,6 +256,7 @@ Only the three classifications below are permitted:
 | `ai_plan_steps.exercise_id`, `content_version`, content copy | `immutable_snapshot` | Exact selected content identity/copy remains historical plan evidence; the catalogue stays release authority. |
 | `ai_plan_steps.scheduled_for`, `expires_at` | `immutable_snapshot` | Written together by scheduling/rescheduling; later timezone changes cannot retroactively move the deadline. |
 | actual delivery variant/payload | `immutable_snapshot` | Captured on the successful `exercise_deliveries` row. |
+| completion source/successor identity and confirmed summary/release receipts | `immutable_snapshot` | Owned `plan_completions` identity and actual Telegram payload/message/time. Mutable obligation state and wakeups reconcile only unfinished external work; they do not own source finalization or product metrics. |
 | `users.first_seen_at` | `immutable_snapshot` | Set once from the first proven accepted interaction; unknown legacy facts stay null. |
 | `users.last_active_at` | `calculate` | Maximum accepted user-authored event; no mutable activity summary. |
 | event organization/deployment/plan/content attribution | `immutable_snapshot` | Captured at occurrence and never rewritten when enrollment or content changes. |
@@ -349,3 +353,29 @@ process cache, scheduler job or summary retry never owns plan finalization.
 No completion-obligation table or successor constraint is invented by this
 documentation handoff. Preserve the scheduled-only denominator and authoritative
 14-day step/day facts; final summary payload belongs to WP-07.4.
+
+
+## Implemented completion candidate — 2026-10-14
+
+WP-03.5 adds `plan_completions` at application revision
+`20261014_plan_completion`. The source closes and the target builder creates
+its one same-format successor atomically under the user lock. The normal
+no-action report follows authoritative expiry, selected workdays and saved DAY;
+a successor starts strictly after the actual report day. A final Done/Skip
+while paused closes the source and carries pause into the successor.
+
+Saved DAY and an unattempted report's timing change in the same authoritative
+transaction, including while paused. Scheduler reconciliation only arms the
+post-commit alarm. Confirmed exercise facts remain unchanged. `activated_at`
+records the activation instant separately from a potentially future
+`start_date`; immediate cancellation/switch therefore remains valid.
+
+Unknown summary sends do not retry. After ten minutes the user may explicitly
+request a separate future-date confirmation with `/continue_plan`; only its
+confirmed receipt releases automatic delivery. No final WP-07.4 web/image
+summary payload, on-demand linkage or canonical metrics are added.
+
+The 2026-10-15 nullable-preference repair uses the canonical DAY default when
+saved slots are NULL/empty or omit DAY, including no-action report chronology
+and late continuation re-anchoring. MEDIUM still requires a collected, explicitly
+saved valid EVENING. No preference backfill, schema change or new state is added.

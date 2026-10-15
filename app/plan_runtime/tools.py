@@ -615,7 +615,7 @@ def change_day_time(
             "disposition": "superseded",
         }
     effect = result.effects[0]
-    if effect.state.value == "failed":
+    if not _operational_effects_succeeded(result):
         return {
             "status": "error",
             "code": "schedule_reconciliation_failed",
@@ -624,6 +624,7 @@ def change_day_time(
             "jobs_reconciled": False,
             "duplicate": result.duplicate,
             "disposition": "partial_failure",
+            "original_source_operation_id": source_operation_id,
         }
     logger.info(
         "[plan_runtime] change_day_time: user=%s hhmm=%s rescheduled=%d",

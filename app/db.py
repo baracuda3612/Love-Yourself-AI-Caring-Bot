@@ -43,7 +43,7 @@ SessionLocal = sessionmaker(
 Base = declarative_base()
 logger = logging.getLogger(__name__)
 
-EXPECTED_ALEMBIC_REVISION = "20261010_scheduled_delivery"
+EXPECTED_ALEMBIC_REVISION = "20261014_plan_completion"
 
 
 class SchemaVersionError(RuntimeError):
@@ -923,6 +923,37 @@ class ExerciseDelivery(Base):
     visible_status = Column(String(32))
     visible_feedback = Column(String(64))
     projection_failure_code = Column(String(64))
+
+
+class PlanCompletion(Base):
+    """One durable closing obligation and continuation identity per source plan."""
+    __tablename__ = "plan_completions"
+    __table_args__ = (
+        UniqueConstraint("successor_plan_id", name="uq_plan_completion_successor"),
+        CheckConstraint("plan_id <> successor_plan_id", name="ck_plan_completion_distinct"),
+        CheckConstraint("state IN ('pending','in_flight','uncertain','sent','failed','release_in_flight','release_uncertain','released','sent_held')", name="ck_plan_completion_state"),
+        CheckConstraint("attempts BETWEEN 0 AND 3", name="ck_plan_completion_attempts"),
+        CheckConstraint("state NOT IN ('sent','sent_held') OR (message_id IS NOT NULL AND message_id > 0 AND chat_id IS NOT NULL AND sent_at IS NOT NULL AND payload IS NOT NULL)", name="ck_plan_completion_receipt"),
+        CheckConstraint("state <> 'released' OR (release_message_id IS NOT NULL AND release_message_id > 0 AND release_payload IS NOT NULL AND released_at IS NOT NULL)", name="ck_plan_completion_release"),
+        Index("ix_plan_completions_work", "state", "wake_at", postgresql_where=text("state IN ('pending','in_flight','release_in_flight') OR schedule_pending")),
+    )
+    plan_id = Column(Integer, ForeignKey("ai_plans.id", ondelete="CASCADE"), primary_key=True)
+    successor_plan_id = Column(Integer, ForeignKey("ai_plans.id", ondelete="CASCADE"), nullable=False)
+    report_at = Column(DateTime(timezone=True), nullable=False)
+    state = Column(String(32), nullable=False, default="pending")
+    wake_at = Column(DateTime(timezone=True), nullable=False)
+    attempts = Column(Integer, nullable=False, default=0)
+    started_at = Column(DateTime(timezone=True))
+    payload = Column(Text)
+    chat_id = Column(BigInteger)
+    message_id = Column(BigInteger)
+    sent_at = Column(DateTime(timezone=True))
+    failure_code = Column(String(64))
+    schedule_pending = Column(Boolean, nullable=False, default=False)
+    release_started_at = Column(DateTime(timezone=True))
+    release_payload = Column(Text)
+    release_message_id = Column(BigInteger)
+    released_at = Column(DateTime(timezone=True))
 
 
 class FeedbackEvent(Base):

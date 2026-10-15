@@ -291,7 +291,6 @@ def test_scheduler_wait_timeout_preserves_late_receipt_without_duplicate(db,monk
     user,_,step=active_step(db)
     monkeypatch.setattr(scheduler,'SessionLocal',lambda:nullcontext(db))
     monkeypatch.setattr(db,'commit',db.flush)
-    monkeypatch.setattr(scheduler,'_maybe_schedule_plan_completion',lambda *_a:None)
     monkeypatch.setattr(scheduler,'_event_loop',object())
     monkeypatch.setattr(active_days,'is_active_day',lambda *_a:True)
     tg=bot(chat_id=user.tg_id); monkeypatch.setattr(telegram,'bot',tg)
@@ -317,8 +316,6 @@ def test_restart_sweep_restores_past_due_retry_and_ui(db,monkeypatch):
     now=datetime.now(timezone.utc)-timedelta(seconds=60)
     finish_send(db,claim.attempt_id,ExerciseSendResult('failed','text',claim.presentation,'x',failure_code='limit',retry_after=30),now=now)
     monkeypatch.setattr(scheduler,'SessionLocal',lambda:nullcontext(db)); monkeypatch.setattr(db,'commit',db.flush)
-    monkeypatch.setattr(scheduler,'_maybe_schedule_plan_completion',lambda *_a:None)
-    monkeypatch.setattr(scheduler,'_maybe_schedule_plan_completion',lambda *_a:None)
     monkeypatch.setattr(scheduler,'_event_loop',object()); monkeypatch.setattr(active_days,'is_active_day',lambda *_a:True)
     tg=bot(chat_id=user.tg_id); monkeypatch.setattr(telegram,'bot',tg)
     def submit(coro):
@@ -535,7 +532,6 @@ def test_recovery_is_dormant_for_success_and_wakes_for_definite_retry(db, monkey
     monkeypatch.setattr(scheduler, 'scheduler', FakeScheduler())
     monkeypatch.setattr(scheduler, 'SessionLocal', lambda: nullcontext(db))
     monkeypatch.setattr(db, 'commit', db.flush)
-    monkeypatch.setattr(scheduler, '_maybe_schedule_plan_completion', lambda *_a: None)
     monkeypatch.setattr(scheduler, '_event_loop', object())
     monkeypatch.setattr(active_days, 'is_active_day', lambda *_a: True)
     monkeypatch.setattr(telegram, 'bot', bot(chat_id=user.tg_id))
@@ -595,12 +591,16 @@ def test_startup_retires_permanent_recovery_interval(monkeypatch):
     added = {}; removed = []
     class FakeScheduler:
         running = True
+        def get_jobs(self): return [SimpleNamespace(id=x) for x in ['completion_1','completion_retry_1','completion_receipt_retry_1','plan_1_day_1_step_1']]
+        def resume(self): pass
         def remove_job(self, job_id): removed.append(job_id)
         def add_job(self, func, trigger, **kwargs): added[kwargs['id']] = trigger
     monkeypatch.setattr(scheduler, 'scheduler', FakeScheduler())
     scheduler.init_scheduler()
     assert 'scheduled_delivery_recovery' in removed
     assert 'scheduled_delivery_recovery' not in added
+    assert all(x in removed for x in ['completion_1','completion_retry_1','completion_receipt_retry_1'])
+    assert 'plan_1_day_1_step_1' not in removed
 
 
 @pytest.mark.parametrize('variant', ['text', 'gif'])
