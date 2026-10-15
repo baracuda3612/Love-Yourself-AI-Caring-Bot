@@ -985,13 +985,15 @@ and form a bounded execution contract against the then-current code.
 * OIDC or verified-email authorization and deployment entitlement check;
 * caller authentication, current entitlement/enrollment and target ownership at
   existing user-mutating HTTP boundaries; secure or remove `/user/time-slots`
-  in this package, never defer its access gate until privacy cleanup;
+  in this package, never defer its access gate until privacy cleanup. If retained,
+  derive user identity from a verified session or validated signed Telegram
+  WebApp payload, authorize ownership and rate-limit the endpoint (`PRIV-10`);
 * high-entropy, hashed, expiring, single-use Telegram handoff token;
 * atomic redemption, replay/cross-environment rejection, and revocation;
 * deployment timezone mode and environment isolation;
 * removal of the legacy `newplan_*` entry model.
 
-**Primary audit coverage:** `SEC-10`, `COMP-01`, `COMP-04`, `COMP-06`,
+**Primary audit coverage:** `SEC-10`, `PRIV-10`, `COMP-01`, `COMP-04`, `COMP-06`,
 `COMP-08`, `UX-01`, `FD-18`, `MISC-01` pointer.
 
 **Exit criteria**
@@ -1001,16 +1003,22 @@ and form a bounded execution contract against the then-current code.
 * testnet and production credentials/data are non-interchangeable;
 * roster revocation removes sponsored access without deleting history or
   exposing behavior;
-* already-enrolled users resume idempotently.
+* already-enrolled users resume idempotently;
 * no anonymous or cross-user/cross-deployment caller can mutate a schedule,
   even when the requested target user is entitled; a supplied `user_id` or
   `Idempotency-Key` is not caller identity, and revoked/expired callers fail closed.
+* a retained time-slot endpoint rejects forged/expired caller proof and enforces
+  its rate limit without relying on a query-supplied identity; cross-user denial
+  and supported owner requests are covered, errors do not enumerate internal
+  user identities, or the removed route is unreachable.
 
 **Access/privacy boundary clarified — 2026-10-15:** protecting or removing the
 existing time-slot mutation endpoint is a WP-04.1 exit requirement. The earlier
 WP-04.2 line is consolidated here so production enrollment cannot precede its
 HTTP access control. WP-04.2 retains privacy/data-rights/report-grant work and
-later retirement or minimization of already protected surfaces.
+later retirement or minimization of already protected surfaces. `PRIV-10` is
+therefore a primary WP-04.1 input and owner in both scope and the audit index;
+its verified-session/signed-WebApp and rate-limit requirements move with it.
 
 ### WP-04.2 — Implement the minimum privacy and data-rights lifecycle
 
@@ -1027,7 +1035,7 @@ later retirement or minimization of already protected surfaces.
   authorization or removal of `/user/time-slots` is already required by WP-04.1;
 * Redis cannot become stale business authority.
 
-**Primary audit coverage:** `PRIV-01…05`, `PRIV-08…10`, `DB-16…17`,
+**Primary audit coverage:** `PRIV-01…05`, `PRIV-08…09`, `DB-16…17`,
 `COMP-07`, `UX-13`.
 
 **Exit criteria**
@@ -1591,7 +1599,7 @@ Cross-package dependencies remain in the package descriptions above.
 | Delivery `DEL-01…08` | WP-03.3: `DEL-01…02`, `DEL-07…08`; WP-03.4: `DEL-03…06` |
 | Runtime tools `RT-01…15` | WP-02.1: `RT-05`; WP-02.3: `RT-01…04`, `RT-06…08`, `RT-10…15`; WP-05.2: `RT-09` |
 | Lifecycle/FSM `FSM-01…13` | WP-01.3: `FSM-08`, `FSM-11…13`; WP-02.1: `FSM-01…05`, `FSM-07`, `FSM-10`; WP-02.2/02.3: `FSM-06`, `FSM-09` |
-| Privacy `PRIV-01…10` | WP-04.2: `PRIV-01…05`, `PRIV-08…10`; WP-07.3: `PRIV-06…07` |
+| Privacy `PRIV-01…10` | WP-04.1: `PRIV-10`; WP-04.2: `PRIV-01…05`, `PRIV-08…09`; WP-07.3: `PRIV-06…07` |
 | Content `CONTENT-01…09` | WP-01.4: `CONTENT-07` identity; WP-03.1: `CONTENT-01…06`, `CONTENT-08…09` |
 | Telemetry `TEL-01…15` | WP-07.1: `TEL-01…11`, `TEL-13`; WP-07.3: `TEL-12`; WP-07.2: `TEL-14…15` |
 | Database/Redis `DB-01…20` | WP-01.1: `DB-01`; WP-01.2: `DB-09…10`, `DB-12…14`, `DB-18…19`; WP-01.3: `DB-02…04`; WP-01.4: `DB-05…07`, `DB-11`, `DB-15`; WP-03.4: `DB-08`; WP-04.2: `DB-16…17`; WP-09.2: `DB-20` |
