@@ -769,8 +769,9 @@ MVP merge blocker; this does not claim that path is fixed.
 
 ## 9. Block 3 — Content, plan generation, presentation, and scheduled delivery
 
-**Status:** `IN PROGRESS` — WP-03.1 through WP-03.4 are founder-merged;
-WP-03.5 is the final package in this block.
+**Status:** `VERIFIED` — WP-03.1 through WP-03.5 are founder-merged.
+B3 closed on 2026-10-15 with PR #267, merge
+`efc5d08647ca6b724d5f5a453fe3be5b5562396a`. This is not a release or beta gate.
 
 **Depends on:** B2 and canonical identity from B1  
 **Objective:** make the primary product touchpoint deterministic, versioned,
@@ -919,10 +920,13 @@ preserves delivered actions through their existing deadline. See
 
 ### WP-03.5 — Implement durable completion and automatic continuation
 
-**Status:** `READY` — all package dependencies are founder-merged. Start in a
-fresh task from the then-current integration after this documentation handoff
-merges; first form a bounded execution contract from this scope and live code.
-See [the start message](work_packages/WP-03.5_start_message.md).
+**Status:** `VERIFIED` — founder merged [PR #267](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/267)
+on 2026-10-15 as `efc5d08647ca6b724d5f5a453fe3be5b5562396a`.
+Final candidate `9d6a2f1` passed independent local/category review and configured
+GitHub review with no new findings. Acceptance: 431 non-opt-in tests, 66 fresh
+disposable PostgreSQL completion scenarios and 13 runtime-control scenarios;
+predecessor 88 and migration/concurrency evidence are recorded in the
+[package closure](work_packages/WP-03.5_durable_completion.md).
 
 **Depends on:** WP-02.2, WP-02.3, WP-03.2, and WP-03.4.
 
@@ -960,12 +964,17 @@ See [the start message](work_packages/WP-03.5_start_message.md).
 
 ## 10. Block 4 — Access, privacy minimum, onboarding, and deterministic controls
 
-**Status:** `NOT STARTED`  
+**Status:** `READY` — B2 and B3 are verified; WP-04.1 is next.  
 **Depends on:** B2–B3  
 **Objective:** create a trustworthy entry path that remains usable without the
 Coach model.
 
 ### WP-04.1 — Implement deployment, entitlement, and enrollment authority
+
+**Status:** `READY` — WP-00.4, WP-01.4 and WP-02.2 are founder-merged;
+B3 closure is verified. Start a fresh task only after this documentation
+handoff merges. Read the [WP-04.1 start message](work_packages/WP-04.1_start_message.md)
+and form a bounded execution contract against the then-current code.
 
 **Scope**
 
@@ -1301,6 +1310,9 @@ otherwise. Do not scatter new behavior around it.
 * security event taxonomy and privacy-safe logging;
 * kill switches for Coach, scheduled delivery, and deployment;
 * alert destinations and credential-rotation paths;
+* common exhausted-recovery incident contract: durable unresolved work,
+  per-mechanism retry window, parking reason, explicit operational restart,
+  deduplicated owner notification and recovery acknowledgement;
 * founder-owned incident runbook and one rehearsal;
 * accepted exceptions recorded with review date.
 
@@ -1362,7 +1374,10 @@ restart, and recovery conditions.
 * `/live`, truthful `/ready`, `PORT`, schema/dependency checks;
 * polling/scheduler heartbeat, overdue backlog, delivery failure/retry,
   dependency health, restart, backup age, and cost-control alerts;
-* privacy-safe alert payloads and named response owner.
+* privacy-safe alert payloads and named response owner;
+* connect exhausted recovery windows to the WP-08.2 incident contract, including
+  notification delivery/retry, external failure detection and environment
+  isolation; ordinary cache TTL or product expiry is not itself an incident.
 
 **Primary audit coverage:** `OPS-03…04`, `OPS-09`, `DB-20`, `COMP-09`.
 
@@ -1619,12 +1634,12 @@ block exit gate passes.
   - [x] WP-02.1 — Remove dead lifecycle entrances and the schedule-adjustment tunnel
   - [x] WP-02.2 — Build the authoritative lifecycle service
   - [x] WP-02.3 — Complete runtime controls and plan-format behavior
-- [ ] B3 — Content, plan generation, presentation, and scheduled delivery
+- [x] B3 — Content, plan generation, presentation, and scheduled delivery
   - [x] WP-03.1 — Migrate the versioned Content Library
   - [x] WP-03.2 — Correct deterministic plan generation
   - [x] WP-03.3 — Introduce canonical ExercisePresentation and media delivery
   - [x] WP-03.4 — Make scheduled delivery and callbacks reconcilable
-  - [ ] WP-03.5 — Implement durable completion and automatic continuation
+  - [x] WP-03.5 — Implement durable completion and automatic continuation
 - [ ] B4 — Access, privacy minimum, onboarding, and deterministic controls
   - [ ] WP-04.1 — Implement deployment, entitlement, and enrollment authority
   - [ ] WP-04.2 — Implement the minimum privacy and data-rights lifecycle
@@ -1662,10 +1677,10 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | `WP-03.5 — Implement durable completion and automatic continuation` |
-| Status | `READY` after WP-03.4 founder merge PR #265 (`4b064e5`); documentation handoff must merge before implementation starts |
-| Next action | Start a fresh WP-03.5 task after the documentation handoff merges; fetch and verify integration, preserve local changes, create a separate package branch, then form the completion/continuation contract |
-| Current blockers | No package dependency blocks WP-03.5; the documentation handoff merge is pending. `DG-02` keeps cold water unavailable; `DG-03` device checks remain before beta. Final summary payload is WP-07.4; Gate G1 remains required before durable-data rollout |
+| Current package | `WP-04.1 — Implement deployment, entitlement, and enrollment authority` |
+| Status | `READY`; B3 closed by WP-03.5 founder merge PR #267 (`efc5d08`). WP-04.1 implementation has not started |
+| Next action | Founder merges the documentation handoff; start a fresh WP-04.1 task, fetch/verify integration, preserve local changes, create its own package branch, and form the access/enrollment execution contract from FD-18 and live code |
+| Current blockers | No package dependency blocks WP-04.1; documentation handoff merge is pending. Production roster/identity/token behavior must enforce FD-18. Gate G1 is required before durable-data rollout/company enrollment. `DG-02` keeps cold water unavailable; `DG-03` remains before beta. Final summary payload is WP-07.4; shared exhausted-recovery alerts are WP-08.2/WP-09.2 |
 
 ### Private founder log
 
@@ -1715,8 +1730,8 @@ behavior.
 
 ## 22. Historical first steps after roadmap approval
 
-The sequence below was the initial handoff and has been completed through B2.
-The current next step is WP-03.5, as recorded in the current-package table
+The sequence below was the initial handoff and has been completed through B3.
+The current next step is WP-04.1, as recorded in the current-package table
 above; do not restart WP-00.4 or WP-01.1 from this historical list.
 
 1. Complete WP-00.4 repository hardening and targeted verification.

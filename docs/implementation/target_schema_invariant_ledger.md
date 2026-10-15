@@ -4,6 +4,10 @@
 
 **Physical starting point:** Alembic revision `20260827_schema_baseline`
 
+**Current implemented head:** `20261014_plan_completion`, founder-merged
+WP-03.5 PR #267 (`efc5d08`, 2026-10-15). B3 is verified; WP-04.1 access
+behavior is next. Deployment schema primitives do not imply working enrollment.
+
 **Contract scope:** target design only; no DDL in WP-01.2
 
 This document is the canonical target contract for the forward migrations owned
@@ -346,7 +350,7 @@ is `20261010_scheduled_delivery`. Scheduled `exercise_deliveries`, immutable
 confirmed facts, completed-only efficacy uniqueness and mutable projection
 diagnostics above are implemented. No on-demand occurrence linkage is added.
 
-WP-03.5 must define only the necessary plan-scoped durable completion/summary
+At the WP-03.4 handoff, WP-03.5 was to define only the necessary plan-scoped durable completion/summary
 obligation and successor identity in its execution contract and forward
 migration. Lifecycle operations remain canonical; a delivery receipt, event,
 process cache, scheduler job or summary retry never owns plan finalization.
@@ -355,7 +359,7 @@ documentation handoff. Preserve the scheduled-only denominator and authoritative
 14-day step/day facts; final summary payload belongs to WP-07.4.
 
 
-## Implemented completion candidate — 2026-10-14
+## Implemented completion — founder-merged 2026-10-15
 
 WP-03.5 adds `plan_completions` at application revision
 `20261014_plan_completion`. The source closes and the target builder creates
@@ -379,3 +383,11 @@ The 2026-10-15 nullable-preference repair uses the canonical DAY default when
 saved slots are NULL/empty or omit DAY, including no-action report chronology
 and late continuation re-anchoring. MEDIUM still requires a collected, explicitly
 saved valid EVENING. No preference backfill, schema change or new state is added.
+
+PR #267 merged as `efc5d08647ca6b724d5f5a453fe3be5b5562396a` after the final
+review of `9d6a2f1`. First automatic activation instrumentation belongs to the
+locked active/unblocked job-set proof, including first resume. One idempotent
+event and contribution survive retries; paused/cancelled/superseded successors
+do not contribute a runnable activation. Existing completion work also owns
+resume repair, backoff and atomic obligation clear/parking. Domain `activated_at`
+remains distinct from first runnable scheduling telemetry.
