@@ -260,14 +260,17 @@ def test_real_concurrent_claim_and_feedback_have_one_winner(migrated_engine):
             s.execute(text('TRUNCATE users CASCADE')); s.commit()
 
 
-def test_unknown_send_owned_callback_proves_delivery_and_action(db):
+@pytest.mark.parametrize('telegram_precision', ['microseconds', 'seconds'])
+def test_unknown_send_owned_callback_proves_delivery_and_action(db, telegram_precision):
     from html import unescape
     import re
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     user,_,step=active_step(db); claim=claim_send(db,step.id)
+    claimed_at=latest_attempt(db,step.id).started_at
     finish_send(db,claim.attempt_id,ExerciseSendResult('uncertain',None,claim.presentation,'',failure_code='timeout'))
     payload=render_exercise(claim.presentation)
-    message=SimpleNamespace(chat=SimpleNamespace(id=user.tg_id,type='private'),date=datetime.now(timezone.utc),message_id=777,
+    receipt_at=claimed_at.replace(microsecond=0) if telegram_precision=='seconds' else datetime.now(timezone.utc)
+    message=SimpleNamespace(chat=SimpleNamespace(id=user.tg_id,type='private'),date=receipt_at,message_id=777,
                             animation=None,text=unescape(re.sub(r'</?b>','',payload)),
                             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                                 InlineKeyboardButton(text='Done',callback_data=f'task_complete:{step.id}'),
@@ -276,6 +279,8 @@ def test_unknown_send_owned_callback_proves_delivery_and_action(db):
     assert result.status=='completed'
     assert sent_receipt(db,step.id).rendered_payload==payload
     assert [e.event_name for e in events(db,step)]==['task_delivered','task_completed']
+    receipt_event=next(e for e in events(db,step) if e.event_name=='task_delivered')
+    assert receipt_event.occurred_at==receipt_at and receipt_event.attribution_at==claimed_at
     finish_send(db,claim.attempt_id,success(claim))
     assert len(events(db,step))==2
 

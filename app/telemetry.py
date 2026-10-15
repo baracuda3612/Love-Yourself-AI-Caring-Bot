@@ -456,8 +456,17 @@ def write_event_operation(
         if duplicate is not None and explicit_occurrence is None
         else explicit_occurrence or _utc_now()
     )
-    if attribution_at is not None and (attribution_at.tzinfo is None or attribution_at > occurrence):
-        raise EventValidationError("invalid event attribution time")
+    if attribution_at is not None:
+        # Telegram message.date is rounded down to whole seconds. Keep both
+        # the immutable provider receipt and the exact authorized claim time;
+        # only these Telegram receipts may cross that precision boundary.
+        if attribution_at.tzinfo is None or (
+            attribution_at > occurrence and not (
+                event_name in {'task_delivered', 'plan_completion_sent'}
+                and attribution_at - occurrence < timedelta(seconds=1)
+            )
+        ):
+            raise EventValidationError("invalid event attribution time")
     if duplicate is not None and attribution_at is not None and duplicate[0].attribution_at != attribution_at:
         raise EventOperationConflict("source_operation_id was already used for a different attribution")
     attribution = attribution_at or (duplicate[0].attribution_at if duplicate else None) or occurrence

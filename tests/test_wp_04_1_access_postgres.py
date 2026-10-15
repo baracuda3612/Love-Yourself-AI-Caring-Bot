@@ -522,9 +522,10 @@ def test_slow_oidc_exchange_does_not_block_revocation_or_reuse_state(engine,monk
         assert db.get(AccessEntitlement,ent_id).revoked_at
 
 
-def test_late_completion_receipt_keeps_original_send_claim(db):
+@pytest.mark.parametrize('change',['commercial-end','same-second-new-membership'])
+def test_completion_receipt_keeps_original_send_claim(db,monkeypatch,change):
     from app.content_library import load_content_library
-    from app.db import PlanCompletion,UserEvent
+    from app.db import PlanCompletion,UserEvent,AggregateRecord
     from app.plan_completion.workflow import claim_report,finish_report
     from tests.test_wp_03_5_postgres_completion import source_plan,terminalize,close
     load_content_library(db)
@@ -532,13 +533,55 @@ def test_late_completion_receipt_keeps_original_send_claim(db):
     terminalize(db,user,plan)
     close(db,user,plan)
     membership=access.require_access(db,user.id);dep=db.get(Deployment,membership.deployment_id)
-    claim=claim_report(db,user.id,plan.id)
+    claim_at=(access.now_utc()+timedelta(seconds=1)).replace(microsecond=800000)
+    monkeypatch.setattr(access,'now_utc',lambda:claim_at)
+    from app import telemetry
+    monkeypatch.setattr(telemetry,'_utc_now',lambda:claim_at+timedelta(seconds=2))
+    if change=='same-second-new-membership':
+        membership.ended_at=claim_at-timedelta(seconds=1);db.flush()
+        membership=enroll(db,user,target=dep,enrolled_at=claim_at-timedelta(microseconds=100000))
+        dep.starts_at=membership.enrolled_at;db.flush()
+    claim=claim_report(db,user.id,plan.id,now=claim_at)
     assert claim is not None
-    dep.ends_at=access.now_utc();db.flush()
-    actual=access.now_utc()
+    if change=='commercial-end':
+        dep.ends_at=claim_at+timedelta(microseconds=1);db.flush()
+        actual=claim_at+timedelta(seconds=1)
+    else:
+        actual=claim_at.replace(microsecond=0)
     finish_report(db,user.id,claim,outcome='sent',message_id=12345,now=actual)
     receipt=db.get(PlanCompletion,plan.id)
     event=db.query(UserEvent).filter_by(plan_id=plan.id,event_name='plan_completion_sent').one()
     assert receipt.sent_at==event.occurred_at==actual
     assert event.attribution_at==receipt.started_at
     assert event.deployment_id==dep.id
+    assert event.deployment_enrollment_id==membership.id
+    contribution=db.query(AggregateRecord).filter_by(source_operation_id=event.source_operation_id).one()
+    assert contribution.dimensions['deployment_id']==dep.id
+
+
+@pytest.mark.parametrize('name,gap',[('task_delivered',1),('task_delivered',2),('user_message',0.5),('user_message',-0.5)])
+def test_attribution_precision_bound_is_enforced_by_writer_and_database(db,name,gap):
+    from app.content_library import load_content_library
+    from app.db import UserEvent
+    from app.telemetry import write_event_operation,EventValidationError
+    from app.scheduled_delivery import claim_send,finish_send
+    from sqlalchemy.exc import IntegrityError
+    from tests.test_wp_03_3_postgres_presentation import active_step
+    from tests.test_wp_03_4_postgres_delivery import success
+    load_content_library(db)
+    user,_,step=active_step(db)
+    if name=='task_delivered':
+        claim=claim_send(db,step.id);finish_send(db,claim.attempt_id,success(claim))
+        original=db.query(UserEvent).filter_by(plan_step_id=step.id,event_name=name).one()
+    else:
+        original=write_event_operation(db,user_id=user.id,event_name=name,event_source='telegram',
+            source_operation_id='telegram:precision:'+uuid4().hex,properties={'message_length':1}).event
+    invalid_at=original.occurred_at+timedelta(seconds=gap)
+    with pytest.raises(EventValidationError):
+        write_event_operation(db,user_id=user.id,event_name=name,event_source=original.event_source,
+            source_operation_id=original.event_source+':invalid:'+uuid4().hex,properties=original.properties,
+            plan_step_id=original.plan_step_id,occurred_at=original.occurred_at,attribution_at=invalid_at)
+    values={column.name:getattr(original,column.name) for column in UserEvent.__table__.columns if column.name!='event_id'}
+    values.update(attribution_at=invalid_at,source_operation_id=original.event_source+':direct:'+uuid4().hex)
+    with pytest.raises(IntegrityError,match='ck_event_attribution_time'),db.begin_nested():
+        db.add(UserEvent(**values));db.flush()

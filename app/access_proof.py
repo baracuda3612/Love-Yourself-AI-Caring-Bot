@@ -149,7 +149,7 @@ def _provider(deployment, provider):
         if (not re.fullmatch(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', tenant)
             or not settings.MICROSOFT_CLIENT_ID or not settings.MICROSOFT_CLIENT_SECRET):
             raise AccessDenied()
-        root = f'https://login.microsoftonline.com/{tenant}'
+        root = f'https://login.microsoftonline.com/{tenant.lower()}'
         return dict(client=settings.MICROSOFT_CLIENT_ID, secret=settings.MICROSOFT_CLIENT_SECRET,
             authorize=root + '/oauth2/v2.0/authorize', token=root + '/oauth2/v2.0/token',
             jwks=root + '/discovery/v2.0/keys', issuer=root + '/v2.0')

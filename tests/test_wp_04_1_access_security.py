@@ -141,6 +141,26 @@ def test_oidc_real_signature_and_required_claims(monkeypatch,case):
         with pytest.raises(access.AccessDenied):access_proof.validate_id_token(config,raw)
 
 
+def test_microsoft_uppercase_tenant_uses_canonical_issuer(monkeypatch):
+    import jwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    tenant='AABBCCDD-0011-2233-4455-66778899AABB'
+    monkeypatch.setattr(access.settings,'MICROSOFT_CLIENT_ID','our-client')
+    monkeypatch.setattr(access.settings,'MICROSOFT_CLIENT_SECRET','our-secret')
+    config=access_proof._provider(SimpleNamespace(access_policy={'microsoft_tenant':tenant}),'microsoft')
+    issuer=f'https://login.microsoftonline.com/{tenant.lower()}/v2.0'
+    assert config['issuer']==issuer and tenant.lower() in config['authorize']
+    key=rsa.generate_private_key(public_exponent=65537,key_size=2048)
+    at=int(access.now_utc().timestamp())
+    claims={'iss':issuer,'aud':'our-client','sub':'subject','tid':tenant.lower(),'nonce':'nonce','iat':at,'exp':at+300}
+    raw=jwt.encode(claims,key,algorithm='RS256',headers={'kid':'fixture-key'})
+    class Client:
+        def __init__(self,url,timeout):assert tenant.lower() in url
+        def get_signing_key_from_jwt(self,raw):return SimpleNamespace(key=key.public_key())
+    monkeypatch.setattr(jwt,'PyJWKClient',Client)
+    assert access_proof.validate_id_token(config,raw)['tid']==tenant.lower()
+
+
 @pytest.mark.parametrize('text',['/start','/start invalid','/start newplan_SHORT_LITE_mixed'])
 async def test_canonical_start_never_creates_unentitled_account(monkeypatch,text):
     from app import telegram

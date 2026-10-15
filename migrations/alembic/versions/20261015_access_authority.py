@@ -18,7 +18,9 @@ def upgrade():
     op.add_column("users", sa.Column("timezone_override_explicit", sa.Boolean(), nullable=False, server_default=sa.text("false")))
     op.add_column("user_events", sa.Column("attribution_at", sa.DateTime(timezone=True)))
     op.create_check_constraint("ck_event_attribution_time", "user_events",
-        "attribution_at IS NULL OR (occurred_at IS NOT NULL AND attribution_at <= occurred_at "
+        "attribution_at IS NULL OR (occurred_at IS NOT NULL AND (attribution_at <= occurred_at "
+        "OR (event_name IN ('task_delivered','plan_completion_sent') "
+        "AND attribution_at < occurred_at + INTERVAL '1 second')) "
         "AND (attribution_at = occurred_at OR event_name IN "
         "('task_delivered','task_delivery_failed','plan_completion_sent','pulse_sent')))")
     # Keep actual receipt occurrence time; membership/commercial coverage is
