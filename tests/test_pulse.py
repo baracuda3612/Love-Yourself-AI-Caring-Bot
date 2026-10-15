@@ -176,6 +176,9 @@ async def test_no_pulse_short_plan(monkeypatch):
 
     class _DBShort:
         def query(self, model):
+            from sqlalchemy.sql.selectable import Exists
+            if isinstance(model, Exists):
+                return SimpleNamespace(scalar=lambda: True)
             if model is scheduler.AIPlan:
                 return _Query([SimpleNamespace(id=1, user_id=10, duration="SHORT", status="active", current_day=7)])
             if model is scheduler.User:
@@ -254,6 +257,9 @@ async def test_idempotency(monkeypatch):
 
     class _DBIdem:
         def query(self, model):
+            from sqlalchemy.sql.selectable import Exists
+            if isinstance(model, Exists):
+                return SimpleNamespace(scalar=lambda: True)
             if model is scheduler.AIPlan:
                 return _Query([SimpleNamespace(id=1, user_id=10, duration="MEDIUM", status="active", total_days=21)])
             if model is scheduler.User:
@@ -278,6 +284,9 @@ async def test_inactive_plan_skipped(monkeypatch):
 
     class _DBInactive:
         def query(self, model):
+            from sqlalchemy.sql.selectable import Exists
+            if isinstance(model, Exists):
+                return SimpleNamespace(scalar=lambda: True)
             if model is scheduler.AIPlan:
                 return _Query([])
             raise AssertionError(model)

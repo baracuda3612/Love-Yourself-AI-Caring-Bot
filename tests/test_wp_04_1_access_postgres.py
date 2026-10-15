@@ -72,6 +72,13 @@ def verified(db, dep, email='member@client.org'):
     return access_proof.finish_email(db, deployment_id=dep.id, raw=raw, browser='b'*43)
 
 
+def finish_oidc(db, *, deployment_id, provider, state, code, browser):
+    prepared=access_proof.prepare_oidc(db,deployment_id=deployment_id,provider=provider,state=state,browser=browser)
+    db.commit()  # HTTP consumes once before the network exchange.
+    claims=access_proof.verify_oidc(prepared,state=state,code=code)
+    return access_proof.finish_oidc(db,prepared=prepared,claims=claims,browser=browser)
+
+
 def test_fresh_database_and_redis_binding_fail_closed(db,monkeypatch):
     from app import access_environment
     from tests.test_wp_04_1_access_security import inventory
@@ -92,7 +99,7 @@ def test_fresh_database_and_redis_binding_fail_closed(db,monkeypatch):
 
 
 def test_complete_production_proof_token_enrollment_return_revocation(db, monkeypatch):
-    monkeypatch.setattr(access.settings, 'IS_PROD', True)
+    monkeypatch.setattr(access.settings, 'ENVIRONMENT', 'prod')
     dep = deployment(db, environment='production', zone='America/New_York')
     raw = verified(db, dep)
     tg = actor()
@@ -114,7 +121,7 @@ def test_complete_production_proof_token_enrollment_return_revocation(db, monkey
 
 
 def test_missed_rejected_delta_and_confirmed_snapshot(db, monkeypatch):
-    monkeypatch.setattr(access.settings, 'IS_PROD', True)
+    monkeypatch.setattr(access.settings, 'ENVIRONMENT', 'prod')
     dep = deployment(db, environment='production')
     roster(db, dep, ['a@client.org','b@client.org'])
     ent = access.grant_verified(db, dep.id, access.email_digest('a@client.org'))
@@ -135,7 +142,7 @@ def test_missed_rejected_delta_and_confirmed_snapshot(db, monkeypatch):
 
 @pytest.mark.parametrize('case', ['empty','missing-mode','duplicate','count','domain','action'])
 def test_roster_invalid_input_does_not_revoke(db, monkeypatch, case):
-    monkeypatch.setattr(access.settings,'IS_PROD',True)
+    monkeypatch.setattr(access.settings,'ENVIRONMENT','prod')
     dep = deployment(db, environment='production')
     roster(db, dep, ['a@client.org'])
     ent = access.grant_verified(db, dep.id, access.email_digest('a@client.org'))
@@ -161,7 +168,7 @@ def test_invalid_tokens_never_create_account(db, monkeypatch, case):
     if case == 'expired': invitation.expires_at=access.now_utc()-timedelta(seconds=1); invitation.issued_at=invitation.expires_at-timedelta(minutes=10)
     if case == 'revoked': access.revoke_entitlement(db, entitlement_id=ent.id)
     if case == 'spent': access.redeem_handoff(db,raw,actor())
-    if case == 'environment': monkeypatch.setattr(access.settings,'IS_PROD',True)
+    if case == 'environment': monkeypatch.setattr(access.settings,'ENVIRONMENT','prod')
     if case == 'version': monkeypatch.setattr(access.settings,'ACCESS_KEY_VERSION',2)
     if case == 'wrong-account': access.redeem_handoff(db,raw,actor()); raw=access.issue_handoff(db,ent.id)
     if case == 'wrong-deployment':
@@ -189,7 +196,7 @@ def test_pauses_renewal_timezone_and_history(db):
 
 
 def test_email_unknown_expired_replayed_cross_browser_and_deployment(db,monkeypatch):
-    monkeypatch.setattr(access.settings,'IS_PROD',True)
+    monkeypatch.setattr(access.settings,'ENVIRONMENT','prod')
     dep=deployment(db,environment='production');roster(db,dep,['a@client.org'])
     raw=access_proof.begin_email(db,deployment_id=dep.id,email='unknown@client.org',browser='b'*43)
     with pytest.raises(access.AccessDenied):access_proof.finish_email(db,deployment_id=dep.id,raw=raw,browser='b'*43)
@@ -204,7 +211,7 @@ def test_email_unknown_expired_replayed_cross_browser_and_deployment(db,monkeypa
 
 
 def test_atomic_roster_rollback(db,monkeypatch):
-    monkeypatch.setattr(access.settings,'IS_PROD',True)
+    monkeypatch.setattr(access.settings,'ENVIRONMENT','prod')
     dep=deployment(db,environment='production'); roster(db,dep,['a@client.org','b@client.org'])
     ent=access.grant_verified(db,dep.id,access.email_digest('a@client.org'))
     preview=access.preview_roster(db,deployment_id=dep.id,mode='full_snapshot',rows=[{'email':'b@client.org','action':'add'}],expected_total=1,source_ref='rollback',operator='founder')
@@ -301,7 +308,7 @@ def test_oidc_code_state_nonce_and_verified_roster_chain(db,monkeypatch,provider
     monkeypatch.setattr(access.settings,'MICROSOFT_CLIENT_ID','ms-client')
     monkeypatch.setattr(access.settings,'MICROSOFT_CLIENT_SECRET','private-ms-secret')
     tenant='12345678-1234-1234-1234-123456789abc'
-    monkeypatch.setattr(access.settings,'IS_PROD',True)
+    monkeypatch.setattr(access.settings,'ENVIRONMENT','prod')
     dep=deployment(db,environment='production');dep.access_policy={'allowed_domains':['client.org'],'google_domain':'client.org','microsoft_tenant':tenant};db.flush()
     roster(db,dep,['member@client.org'])
     browser='b'*43
@@ -315,14 +322,14 @@ def test_oidc_code_state_nonce_and_verified_roster_chain(db,monkeypatch,provider
     claims={'sub':'stable-subject','nonce':nonce,'iss':config['issuer'],'email':'member@client.org',
         'email_verified':True,'hd':'client.org','tid':tenant,'oid':'stable-tenant-object'}
     monkeypatch.setattr(access_proof,'validate_id_token',lambda *a:claims)
-    with pytest.raises(access.AccessDenied):access_proof.finish_oidc(db,deployment_id=dep.id,provider=provider,state=state,code='auth-code',browser='forged')
-    result=access_proof.finish_oidc(db,deployment_id=dep.id,provider=provider,state=state,code='auth-code',browser=browser)
+    with pytest.raises(access.AccessDenied):finish_oidc(db,deployment_id=dep.id,provider=provider,state=state,code='auth-code',browser='forged')
+    result=finish_oidc(db,deployment_id=dep.id,provider=provider,state=state,code='auth-code',browser=browser)
     if provider=='microsoft':
         assert 'handoff' not in result  # email claim alone cannot grant access
         raw=access_proof.finish_email(db,deployment_id=dep.id,raw=result['challenge'],browser=browser)
     else:raw=result['handoff']
     assert raw.startswith('ly')
-    with pytest.raises(access.AccessDenied):access_proof.finish_oidc(db,deployment_id=dep.id,provider=provider,state=state,code='auth-code',browser=browser)
+    with pytest.raises(access.AccessDenied):finish_oidc(db,deployment_id=dep.id,provider=provider,state=state,code='auth-code',browser=browser)
 
 
 @pytest.mark.parametrize('claim,value',[('nonce','forged'),('email_verified',False),('hd','other.org'),('email','other@client.org'),('sub',''),('azp','another-client')])
@@ -330,14 +337,14 @@ def test_oidc_claim_substitution_never_grants(db,monkeypatch,claim,value):
     from urllib.parse import urlsplit,parse_qs
     monkeypatch.setattr(access.settings,'GOOGLE_CLIENT_ID','google-client')
     monkeypatch.setattr(access.settings,'GOOGLE_CLIENT_SECRET','google-secret')
-    monkeypatch.setattr(access.settings,'IS_PROD',True)
+    monkeypatch.setattr(access.settings,'ENVIRONMENT','prod')
     dep=deployment(db,environment='production');dep.access_policy={'allowed_domains':['client.org'],'google_domain':'client.org'};db.flush();roster(db,dep,['member@client.org'])
     query=parse_qs(urlsplit(access_proof.begin_oidc(db,deployment_id=dep.id,provider='google',browser='b'*43)).query)
     claims={'sub':'stable','nonce':query['nonce'][0],'iss':'https://accounts.google.com','email':'member@client.org','email_verified':True,'hd':'client.org'}
     claims[claim]=value
     monkeypatch.setattr(access_proof,'exchange_code',lambda *a:'signed-token')
     monkeypatch.setattr(access_proof,'validate_id_token',lambda *a:claims)
-    with pytest.raises(access.AccessDenied):access_proof.finish_oidc(db,deployment_id=dep.id,provider='google',state=query['state'][0],code='code',browser='b'*43)
+    with pytest.raises(access.AccessDenied):finish_oidc(db,deployment_id=dep.id,provider='google',state=query['state'][0],code='code',browser='b'*43)
     assert db.query(AccessEntitlement).filter_by(deployment_id=dep.id).count()==0
 
 
@@ -389,11 +396,12 @@ async def test_returning_telegram_start_and_revoked_text_do_not_repeat_sso(db,mo
 
 
 def test_same_identity_regrant_preserves_account_and_ends_old_enrollment(db,monkeypatch):
-    monkeypatch.setattr(access.settings,'IS_PROD',True)
+    monkeypatch.setattr(access.settings,'ENVIRONMENT','prod')
     dep=deployment(db,environment='production');tg=actor()
     user,_=access.redeem_handoff(db,verified(db,dep),tg)
     old=access.require_access(db,user.id)
     access.revoke_entitlement(db,entitlement_id=old.entitlement_id)
+    roster(db,dep,['member@client.org'])  # New explicit restoration decision.
     raw=access_proof.begin_email(db,deployment_id=dep.id,email='member@client.org',browser='b'*43)
     handoff=access_proof.finish_email(db,deployment_id=dep.id,raw=raw,browser='b'*43)
     same,created=access.redeem_handoff(db,handoff,tg)
@@ -410,3 +418,127 @@ def test_real_redis_rate_limit_is_shared_atomic_and_expires():
     key=f'ly:{access.settings.DEPLOYMENT_ID}:access-rate:'+access.digest(subject,'rate')
     assert 0 < client.ttl(key) <= 60
     client.delete(key)
+
+
+@pytest.mark.parametrize('mode',['single','distributed'])
+def test_legacy_implicit_kyiv_is_not_an_explicit_override(db,mode):
+    user=User(tg_id=actor().id,timezone_override='Europe/Kyiv',timezone_override_explicit=False)
+    db.add(user);db.flush()
+    dep=deployment(db,mode=mode,zone='America/New_York' if mode=='single' else None)
+    ent=access.founder_grant(db,deployment_id=dep.id,operator='founder',label='legacy-'+mode)
+    access.redeem_handoff(db,access.issue_handoff(db,ent.id),SimpleNamespace(id=user.tg_id,username=None,first_name=None))
+    assert user.timezone_override=='Europe/Kyiv'  # Preserve unknown legacy evidence.
+    assert user.timezone==('America/New_York' if mode=='single' else None)
+    user.timezone='Europe/Paris';db.flush();db.refresh(user)
+    assert user.timezone_override_explicit and user.timezone=='Europe/Paris'
+
+
+def test_event_and_aggregate_capture_enrollment_and_replay_original_snapshot(db):
+    from app.telemetry import write_event_operation
+    dep=deployment(db);user=User(tg_id=actor().id,timezone='UTC');db.add(user);db.flush()
+    old=enroll(db,user,target=dep)
+    first=write_event_operation(db,user_id=user.id,event_name='user_message',event_source='telegram',source_operation_id='attribution:'+uuid4().hex,properties={'message_length':1})
+    assert first.event.deployment_enrollment_id==old.id
+    assert first.contribution.dimensions['deployment_id']==dep.id
+    old.ended_at=access.now_utc();db.flush();enroll(db,user,enrolled_at=access.now_utc())
+    again=write_event_operation(db,user_id=user.id,event_name='user_message',event_source='telegram',source_operation_id=first.event.source_operation_id,properties={'message_length':1})
+    assert again.duplicate and again.event.deployment_id==dep.id
+
+
+@pytest.mark.parametrize('change',['commercial-end','revoked','replacement'])
+def test_late_actual_exercise_receipt_keeps_claim_attribution(db,change):
+    from app.content_library import load_content_library
+    from app.db import UserEvent,AggregateRecord
+    from app.scheduled_delivery import claim_send,finish_send
+    from tests.test_wp_03_3_postgres_presentation import active_step
+    from tests.test_wp_03_4_postgres_delivery import success
+    load_content_library(db)
+    user,plan,step=active_step(db)
+    membership=access.require_access(db,user.id);dep=db.get(Deployment,membership.deployment_id)
+    claim=claim_send(db,step.id)
+    if change=='commercial-end':dep.ends_at=access.now_utc()
+    elif change=='revoked':access.revoke_entitlement(db,entitlement_id=membership.entitlement_id)
+    else:
+        membership.ended_at=access.now_utc();db.flush();enroll(db,user,enrolled_at=access.now_utc())
+    db.flush();actual=access.now_utc()
+    finish_send(db,claim.attempt_id,success(claim),now=actual);db.flush()
+    event=db.query(UserEvent).filter_by(plan_step_id=step.id,event_name='task_delivered').one()
+    contribution=db.query(AggregateRecord).filter_by(source_operation_id=event.source_operation_id).one()
+    assert event.occurred_at==actual and event.attribution_at<actual
+    assert event.deployment_id==dep.id and event.deployment_enrollment_id==membership.id
+    assert contribution.dimensions['deployment_id']==dep.id
+    assert step.step_status=='delivered'
+
+
+def test_manual_revoke_cannot_be_undone_by_repeating_identity_proof(db,monkeypatch):
+    monkeypatch.setattr(access.settings,'ENVIRONMENT','prod')
+    dep=deployment(db,environment='production');raw=verified(db,dep)
+    entitlement=db.query(AccessEntitlement).filter_by(deployment_id=dep.id).one()
+    access.revoke_entitlement(db,entitlement_id=entitlement.id)
+    code=access_proof.begin_email(db,deployment_id=dep.id,email='member@client.org',browser='b'*43)
+    with pytest.raises(access.AccessDenied):access_proof.finish_email(db,deployment_id=dep.id,raw=code,browser='b'*43)
+    with pytest.raises(access.AccessDenied):access.redeem_handoff(db,raw,actor())
+    assert db.query(AccessEntitlement).filter_by(deployment_id=dep.id,revoked_at=None).count()==0
+    roster(db,dep,['member@client.org','other@client.org'],mode='delta',rows=[{'email':'other@client.org','action':'add'}])
+    code=access_proof.begin_email(db,deployment_id=dep.id,email='member@client.org',browser='b'*43)
+    with pytest.raises(access.AccessDenied):access_proof.finish_email(db,deployment_id=dep.id,raw=code,browser='b'*43)
+    roster(db,dep,['member@client.org','other@client.org'],mode='delta',rows=[{'email':'member@client.org','action':'add'}])
+    code=access_proof.begin_email(db,deployment_id=dep.id,email='member@client.org',browser='b'*43)
+    assert access_proof.finish_email(db,deployment_id=dep.id,raw=code,browser='b'*43).startswith('ly')
+
+
+def test_slow_oidc_exchange_does_not_block_revocation_or_reuse_state(engine,monkeypatch):
+    from threading import Event
+    from urllib.parse import urlsplit,parse_qs
+    from sqlalchemy.orm import sessionmaker
+    monkeypatch.setattr(access.settings,'ENVIRONMENT','prod')
+    monkeypatch.setattr(access.settings,'GOOGLE_CLIENT_ID','google-client')
+    monkeypatch.setattr(access.settings,'GOOGLE_CLIENT_SECRET','google-secret')
+    sessions=sessionmaker(bind=engine,expire_on_commit=False)
+    with sessions() as db:
+        dep=deployment(db,environment='production');dep.access_policy={'allowed_domains':['client.org'],'google_domain':'client.org'};db.flush()
+        roster(db,dep,['network@client.org'])
+        ent=access.grant_verified(db,dep.id,access.email_digest('network@client.org'))
+        dep_id,ent_id=dep.id,ent.id
+        query=parse_qs(urlsplit(access_proof.begin_oidc(db,deployment_id=dep.id,provider='google',browser='b'*43)).query);db.commit()
+    entered,released=Event(),Event()
+    def exchange(*args):
+        entered.set();assert released.wait(5);raise access.AccessDenied()
+    monkeypatch.setattr(access_proof,'exchange_code',exchange)
+    def callback():
+        with sessions() as db:
+            prepared=access_proof.prepare_oidc(db,deployment_id=dep_id,provider='google',state=query['state'][0],browser='b'*43);db.commit()
+        with pytest.raises(access.AccessDenied):access_proof.verify_oidc(prepared,state=query['state'][0],code='code')
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future=pool.submit(callback);assert entered.wait(3)
+        try:
+            with sessions() as db:
+                db.execute(text("SET LOCAL lock_timeout='500ms'"))
+                access.revoke_entitlement(db,entitlement_id=ent_id);db.commit()
+        finally:released.set()
+        future.result()
+    with sessions() as db:
+        with pytest.raises(access.AccessDenied):access_proof.prepare_oidc(db,deployment_id=dep_id,provider='google',state=query['state'][0],browser='b'*43)
+        assert db.get(AccessEntitlement,ent_id).revoked_at
+
+
+def test_late_completion_receipt_keeps_original_send_claim(db):
+    from app.content_library import load_content_library
+    from app.db import PlanCompletion,UserEvent
+    from app.plan_completion.workflow import claim_report,finish_report
+    from tests.test_wp_03_5_postgres_completion import source_plan,terminalize,close
+    load_content_library(db)
+    user,plan=source_plan(db)
+    terminalize(db,user,plan)
+    close(db,user,plan)
+    membership=access.require_access(db,user.id);dep=db.get(Deployment,membership.deployment_id)
+    claim=claim_report(db,user.id,plan.id)
+    assert claim is not None
+    dep.ends_at=access.now_utc();db.flush()
+    actual=access.now_utc()
+    finish_report(db,user.id,claim,outcome='sent',message_id=12345,now=actual)
+    receipt=db.get(PlanCompletion,plan.id)
+    event=db.query(UserEvent).filter_by(plan_id=plan.id,event_name='plan_completion_sent').one()
+    assert receipt.sent_at==event.occurred_at==actual
+    assert event.attribution_at==receipt.started_at
+    assert event.deployment_id==dep.id

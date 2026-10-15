@@ -184,13 +184,14 @@ def test_report_valid_token_200_contains_completion_rate(monkeypatch):
     monkeypatch.setattr(api, "build_completion_metrics", lambda *_: SimpleNamespace(completion_rate=0.5, total_days=21, best_streak=3, adaptation_count=1, dominant_time_slot="MORNING", focus="mixed", duration="STANDARD", outcome_tier="NEUTRAL"))
     monkeypatch.setattr(api, "build_completion_report", lambda *_: "header\nbody")
     monkeypatch.setattr(api, "_pick_observation", lambda *_: "obs")
-    monkeypatch.setattr(api, "get_next_plan_recommendation", lambda *_: SimpleNamespace(button1_text="A", button2_text="B", button1_params={"duration": "SHORT", "load": "LITE", "focus": "mixed"}, button2_params={"duration": "MEDIUM", "load": "MID", "focus": "rest"}))
     monkeypatch.setattr(api, "get_plan_timeline", lambda *_: [])
 
     client = TestClient(api.app)
     resp = client.get(f"/report/{token}")
     assert resp.status_code == 200
     assert "50%" in resp.text
+    assert "Повернутися в бот" in resp.text
+    assert 'newplan_' not in resp.text
 
 
 def test_report_invalid_token_404(monkeypatch):
@@ -214,7 +215,6 @@ def test_report_uses_plan_user_id_not_token_user_id(monkeypatch):
     monkeypatch.setattr(api, "build_completion_metrics", _metrics)
     monkeypatch.setattr(api, "build_completion_report", lambda *_: "header\nbody")
     monkeypatch.setattr(api, "_pick_observation", lambda *_: "obs")
-    monkeypatch.setattr(api, "get_next_plan_recommendation", lambda *_: SimpleNamespace(button1_text="A", button2_text="B", button1_params={"duration": "SHORT", "load": "LITE", "focus": "mixed"}, button2_params={"duration": "MEDIUM", "load": "MID", "focus": "rest"}))
     monkeypatch.setattr(api, "get_plan_timeline", lambda *_: [])
 
     client = TestClient(api.app)

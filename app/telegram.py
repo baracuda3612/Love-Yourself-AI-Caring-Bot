@@ -369,6 +369,11 @@ async def handle_adapt_suggest(callback_query: CallbackQuery):
 
 
 async def _send_agent_response(message: Message, user_id: int, response: dict) -> None:
+    import asyncio
+    from app.access import outbound_claim
+    if await asyncio.to_thread(outbound_claim, user_id) is None:
+        await message.answer("Доступ зараз недоступний.")
+        return
     reply_text = _sanitize_message_text(response.get("reply_text"))
     await message.answer(reply_text)
 

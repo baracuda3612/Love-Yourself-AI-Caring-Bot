@@ -76,9 +76,11 @@ def test_unknown_send_quarantines_after_restart_and_late_receipt_recovers(db, ou
     assert step.step_status == 'delivered' and len(events(db,step)) == 1
 
 
-def test_rate_limit_has_three_bounded_attempts_with_one_source(db):
+def test_rate_limit_has_three_bounded_attempts_with_one_source(db,monkeypatch):
     _, _, step = active_step(db)
     now = datetime.now(timezone.utc)
+    from app import telemetry
+    monkeypatch.setattr(telemetry, '_utc_now', lambda: now)
     for number in range(1,4):
         claim = claim_send(db, step.id, now=now)
         assert claim is not None

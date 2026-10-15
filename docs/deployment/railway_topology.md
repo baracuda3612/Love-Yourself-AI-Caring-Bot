@@ -222,8 +222,9 @@ Operator JSON endpoints require the bearer credential and bounded input:
   version invalidates it. No apply occurs on missing/failed/rejected imports.
   Accepted versions retain the effective set and explicit input actions. To
   roll back a roster mistake, prepare/confirm a new import from the prior
-  accepted set; never edit audit history or restore raw token values. A revoked
-  identity must reverify before a new entitlement is granted.
+  accepted set; never edit audit history or restore raw token values. A manually revoked identity requires an explicitly accepted add in a later
+  roster and then re-verification before a new entitlement is granted; unrelated
+  deltas cannot restore it.
 * `/access/testnet/handoff`: founder-only `deployment_id` and restricted test
   `label`; production is rejected. Raw handoff is returned once, valid ten
   minutes. Reissuance invalidates abandoned unspent links.
@@ -268,3 +269,14 @@ Founder testnet must not be configured with OIDC client secrets or SMTP
 credentials: initial grants are issued by the founder, and startup rejects
 these unused production identity credentials in that contour. Employee-proof
 and founder-grant paths converge on the same invitation/enrollment service.
+
+
+OIDC callback processing consumes state durably, releases authority locks,
+performs provider I/O, then revalidates current roster/deployment before grant.
+Provider failure requires a new sign-in attempt. Preview identity/entry writes
+and apply revocations are bulk operations; no network call runs while holding a
+deployment authority lock. Personalized outbound replies/pulses have a final
+current-access check after generation. Historical event attribution is captured
+at the action/send claim; receipt timestamps remain actual confirmation times.
+Old timezone values are retained as unknown legacy data until an explicit user
+choice marks the override; they do not silently defeat deployment policy.

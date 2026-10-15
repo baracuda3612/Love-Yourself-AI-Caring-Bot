@@ -129,6 +129,7 @@ def confirm_delivery(db, attempt, step, *, variant, payload, message_id, occurre
         db, user_id=step.day.plan.user_id, event_name='task_delivered', event_source='scheduler',
         source_operation_id=attempt.source_operation_id, plan_step_id=step.id,
         occurred_at=occurred_at, properties={'day_number': step.day.day_number},
+        attribution_at=attempt.started_at,
     )
 
 
@@ -167,6 +168,8 @@ def finish_send(db, attempt_id, result, *, now=None):
         db, user_id=step.day.plan.user_id, event_name='task_delivery_failed', event_source='scheduler',
         source_operation_id=f'{attempt.source_operation_id}:attempt:{attempt.attempt}',
         plan_step_id=step.id, properties={'day_number': step.day.day_number, 'failure_code': attempt.failure_code},
+        occurred_at=now,
+        attribution_at=attempt.started_at,
     )
 
 

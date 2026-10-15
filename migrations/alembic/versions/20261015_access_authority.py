@@ -14,6 +14,27 @@ depends_on = None
 
 
 def upgrade():
+    # Non-null legacy timezone values do not prove an explicit user choice.
+    op.add_column("users", sa.Column("timezone_override_explicit", sa.Boolean(), nullable=False, server_default=sa.text("false")))
+    op.add_column("user_events", sa.Column("attribution_at", sa.DateTime(timezone=True)))
+    op.create_check_constraint("ck_event_attribution_time", "user_events",
+        "attribution_at IS NULL OR (occurred_at IS NOT NULL AND attribution_at <= occurred_at "
+        "AND (attribution_at = occurred_at OR event_name IN "
+        "('task_delivered','task_delivery_failed','plan_completion_sent','pulse_sent')))")
+    # Keep actual receipt occurrence time; membership/commercial coverage is
+    # checked at its authorized send claim. All other catalogue/link/immutability
+    # checks remain byte-for-byte the installed predecessor implementation.
+    definition = op.get_bind().execute(sa.text(
+        "SELECT pg_get_functiondef('ly_validate_user_event_catalogue()'::regprocedure)"
+    )).scalar_one()
+    for original in (
+        "e.enrolled_at <= NEW.occurred_at", "e.ended_at > NEW.occurred_at",
+        "d.starts_at <= NEW.occurred_at", "d.ends_at > NEW.occurred_at",
+    ):
+        if original not in definition:
+            raise RuntimeError("Unexpected event attribution validator; explicit forward repair required")
+        definition = definition.replace(original, original.replace("NEW.occurred_at", "COALESCE(NEW.attribution_at, NEW.occurred_at)"))
+    op.execute(definition)
     op.add_column("deployments", sa.Column("access_policy", postgresql.JSONB(), nullable=False, server_default="{}"))
     op.add_column("access_identities", sa.Column("normalized_email", sa.String(254)))
     op.create_index("ux_access_identity_email", "access_identities", ["normalized_email"], unique=True,

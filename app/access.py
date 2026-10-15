@@ -38,7 +38,7 @@ def now_utc():
 
 
 def environment():
-    return "production" if settings.IS_PROD else "testnet"
+    return "production" if settings.ENVIRONMENT == "prod" else "testnet"
 
 
 def digest(value: str, purpose: str) -> str:
@@ -60,9 +60,10 @@ def email_digest(email):
     return hashlib.sha256(normalize_email(email).encode()).hexdigest()
 
 
-def lock_deployment(db, deployment_id, *, joining=False, delivery=False, now=None):
+def lock_deployment(db, deployment_id, *, joining=False, delivery=False, now=None, lock=True):
+    query = db.query(Deployment).filter(Deployment.id == deployment_id).populate_existing()
+    deployment = (query.with_for_update() if lock else query).first()
     now = now or now_utc()
-    deployment = db.query(Deployment).filter(Deployment.id == deployment_id).populate_existing().with_for_update().first()
     if (deployment is None or deployment.environment != environment()
         or (deployment.starts_at and deployment.starts_at > now)
         or (deployment.ends_at and deployment.ends_at <= now)
@@ -73,7 +74,6 @@ def lock_deployment(db, deployment_id, *, joining=False, delivery=False, now=Non
 
 
 def require_access(db, user_id, *, delivery=False, now=None):
-    now = now or now_utc()
     # The lifecycle caller holds the user lock. Standalone callers must also
     # lock it, so enrollment replacement cannot change the binding mid-check.
     user = db.query(User).filter(User.id == user_id).populate_existing().with_for_update().first()
@@ -84,6 +84,7 @@ def require_access(db, user_id, *, delivery=False, now=None):
     if enrollment is None:
         raise AccessDenied()
     deployment = lock_deployment(db, enrollment.deployment_id, delivery=delivery, now=now)
+    now = now or now_utc()
     entitlement = db.query(AccessEntitlement).filter(AccessEntitlement.id == enrollment.entitlement_id).populate_existing().first()
     if (entitlement is None or entitlement.deployment_id != deployment.id
         or entitlement.granted_at > now or (entitlement.revoked_at and entitlement.revoked_at <= now)):
@@ -91,6 +92,17 @@ def require_access(db, user_id, *, delivery=False, now=None):
     if enrollment.enrolled_at > now:
         raise AccessDenied()
     return enrollment
+
+
+def outbound_claim(user_id, *, delivery=False):
+    """Release the short final access guard before any external I/O."""
+    from app.db import SessionLocal
+    with SessionLocal() as db:
+        try:
+            require_access(db, user_id, delivery=delivery)
+            return now_utc()
+        except AccessDenied:
+            return None
 
 
 def may_access(db, user_id, *, delivery=False):
@@ -127,15 +139,6 @@ def require_planning_timezone(user):
         raise AccessDenied() from None
 
 
-def _identity(db, email):
-    email = normalize_email(email)
-    identity_key = email_digest(email)
-    db.execute(insert(AccessIdentity).values(identity_digest=identity_key,
-        normalized_email=email, provider="email", verification_metadata={}).on_conflict_do_nothing())
-    return db.query(AccessIdentity).filter(AccessIdentity.identity_digest == identity_key,
-        AccessIdentity.provider == "email").first()
-
-
 def _roster(db, deployment_id):
     version = db.query(DeploymentRosterVersion).filter(
         DeploymentRosterVersion.deployment_id == deployment_id,
@@ -156,7 +159,8 @@ class RosterPreview:
 
 
 def preview_roster(db, *, deployment_id, mode, rows, expected_total, source_ref, operator):
-    deployment = lock_deployment(db, deployment_id)
+    deployment = lock_deployment(db, deployment_id, lock=False)
+    policy = dict(deployment.access_policy)
     if (mode not in {"full_snapshot", "delta"} or not isinstance(rows, list)
         or not 1 <= len(rows) <= 10000 or not isinstance(expected_total, int)
         or isinstance(expected_total, bool) or expected_total < 0
@@ -178,15 +182,27 @@ def preview_roster(db, *, deployment_id, mode, rows, expected_total, source_ref,
             or (domains and email.rsplit('@', 1)[1] not in domains)):
             raise AccessDenied()
         changes[email] = action
+    identities = [{'identity_digest': email_digest(email), 'normalized_email': email,
+        'provider': 'email', 'verification_metadata': {}} for email in changes]
+    db.execute(insert(AccessIdentity).on_conflict_do_nothing(), identities)
+    identity_rows = db.query(AccessIdentity).filter(AccessIdentity.normalized_email.in_(changes), AccessIdentity.provider == 'email').all()
+    if len(identity_rows) != len(changes):
+        raise AccessDenied()
     additions, removals, explicit_actions = set(), set(), {}
-    for email, action in changes.items():
-        identity = _identity(db, email)
+    for identity in identity_rows:
+        action = changes[identity.normalized_email]
         explicit_actions[identity.id] = action
         (additions if action == 'add' else removals).add(identity.id)
     effective = additions if mode == 'full_snapshot' else (previous | additions) - removals
     if len(effective) != expected_total or (mode == 'full_snapshot' and not effective):
         raise AccessDenied()
     counts = {'add': len(effective - previous), 'keep': len(effective & previous), 'revoke': len(previous - effective), 'total': len(effective)}
+    deployment = lock_deployment(db, deployment_id)
+    accepted = db.query(DeploymentRosterVersion).filter(
+        DeploymentRosterVersion.deployment_id == deployment_id,
+        DeploymentRosterVersion.is_current.is_(True)).first()
+    if (accepted.version if accepted else 0) != (current.version if current else 0) or deployment.access_policy != policy:
+        raise AccessDenied()
     next_version = (db.query(func.max(DeploymentRosterVersion.version)).filter(
         DeploymentRosterVersion.deployment_id == deployment_id).scalar() or 0) + 1
     confirmation = secrets.token_urlsafe(32)
@@ -199,11 +215,11 @@ def preview_roster(db, *, deployment_id, mode, rows, expected_total, source_ref,
     db.add(version); db.flush()
     # Each version materializes its effective access set, including delta
     # carry-forward. The source mode and explicit removals remain auditable.
-    for identity_id in sorted(effective | (previous - effective)):
-        db.add(DeploymentRosterEntry(roster_version_id=version.id,
-            access_identity_id=identity_id, entry_key=str(identity_id),
-            delta_action='add' if identity_id in effective else 'remove',
-            validation_metadata={'input_action': explicit_actions.get(identity_id, 'carried')}))
+    entries = [dict(roster_version_id=version.id, access_identity_id=identity_id,
+        entry_key=str(identity_id), delta_action='add' if identity_id in effective else 'remove',
+        validation_metadata={'input_action': explicit_actions.get(identity_id, 'carried')})
+        for identity_id in sorted(effective | (previous - effective))]
+    db.execute(insert(DeploymentRosterEntry), entries)
     db.flush()
     return RosterPreview(version.id, counts, confirmation)
 
@@ -224,14 +240,15 @@ def apply_roster(db, *, deployment_id, version_id, confirmation, counts, operato
         raise AccessDenied()
     effective = {r.access_identity_id for r in db.query(DeploymentRosterEntry).filter(
         DeploymentRosterEntry.roster_version_id == version.id, DeploymentRosterEntry.delta_action == 'add')}
-    for entitlement in db.query(AccessEntitlement).filter(AccessEntitlement.deployment_id == deployment_id,
-        AccessEntitlement.revoked_at.is_(None)).all():
-        if entitlement.access_identity_id not in effective:
-            entitlement.revoked_at = at
-            db.query(DeploymentInvitation).filter(DeploymentInvitation.entitlement_id == entitlement.id,
-                DeploymentInvitation.redeemed_at.is_(None), DeploymentInvitation.revoked_at.is_(None)).update({'revoked_at': at})
-        else:
-            entitlement.confirming_roster_version_id = version.id
+    open_entitlements = db.query(AccessEntitlement).filter(AccessEntitlement.deployment_id == deployment_id,
+        AccessEntitlement.revoked_at.is_(None))
+    revoked_ids = [row.id for row in open_entitlements.filter(~AccessEntitlement.access_identity_id.in_(effective)).all()]
+    if revoked_ids:
+        open_entitlements.filter(AccessEntitlement.id.in_(revoked_ids)).update({'revoked_at': at}, synchronize_session='fetch')
+        db.query(DeploymentInvitation).filter(DeploymentInvitation.entitlement_id.in_(revoked_ids),
+            DeploymentInvitation.redeemed_at.is_(None), DeploymentInvitation.revoked_at.is_(None)).update({'revoked_at': at}, synchronize_session='fetch')
+    open_entitlements.filter(AccessEntitlement.access_identity_id.in_(effective)).update(
+        {'confirming_roster_version_id': version.id}, synchronize_session='fetch')
     if current:
         current.is_current = False
         db.flush()
@@ -262,6 +279,20 @@ def grant_verified(db, deployment_id, identity_key, *, provider='email', subject
     entitlement = db.query(AccessEntitlement).filter(AccessEntitlement.deployment_id == deployment_id,
         AccessEntitlement.access_identity_id == identity.id, AccessEntitlement.revoked_at.is_(None)).first()
     if entitlement is None:
+        prior = db.query(AccessEntitlement).filter(AccessEntitlement.deployment_id == deployment_id,
+            AccessEntitlement.access_identity_id == identity.id).order_by(AccessEntitlement.granted_at.desc(), AccessEntitlement.id.desc()).first()
+        if prior is not None:
+            restored = db.query(DeploymentRosterEntry.id).join(DeploymentRosterVersion,
+                DeploymentRosterVersion.id == DeploymentRosterEntry.roster_version_id).filter(
+                DeploymentRosterVersion.deployment_id == deployment_id,
+                DeploymentRosterVersion.applied_at > prior.revoked_at,
+                DeploymentRosterEntry.access_identity_id == identity.id,
+                DeploymentRosterEntry.delta_action == 'add',
+                DeploymentRosterEntry.validation_metadata['input_action'].astext == 'add').first()
+            # Neither a fresh proof nor an unrelated delta can undo a manual
+            # revoke. Restoration requires a later explicitly accepted add.
+            if restored is None:
+                raise AccessDenied()
         entitlement = AccessEntitlement(deployment_id=deployment_id, access_identity_id=identity.id,
             granted_at=now_utc(), source='verified_identity', granting_roster_version_id=version.id,
             confirming_roster_version_id=version.id)
@@ -327,6 +358,7 @@ def redeem_handoff(db, raw, tg_user):
     if created:
         user = User(tg_id=tg_user.id, username=tg_user.username, first_name=tg_user.first_name)
         db.add(user); db.flush()
+    if db.query(UserProfile).filter(UserProfile.user_id == user.id).first() is None:
         db.add(UserProfile(user_id=user.id))
     if user.is_active is False:
         raise AccessDenied()

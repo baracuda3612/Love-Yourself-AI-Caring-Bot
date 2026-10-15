@@ -411,3 +411,11 @@ mode resolves the current deployment default. Distributed mode requires an
 explicit timezone before planning. Existing values are preserved without
 inventing their provenance. Proof state and access audits cannot become
 behavior telemetry or a second entitlement authority.
+
+The WP-04.1 compatibility marker `timezone_override_explicit` is false for
+pre-cutover rows; retained raw legacy timezone values are not evidence of a
+choice. New explicit settings set it true. New `user_events.attribution_at`
+records the authoritative action/send claim basis separately from actual
+`occurred_at`; only send-receipt event types may use an earlier attribution
+instant. This supports immutable actual receipts across access changes without
+inventing historical attribution for existing events.

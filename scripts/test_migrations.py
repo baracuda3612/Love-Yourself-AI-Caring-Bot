@@ -1544,6 +1544,7 @@ def _assert_lifecycle_concurrency(target_url: str) -> None:
     with Session.begin() as seed_access:
         for user in seed_access.query(User).all():
             if not seed_access.query(DeploymentEnrollment).filter_by(user_id=user.id, ended_at=None).first():
+                user.timezone = user.timezone_override or "Europe/Kyiv"  # Explicit fixture choice.
                 enroll(seed_access, user)
     try:
         activation_barrier = Barrier(2)

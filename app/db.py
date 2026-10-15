@@ -107,6 +107,7 @@ class User(Base):
 
     # Explicit override only. Deployment policy supplies the default.
     timezone_override = Column("timezone", String, nullable=True)
+    timezone_override_explicit = Column(Boolean, nullable=False, default=False, server_default="false")
     notification_time = Column(Time, nullable=True)
     is_active = Column(Boolean, default=True)
 
@@ -141,7 +142,7 @@ class User(Base):
 
     @property
     def timezone(self):
-        if self.timezone_override:
+        if self.timezone_override_explicit and self.timezone_override:
             return self.timezone_override
         for enrollment in self.deployment_enrollments:
             if enrollment.ended_at is None and enrollment.deployment.timezone_mode == "single":
@@ -151,6 +152,7 @@ class User(Base):
     @timezone.setter
     def timezone(self, value):
         self.timezone_override = value
+        self.timezone_override_explicit = bool(value)
 
 
 class OnboardingProgress(Base):
@@ -911,6 +913,7 @@ class UserEvent(Base):
     event_name = Column(String(96), nullable=True)
     event_schema_version = Column(Integer, nullable=True)
     occurred_at = Column(DateTime(timezone=True), nullable=True)
+    attribution_at = Column(DateTime(timezone=True), nullable=True)
     recorded_at = Column(DateTime(timezone=True), nullable=True)
     event_source = Column(String(64), nullable=True)
     source_operation_id = Column(String(160), nullable=True)

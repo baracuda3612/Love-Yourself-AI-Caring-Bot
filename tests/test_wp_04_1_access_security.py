@@ -130,7 +130,7 @@ def test_oidc_real_signature_and_required_claims(monkeypatch,case):
     if case=='expired':claims['exp']=at-1
     if case=='missing-sub':claims.pop('sub')
     signing=rsa.generate_private_key(public_exponent=65537,key_size=2048) if case=='forged' else key
-    raw=jwt.encode(claims, 'attacker-key' if case=='algorithm' else signing, algorithm='HS256' if case=='algorithm' else 'RS256',headers={'kid':'fixture-key'})
+    raw=jwt.encode(claims, 'attacker-key-for-tests-only-32-bytes' if case=='algorithm' else signing, algorithm='HS256' if case=='algorithm' else 'RS256',headers={'kid':'fixture-key'})
     class Client:
         def __init__(self,url,timeout):assert url=='https://www.googleapis.com/oauth2/v3/certs'
         def get_signing_key_from_jwt(self,raw):return SimpleNamespace(key=key.public_key())
@@ -162,3 +162,45 @@ def test_no_legacy_issuance_or_redemption_path():
     from app import telegram
     assert not hasattr(telegram,'_handle_newplan_deeplink')
     assert '?start=' not in api._deep_link({'duration':'SHORT','load':'LITE','focus':'mixed'})
+
+
+async def test_revocation_during_coach_generation_denies_reply_and_history(monkeypatch):
+    from unittest.mock import AsyncMock
+    from app import telegram
+    monkeypatch.setattr(access,'outbound_claim',lambda *a,**k:None)
+    monkeypatch.setattr(telegram,'SessionLocal',lambda:pytest.fail('denied reply must not be stored'))
+    message=SimpleNamespace(answer=AsyncMock())
+    await telegram._send_agent_response(message,77,{'reply_text':'private generated reply'})
+    message.answer.assert_awaited_once_with('Доступ зараз недоступний.')
+
+
+async def test_revocation_during_daily_pulse_generation_prevents_send(monkeypatch):
+    from contextlib import nullcontext
+    from unittest.mock import AsyncMock
+    from app import scheduler
+    profile=SimpleNamespace(coach_persona='empath',pulse_sent_indices=[])
+    user=SimpleNamespace(id=77,tg_id=123,profile=profile)
+    class Query:
+        def __init__(self,value):self.value=value
+        def filter(self,*a):return self
+        def all(self):return self.value
+        def first(self):return self.value
+    class DB:
+        def query(self,model):return Query(user if model is scheduler.User else [])
+        def commit(self):pytest.fail('denied pulse must not be saved')
+    monkeypatch.setattr(scheduler,'SessionLocal',lambda:nullcontext(DB()))
+    monkeypatch.setattr(scheduler,'_active_plan_users_query',lambda db:Query([user]))
+    monkeypatch.setattr(scheduler,'_event_loop',object())
+    scheduled=[]
+    monkeypatch.setattr(scheduler.asyncio,'run_coroutine_threadsafe',lambda coro,loop:scheduled.append(coro))
+    revoked=False
+    async def generate(*args):
+        nonlocal revoked
+        revoked=True
+        return 'private pulse',[1]
+    monkeypatch.setattr(scheduler,'generate_pulse_message',generate)
+    monkeypatch.setattr(scheduler,'outbound_claim',lambda *a,**k:None if revoked else access.now_utc())
+    sender=AsyncMock();monkeypatch.setattr(scheduler,'_send_message_async',sender)
+    scheduler.send_daily_pulse();await scheduled[0]
+    sender.assert_not_awaited()
+    assert profile.pulse_sent_indices==[]

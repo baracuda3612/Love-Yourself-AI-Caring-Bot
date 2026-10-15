@@ -114,8 +114,12 @@ def oidc_callback(deployment_id: int, provider: str, request: Request):
     if len(params.multi_items()) != len(params) or not 1 <= len(params.get('code', '')) <= 4096:
         raise access.AccessDenied()
     with SessionLocal() as db:
-        result = access_proof.finish_oidc(db, deployment_id=deployment_id, provider=provider,
-            state=params.get('state', ''), code=params['code'], browser=browser)
+        prepared = access_proof.prepare_oidc(db, deployment_id=deployment_id, provider=provider,
+            state=params.get('state', ''), browser=browser)
+        db.commit()
+    claims = access_proof.verify_oidc(prepared, state=params.get('state', ''), code=params['code'])
+    with SessionLocal() as db:
+        result = access_proof.finish_oidc(db, prepared=prepared, claims=claims, browser=browser)
         db.commit()
     if 'handoff' in result:
         return _handoff(result['handoff'])

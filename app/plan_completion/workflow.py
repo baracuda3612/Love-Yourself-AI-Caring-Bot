@@ -209,6 +209,7 @@ def finish_report(db, user_id, claim, *, outcome, message_id=None, retry_after=N
                 write_event_operation(db, user_id=user_id, event_name='plan_completion_sent',
                     event_source='runtime', source_operation_id=f'runtime:completion-report:{claim.plan_id}',
                     plan_id=claim.plan_id, occurred_at=now,
+                    attribution_at=row.started_at,
                     properties={'outcome_tier': build_completion_metrics(db,user_id,claim.plan_id).outcome_tier})
         except Exception:
             import logging

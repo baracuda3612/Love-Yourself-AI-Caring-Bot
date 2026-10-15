@@ -18,9 +18,9 @@ def deployment(db, *, environment='testnet', mode='single', zone='UTC'):
     return row
 
 
-def enroll(db, user, *, target=None):
+def enroll(db, user, *, target=None, enrolled_at=None):
     target = target or deployment(db)
-    at = datetime.now(timezone.utc)-timedelta(days=3650)
+    at = enrolled_at or datetime.now(timezone.utc)-timedelta(days=3650)
     identity = AccessIdentity(identity_digest=uuid4().hex, provider='founder', verified_at=at, verification_metadata={})
     db.add(identity); db.flush()
     entitlement = AccessEntitlement(deployment_id=target.id, access_identity_id=identity.id,

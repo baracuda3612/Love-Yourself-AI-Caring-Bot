@@ -201,17 +201,38 @@ def validate_id_token(config, raw):
         raise AccessDenied() from None
 
 
-def finish_oidc(db, *, deployment_id, provider, state, code, browser):
+def prepare_oidc(db, *, deployment_id, provider, state, browser):
+    """Consume state in a short transaction; caller commits before provider I/O."""
     deployment = lock_deployment(db, deployment_id, joining=True)
     config = _provider(deployment, provider)
     proof = consume_proof(db, deployment_id=deployment_id, raw=state, browser=browser, kind=provider)
-    claims = validate_id_token(config, exchange_code(config, code, redirect_uri(deployment_id, provider), state))
+    return {'deployment_id': deployment_id, 'provider': provider, 'proof_id': proof.id,
+        'nonce_digest': proof.nonce_digest, 'config': config, 'policy': dict(deployment.access_policy)}
+
+
+def verify_oidc(prepared, *, state, code):
+    """No session or authority lock exists while provider work is running."""
+    config = prepared['config']
+    claims = validate_id_token(config, exchange_code(config, code,
+        redirect_uri(prepared['deployment_id'], prepared['provider']), state))
     if (not isinstance(claims.get('sub'), str) or not claims['sub']
         or not isinstance(claims.get('nonce'), str)
-        or not hmac.compare_digest(proof.nonce_digest, digest(claims['nonce'], 'nonce'))
+        or not hmac.compare_digest(prepared['nonce_digest'], digest(claims['nonce'], 'nonce'))
         or (claims.get('azp') and claims['azp'] != config['client'])
         or (isinstance(claims.get('aud'), list) and len(claims['aud']) > 1 and claims.get('azp') != config['client'])):
         raise AccessDenied()
+    return claims
+
+
+def finish_oidc(db, *, prepared, claims, browser):
+    deployment_id, provider = prepared['deployment_id'], prepared['provider']
+    deployment = lock_deployment(db, deployment_id, joining=True)
+    proof = db.query(AccessProof).filter(AccessProof.id == prepared['proof_id']).populate_existing().with_for_update().first()
+    if (proof is None or proof.kind != provider or not proof.consumed_at or proof.expires_at <= now_utc()
+        or proof.deployment_id != deployment_id or deployment.access_policy != prepared['policy']
+        or not hmac.compare_digest(proof.browser_digest, digest(browser, 'browser'))):
+        raise AccessDenied()
+    proof.kind = 'verified'  # The final grant also has one transactional winner.
     email = normalize_email(claims.get('email'))
     subject = hashlib.sha256((claims['iss'] + ':' + claims['sub']).encode()).hexdigest()
     if provider == 'google':

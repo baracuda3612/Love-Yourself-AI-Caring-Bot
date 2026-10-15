@@ -37,7 +37,7 @@ DATABASE_URL = settings.DATABASE_URL
 jobstore_url = DATABASE_URL
 
 jobstores = {"default": SQLAlchemyJobStore(url=jobstore_url), "delivery_recovery": MemoryJobStore(), "completion_recovery": MemoryJobStore()}
-from app.access import access_predicate, may_access
+from app.access import access_predicate, may_access, outbound_claim
 
 scheduler = BackgroundScheduler(jobstores=jobstores, timezone="UTC")
 
@@ -752,6 +752,9 @@ def send_daily_pulse():
                         return
 
                     # Phase 3: Telegram delivery
+                    claim_at = await asyncio.to_thread(outbound_claim, user_id, delivery=True)
+                    if claim_at is None:
+                        return
                     result = await _send_message_async(tg_id, text)
                     if not result:
                         logger.warning("[PULSE] Delivery failed for user_id=%s", user_id)
@@ -770,6 +773,7 @@ def send_daily_pulse():
                             event_source="scheduler",
                             source_operation_id=f"scheduler:pulse:{user.id}:{today_utc}",
                             context={"persona": persona or "empath"},
+                            attribution_at=claim_at,
                         )
                         db.commit()
                 except Exception:
@@ -1091,7 +1095,8 @@ async def check_pulse_triggers(db, bot) -> None:
         user = db.query(User).filter(User.id == plan.user_id).first()
         if not user or not user.tg_id:
             continue
-        if not can_deliver_tasks(user, plan):
+        # Scan without holding authority locks across Telegram I/O.
+        if not user.is_active or not db.query(access_predicate(user.id, delivery=True)).scalar():
             continue
 
         today = _now_in_user_tz(user).date()
@@ -1127,6 +1132,9 @@ async def check_pulse_triggers(db, bot) -> None:
         )
 
         try:
+            claim_at = await asyncio.to_thread(outbound_claim, user.id, delivery=True)
+            if claim_at is None:
+                continue
             await bot.send_message(user.tg_id, text, reply_markup=keyboard)
         except Exception:
             continue
@@ -1139,6 +1147,7 @@ async def check_pulse_triggers(db, bot) -> None:
             source_operation_id=f"scheduler:pulse-snapshot:{plan.id}:{active_day}",
             plan_id=plan.id,
             context={"active_day": active_day, "date": str(today)},
+            attribution_at=claim_at,
         )
         db.commit()
 

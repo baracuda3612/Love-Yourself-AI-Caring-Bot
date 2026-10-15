@@ -11,7 +11,6 @@ from pydantic import BaseModel, ConfigDict
 
 from app.config import settings
 from app.db import AIPlan, SessionLocal, User
-from app.plan_completion.cta import get_next_plan_recommendation
 from app.plan_completion.metrics import build_completion_metrics
 from app.plan_completion.pulse import build_pulse_data
 from app.plan_completion.report import _pick_observation, build_completion_report
@@ -327,7 +326,6 @@ async def completion_report(request: Request, token: str):
 
         report_text = build_completion_report(metrics, persona)
         observation = _pick_observation(metrics)
-        cta = get_next_plan_recommendation(metrics)
         timeline = get_plan_timeline(db, user_id, plan_id)
 
     if templates is None:
@@ -359,10 +357,8 @@ async def completion_report(request: Request, token: str):
                 (metrics.focus or "").lower(), metrics.focus or ""
             ),
             "duration_label": DUR_LABELS.get(metrics.duration or "", ""),
-            "cta_button1_text": cta.button1_text,
-            "cta_button2_text": cta.button2_text,
-            "cta_button1_link": _deep_link(cta.button1_params),
-            "cta_button2_link": _deep_link(cta.button2_params),
+            "cta_button1_text": "Повернутися в бот",
+            "cta_button1_link": _deep_link({}),
             "timeline": [{"day": d.day, "status": d.status} for d in timeline],
             "logo_long_svg": _LOGO_LONG,
             "logo_icon_svg": _LOGO_ICON,
