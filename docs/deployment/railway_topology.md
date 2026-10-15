@@ -145,3 +145,126 @@ market launch, or treating testnet data as durable. Before any such use, the
 founder must provision the production contour, enable the paid Railway backup
 capability, and complete the scratch restore drill above. A fresh backup is
 also required before any operation that could destroy non-disposable data.
+
+## WP-04.1 access provisioning (no live rollout)
+
+The access head is `20261015_access_authority`. Existing user rows acquire no
+implicit license. Stop the prior binary before migration. This source change
+is not permission to enroll company users: Gate G1 and the release gates remain
+required. Only newly created disposable databases were used for rehearsals.
+
+Additional typed settings:
+
+| Variable | Purpose |
+|---|---|
+| `ACCESS_TOKEN_SECRET` | Dedicated random secret, at least 32 characters; never the report/operator/bot/OpenAI secret |
+| `ACCESS_KEY_VERSION` | Positive generation, default 1; rotating the secret and incrementing this invalidates all outstanding proof/preview/handoff values |
+| `ACCESS_OPERATOR_SECRET` | Separate random founder/operator bearer credential, at least 32 characters; HR never receives it |
+| `ACCESS_ISOLATION_INVENTORY` | Restricted JSON inventory below; required outside dev and checked at every runtime start |
+| `OPENAI_PROJECT_ID` | Explicit `proj_*` identity, passed to the OpenAI client; separate per environment |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Optional configured pair; authorization-code application; exact registered callback |
+| `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` | Optional configured pair; tenant-specific authorization-code application; exact registered callback |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` | Verified-email transport; port 587 by default, STARTTLS with certificate verification. Required in production; no delivery retry loop |
+
+Use the same artifact with different configuration. A provider dashboard name
+is not runtime identity. Record two profiles, keyed `testnet` and `production`.
+Each profile contains `runtime_id`, `resources`, `openai_project`, `backup_scope`,
+`alert_route`, `aggregate_sink`. `resources` is the exact SHA256 mapping emitted
+by `python -m scripts.access_environment --print-resources` from that contour's
+configuration. Only fingerprints are output; do not post them publicly. While
+production is not provisioned its profile may be null in testnet. Production
+startup requires both profiles and rejects every shared fingerprint or scope ID.
+Provider project, backup and alert scope IDs require actual provisioning/release
+evidence; a self-declared inventory does not establish that external resources
+were provisioned. The application checks configured IDs/fingerprints, explicit
+OpenAI project selection, immutable DB binding and dedicated Redis binding.
+
+After reviewed migration on an **empty fresh contour**, set the complete
+inventory and run `python -m scripts.access_environment --bind-empty`. This
+explicit operation binds PostgreSQL and a dedicated Redis instance. Runtime
+startup is read-only and refuses missing/mismatched bindings, cross-environment
+deployments and shared resources. A failed bind may leave Redis bound safely;
+repair the empty contour explicitly rather than overwriting another identity.
+Never rebind/promote testnet data to production. Resource relocation requires a
+reviewed provisioning/restore decision; normal secret rotation does not alter
+stable infrastructure binding.
+
+Before inserting a deployment, configure its existing orthogonal controls,
+commercial dates, notice pin and timezone policy. `access_policy` holds an
+explicit `allowed_domains` list (including any approved contractor/personal
+mail domains), optional Google Workspace `google_domain`, and/or a Microsoft
+`microsoft_tenant` UUID. Email strings/domain membership alone grant nothing.
+The restricted access schema and founder operator credential are separate from
+behavior/reporting tools. HR submits roster data and receives validation/total
+count only; HR must not receive operator APIs, preview secrets, SSO/enrollment
+status, token lists or identity-to-activity mappings.
+
+The production employee entry is `/enroll/{deployment_id}`. Register exact
+`/enroll/{deployment_id}/oidc/google/callback` and/or
+`/enroll/{deployment_id}/oidc/microsoft/callback` HTTPS redirect URIs. Request
+only `openid email`. Google must verify Workspace `hd`, verified email and
+stable subject. Microsoft tenant/subject is validated; its email claim requires
+mailbox verification on first binding. Browser-bound state/nonce, PKCE and
+single-use proofs prevent login CSRF/replay. Email proofs expire after ten
+minutes. Unknown and roster-listed addresses receive identical challenge
+messages/responses; only verified current roster membership can grant access.
+Expired proof rows older than one day are removed opportunistically on new
+proof creation. Raw roster uploads are never persisted.
+
+Operator JSON endpoints require the bearer credential and bounded input:
+
+* `/access/roster/preview`: `deployment_id`, explicit `mode`, `rows` of
+  `{email, action}` (`add`/`revoke`), company-declared `expected_total`, and a
+  non-sensitive `source_ref`. Full snapshots must be nonempty and match the
+  independently declared expected total; this catches unexpectedly small files.
+* `/access/roster/apply`: `deployment_id`, `version_id`, returned `confirmation`
+  and exact `counts`. The preview expires after 30 minutes; a concurrent accepted
+  version invalidates it. No apply occurs on missing/failed/rejected imports.
+  Accepted versions retain the effective set and explicit input actions. To
+  roll back a roster mistake, prepare/confirm a new import from the prior
+  accepted set; never edit audit history or restore raw token values. A revoked
+  identity must reverify before a new entitlement is granted.
+* `/access/testnet/handoff`: founder-only `deployment_id` and restricted test
+  `label`; production is rejected. Raw handoff is returned once, valid ten
+  minutes. Reissuance invalidates abandoned unspent links.
+* `/access/revoke`: `entitlement_id`; closes sponsored access and outstanding
+  invitations, retaining the account/history.
+* `/access/deployment/controls`: `deployment_id`, `enrollment_open`,
+  `delivery_enabled`. Delivery pause and enrollment closure are independent;
+  plan-pause callback actionability remains unchanged.
+* `/access/enrollment/replace`: `user_id` and freshly issued `handoff` after
+  re-verification. Founder support alone closes the previous enrollment in an
+  audited transaction; the new token can bind the intended Telegram account.
+  Never copy the old account/history to another account. Employer changes also
+  require this explicit support action. A same-identity/same-deployment regrant
+  may replace its own revoked enrollment when the same Telegram user redeems.
+
+Roster cadence is not expiry. Overdue collection/reminders belong to the company
+operating cadence in WP-10.1; no missed/rejected upload revokes entitlement.
+Commercial end is evaluated on every access/send; central renewal extends the
+period without SSO/token/user action. Revocation does not delete personal data.
+
+`POST /user/time-slots` requires `X-Telegram-Init-Data` containing the complete
+signed WebApp initData from this contour's bot, at most five minutes old. The
+server derives the actor, checks ownership/current enrollment/entitlement and
+limits attempts to 20/minute per signed actor. `user_id` remains only an asserted
+target, and `Idempotency-Key` remains lifecycle replay identity. Invalid targets
+and denied access share a neutral response; authorized owners keep the existing
+saved/deferred/replayed lifecycle behavior.
+
+All enrollment/access responses carry no-store/no-referrer, CSRF protections
+and restrictive framing/content policies. Uvicorn access logging is disabled so
+OIDC query codes are not emitted. Before any release, configure the upstream
+proxy/APM to exclude enrollment/access query strings, request bodies, cookies,
+authorization headers and WebApp payloads. No enrollment page analytics or raw
+identity/proof logging is supported. Emergency rotation replaces the dedicated
+access secret and advances its generation, restarts the same artifact and
+invalidates outstanding links/challenges/previews without revoking entitlements
+or enrolled accounts. Rotate operator/SMTP/provider credentials separately if
+exposed. Generic monitoring/recovery and company launch operations remain with
+their roadmap owners.
+
+Founder testnet must not be configured with OIDC client secrets or SMTP
+credentials: initial grants are issued by the founder, and startup rejects
+these unused production identity credentials in that contour. Employee-proof
+and founder-grant paths converge on the same invitation/enrollment service.

@@ -226,4 +226,4 @@ def test_report_uses_plan_user_id_not_token_user_id(monkeypatch):
 def test_deep_link_format(monkeypatch):
     monkeypatch.setattr(api.settings, "BOT_USERNAME", "mybot")
     url = api._deep_link({"duration": "SHORT", "load": "LITE", "focus": "mixed"})
-    assert url == "https://t.me/mybot?start=newplan_SHORT_LITE_mixed"
+    assert url == "https://t.me/mybot"

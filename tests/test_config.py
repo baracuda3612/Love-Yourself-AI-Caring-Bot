@@ -76,6 +76,13 @@ def test_valid_production_configuration_is_accepted() -> None:
             APP_BASE_URL="https://app.loveyourself.com/",
             BOT_USERNAME="love_yourself_bot",
             PORT="9000",
+            OPENAI_PROJECT_ID="proj_production_fixture",
+            SMTP_HOST="smtp.fixture.invalid", SMTP_FROM="noreply@client.org",
+            SMTP_USERNAME="fixture", SMTP_PASSWORD="fixture-test-only",
+
+            ACCESS_TOKEN_SECRET="t" * 32,
+            ACCESS_OPERATOR_SECRET="o" * 32,
+            ACCESS_ISOLATION_INVENTORY='{}',
         )
     )
 

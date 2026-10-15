@@ -61,6 +61,8 @@ def db(pg_engine):
 def source_plan(db, *, medium=False, zone='UTC', work_days=None):
     user = User(tg_id=990350000 + uuid4().int % 10000000, is_active=True, timezone=zone)
     db.add(user); db.flush()
+    from tests.access_fixtures import enroll
+    enroll(db, user)
     db.add(UserProfile(user_id=user.id, daily_time_slots={'DAY':'14:00','EVENING':'20:30'},
         evening_slot_collected=medium, active_days=work_days or ['MON','TUE','WED','THU','FRI']))
     db.flush()

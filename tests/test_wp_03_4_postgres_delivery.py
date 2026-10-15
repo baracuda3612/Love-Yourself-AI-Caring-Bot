@@ -150,6 +150,8 @@ def test_pending_and_cross_user_actions_and_feedback_rejected(db):
     user,plan,step=active_step(db)
     with pytest.raises(LifecycleTransitionError, match='step_not_delivered'): action(db,user,step,'completed')
     stranger=User(tg_id=9888777,is_active=True,timezone='UTC'); db.add(stranger); db.flush()
+    from tests.access_fixtures import enroll
+    enroll(db, stranger)
     with pytest.raises(LifecycleOwnershipError): action(db,stranger,step,'completed')
     with pytest.raises(LifecycleTransitionError,match='requires_completed'):
         submit_step_feedback(db,telegram_user_id=user.tg_id,step_id=step.id,value='better')

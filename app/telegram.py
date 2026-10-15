@@ -119,27 +119,15 @@ async def _answer_stale_terminal_callback(
 
 
 def _ensure_user(db, tg_user) -> tuple[User, bool]:
-    user: Optional[User] = db.query(User).filter(User.tg_id == tg_user.id).first()
-    is_created = False
-    if not user:
-        user = User(
-            tg_id=tg_user.id,
-            username=tg_user.username,
-            first_name=tg_user.first_name,
-        )
-        db.add(user)
-        db.flush()
-        ensure_onboarding_progress(db, user.id, stage="START")
-        is_created = True
-    else:
-        user.username = tg_user.username
-        user.first_name = tg_user.first_name
-    if not user.profile:
-        profile = UserProfile(user_id=user.id)
-        db.add(profile)
+    from app.access import AccessDenied, require_access
+    user = db.query(User).filter(User.tg_id == tg_user.id).with_for_update().first()
+    if user is None:
+        raise AccessDenied()
+    require_access(db, user.id)
+    user.username = tg_user.username
+    user.first_name = tg_user.first_name
     db.commit()
-    db.refresh(user)
-    return user, is_created
+    return user, False
 
 
 def _sanitize_message_text(text: Optional[str]) -> str:
@@ -150,50 +138,51 @@ def _sanitize_message_text(text: Optional[str]) -> str:
 
 @router.message(Command("start"))
 async def cmd_start(message: Message):
-    args = message.text.split(maxsplit=1)[1] if message.text and " " in message.text else ""
-
-    if args.startswith("newplan_"):
-        await _handle_newplan_deeplink(message, args)
+    from app.access import AccessDenied, redeem_handoff
+    args = message.text.split(maxsplit=1)[1].strip() if message.text and " " in message.text else ""
+    if not message.from_user or message.chat.type != "private" or message.chat.id != message.from_user.id:
         return
-
-    with SessionLocal() as db:
-        user, is_created = _ensure_user(db, message.from_user)
-        if is_created:
-            await message.answer("Привіт! Я LoveYourself бот. Давай познайомимось.")
-        else:
-            await message.answer("З поверненням! Продовжуємо.")
-    logger.info("User %s started. Created: %s", user.id, is_created)
-
-
-async def _handle_newplan_deeplink(message: Message, args: str) -> None:
-    from app.orchestrator import handle_incoming_message
-
-    parts = args.split("_")
-    if len(parts) != 4:
-        await message.answer("Некоректне посилання. Напиши мені напряму.")
+    try:
+        with SessionLocal() as db:
+            if args:
+                user, created = redeem_handoff(db, args, message.from_user)
+                db.commit()
+            else:
+                user, created = _ensure_user(db, message.from_user)
+    except AccessDenied:
+        await message.answer("Доступ зараз недоступний. Відкрий актуальне особисте посилання зі сторінки входу.")
         return
+    await message.answer("Привіт! Доступ підтверджено. Давай познайомимось." if created else "З поверненням! Продовжуємо.")
 
-    _, duration, load, focus = parts
-    tg_id = message.from_user.id
 
-    with SessionLocal() as db:
-        user = db.query(User).filter(User.tg_id == tg_id).first()
-        if not user:
-            await message.answer("Спочатку потрібно зареєструватись.")
+# Gate all Telegram entrances before text, callbacks, Coach or history writes.
+# Start alone may redeem a token; it implements the same guard above.
+from aiogram import BaseMiddleware
+
+
+class EnrollmentMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        from app.access import AccessDenied, require_access
+        message = event if isinstance(event, Message) else getattr(event, 'message', None)
+        actor = getattr(event, 'from_user', None)
+        if not actor or not message or message.chat.type != 'private' or message.chat.id != actor.id:
             return
-        if derive_current_mode(db, user.id) is not CurrentMode.NO_ACTIVE_PLAN:
-            await message.answer(
-                "Зараз не можу розпочати новий план. "
-                "Заверши поточний або напиши — розберемось."
-            )
+        if isinstance(event, Message) and (event.text or ' ').split(' ', 1)[0].split('@')[0] == '/start':
+            return await handler(event, data)
+        try:
+            with SessionLocal() as db:
+                user = db.query(User).filter(User.tg_id == actor.id).first()
+                if user is None:
+                    raise AccessDenied()
+                require_access(db, user.id)
+        except AccessDenied:
+            await event.answer("Доступ зараз недоступний.")
             return
-        internal_id = user.id
+        return await handler(event, data)
 
-    response = await handle_incoming_message(
-        user_id=internal_id, message_text="створити план"
-    )
-    if response.get("reply_text"):
-        await message.answer(response["reply_text"])
+
+router.message.outer_middleware(EnrollmentMiddleware())
+router.callback_query.outer_middleware(EnrollmentMiddleware())
 
 
 @dp.startup()

@@ -151,6 +151,20 @@ class Settings:
     APP_BASE_URL: str = "http://127.0.0.1:8000"
     BOT_USERNAME: str = "local_dev_bot"
     PORT: int = 8000
+    OPENAI_PROJECT_ID: str = ""
+    ACCESS_TOKEN_SECRET: str = "local-access-secret-not-for-deployment"
+    ACCESS_KEY_VERSION: int = 1
+    ACCESS_OPERATOR_SECRET: str = ""
+    ACCESS_ISOLATION_INVENTORY: str = ""
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    MICROSOFT_CLIENT_ID: str = ""
+    MICROSOFT_CLIENT_SECRET: str = ""
+    SMTP_HOST: str = ""
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = ""
+    SMTP_PORT: int = 587
 
     IS_DEV: bool = True
     IS_STAGING: bool = False
@@ -224,6 +238,29 @@ class Settings:
         max_tokens = _integer(source, "MAX_TOKENS", 300, 1, 32768, errors)
         temperature = _floating(source, "TEMPERATURE", 0.7, 0.0, 2.0, errors)
         port = _integer(source, "PORT", 8000, 1, 65535, errors)
+        access_secret = source.get("ACCESS_TOKEN_SECRET", "local-access-secret-not-for-deployment").strip()
+        operator_secret = source.get("ACCESS_OPERATOR_SECRET", "").strip()
+        key_version = _integer(source, "ACCESS_KEY_VERSION", 1, 1, 1000000, errors)
+        smtp_port = _integer(source, "SMTP_PORT", 587, 1, 65535, errors)
+        if environment is not Environment.DEV:
+            if not source.get("OPENAI_PROJECT_ID", "").startswith("proj_"):
+                errors.append("OPENAI_PROJECT_ID is required outside development")
+            for name, value in (("ACCESS_TOKEN_SECRET", access_secret), ("ACCESS_OPERATOR_SECRET", operator_secret)):
+                if len(value) < 32 or _is_placeholder(value) or value.startswith("local-"):
+                    errors.append(f"{name} must be a dedicated random secret outside development")
+            if access_secret in {report_secret, operator_secret, bot_token, openai_api_key}:
+                errors.append("ACCESS_TOKEN_SECRET must be independent")
+            if operator_secret in {report_secret, bot_token, openai_api_key}:
+                errors.append("ACCESS_OPERATOR_SECRET must be independent")
+            if not source.get("ACCESS_ISOLATION_INVENTORY", "").strip():
+                errors.append("ACCESS_ISOLATION_INVENTORY is required outside development")
+            for provider in ("GOOGLE", "MICROSOFT"):
+                if bool(source.get(provider + "_CLIENT_ID")) != bool(source.get(provider + "_CLIENT_SECRET")):
+                    errors.append(f"{provider} client credentials must be configured together")
+        if environment is Environment.PROD:
+            for name in ("SMTP_HOST", "SMTP_FROM", "SMTP_USERNAME", "SMTP_PASSWORD"):
+                if not source.get(name, "").strip():
+                    errors.append(f"{name} is required for verified-email fallback in production")
 
         if errors:
             raise ConfigurationError("Invalid configuration: " + "; ".join(errors))
@@ -247,6 +284,18 @@ class Settings:
             APP_BASE_URL=app_base_url.rstrip("/"),
             BOT_USERNAME=bot_username,
             PORT=port,
+            OPENAI_PROJECT_ID=source.get("OPENAI_PROJECT_ID", ""),
+            ACCESS_TOKEN_SECRET=access_secret,
+            ACCESS_KEY_VERSION=key_version,
+            ACCESS_OPERATOR_SECRET=operator_secret,
+            ACCESS_ISOLATION_INVENTORY=source.get("ACCESS_ISOLATION_INVENTORY", ""),
+            GOOGLE_CLIENT_ID=source.get("GOOGLE_CLIENT_ID", ""),
+            GOOGLE_CLIENT_SECRET=source.get("GOOGLE_CLIENT_SECRET", ""),
+            MICROSOFT_CLIENT_ID=source.get("MICROSOFT_CLIENT_ID", ""),
+            MICROSOFT_CLIENT_SECRET=source.get("MICROSOFT_CLIENT_SECRET", ""),
+            SMTP_HOST=source.get("SMTP_HOST", ""), SMTP_PORT=smtp_port,
+            SMTP_USERNAME=source.get("SMTP_USERNAME", ""), SMTP_PASSWORD=source.get("SMTP_PASSWORD", ""),
+            SMTP_FROM=source.get("SMTP_FROM", ""),
             IS_DEV=environment is Environment.DEV,
             IS_STAGING=environment is Environment.STAGING,
             IS_PROD=environment is Environment.PROD,

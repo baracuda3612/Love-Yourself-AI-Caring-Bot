@@ -109,7 +109,12 @@ def claim_report(db, user_id, plan_id, *, now=None, release_operation_id=None):
         if row.state != 'pending' or now < utc(row.wake_at):
             return None
     user = db.get(User, user_id)
-    if not user.is_active or not user.tg_id:
+    from app.access import may_access
+    if not may_access(db, user_id, delivery=True) or not user.tg_id:
+        # Access pause/revocation parks the unfinished obligation. Scans exclude
+        # inaccessible work; renewal/resume makes it eligible again.
+        return None
+    if not user.is_active:
         row.state = 'failed'
         row.failure_code = 'user_unavailable'
         return None

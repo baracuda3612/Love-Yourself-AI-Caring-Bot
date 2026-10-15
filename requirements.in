@@ -8,6 +8,7 @@ jinja2==3.1.6
 openai==2.9.0
 psycopg2-binary==2.9.12
 pydantic==2.13.4
+PyJWT[crypto]==2.15.1
 python-dotenv==1.2.3
 pytz==2026.3.post1
 pyyaml==6.0.3

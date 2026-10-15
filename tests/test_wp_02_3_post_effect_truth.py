@@ -264,3 +264,9 @@ async def test_followup_reply_rejects_later_pause(monkeypatch):
     assert state.jobs == set()
     assert response["code"] == "superseded"
     assert "застарів" in copy
+
+
+@pytest.fixture(autouse=True)
+def _authorized_caller_for_lifecycle_unit_fakes(monkeypatch):
+    # Caller proof has real HTTP/PostgreSQL coverage in WP-04.1 tests.
+    monkeypatch.setattr(api, "authorize_time_slots", lambda db, proof, target: target)

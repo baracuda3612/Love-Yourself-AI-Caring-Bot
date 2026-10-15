@@ -4,9 +4,10 @@
 
 **Physical starting point:** Alembic revision `20260827_schema_baseline`
 
-**Current implemented head:** `20261014_plan_completion`, founder-merged
-WP-03.5 PR #267 (`efc5d08`, 2026-10-15). B3 is verified; WP-04.1 access
-behavior is next. Deployment schema primitives do not imply working enrollment.
+**Current implementation candidate:** `20261015_access_authority` in WP-04.1;
+last founder-merged head is `20261014_plan_completion`, WP-03.5 PR #267
+(`efc5d08`, 2026-10-15). B3 remains verified. The WP-04.1 contract/evidence owns
+access behavior acceptance; no durable/company rollout is implied.
 
 **Contract scope:** target design only; no DDL in WP-01.2
 
@@ -391,3 +392,22 @@ event and contribution survive retries; paused/cancelled/superseded successors
 do not contribute a runnable activation. Existing completion work also owns
 resume repair, backoff and atomic obligation clear/parking. Domain `activated_at`
 remains distinct from first runnable scheduling telemetry.
+
+
+### WP-04.1 access candidate
+
+`20261015_access_authority` extends the existing access tables with restricted
+normalized email and deployment policy, expiring browser-bound proof rows,
+version-bound roster previews and access-only immutable operator facts. Partial
+unique indexes enforce one current roster, one unrevoked entitlement per
+deployment/identity and one active enrollment per user and per entitlement.
+Existing ambiguous rows fail migration instead of being silently rewritten.
+No legacy user gets a guessed entitlement. Environment binding is immutable
+and established explicitly only on a fresh empty contour. Redis and provider
+resources have independent environment bindings/configuration checks.
+
+`users.timezone` now means explicit override for new writes; otherwise single
+mode resolves the current deployment default. Distributed mode requires an
+explicit timezone before planning. Existing values are preserved without
+inventing their provenance. Proof state and access audits cannot become
+behavior telemetry or a second entitlement authority.

@@ -1086,10 +1086,7 @@ async def test_inactive_sender_gets_access_denied_before_coach(monkeypatch):
 
     assert result == {"reply_text": "Доступ до Love Yourself зараз неактивний."}
     assert coach_called is False
-    assert memory.messages == [
-        (17, "user", "Привіт"),
-        (17, "assistant", "Доступ до Love Yourself зараз неактивний."),
-    ]
+    assert memory.messages == []  # Denied access does not enter Coach memory.
 
 
 def test_auto_complete_marks_plan_completed_and_logs_event_with_metrics_error(monkeypatch):

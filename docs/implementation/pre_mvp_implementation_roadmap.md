@@ -971,9 +971,10 @@ Coach model.
 
 ### WP-04.1 — Implement deployment, entitlement, and enrollment authority
 
-**Status:** `READY` — WP-00.4, WP-01.4 and WP-02.2 are founder-merged;
-B3 closure is verified. Start a fresh task only after this documentation
-handoff merges. Read the [WP-04.1 start message](work_packages/WP-04.1_start_message.md)
+**Status:** `IN_PROGRESS` — the documentation handoff is founder-merged as
+PR #268 (`340561b`); implementation and access acceptance are in the separate
+`wp/04.1-deployment-entitlement-enrollment` branch. See the
+[execution contract](work_packages/WP-04.1_deployment_access_authority.md). Read the [WP-04.1 start message](work_packages/WP-04.1_start_message.md)
 and form a bounded execution contract against the then-current code.
 
 **Scope**
@@ -1699,9 +1700,9 @@ block exit gate passes.
 | Field | Value |
 |---|---|
 | Current package | `WP-04.1 — Implement deployment, entitlement, and enrollment authority` |
-| Status | `READY`; B3 closed by WP-03.5 founder merge PR #267 (`efc5d08`). WP-04.1 implementation has not started |
-| Next action | Founder merges the documentation handoff; start a fresh WP-04.1 task, fetch/verify integration, preserve local changes, create its own package branch, and form the access/enrollment execution contract from FD-18 and live code |
-| Current blockers | No package dependency blocks WP-04.1; documentation handoff merge is pending. Production roster/identity/token behavior must enforce FD-18. Gate G1 is required before durable-data rollout/company enrollment. `DG-02` keeps cold water unavailable; `DG-03` remains before beta. Final summary payload is WP-07.4; shared exhausted-recovery alerts are WP-08.2/WP-09.2 |
+| Status | `IN_PROGRESS`; B3 remains verified. WP-04.1 access authority is under scoped implementation/verification after PR #268 merge (`340561b`) |
+| Next action | Complete access acceptance and independent review, open the WP-04.1 PR against implementation/pre-mvp, and await founder merge |
+| Current blockers | No package dependency blocks WP-04.1; documentation handoff PR #268 is merged. Production roster/identity/token behavior must enforce FD-18. Gate G1 is required before durable-data rollout/company enrollment. `DG-02` keeps cold water unavailable; `DG-03` remains before beta. Final summary payload is WP-07.4; shared exhausted-recovery alerts are WP-08.2/WP-09.2 |
 
 ### Private founder log
 

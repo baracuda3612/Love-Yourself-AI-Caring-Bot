@@ -212,3 +212,9 @@ def test_time_slot_api_reports_mixed_superseded_and_persisted_failure(monkeypatc
         },
     }
     assert db.commits == 1
+
+
+@pytest.fixture(autouse=True)
+def _authorized_caller_for_lifecycle_unit_fakes(monkeypatch):
+    # Caller proof has real HTTP/PostgreSQL coverage in WP-04.1 tests.
+    monkeypatch.setattr(api, "authorize_time_slots", lambda db, proof, target: target)
