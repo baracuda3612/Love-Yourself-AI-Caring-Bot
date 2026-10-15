@@ -574,8 +574,8 @@ def test_plan_schedule_reconciliation_removes_past_job_and_repairs_future(
                 return _OneQuery(user)
             if model is scheduler.AIPlanStep:
                 return _StepsQuery()
-            from app.db import ExerciseDelivery
-            if model is ExerciseDelivery.id:
+            from app.db import ExerciseDelivery, PlanCompletion
+            if model is ExerciseDelivery.id or model is PlanCompletion:
                 return _OneQuery(None)
             raise AssertionError(model)
 
@@ -665,8 +665,8 @@ def test_plan_schedule_reconciliation_fences_newer_lifecycle_decision(
                     user_id=3,
                     status=shared["status"],
                 )
-            from app.db import ExerciseDelivery
-            if self.model is ExerciseDelivery.id:
+            from app.db import ExerciseDelivery, PlanCompletion
+            if self.model is ExerciseDelivery.id or self.model is PlanCompletion:
                 return None
             raise AssertionError(self.model)
 

@@ -821,6 +821,20 @@ _PLAN_TRANSITIONS = {
 }
 
 
+def _resume_completion_effects(db: Session, plan: AIPlan, *, arm: bool) -> tuple[ExternalEffect, ...]:
+    """Keep a concrete automatic-resume proof recoverable before external work."""
+    from app.db import PlanCompletion
+    row = db.query(PlanCompletion).filter(PlanCompletion.successor_plan_id == plan.id).first()
+    if row is None:
+        return ()
+    if arm:
+        row.schedule_pending = True
+        row.wake_at = datetime.now(timezone.utc)
+    if not row.schedule_pending:
+        return ()
+    return (ExternalEffect(kind="reconcile_completion_schedule", target_ids=(int(plan.id),)),)
+
+
 def transition_current_plan(
     db: Session,
     *,
@@ -863,7 +877,8 @@ def transition_current_plan(
                         else ExternalEffectState.NOT_REQUIRED
                     ),
                 ),
-            ),
+            ) + (_resume_completion_effects(db, recorded_plan, arm=False)
+                 if operation == "resume" and still_authoritative else ()),
         )
 
     plan = get_current_plan(db, user_id, lock=True)
@@ -915,7 +930,7 @@ def transition_current_plan(
                 target_ids=(int(plan.id),),
                 state=ExternalEffectState.PENDING,
             ),
-        ),
+        ) + (_resume_completion_effects(db, plan, arm=True) if operation == "resume" else ()),
         details={"updated_step_ids": updated_step_ids},
     )
 

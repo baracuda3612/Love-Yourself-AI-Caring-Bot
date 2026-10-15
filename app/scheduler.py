@@ -551,6 +551,33 @@ def reconcile_plan_schedule(plan_id: int) -> SchedulerReconciliation:
             from app.db import ExerciseDelivery
             due_retry = db.query(ExerciseDelivery.id).filter(
                 ExerciseDelivery.plan_step_id.in_(pending_ids), ExerciseDelivery.state == 'retryable').first() is not None
+        from app.db import PlanCompletion
+        completion = db.query(PlanCompletion).filter(PlanCompletion.successor_plan_id == plan.id).first()
+        if (completion is not None and not failed and not continuation_blocked and user.is_active
+                and str(plan.status) == 'active'
+                and any(step.step_status == 'pending' and step.scheduled_for is not None
+                        and _to_utc(step.scheduled_for) > now_utc for step in rows)):
+            from app.telemetry import write_event_operation
+            try:
+                with db.begin_nested():
+                    # Preserve the first successful proof on duplicate writes.
+                    write_event_operation(db, user_id=user.id,
+                        event_name='plan_activated', event_source='plan_finalization',
+                        source_operation_id=f'plan-activation:{plan.id}', plan_id=plan.id,
+                        properties={'total_days': plan.total_days})
+            except Exception:
+                completion.schedule_pending = True
+                completion.wake_at = datetime.now(timezone.utc) + timedelta(seconds=30)
+                db.commit()
+                enable_completion_recovery()
+                raise
+        if completion is not None:
+            # Clear/retry the obligation under the same lock as its proof;
+            # an older scanner must not erase a newer resume's owed work.
+            completion.schedule_pending = bool(failed)
+            if failed:
+                completion.wake_at = datetime.now(timezone.utc) + timedelta(seconds=30)
+            db.commit()
     if due_retry:
         _enable_delivery_recovery()
     return SchedulerReconciliation(
@@ -1152,6 +1179,7 @@ def _completion_recovery_time(now):
     if _completion_source_failure:
         retry = now + timedelta(minutes=5)
         wake = min(_to_utc(wake), retry) if wake else retry
+        wake = max(now + timedelta(seconds=30), wake)
     return max(now + timedelta(seconds=1), _to_utc(wake)) if wake else None
 
 
@@ -1237,22 +1265,11 @@ def reconcile_plan_completions():
             with ThreadPoolExecutor(max_workers=8, thread_name_prefix='completion') as workers:
                 list(workers.map(dispatch, due))
         for source_id, successor_id in schedules:
-            result = reconcile_plan_schedule(successor_id)
-            with SessionLocal() as db:
-                # Reconciliation itself fences the actual current job set using
-                # the user lock. No lock is held while waiting on another session.
-                row = db.get(PlanCompletion, source_id)
-                row.schedule_pending = bool(result.failed_ids)
-                if not row.schedule_pending:
-                    from app.telemetry import write_event_operation
-                    successor = db.get(AIPlan, successor_id)
-                    write_event_operation(db, user_id=successor.user_id,
-                        event_name='plan_activated', event_source='plan_finalization',
-                        source_operation_id=f'plan-activation:{successor_id}', plan_id=successor_id,
-                        occurred_at=successor.activated_at, properties={'total_days':successor.total_days})
-                if row.schedule_pending:
-                    row.wake_at = datetime.now(timezone.utc) + timedelta(seconds=30)
-                db.commit()
+            try:
+                reconcile_plan_schedule(successor_id)
+            except Exception:
+                logger.exception('Completion schedule interrupted source=%s', source_id)
+                _completion_source_failure = True
     except Exception:
         logger.exception('Completion recovery interrupted')
         _completion_source_failure = True

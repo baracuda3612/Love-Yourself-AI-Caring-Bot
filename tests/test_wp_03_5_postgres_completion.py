@@ -414,6 +414,183 @@ def test_confirmed_summary_releases_exact_successor_jobs_and_parks_recovery(db,m
     assert db.query(UserEvent).filter(UserEvent.event_name=='plan_activated',UserEvent.plan_id==row.successor_plan_id).count()==1
 
 
+@pytest.fixture
+def completion_jobs(db, monkeypatch):
+    from app import db as database, scheduler
+    @contextmanager
+    def retained(): yield db
+    jobs = {}
+    fake = SimpleNamespace(get_job=lambda job_id, **kw: jobs.get(job_id),
+        remove_job=lambda job_id, **kw: jobs.pop(job_id, None),
+        modify_job=lambda *a, **k: None, add_job=lambda *a, **k: None)
+    def schedule(step, user):
+        jobs[scheduler._generate_step_job_id(step)] = SimpleNamespace(next_run_time=step.scheduled_for)
+        return True
+    monkeypatch.setattr(database, 'SessionLocal', retained)
+    monkeypatch.setattr(scheduler, 'SessionLocal', retained)
+    monkeypatch.setattr(scheduler, 'scheduler', fake)
+    monkeypatch.setattr(scheduler, 'schedule_plan_step', schedule)
+    monkeypatch.setattr(scheduler, '_completion_source_failure', False)
+    return scheduler, jobs
+
+
+def activation_facts(db, plan_id):
+    from app.db import AggregateRecord, UserEvent
+    events = db.query(UserEvent).filter_by(event_name='plan_activated', plan_id=plan_id).all()
+    contributions = db.query(AggregateRecord).filter_by(record_kind='contribution',
+        metric_name='plan_activated', source_operation_id=f'plan-activation:{plan_id}').all()
+    assert len(events) == len(contributions)
+    return events
+
+
+@pytest.mark.parametrize('control', ['paused', 'cancelled', 'switched', 'inactive'])
+def test_completion_activation_excludes_unstarted_successors(db, completion_jobs, control):
+    from app.lifecycle_reconciliation import _record_activation_event
+    from app.lifecycle import LifecycleResult
+    scheduler, jobs = completion_jobs
+    user, plan = source_plan(db)
+    terminalize(db, user, plan)
+    if control == 'paused':
+        transition_current_plan(db, user_id=user.id, operation='pause', source_operation_id='event:pause')
+    close(db, user, plan)
+    row = db.get(PlanCompletion, plan.id)
+    successor = db.get(AIPlan, row.successor_plan_id)
+    if control == 'cancelled':
+        abandon_current_plan(db, user_id=user.id, source_operation_id='event:cancel')
+    elif control == 'switched':
+        user.profile.evening_slot_collected = True
+        db.flush()
+        switch_plan_format(db, user_id=user.id, target_plan_type='MEDIUM', source_operation_id='event:switch')
+    claim = claim_report(db, user.id, plan.id)
+    finish_report(db, user.id, claim, outcome='sent', message_id=77)
+    if control == 'inactive':
+        user.is_active = False
+        db.flush()
+    scheduler.reconcile_plan_completions()
+    assert not jobs and not row.schedule_pending
+    assert activation_facts(db, successor.id) == []
+    # Recovery of the builder's activation receipt cannot bypass this gate.
+    _record_activation_event(LifecycleResult(user_id=user.id, plan_id=successor.id,
+        status=successor.status, operation='activate', details={'total_days': 7}))
+    assert activation_facts(db, successor.id) == []
+
+
+@pytest.mark.parametrize('report_before_resume', [False, True])
+def test_completion_activation_on_first_resume_is_once_and_after_report(db, completion_jobs, report_before_resume):
+    from app.lifecycle_reconciliation import reconcile_scheduler_effects
+    scheduler, jobs = completion_jobs
+    user, plan = source_plan(db)
+    terminalize(db, user, plan)
+    transition_current_plan(db, user_id=user.id, operation='pause', source_operation_id='event:source-pause')
+    close(db, user, plan)
+    row = db.get(PlanCompletion, plan.id)
+    if report_before_resume:
+        claim = claim_report(db, user.id, plan.id)
+        finish_report(db, user.id, claim, outcome='sent', message_id=77)
+        scheduler.reconcile_plan_completions()
+    assert not jobs and activation_facts(db, row.successor_plan_id) == []
+    before = datetime.now(timezone.utc)
+    result = transition_current_plan(db, user_id=user.id, operation='resume', source_operation_id='event:first-resume')
+    assert reconcile_scheduler_effects(result).external_effects_succeeded
+    if not report_before_resume:
+        assert not jobs and activation_facts(db, row.successor_plan_id) == []
+        claim = claim_report(db, user.id, plan.id)
+        finish_report(db, user.id, claim, outcome='sent', message_id=77)
+        scheduler.reconcile_plan_completions()
+    facts = activation_facts(db, row.successor_plan_id)
+    assert len(jobs) == 7 and len(facts) == 1 and facts[0].occurred_at >= before
+    original_occurrence = facts[0].occurred_at
+    for operation, key in [('pause', 'event:again-pause'), ('resume', 'event:again-resume')]:
+        result = transition_current_plan(db, user_id=user.id, operation=operation, source_operation_id=key)
+        assert reconcile_scheduler_effects(result).external_effects_succeeded
+    scheduler.reconcile_plan_completions()
+    facts = activation_facts(db, row.successor_plan_id)
+    assert len(jobs) == 7 and len(facts) == 1 and facts[0].occurred_at == original_occurrence
+
+
+@pytest.mark.parametrize('failure', ['jobs', 'event'])
+@pytest.mark.parametrize('automatic_recovery', [False, True])
+def test_completion_activation_resume_failure_replays_without_false_fact(db, completion_jobs, monkeypatch, failure, automatic_recovery):
+    from app import telemetry
+    from app.lifecycle_reconciliation import reconcile_scheduler_effects
+    scheduler, jobs = completion_jobs
+    user, plan = source_plan(db)
+    terminalize(db, user, plan)
+    transition_current_plan(db, user_id=user.id, operation='pause', source_operation_id='event:source-pause')
+    close(db, user, plan)
+    row = db.get(PlanCompletion, plan.id)
+    claim = claim_report(db, user.id, plan.id)
+    finish_report(db, user.id, claim, outcome='sent', message_id=77)
+    scheduler.reconcile_plan_completions()
+    target, name = (scheduler, 'schedule_plan_step') if failure == 'jobs' else (telemetry, 'write_event_operation')
+    original = getattr(target, name)
+    def fail(*a, **kw): raise RuntimeError('event rehearsal failure')
+    monkeypatch.setattr(target, name, fail)
+    result = transition_current_plan(db, user_id=user.id, operation='resume', source_operation_id='event:retry-resume')
+    assert not reconcile_scheduler_effects(result).external_effects_succeeded
+    assert activation_facts(db, row.successor_plan_id) == []
+    assert row.schedule_pending
+    assert scheduler._completion_recovery_time(datetime.now(timezone.utc)) is not None
+    monkeypatch.setattr(target, name, original)
+    if automatic_recovery:
+        # No user action: the persisted resume obligation survives loss of the
+        # caller/result and is sufficient for the ordinary recovery scanner.
+        retry_at = utc(row.wake_at) + timedelta(seconds=1)
+        class Clock(datetime):
+            @classmethod
+            def now(cls, tz=None): return retry_at
+        monkeypatch.setattr(scheduler, 'datetime', Clock)
+        scheduler.reconcile_plan_completions()
+        assert not row.schedule_pending
+        assert scheduler._completion_recovery_time(datetime.now(timezone.utc)) is None
+    else:
+        result = transition_current_plan(db, user_id=user.id, operation='resume', source_operation_id='event:retry-resume')
+        assert result.duplicate and reconcile_scheduler_effects(result).external_effects_succeeded
+    assert len(jobs) == 7 and len(activation_facts(db, row.successor_plan_id)) == 1
+
+
+def test_completion_activation_persistent_failure_backs_off_and_isolates(db, completion_jobs, monkeypatch):
+    from app import telemetry
+    scheduler, jobs = completion_jobs
+    rows = []
+    for _ in range(2):
+        user, plan = source_plan(db)
+        terminalize(db, user, plan)
+        close(db, user, plan)
+        claim = claim_report(db, user.id, plan.id)
+        finish_report(db, user.id, claim, outcome='sent', message_id=77)
+        rows.append(db.get(PlanCompletion, plan.id))
+    broken, healthy = rows
+    original = telemetry.write_event_operation
+    calls = []
+    def write(*a, **kw):
+        if kw.get('source_operation_id') == f'plan-activation:{broken.successor_plan_id}':
+            calls.append(kw['source_operation_id'])
+            raise RuntimeError('persistent telemetry failure')
+        return original(*a, **kw)
+    monkeypatch.setattr(telemetry, 'write_event_operation', write)
+    moment = SimpleNamespace(at=datetime.now(timezone.utc))
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None): return moment.at
+    monkeypatch.setattr(scheduler, 'datetime', Clock)
+    for attempt in range(2):
+        scheduler.reconcile_plan_completions()
+        assert len(calls) == attempt + 1 and broken.schedule_pending
+        assert utc(broken.wake_at) >= moment.at + timedelta(seconds=30)
+        assert scheduler._completion_recovery_time(moment.at) >= moment.at + timedelta(seconds=30)
+        scheduler.reconcile_plan_completions()  # no due retry at the same instant
+        assert len(calls) == attempt + 1
+        moment.at = utc(broken.wake_at) + timedelta(seconds=1)
+    assert activation_facts(db, broken.successor_plan_id) == []
+    assert len(activation_facts(db, healthy.successor_plan_id)) == 1 and not healthy.schedule_pending
+    monkeypatch.setattr(telemetry, 'write_event_operation', original)
+    scheduler.reconcile_plan_completions()
+    assert not broken.schedule_pending
+    assert len(activation_facts(db, broken.successor_plan_id)) == 1
+    assert scheduler._completion_recovery_time(moment.at) is None
+
+
 @pytest.mark.parametrize('target',['completed','skipped'])
 def test_final_delivered_action_while_paused_closes_and_carries_pause(db,target):
     from app.lifecycle import transition_owned_plan_step

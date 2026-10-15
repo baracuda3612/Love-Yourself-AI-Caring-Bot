@@ -24,10 +24,15 @@ def _failed(effect: ExternalEffect, error_code: str) -> ExternalEffect:
 
 
 def _record_activation_event(result: LifecycleResult) -> None:
-    from app.db import SessionLocal
+    from app.db import PlanCompletion, SessionLocal
     from app.telemetry import log_user_event
 
     with SessionLocal() as db:
+        if db.query(PlanCompletion.plan_id).filter(
+                PlanCompletion.successor_plan_id == result.plan_id).first() is not None:
+            # Automatic successors are instrumented only by their locked,
+            # active-and-unblocked scheduler proof (including first resume).
+            return
         log_user_event(
             db,
             user_id=int(result.user_id),
