@@ -95,6 +95,113 @@ def first_step(db, plan_id):
     return db.query(AIPlanStep).join(AIPlanDay).filter(AIPlanDay.plan_id == plan_id).order_by(AIPlanStep.scheduled_for, AIPlanStep.id).first()
 
 
+@pytest.mark.parametrize('slots,expected_time', [
+    (None, '14:00'), ({}, '14:00'), ({'EVENING': '20:30'}, '14:00'),
+    ({'DAY': '16:45'}, '16:45'),
+])
+@pytest.mark.parametrize('action', ['completed', 'skipped', 'expired'])
+def test_nullable_saved_slots_completion_and_report(db, slots, expected_time, action):
+    user, plan = source_plan(db, work_days=['MON', 'FRI'])
+    now = datetime(2026, 11, 6, 23, 59, 59, tzinfo=timezone.utc)
+    terminalize(db, user, plan, status=action, at=now)
+    user.profile.daily_time_slots = slots
+    db.flush()
+    if slots is None:
+        # SQL NULL is distinct from a JSON null in this JSON column.
+        db.execute(text('UPDATE user_profiles SET daily_time_slots = NULL WHERE user_id = :id'), {'id': user.id})
+        db.refresh(user.profile)
+    close(db, user, plan, now=now + timedelta(seconds=1))
+    row = db.get(PlanCompletion, plan.id)
+    first = first_step(db, row.successor_plan_id)
+    assert plan.status == 'completed'
+    assert first.scheduled_for.strftime('%H:%M') == expected_time
+    if action == 'expired':
+        assert row.report_at.strftime('%Y-%m-%d %H:%M') == f'2026-11-09 {expected_time}'
+        assert first.scheduled_for.date().isoformat() == '2026-11-13'
+    assert first.scheduled_for.date() > row.report_at.date()
+    claim = claim_report(db, user.id, plan.id, now=row.report_at)
+    assert first.scheduled_for.strftime('%d.%m.%Y') in claim.payload
+    assert f'о {expected_time}' in claim.payload
+    assert close(db, user, plan, now=row.report_at).duplicate
+    assert db.query(PlanCompletion).filter_by(plan_id=plan.id).count() == 1
+    assert user.profile.daily_time_slots == slots
+
+
+@pytest.mark.parametrize('slots', [None, {}, {'EVENING': '20:30'}])
+@pytest.mark.parametrize('release', [False, True])
+def test_nullable_saved_slots_late_report_recovery(db, slots, release):
+    user, plan = source_plan(db)
+    now = datetime.now(timezone.utc)
+    terminalize(db, user, plan, at=now)
+    close(db, user, plan, now=now)
+    claim = claim_report(db, user.id, plan.id, now=now)
+    if release:
+        claim_report(db, user.id, plan.id, now=now + SEND_TIMEOUT)
+    else:
+        finish_report(db, user.id, claim, outcome='retryable', retry_after=60, now=now)
+    user.profile.daily_time_slots = slots
+    db.flush()
+    if slots is None:
+        db.execute(text('UPDATE user_profiles SET daily_time_slots = NULL WHERE user_id = :id'), {'id': user.id})
+        db.refresh(user.profile)
+    late = now + timedelta(days=7)
+    recovered = claim_report(db, user.id, plan.id, now=late,
+        release_operation_id='nullable:continue' if release else None)
+    row = db.get(PlanCompletion, plan.id)
+    first = first_step(db, row.successor_plan_id)
+    assert recovered.release == release
+    assert first.scheduled_for.date() > late.date()
+    assert first.scheduled_for.strftime('%H:%M') == '14:00'
+    assert first.scheduled_for.strftime('%d.%m.%Y') in recovered.payload
+    assert 'о 14:00' in recovered.payload
+    assert db.query(blocked_successor(row.successor_plan_id)).scalar()
+    finish_report(db, user.id, recovered, outcome='sent', message_id=778, now=late)
+    assert not db.query(blocked_successor(row.successor_plan_id)).scalar()
+    assert user.profile.daily_time_slots == slots
+
+
+@pytest.mark.parametrize('collected,slots', [
+    (False, {'DAY': '14:00', 'EVENING': '20:30'}),
+    (True, None), (True, {}), (True, {'DAY': '14:00'}),
+    (True, {'DAY': '14:00', 'EVENING': '99:00'}),
+])
+def test_nullable_saved_slots_do_not_bypass_medium_gate(db, collected, slots):
+    from app.lifecycle import LifecycleTransitionError
+    from app.time_slots import TimeSlotError
+    user, plan = source_plan(db, medium=True)
+    terminalize(db, user, plan)
+    user.profile.daily_time_slots = slots
+    user.profile.evening_slot_collected = collected
+    db.flush()
+    with pytest.raises((LifecycleTransitionError, TimeSlotError)), db.begin_nested():
+        close(db, user, plan)
+    db.refresh(plan)
+    assert plan.status == 'active' and db.get(PlanCompletion, plan.id) is None
+    assert db.query(AIPlan).filter_by(user_id=user.id).count() == 2
+
+
+def test_nullable_saved_day_preserves_collected_medium_evening_in_recovery(db):
+    user, plan = source_plan(db, medium=True)
+    now = datetime.now(timezone.utc)
+    terminalize(db, user, plan, at=now)
+    user.profile.daily_time_slots = {'EVENING': '20:30'}
+    db.flush()
+    close(db, user, plan, now=now)
+    row = db.get(PlanCompletion, plan.id)
+    late = now + timedelta(days=7)
+    claim = claim_report(db, user.id, plan.id, now=late)
+    successor = db.get(AIPlan, row.successor_plan_id)
+    assert successor.total_days == 14
+    assert len([step for day in successor.days for step in day.steps]) == 28
+    for day in successor.days:
+        assert {s.time_slot: s.scheduled_for.strftime('%H:%M') for s in day.steps} == {
+            'DAY': '14:00', 'EVENING': '20:30'}
+        assert all(s.scheduled_for.date() > late.date() for s in day.steps)
+    first = first_step(db, successor.id)
+    assert first.scheduled_for.strftime('%d.%m.%Y') in claim.payload
+    assert 'о 14:00' in claim.payload
+
+
 @pytest.mark.parametrize('medium', [False, True])
 @pytest.mark.parametrize('action', ['completed','skipped'])
 def test_atomic_same_format_explicit_source_and_replay(db, medium, action):

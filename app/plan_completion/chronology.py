@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta, timezone
 
 from app.active_days import next_active_date, resolve_active_days, resolve_timezone
-from app.time_slots import canonicalize_hhmm, compute_scheduled_for
+from app.time_slots import compute_scheduled_for, normalize_daily_time_slots
 
 
 def utc(value):
@@ -20,10 +20,8 @@ def report_due_at(user, last_terminal, *, now):
 
 def next_workday_day_at(user, after):
     profile = user.profile
-    slots = getattr(profile, 'daily_time_slots', None) or {}
-    if 'DAY' not in slots:
-        raise ValueError('saved_day_time_missing')
-    day_time = canonicalize_hhmm(slots['DAY'])
+    slots = normalize_daily_time_slots(getattr(profile, 'daily_time_slots', None), require_all=False)
+    day_time = slots['DAY']
     tz = resolve_timezone(user.timezone)
     report_day = next_active_date(utc(after).astimezone(tz).date() + timedelta(days=1), resolve_active_days(profile))
     return compute_scheduled_for(

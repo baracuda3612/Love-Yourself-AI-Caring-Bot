@@ -1432,7 +1432,6 @@ def complete_current_plan_if_ready(
     from app.plan_completion.chronology import report_due_at, last_terminal_step
     from app.active_days import resolve_timezone
     from app.plan_drafts.service import create_plan_for_lifecycle
-    from app.time_slots import canonicalize_hhmm
 
     now = now or datetime.now(timezone.utc)
     last_terminal = last_terminal_step(db, plan.id)
@@ -1440,18 +1439,14 @@ def complete_current_plan_if_ready(
         return None
     user = db.get(User, user_id)
     report_at = report_due_at(user, last_terminal, now=now)
-    slots = getattr(user.profile, "daily_time_slots", None) or {}
-    day_time = canonicalize_hhmm(slots.get("DAY"))
+    slots = _completion_time_slots(user, plan)
     plan_type = _plan_type(plan)
-    evening_time = canonicalize_hhmm(slots.get("EVENING")) if plan_type == "MEDIUM" else None
-    if plan_type == "MEDIUM" and not user.profile.evening_slot_collected:
-        raise LifecycleTransitionError("saved_evening_time_missing")
 
     plan.status = "completed"
     plan.version = int(plan.version or 0) + 1
     db.flush()  # release the one-current-plan constraint before builder activation
     successor = create_plan_for_lifecycle(
-        db, user_id, plan_type, day_time=day_time, evening_time=evening_time,
+        db, user_id, plan_type, day_time=slots["DAY"], evening_time=slots.get("EVENING"),
         source_operation_id=f"continuation:{plan.id}",
         activation_receipt_status="active",
         start_after_local_date=max(now, report_at).astimezone(resolve_timezone(user.timezone)).date(),
@@ -2546,6 +2541,19 @@ def prepare_continuation(
     )
 
 
+def _completion_time_slots(user: User, plan: AIPlan) -> dict[str, str]:
+    """Use the canonical DAY default without inventing a collected evening."""
+    from app.time_slots import canonicalize_hhmm, normalize_daily_time_slots
+    profile = user.profile
+    raw = getattr(profile, "daily_time_slots", None)
+    slots = {"DAY": normalize_daily_time_slots(raw, require_all=False)["DAY"]}
+    if _plan_type(plan) == "MEDIUM":
+        if not getattr(profile, "evening_slot_collected", False):
+            raise LifecycleTransitionError("saved_evening_time_missing")
+        slots["EVENING"] = canonicalize_hhmm(raw.get("EVENING") if isinstance(raw, dict) else None)
+    return slots
+
+
 def refresh_completion_successor(db: Session, *, user: User, plan: AIPlan, report_at: datetime) -> datetime:
     """Re-anchor only unstarted automatic work before a fresh report promise.
 
@@ -2559,7 +2567,8 @@ def refresh_completion_successor(db: Session, *, user: User, plan: AIPlan, repor
         raise LifecycleInvariantError("continuation_has_no_pending_steps")
     tz = resolve_timezone(user.timezone)
     if first.astimezone(tz).date() <= report_at.astimezone(tz).date():
-        reanchor_pending_plan_steps(user, plan, resumed_at=report_at)
+        reanchor_pending_plan_steps(user, plan, resumed_at=report_at,
+            daily_time_slots=_completion_time_slots(user, plan))
         plan.version = int(plan.version or 0) + 1
         db.flush()
         first = (db.query(func.min(AIPlanStep.scheduled_for)).join(AIPlanDay)

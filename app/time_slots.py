@@ -233,12 +233,15 @@ def reanchor_pending_plan_steps(
     plan: AIPlan,
     *,
     resumed_at: Optional[datetime] = None,
+    daily_time_slots: Optional[Dict[str, str]] = None,
 ) -> list[int]:
     """Move remaining pending work to consecutive selected work days.
 
     Delivered work remains actionable through its existing expiry.  The first
     still-pending logical day is anchored to the next selected work day after
     resume, and later logical days retain their grouping and order.
+    Completion may supply its resolved saved slots; manual resume retains the
+    strict persisted-slot checks when no mapping is supplied.
     """
     from app.active_days import next_active_date, resolve_active_days, step_expires_at
 
@@ -247,7 +250,7 @@ def reanchor_pending_plan_steps(
         resumed_at = resumed_at.replace(tzinfo=timezone.utc)
     tz = _normalize_timezone(user.timezone)
     profile = user.profile
-    raw_slots = getattr(profile, "daily_time_slots", None)
+    raw_slots = daily_time_slots if daily_time_slots is not None else getattr(profile, "daily_time_slots", None)
     if not isinstance(raw_slots, dict):
         raise TimeSlotError("daily_time_slots_invalid")
     daily_time_slots: Dict[str, str] = {}

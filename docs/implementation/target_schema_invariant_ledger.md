@@ -374,3 +374,8 @@ Unknown summary sends do not retry. After ten minutes the user may explicitly
 request a separate future-date confirmation with `/continue_plan`; only its
 confirmed receipt releases automatic delivery. No final WP-07.4 web/image
 summary payload, on-demand linkage or canonical metrics are added.
+
+The 2026-10-15 nullable-preference repair uses the canonical DAY default when
+saved slots are NULL/empty or omit DAY, including no-action report chronology
+and late continuation re-anchoring. MEDIUM still requires a collected, explicitly
+saved valid EVENING. No preference backfill, schema change or new state is added.
