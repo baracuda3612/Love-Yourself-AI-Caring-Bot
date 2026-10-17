@@ -62,6 +62,8 @@ def _seed_current_plan(db: Session, *, medium: bool = False):
     user = User(tg_id=990230000 + (1 if medium else 0), is_active=True, timezone="UTC")
     db.add(user)
     db.flush()
+    from tests.access_fixtures import enroll
+    enroll(db, user)
     profile = UserProfile(
         user_id=user.id,
         daily_time_slots={"DAY": "14:00", "EVENING": "20:30"},

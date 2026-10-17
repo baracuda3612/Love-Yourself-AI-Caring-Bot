@@ -43,7 +43,7 @@ SessionLocal = sessionmaker(
 Base = declarative_base()
 logger = logging.getLogger(__name__)
 
-EXPECTED_ALEMBIC_REVISION = "20261014_plan_completion"
+EXPECTED_ALEMBIC_REVISION = "20261015_access_authority"
 
 
 class SchemaVersionError(RuntimeError):
@@ -105,7 +105,9 @@ class User(Base):
     last_active_at = Column(DateTime(timezone=True), nullable=True)
     plan_end_date = Column(DateTime(timezone=True), nullable=True)
 
-    timezone = Column(String, default="Europe/Kyiv")
+    # Explicit override only. Deployment policy supplies the default.
+    timezone_override = Column("timezone", String, nullable=True)
+    timezone_override_explicit = Column(Boolean, nullable=False, default=False, server_default="false")
     notification_time = Column(Time, nullable=True)
     is_active = Column(Boolean, default=True)
 
@@ -137,6 +139,20 @@ class User(Base):
         uselist=False,
         cascade="all, delete-orphan",
     )
+
+    @property
+    def timezone(self):
+        if self.timezone_override_explicit and self.timezone_override:
+            return self.timezone_override
+        for enrollment in self.deployment_enrollments:
+            if enrollment.ended_at is None and enrollment.deployment.timezone_mode == "single":
+                return enrollment.deployment.default_timezone
+        return None
+
+    @timezone.setter
+    def timezone(self, value):
+        self.timezone_override = value
+        self.timezone_override_explicit = bool(value)
 
 
 class OnboardingProgress(Base):
@@ -577,6 +593,7 @@ class Deployment(Base):
         Enum("single", "distributed", name="deployment_timezone_mode"), nullable=False
     )
     default_timezone = Column(String(64), nullable=True)
+    access_policy = Column(JSONB, nullable=False, default=dict)
     notice_version_id = Column(
         BigInteger,
         ForeignKey("privacy_notice_versions.id", ondelete="RESTRICT"),
@@ -600,6 +617,7 @@ class AccessIdentity(Base):
 
     id = Column(BigInteger, primary_key=True)
     identity_digest = Column(String(128), nullable=False)
+    normalized_email = Column(String(254), nullable=True)
     provider = Column(String(64), nullable=False)
     verified_at = Column(DateTime(timezone=True), nullable=True)
     verification_metadata = Column(JSONB, nullable=False, default=dict)
@@ -634,6 +652,11 @@ class DeploymentRosterVersion(Base):
     eligible_count = Column(Integer, nullable=False)
     invalid_count = Column(Integer, nullable=False, default=0)
     is_current = Column(Boolean, nullable=False, default=False)
+    base_version = Column(Integer, nullable=False, default=0)
+    preview_counts = Column(JSONB, nullable=False, default=dict)
+    confirmation_digest = Column(String(128), nullable=True)
+    preview_expires_at = Column(DateTime(timezone=True), nullable=True)
+    operator_digest = Column(String(128), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
@@ -744,6 +767,41 @@ class DeploymentEnrollment(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     user = relationship("User", back_populates="deployment_enrollments")
+    deployment = relationship("Deployment", foreign_keys=[deployment_id], overlaps="")
+
+
+class AccessProof(Base):
+    """Restricted, short-lived browser-bound proof; never product telemetry."""
+    __tablename__ = "access_proofs"
+    id = Column(BigInteger, primary_key=True)
+    deployment_id = Column(BigInteger, ForeignKey("deployments.id", ondelete="RESTRICT"), nullable=False)
+    kind = Column(String(16), nullable=False)
+    secret_digest = Column(String(128), nullable=False, unique=True)
+    browser_digest = Column(String(128), nullable=False)
+    identity_digest = Column(String(128), nullable=True)
+    nonce_digest = Column(String(128), nullable=True)
+    subject_digest = Column(String(128), nullable=True)
+    issued_at = Column(DateTime(timezone=True), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    consumed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class RuntimeAccessBinding(Base):
+    __tablename__ = "runtime_access_binding"
+    singleton = Column(Integer, primary_key=True, default=1)
+    environment = Column(String(16), nullable=False)
+    runtime_id = Column(String(96), nullable=False)
+    resource_digest = Column(String(128), nullable=False)
+
+
+class AccessAdminOperation(Base):
+    __tablename__ = "access_admin_operations"
+    id = Column(BigInteger, primary_key=True)
+    deployment_id = Column(BigInteger, ForeignKey("deployments.id", ondelete="RESTRICT"), nullable=False)
+    operator_digest = Column(String(128), nullable=False)
+    action = Column(String(32), nullable=False)
+    target_id = Column(BigInteger, nullable=True)
+    occurred_at = Column(DateTime(timezone=True), nullable=False)
 
 
 # -------------------- TELEMETRY --------------------
@@ -855,6 +913,7 @@ class UserEvent(Base):
     event_name = Column(String(96), nullable=True)
     event_schema_version = Column(Integer, nullable=True)
     occurred_at = Column(DateTime(timezone=True), nullable=True)
+    attribution_at = Column(DateTime(timezone=True), nullable=True)
     recorded_at = Column(DateTime(timezone=True), nullable=True)
     event_source = Column(String(64), nullable=True)
     source_operation_id = Column(String(160), nullable=True)

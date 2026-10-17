@@ -23,8 +23,11 @@ from sqlalchemy.orm import sessionmaker
 from scripts.inspect_database_schema import inspect_database
 
 
-EXPECTED_REVISION = "20261014_plan_completion"
+EXPECTED_REVISION = "20261015_access_authority"
 EXPECTED_APPLICATION_TABLES = {
+    "access_proofs",
+    "access_admin_operations",
+    "runtime_access_binding",
     "access_entitlements",
     "access_identities",
     "aggregate_records",
@@ -1534,6 +1537,15 @@ def _assert_lifecycle_concurrency(target_url: str) -> None:
 
     engine = create_engine(sqlalchemy_url, pool_size=4, max_overflow=0)
     Session = sessionmaker(bind=engine, expire_on_commit=False)
+    # Legacy lifecycle fixtures now need explicit valid access records; this
+    # is test seeding only, never a migration backfill or runtime bypass.
+    from tests.access_fixtures import enroll
+    from app.db import User, DeploymentEnrollment
+    with Session.begin() as seed_access:
+        for user in seed_access.query(User).all():
+            if not seed_access.query(DeploymentEnrollment).filter_by(user_id=user.id, ended_at=None).first():
+                user.timezone = user.timezone_override or "Europe/Kyiv"  # Explicit fixture choice.
+                enroll(seed_access, user)
     try:
         activation_barrier = Barrier(2)
 

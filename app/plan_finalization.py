@@ -167,6 +167,9 @@ def finalize_plan(
         )
         if not user:
             raise FinalizationError("user_not_found")
+        from app.access import require_access, require_planning_timezone
+        require_access(db, user_id)
+        require_planning_timezone(user)
 
         existing_operation = find_lifecycle_operation(
             db,

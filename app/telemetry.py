@@ -11,7 +11,7 @@ import re
 from typing import Any, Mapping
 
 import pytz
-from sqlalchemy import select, update
+from sqlalchemy import select, update, or_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -289,7 +289,21 @@ def _resolve_deployment_linkage(
     occurred_at: datetime,
     deployment_id: int | None,
     deployment_enrollment_id: int | None,
+    resolve_missing: bool = True,
 ) -> tuple[int | None, int | None, int | None, str]:
+    if deployment_id is None and deployment_enrollment_id is None and resolve_missing:
+        matches = db.query(DeploymentEnrollment).join(Deployment,
+            Deployment.id == DeploymentEnrollment.deployment_id).filter(
+            DeploymentEnrollment.user_id == user_id,
+            DeploymentEnrollment.enrolled_at <= occurred_at,
+            or_(DeploymentEnrollment.ended_at.is_(None), DeploymentEnrollment.ended_at > occurred_at),
+            Deployment.environment == _runtime_environment(),
+            or_(Deployment.starts_at.is_(None), Deployment.starts_at <= occurred_at),
+            or_(Deployment.ends_at.is_(None), Deployment.ends_at > occurred_at)).all()
+        if len(matches) > 1:
+            raise EventValidationError("ambiguous historical enrollment attribution")
+        if matches:
+            deployment_enrollment_id = matches[0].id
     if deployment_id is not None and deployment_enrollment_id is None:
         raise EventValidationError(
             "deployment attribution requires deployment_enrollment_id"
@@ -396,6 +410,7 @@ def write_event_operation(
     source_operation_id: str,
     properties: Mapping[str, Any] | None = None,
     occurred_at: datetime | None = None,
+    attribution_at: datetime | None = None,
     plan_id: int | None = None,
     plan_step_id: int | None = None,
     deployment_id: int | None = None,
@@ -441,6 +456,26 @@ def write_event_operation(
         if duplicate is not None and explicit_occurrence is None
         else explicit_occurrence or _utc_now()
     )
+    if attribution_at is not None:
+        # Telegram message.date is rounded down to whole seconds. Keep both
+        # the immutable provider receipt and the exact authorized claim time;
+        # only these Telegram receipts may cross that precision boundary.
+        if attribution_at.tzinfo is None or (
+            attribution_at > occurrence and not (
+                event_name in {'task_delivered', 'plan_completion_sent'}
+                and attribution_at - occurrence < timedelta(seconds=1)
+            )
+        ):
+            raise EventValidationError("invalid event attribution time")
+    if duplicate is not None and attribution_at is not None and duplicate[0].attribution_at != attribution_at:
+        raise EventOperationConflict("source_operation_id was already used for a different attribution")
+    attribution = attribution_at or (duplicate[0].attribution_at if duplicate else None) or occurrence
+    if attribution != occurrence and event_name not in {'task_delivered','task_delivery_failed','plan_completion_sent','pulse_sent'}:
+        raise EventValidationError("only send receipts may use claim-time attribution")
+    if duplicate is not None and deployment_id is None and deployment_enrollment_id is None:
+        # Replays retain the original snapshot, including truthful legacy nulls.
+        deployment_id = duplicate[0].deployment_id
+        deployment_enrollment_id = duplicate[0].deployment_enrollment_id
 
     catalogue = db.get(EventCatalog, (event_name, 1))
     if catalogue is None:
@@ -466,9 +501,10 @@ def write_event_operation(
         _resolve_deployment_linkage(
             db,
             user_id=user_id,
-            occurred_at=occurrence,
+            occurred_at=attribution,
             deployment_id=deployment_id,
             deployment_enrollment_id=deployment_enrollment_id,
+            resolve_missing=duplicate is None,
         )
     )
     if "deployment" in required_linkage and deployment_id is None:
@@ -522,6 +558,7 @@ def write_event_operation(
                 event_name=event_name,
                 event_schema_version=1,
                 occurred_at=occurrence,
+                attribution_at=attribution,
                 recorded_at=recorded_at,
                 event_source=event_source,
                 source_operation_id=source_operation_id,
@@ -618,6 +655,7 @@ def log_user_event(
     context: Mapping[str, Any] | None = None,
     deployment_id: int | None = None,
     deployment_enrollment_id: int | None = None,
+    attribution_at: datetime | None = None,
     step_id: str | None = None,
     content_id: str | None = None,
     plan_instance_id: str | None = None,
@@ -638,6 +676,7 @@ def log_user_event(
         plan_step_id=plan_step_id,
         deployment_id=deployment_id,
         deployment_enrollment_id=deployment_enrollment_id,
+        attribution_at=attribution_at,
     ).event
 
 

@@ -483,6 +483,12 @@ def _lock_user(
         raise LifecycleInvariantError(f"user {user_id} not found")
     if require_entitlement and getattr(user, "is_active", True) is not True:
         raise LifecycleEntitlementError("user_not_entitled")
+    if require_entitlement:
+        from app.access import AccessDenied, require_access
+        try:
+            require_access(db, user_id)
+        except AccessDenied:
+            raise LifecycleEntitlementError("user_not_entitled") from None
     return user
 
 
@@ -503,6 +509,11 @@ def _lock_telegram_actor(db: Session, telegram_user_id: int) -> User:
         raise LifecycleOwnershipError("telegram_actor_not_found")
     if getattr(user, "is_active", True) is not True:
         raise LifecycleEntitlementError("user_not_entitled")
+    from app.access import AccessDenied, require_access
+    try:
+        require_access(db, user.id)
+    except AccessDenied:
+        raise LifecycleEntitlementError("user_not_entitled") from None
     return user
 
 

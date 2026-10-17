@@ -4,7 +4,7 @@ from openai import AsyncOpenAI
 
 from app.config import settings
 
-async_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+async_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY, project=settings.OPENAI_PROJECT_ID or None)
 
 
 def _usage_dict(resp):

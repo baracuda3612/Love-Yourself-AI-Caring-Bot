@@ -130,7 +130,7 @@ async def _auto_complete_plan_if_needed_for_user_id(user_id: int) -> None:
         with SessionLocal() as db:
             user = db.query(User).filter(User.id == user_id).first()
             if user is None:
-                return None
+                raise LifecycleEntitlementError("user_not_entitled")
             completion = _auto_complete_plan_if_needed(db, user)
             db.commit()
             return completion
@@ -142,7 +142,7 @@ async def _auto_complete_plan_if_needed_for_user_id(user_id: int) -> None:
         logger.exception("Completion preparation pending user=%s", user_id)
         from app.scheduler import enable_completion_recovery
         await asyncio.to_thread(enable_completion_recovery)
-        return
+        raise LifecycleEntitlementError("access_unavailable") from None
     if completion is not None:
         await send_plan_completion_message(user_id, completion.plan_id)
 
@@ -202,11 +202,12 @@ async def get_ltm_snapshot(user_id: int) -> Dict[str, Any]:
 async def get_temporal_context(user_id: int) -> Optional[str]:
     with SessionLocal() as db:
         user: Optional[User] = db.query(User).filter(User.id == user_id).first()
+        timezone_name = user.timezone if user else None
 
     if not user:
         return None
 
-    tz = _safe_timezone(user.timezone)
+    tz = _safe_timezone(timezone_name)
     localized_now = datetime.now(tz)
     hour = localized_now.hour
 
@@ -903,8 +904,6 @@ async def handle_incoming_message(
     - returns reply
     """
 
-    await session_memory.append_message(user_id, "user", message_text)
-
     async def _finalize_reply(text: str) -> Dict[str, Any]:
         await session_memory.append_message(user_id, "assistant", text)
         return {"reply_text": text}
@@ -912,7 +911,8 @@ async def handle_incoming_message(
     try:
         await _auto_complete_plan_if_needed_for_user_id(user_id)
     except LifecycleEntitlementError:
-        return await _finalize_reply("Доступ до Love Yourself зараз неактивний.")
+        return {"reply_text": "Доступ до Love Yourself зараз неактивний."}
+    await session_memory.append_message(user_id, "user", message_text)
 
     context_payload = await build_user_context(user_id, message_text)
     current_mode = context_payload.get("current_mode")

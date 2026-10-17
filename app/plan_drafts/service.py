@@ -74,6 +74,12 @@ def create_plan_for_lifecycle(
     )
     if user is None:
         raise FinalizationError("user_not_found")
+    from app.access import AccessDenied, require_access, require_planning_timezone
+    try:
+        require_access(db, user_id)
+        require_planning_timezone(user)
+    except AccessDenied:
+        raise FinalizationError("access_or_timezone_unavailable") from None
     existing_operation = (
         db.query(PlanLifecycleOperation)
         .filter(
