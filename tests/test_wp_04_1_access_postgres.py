@@ -585,3 +585,53 @@ def test_attribution_precision_bound_is_enforced_by_writer_and_database(db,name,
     values.update(attribution_at=invalid_at,source_operation_id=original.event_source+':direct:'+uuid4().hex)
     with pytest.raises(IntegrityError,match='ck_event_attribution_time'),db.begin_nested():
         db.add(UserEvent(**values));db.flush()
+
+
+@pytest.mark.parametrize('state,delivery,allowed',[
+    ('active',False,True),('no-enrollment',False,False),('revoked',False,False),
+    ('commercial-end',False,False),('wrong-environment',False,False),
+    ('ended',False,False),('inactive',False,False),
+    ('delivery-off',False,True),('delivery-off',True,False),('enrollment-closed',False,True),
+])
+def test_final_outbound_snapshot_is_one_current_authority_query(engine,monkeypatch,state,delivery,allowed):
+    from sqlalchemy import event
+    from sqlalchemy.orm import sessionmaker
+    from app import db as models
+    sessions=sessionmaker(bind=engine,expire_on_commit=False)
+    monkeypatch.setattr(models,'SessionLocal',sessions)
+    with sessions() as db:
+        dep=deployment(db,environment='production' if state=='wrong-environment' else 'testnet')
+        user=User(tg_id=actor().id,timezone='UTC');db.add(user);db.flush()
+        membership=None if state=='no-enrollment' else enroll(db,user,target=dep)
+        if state=='revoked':access.revoke_entitlement(db,entitlement_id=membership.entitlement_id)
+        if state=='commercial-end':dep.ends_at=access.now_utc()-timedelta(seconds=1)
+        if state=='ended':membership.ended_at=access.now_utc()
+        if state=='inactive':user.is_active=False
+        if state=='delivery-off':dep.delivery_enabled=False
+        if state=='enrollment-closed':dep.enrollment_open=False
+        db.commit();user_id=user.id
+    statements=[]
+    def track(conn,cursor,statement,*args):statements.append(statement)
+    event.listen(engine,'before_cursor_execute',track)
+    try:
+        assert (access.outbound_claim(user_id,delivery=delivery) is not None)==allowed
+    finally:event.remove(engine,'before_cursor_execute',track)
+    assert len(statements)==1 and 'FOR UPDATE' not in statements[0]
+
+
+def test_final_outbound_snapshot_does_not_queue_on_another_company_reader(engine,monkeypatch):
+    from sqlalchemy.orm import sessionmaker
+    from app import db as models
+    sessions=sessionmaker(bind=engine,expire_on_commit=False)
+    monkeypatch.setattr(models,'SessionLocal',sessions)
+    with sessions() as db:
+        dep=deployment(db);user=User(tg_id=actor().id,timezone='UTC');db.add(user);db.flush()
+        enroll(db,user,target=dep);db.commit();user_id,dep_id=user.id,dep.id
+    with engine.begin() as holder:
+        holder.execute(text('SELECT id FROM deployments WHERE id=:id FOR UPDATE'),{'id':dep_id})
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future=pool.submit(access.outbound_claim,user_id)
+            try:
+                assert future.result(timeout=1) is not None
+            finally:
+                holder.rollback()  # Always release before joining a failed worker.

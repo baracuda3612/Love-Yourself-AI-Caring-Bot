@@ -95,14 +95,18 @@ def require_access(db, user_id, *, delivery=False, now=None):
 
 
 def outbound_claim(user_id, *, delivery=False):
-    """Release the short final access guard before any external I/O."""
+    """One fresh access snapshot before non-durable conversational/pulse I/O.
+
+    This read makes no related mutation, so one statement supplies a coherent
+    authority snapshot without serializing every company reply on its row.
+    Durable exercise/completion claims and lifecycle mutations keep their locks.
+    """
     from app.db import SessionLocal
     with SessionLocal() as db:
-        try:
-            require_access(db, user_id, delivery=delivery)
-            return now_utc()
-        except AccessDenied:
-            return None
+        return db.execute(select(func.now()).select_from(User).where(
+            User.id == user_id, User.is_active.is_(True),
+            access_predicate(User.id, delivery=delivery),
+        )).scalar_one_or_none()
 
 
 def may_access(db, user_id, *, delivery=False):
@@ -114,7 +118,7 @@ def may_access(db, user_id, *, delivery=False):
 
 
 def access_predicate(user_id, *, delivery=False):
-    """SQL eligibility for scans; a send still rechecks under authority locks."""
+    """Current SQL authority; durable send/mutation claims additionally lock."""
     at = func.now()
     statement = select(DeploymentEnrollment.id).join(AccessEntitlement,
         AccessEntitlement.id == DeploymentEnrollment.entitlement_id).join(Deployment,
