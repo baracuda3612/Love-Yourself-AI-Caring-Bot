@@ -203,8 +203,11 @@ The production employee entry is `/enroll/{deployment_id}`. Register exact
 `/enroll/{deployment_id}/oidc/google/callback` and/or
 `/enroll/{deployment_id}/oidc/microsoft/callback` HTTPS redirect URIs. Request
 only `openid email`. Google must verify Workspace `hd`, verified email and
-stable subject. Microsoft tenant/subject is validated; its email claim requires
-mailbox verification on first binding. Browser-bound state/nonce, PKCE and
+stable subject; both documented issuer strings are accepted and canonicalized
+for subject binding. Microsoft uses validated `sub` and tenant, without an
+unused `oid`/`profile` requirement. Its email claim requires mailbox verification
+on first binding; an absent claim returns to the existing email verification
+form without inferring an address or granting access. Browser-bound state/nonce, PKCE and
 single-use proofs prevent login CSRF/replay. Email proofs expire after ten
 minutes. Unknown and roster-listed addresses receive identical challenge
 messages/responses; only verified current roster membership can grant access.
@@ -233,11 +236,17 @@ Operator JSON endpoints require the bearer credential and bounded input:
 * `/access/deployment/controls`: `deployment_id`, `enrollment_open`,
   `delivery_enabled`. Delivery pause and enrollment closure are independent;
   plan-pause callback actionability remains unchanged.
-* `/access/enrollment/replace`: `user_id` and freshly issued `handoff` after
-  re-verification. Founder support alone closes the previous enrollment in an
-  audited transaction; the new token can bind the intended Telegram account.
+* `/access/enrollment/replace`: `user_id`, `expected_enrollment_id`, freshly
+  issued `handoff` after re-verification, and explicit `replacement_mode`.
+  The expected enrollment must still be current for that user. Ordinary
+  `same_identity` replacement requires the same access identity and deployment.
+  A verified employer/address change requires the explicit `identity_change`
+  mode after founder support confirms the intended person and target. The
+  operator audit identifies the old enrollment, whose ending reason records
+  the operation and target entitlement. The new token remains single-use and
+  can bind the intended Telegram account.
   Never copy the old account/history to another account. Employer changes also
-  require this explicit support action. A same-identity/same-deployment regrant
+  require this explicit identity-change action. A same-identity/same-deployment regrant
   may replace its own revoked enrollment when the same Telegram user redeems.
 
 Roster cadence is not expiry. Overdue collection/reminders belong to the company

@@ -135,6 +135,9 @@ def finish_email(db, *, deployment_id, raw, browser):
     return issue_handoff(db, entitlement.id)
 
 
+GOOGLE_ISSUERS = ('https://accounts.google.com', 'accounts.google.com')
+
+
 def _provider(deployment, provider):
     if provider == 'google':
         if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET or not deployment.access_policy.get('google_domain'):
@@ -142,7 +145,7 @@ def _provider(deployment, provider):
         return dict(client=settings.GOOGLE_CLIENT_ID, secret=settings.GOOGLE_CLIENT_SECRET,
             authorize='https://accounts.google.com/o/oauth2/v2/auth',
             token='https://oauth2.googleapis.com/token', jwks='https://www.googleapis.com/oauth2/v3/certs',
-            issuer='https://accounts.google.com')
+            issuer=GOOGLE_ISSUERS)
     if provider == 'microsoft':
         tenant = deployment.access_policy.get('microsoft_tenant', '')
         import re
@@ -233,17 +236,26 @@ def finish_oidc(db, *, prepared, claims, browser):
         or not hmac.compare_digest(proof.browser_digest, digest(browser, 'browser'))):
         raise AccessDenied()
     proof.kind = 'verified'  # The final grant also has one transactional winner.
-    email = normalize_email(claims.get('email'))
-    subject = hashlib.sha256((claims['iss'] + ':' + claims['sub']).encode()).hexdigest()
     if provider == 'google':
+        if claims.get('iss') not in GOOGLE_ISSUERS:
+            raise AccessDenied()
+        email = normalize_email(claims.get('email'))
+        # Both documented issuer spellings identify the same Google subject.
+        subject = hashlib.sha256((GOOGLE_ISSUERS[0] + ':' + claims['sub']).encode()).hexdigest()
         if (claims.get('email_verified') is not True
             or claims.get('hd') != deployment.access_policy['google_domain']
             or email.rsplit('@', 1)[1] != deployment.access_policy['google_domain']):
             raise AccessDenied()
         entitlement = grant_verified(db, deployment_id, email_digest(email), provider=provider, subject_digest=subject)
         return {'handoff': issue_handoff(db, entitlement.id)}
-    if claims.get('tid', '').lower() != deployment.access_policy['microsoft_tenant'].lower() or not claims.get('oid'):
+    if claims.get('tid', '').lower() != deployment.access_policy['microsoft_tenant'].lower():
         raise AccessDenied()
+    # openid guarantees the validated stable sub; oid needs an unused profile
+    # scope. Email is optional even with the email scope, so use mailbox proof.
+    if not claims.get('email'):
+        return {'email_required': True}
+    email = normalize_email(claims['email'])
+    subject = hashlib.sha256((claims['iss'] + ':' + claims['sub']).encode()).hexdigest()
     identity = db.query(AccessIdentity).filter(AccessIdentity.identity_digest == email_digest(email), AccessIdentity.provider == 'email').first()
     if identity and (identity.verification_metadata or {}).get(provider) == subject:
         entitlement = grant_verified(db, deployment_id, identity.identity_digest, provider=provider, subject_digest=subject)

@@ -1188,7 +1188,7 @@ def _terminal_completion_sources(db):
 def _completion_recovery_time(now):
     from app.db import PlanCompletion
     with SessionLocal() as db:
-        wake = db.query(func.min(PlanCompletion.wake_at)).join(AIPlan, AIPlan.id == PlanCompletion.plan_id).filter(or_(access_predicate(AIPlan.user_id, delivery=True), PlanCompletion.state.in_(['in_flight', 'release_in_flight']))).filter(or_(
+        wake = db.query(func.min(PlanCompletion.wake_at)).join(AIPlan, AIPlan.id == PlanCompletion.plan_id).join(User, User.id == AIPlan.user_id).filter(or_(and_(User.is_active.is_(True), access_predicate(AIPlan.user_id, delivery=True)), PlanCompletion.state.in_(['in_flight', 'release_in_flight']))).filter(or_(
             PlanCompletion.state.in_(['pending', 'in_flight', 'release_in_flight']),
             PlanCompletion.schedule_pending.is_(True),
         )).scalar()
@@ -1261,10 +1261,10 @@ def reconcile_plan_completions():
             request_plan_completion(user_id, plan_id)
         with SessionLocal() as db:
             due = db.query(PlanCompletion.plan_id, AIPlan.user_id).join(
-                AIPlan, AIPlan.id == PlanCompletion.plan_id).filter(
+                AIPlan, AIPlan.id == PlanCompletion.plan_id).join(User, User.id == AIPlan.user_id).filter(
                     PlanCompletion.state.in_(['pending', 'in_flight', 'release_in_flight']),
-                    PlanCompletion.wake_at <= now, or_(access_predicate(AIPlan.user_id, delivery=True), PlanCompletion.state.in_(['in_flight','release_in_flight']))).all()
-            schedules = db.query(PlanCompletion.plan_id, PlanCompletion.successor_plan_id).join(AIPlan, AIPlan.id == PlanCompletion.plan_id).filter(access_predicate(AIPlan.user_id, delivery=True)).filter(
+                    PlanCompletion.wake_at <= now, or_(and_(User.is_active.is_(True), access_predicate(AIPlan.user_id, delivery=True)), PlanCompletion.state.in_(['in_flight','release_in_flight']))).all()
+            schedules = db.query(PlanCompletion.plan_id, PlanCompletion.successor_plan_id).join(AIPlan, AIPlan.id == PlanCompletion.plan_id).join(User, User.id == AIPlan.user_id).filter(User.is_active.is_(True), access_predicate(AIPlan.user_id, delivery=True)).filter(
                 PlanCompletion.schedule_pending.is_(True), PlanCompletion.wake_at <= now).all()
         def dispatch(pair):
             user_id, plan_id = pair[1], pair[0]

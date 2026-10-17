@@ -123,6 +123,9 @@ def oidc_callback(deployment_id: int, provider: str, request: Request):
         db.commit()
     if 'handoff' in result:
         return _handoff(result['handoff'])
+    if result.get('email_required'):
+        return HTMLResponse(_page(deployment_id, browser,
+            note='Microsoft підтвердив вхід. Вкажи адресу для доступу й підтвердь її кодом із листа.'))
     try:
         access_proof.send_email(result['email'], result['challenge'])
     except Exception:
@@ -183,7 +186,7 @@ async def revoke(request: Request):
 async def replace_enrollment(request: Request):
     operator = _operator(request)
     body = await request.json()
-    if set(body) != {'user_id', 'handoff'}:
+    if set(body) != {'user_id', 'expected_enrollment_id', 'handoff', 'replacement_mode'}:
         raise access.AccessDenied()
     with SessionLocal() as db:
         access.end_enrollment_for_replacement(db, **body, operator=operator)

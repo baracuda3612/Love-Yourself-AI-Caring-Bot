@@ -114,10 +114,6 @@ def claim_report(db, user_id, plan_id, *, now=None, release_operation_id=None):
         # Access pause/revocation parks the unfinished obligation. Scans exclude
         # inaccessible work; renewal/resume makes it eligible again.
         return None
-    if not user.is_active:
-        row.state = 'failed'
-        row.failure_code = 'user_unavailable'
-        return None
     # Every attempted send first resolves current controls and future chronology.
     # No network call or receipt exists if generation fails: pending remains safe.
     continuation = continuation_text(db, row, user, now)

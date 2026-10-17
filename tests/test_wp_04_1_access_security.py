@@ -118,13 +118,14 @@ def test_rate_limit_atomic_expiry_and_failure(monkeypatch):
     with pytest.raises(access.AccessDenied,match='^access_unavailable$'):access_proof.rate_limit('same')
 
 
-@pytest.mark.parametrize('case',['valid','forged','issuer','audience','expired','missing-sub','algorithm'])
+@pytest.mark.parametrize('case',['valid','legacy-valid','forged','issuer','audience','expired','missing-sub','algorithm'])
 def test_oidc_real_signature_and_required_claims(monkeypatch,case):
     import jwt
     from cryptography.hazmat.primitives.asymmetric import rsa
     key=rsa.generate_private_key(public_exponent=65537,key_size=2048)
     at=int(access.now_utc().timestamp())
     claims={'iss':'https://accounts.google.com','aud':'our-client','sub':'subject','nonce':'nonce','iat':at,'exp':at+300}
+    if case=='legacy-valid':claims['iss']='accounts.google.com'
     if case=='issuer':claims['iss']='https://attacker.invalid'
     if case=='audience':claims['aud']='another-client'
     if case=='expired':claims['exp']=at-1
@@ -135,8 +136,8 @@ def test_oidc_real_signature_and_required_claims(monkeypatch,case):
         def __init__(self,url,timeout):assert url=='https://www.googleapis.com/oauth2/v3/certs'
         def get_signing_key_from_jwt(self,raw):return SimpleNamespace(key=key.public_key())
     monkeypatch.setattr(jwt,'PyJWKClient',Client)
-    config={'jwks':'https://www.googleapis.com/oauth2/v3/certs','issuer':'https://accounts.google.com','client':'our-client'}
-    if case=='valid':assert access_proof.validate_id_token(config,raw)['sub']=='subject'
+    config={'jwks':'https://www.googleapis.com/oauth2/v3/certs','issuer':access_proof.GOOGLE_ISSUERS,'client':'our-client'}
+    if case in ('valid','legacy-valid'):assert access_proof.validate_id_token(config,raw)['sub']=='subject'
     else:
         with pytest.raises(access.AccessDenied):access_proof.validate_id_token(config,raw)
 

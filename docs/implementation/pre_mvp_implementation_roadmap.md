@@ -117,6 +117,58 @@ Each execution plan must contain:
 * documentation updates;
 * review instructions.
 
+### 2.2.1 Customer-facing UI and transition completeness
+
+**Founder clarification — 2026-10-17:** every interface encountered by an
+employee, test participant, buyer, HR contact or company champion needs an
+explicit implementation owner and finished presentation/interaction acceptance.
+This applies across the whole journey, including transitions between email,
+browser and Telegram. A working backend or an unstyled technical form does not
+by itself complete the customer-facing experience.
+
+At execution-plan time, each owning WP inventories its relevant screens,
+messages, buttons, links, forms and manual-facing materials. For each touchpoint,
+record the audience, entry point, meaningful states, next action/destination,
+owning WP and acceptance evidence. Include relevant existing surfaces, not only
+new UI. Later WPs remain at roadmap level until their execution planning.
+
+| Touchpoint / journey segment | Presentation and interaction owner |
+|---|---|
+| Employee enrollment web page, provider choice, email/code flow, handoff confirmation, browser/email/Telegram transitions | WP-04.3; access authority remains WP-04.1 and privacy wording/notice remains WP-04.2 |
+| Privacy, support and data-rights instructions, requests and confirmations | WP-04.2; integration with the bot menu in WP-04.3 |
+| Telegram onboarding, returning entry, menu, settings and lifecycle controls | WP-04.3 |
+| Exercise messages, buttons and terminal feedback states | Existing B3 owners; preserve their contracts and verify consistency in WP-09.4 |
+| Coach replies, tool-action confirmations and degraded-mode messages | WP-05.1…03 |
+| On-demand exercise entry, results and unavailable states | WP-06 packages |
+| Personal summaries/reports/continuation and permitted company-facing output | WP-07 packages; report-access/privacy authority remains WP-04.2 |
+| Existing public website and approved buyer-facing product/contact/next-step presentation | WP-08.3 |
+| Company setup instructions, roster submission/validation communication, champion invitation, launch/support/renewal/end-of-access communication | WP-10.1…02; ongoing operational communication in WP-10.4 |
+
+Common acceptance for every applicable touchpoint:
+
+* consistent approved product identity, wording and visual treatment; usable
+  layout on supported mobile/desktop surfaces, readable text and controls;
+* clear normal, waiting, success, empty/unavailable, invalid, expired/revoked
+  and recoverable-error states where applicable; actionable next steps without
+  exposing internal IDs, secrets or individual employee behavior;
+* buttons and links describe the actual result, offer only configured/available
+  actions and preserve context through redirects, app switching, return and
+  retry; no dead ends or false success;
+* appropriate keyboard/input/focus behavior and disabled/submitting states;
+  no duplicate action caused by unclear feedback;
+* screenshots or equivalent rendered evidence plus functional journey checks;
+  validate actual supported devices during WP-09.4 and company-specific paths
+  during WP-10.2.
+
+Each WP finishes the surfaces it owns rather than deferring all presentation to
+a final unspecified polish pass. WP-09.4 reconciles the journey inventory across
+packages; a critical unowned surface, unfinished technical placeholder or broken
+transition blocks release unless covered by an explicit founder exception that
+does not weaken privacy/security. This rule does not authorize a new HR portal,
+individual employee dashboard, self-service billing, extra sales channel or
+other unapproved capability. Existing manual buyer/operator workflows receive
+clear materials and feedback without inventing those features.
+
 ### 2.3 Review rule
 
 Implementation and review are separate passes even when both use Codex:
@@ -1050,6 +1102,11 @@ its verified-session/signed-WebApp and rate-limit requirements move with it.
 
 **Scope**
 
+* finish the enrollment web UI and email/code/handoff presentation: approved
+  visual identity, responsive layout, only configured provider choices, clear
+  states and actionable errors, with privacy wording owned by WP-04.2;
+* verify the complete company-link → browser/provider or email verification →
+  Telegram journey, including return, expired links/codes and retry;
 * canonical `/start` handoff after authorization;
 * FD-04 deterministic mechanism-sale onboarding;
 * collect exact DAY time and selected work days;
@@ -1071,6 +1128,8 @@ remains post-MVP.
 * onboarding requires no LLM and creates one valid first plan;
 * first delivery confirmation uses the actual finalized step;
 * product controls work during OpenAI degradation;
+* enrollment and bot entry meet the cross-cutting UI/transition contract in
+  section 2.2.1, with rendered evidence and a complete mobile handoff;
 * no abandoned plan-parameter UI remains reachable.
 
 ---
@@ -1350,6 +1409,9 @@ otherwise. Do not scatter new behavior around it.
 * finalize Product Contract after core implementation stabilizes;
 * synchronize Product Maps, public website, privacy language, name, claims,
   enrollment, and company-report boundary;
+* finish the existing public website's buyer-facing presentation and approved
+  contact/next-step transitions under section 2.2.1; links and claims match the
+  actual enrollment, product and support paths;
 * retire or rebuild devtools/smoke/stress utilities for the target lifecycle;
 * exclude unapproved development tooling and R&D from production artifact;
 * preserve history in Git rather than live contradictory files.
@@ -1423,6 +1485,9 @@ restart, and recovery conditions.
 **Scope**
 
 * real iOS and Android notification preview and Telegram journey;
+* reconcile the section 2.2.1 touchpoint inventory and rendered evidence across
+  packages; exercise browser/email/Telegram transitions and representative
+  buyer/champion paths, including failure, return and recovery states;
 * enrollment → onboarding → delivery → complete/skip/feedback → expiry → time
   change → pause/resume/cancel → Coach/tool → summary → continuation → on-demand;
 * duplicate tap/update and stale callback;
@@ -1500,6 +1565,9 @@ including:
 * one-time token and log-leak tests;
 * testnet real-phone smoke path;
 * corporate device/network reachability;
+* company-specific buyer/HR/champion instructions, invitation links and
+  employee entry/return/support transitions meet section 2.2.1; no technical
+  placeholder, unavailable provider button or unowned next step remains;
 * deployment-scoped pause and incident owner;
 * production/testnet separation;
 * champion announcement and support path.

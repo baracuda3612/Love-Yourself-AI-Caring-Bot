@@ -293,15 +293,16 @@ def test_operator_replacement_requires_fresh_proof_and_keeps_old_account(db):
     raw=access.issue_handoff(db,ent.id)
     new_actor=actor()
     with pytest.raises(access.AccessDenied):access.redeem_handoff(db,raw,new_actor)
-    access.end_enrollment_for_replacement(db,user_id=old.id,handoff=raw,operator='founder')
+    membership=access.require_access(db,old.id)
+    access.end_enrollment_for_replacement(db,user_id=old.id,expected_enrollment_id=membership.id,handoff=raw,operator='founder')
     new,_=access.redeem_handoff(db,raw,new_actor)
     assert new.id!=old.id and db.get(User,old.id)
     assert not access.may_access(db,old.id) and access.may_access(db,new.id)
     assert db.query(AccessAdminOperation).filter_by(action='end_enrollment',deployment_id=dep.id).count()==1
 
 
-@pytest.mark.parametrize('provider',['google','microsoft'])
-def test_oidc_code_state_nonce_and_verified_roster_chain(db,monkeypatch,provider):
+@pytest.mark.parametrize('provider,issuer',[('google','https://accounts.google.com'),('google','accounts.google.com'),('microsoft',None)])
+def test_oidc_code_state_nonce_and_verified_roster_chain(db,monkeypatch,provider,issuer):
     from urllib.parse import urlsplit,parse_qs
     monkeypatch.setattr(access.settings,'GOOGLE_CLIENT_ID','google-client')
     monkeypatch.setattr(access.settings,'GOOGLE_CLIENT_SECRET','private-google-secret')
@@ -319,8 +320,8 @@ def test_oidc_code_state_nonce_and_verified_roster_chain(db,monkeypatch,provider
     state=query['state'][0];nonce=query['nonce'][0]
     monkeypatch.setattr(access_proof,'exchange_code',lambda *a:'signed-token')
     config=access_proof._provider(dep,provider)
-    claims={'sub':'stable-subject','nonce':nonce,'iss':config['issuer'],'email':'member@client.org',
-        'email_verified':True,'hd':'client.org','tid':tenant,'oid':'stable-tenant-object'}
+    claims={'sub':'stable-subject','nonce':nonce,'iss':issuer or config['issuer'],'email':'member@client.org',
+        'email_verified':True,'hd':'client.org','tid':tenant}  # oid is not guaranteed by openid email.
     monkeypatch.setattr(access_proof,'validate_id_token',lambda *a:claims)
     with pytest.raises(access.AccessDenied):finish_oidc(db,deployment_id=dep.id,provider=provider,state=state,code='auth-code',browser='forged')
     result=finish_oidc(db,deployment_id=dep.id,provider=provider,state=state,code='auth-code',browser=browser)
@@ -635,3 +636,92 @@ def test_final_outbound_snapshot_does_not_queue_on_another_company_reader(engine
                 assert future.result(timeout=1) is not None
             finally:
                 holder.rollback()  # Always release before joining a failed worker.
+
+
+def test_google_issuer_variants_keep_one_stable_identity(db,monkeypatch):
+    from urllib.parse import urlsplit,parse_qs
+    monkeypatch.setattr(access.settings,'ENVIRONMENT','prod')
+    monkeypatch.setattr(access.settings,'GOOGLE_CLIENT_ID','google-client')
+    monkeypatch.setattr(access.settings,'GOOGLE_CLIENT_SECRET','google-secret')
+    dep=deployment(db,environment='production')
+    # JSON changes must be assigned so the policy comparison sees persisted data.
+    dep.access_policy=dict(dep.access_policy,google_domain='client.org');db.flush()
+    roster(db,dep,['member@client.org'])
+    monkeypatch.setattr(access_proof,'exchange_code',lambda *a:'signed-token')
+    bound=None
+    for issuer in access_proof.GOOGLE_ISSUERS:
+        query=parse_qs(urlsplit(access_proof.begin_oidc(db,deployment_id=dep.id,provider='google',browser='b'*43)).query)
+        claims={'sub':'same-subject','nonce':query['nonce'][0],'iss':issuer,'email':'member@client.org','email_verified':True,'hd':'client.org'}
+        monkeypatch.setattr(access_proof,'validate_id_token',lambda *a:claims)
+        assert 'handoff' in finish_oidc(db,deployment_id=dep.id,provider='google',state=query['state'][0],code='code',browser='b'*43)
+        identity=db.query(AccessIdentity).filter_by(identity_digest=access.email_digest('member@client.org')).one()
+        current=identity.verification_metadata['google']
+        if bound is not None:assert current==bound
+        bound=current
+    assert db.query(AccessEntitlement).filter_by(deployment_id=dep.id,revoked_at=None).count()==1
+
+
+@pytest.mark.parametrize('valid_tenant',[True,False])
+def test_microsoft_missing_email_guides_to_real_mailbox_proof(db,monkeypatch,valid_tenant):
+    from urllib.parse import urlsplit,parse_qs
+    monkeypatch.setattr(access.settings,'ENVIRONMENT','prod')
+    monkeypatch.setattr(access.settings,'MICROSOFT_CLIENT_ID','ms-client')
+    monkeypatch.setattr(access.settings,'MICROSOFT_CLIENT_SECRET','ms-secret')
+    tenant='12345678-1234-1234-1234-123456789abc'
+    dep=deployment(db,environment='production');dep.access_policy=dict(dep.access_policy,microsoft_tenant=tenant);db.flush()
+    roster(db,dep,['member@client.org']);browser='b'*43
+    query=parse_qs(urlsplit(access_proof.begin_oidc(db,deployment_id=dep.id,provider='microsoft',browser=browser)).query)
+    claims={'sub':'stable-subject','nonce':query['nonce'][0],'iss':access_proof._provider(dep,'microsoft')['issuer'],'tid':tenant if valid_tenant else 'other-tenant'}
+    monkeypatch.setattr(access_proof,'exchange_code',lambda *a:'signed-token')
+    monkeypatch.setattr(access_proof,'validate_id_token',lambda *a:claims)
+    @contextmanager
+    def retained():yield db
+    monkeypatch.setattr(access_http,'SessionLocal',retained)
+    delivered=[];monkeypatch.setattr(access_proof,'send_email',lambda email,raw:delivered.append((email,raw)))
+    client=TestClient(api.app);client.cookies.set(access_http.COOKIE,browser,path='/enroll')
+    callback=f'/enroll/{dep.id}/oidc/microsoft/callback'
+    response=client.get(callback,params={'state':query['state'][0],'code':'code'})
+    if not valid_tenant:
+        assert response.status_code==403 and not delivered
+        assert db.query(AccessEntitlement).filter_by(deployment_id=dep.id).count()==0
+        return
+    assert response.status_code==200 and 'Microsoft підтвердив вхід' in response.text
+    assert not delivered and db.query(AccessEntitlement).filter_by(deployment_id=dep.id).count()==0
+    assert client.get(callback,params={'state':query['state'][0],'code':'code'}).status_code==403
+    csrf=access.digest(f'{browser}:{dep.id}','csrf');headers={'origin':access.settings.APP_BASE_URL}
+    assert client.post(f'/enroll/{dep.id}/email',data={'email':'member@client.org','csrf':csrf},headers=headers).status_code==200
+    assert len(delivered)==1 and delivered[0][0]=='member@client.org'
+    response=client.post(f'/enroll/{dep.id}/verify',data={'code':delivered[0][1],'csrf':csrf},headers=headers)
+    assert response.status_code==200 and 'Відкрити Telegram' in response.text
+    assert db.query(AccessEntitlement).filter_by(deployment_id=dep.id,revoked_at=None).count()==1
+
+
+@pytest.mark.parametrize('change',['other-identity','other-deployment','stale-enrollment'])
+def test_support_replacement_requires_matching_target_and_explicit_identity_change(db,monkeypatch,change):
+    from app.db import AccessAdminOperation
+    monkeypatch.setattr(access.settings,'ACCESS_OPERATOR_SECRET','test-only-operator-secret-for-fixtures')
+    dep=deployment(db);old_ent=access.founder_grant(db,deployment_id=dep.id,operator='founder',label='member-a')
+    user,_=access.redeem_handoff(db,access.issue_handoff(db,old_ent.id),actor())
+    membership=access.require_access(db,user.id)
+    target_dep=deployment(db) if change=='other-deployment' else dep
+    target=access.founder_grant(db,deployment_id=target_dep.id,operator='founder',label='member-b')
+    raw=access.issue_handoff(db,target.id)
+    @contextmanager
+    def retained():yield db
+    monkeypatch.setattr(access_http,'SessionLocal',retained)
+    client=TestClient(api.app)
+    body={'user_id':user.id,'expected_enrollment_id':membership.id+1 if change=='stale-enrollment' else membership.id,
+        'handoff':raw,'replacement_mode':'same_identity'}
+    headers={'authorization':'Bearer '+access.settings.ACCESS_OPERATOR_SECRET}
+    assert client.post('/access/enrollment/replace',json=body,headers=headers).status_code==403
+    db.refresh(membership);assert membership.ended_at is None and access.require_access(db,user.id).id==membership.id
+    body['replacement_mode']='identity_change'
+    response=client.post('/access/enrollment/replace',json=body,headers=headers)
+    if change=='stale-enrollment':
+        assert response.status_code==403 and membership.ended_at is None
+    else:
+        assert response.status_code==200 and membership.ended_at is not None
+        assert membership.ended_reason==f'operator_identity_change:{target.id}'
+        assert db.query(AccessAdminOperation).filter_by(action='replace_identity',target_id=membership.id).count()==1
+        same,_=access.redeem_handoff(db,raw,SimpleNamespace(id=user.tg_id,username=None,first_name=None))
+        assert same.id==user.id and access.require_access(db,user.id).entitlement_id==target.id

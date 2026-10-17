@@ -342,6 +342,50 @@ def test_recovery_only_selects_unfinished_sources_and_parks(db,monkeypatch):
     assert scheduler._completion_recovery_time(datetime.now(timezone.utc)) is None
 
 
+@pytest.mark.parametrize('state',['pending','in_flight','schedule_pending'])
+def test_inactive_completion_parks_but_quarantines_inflight_and_recovers_when_active(db,completion_jobs,monkeypatch,state):
+    import asyncio
+    from concurrent.futures import Future
+    from app import orchestrator
+    scheduler,jobs=completion_jobs
+    user,plan=source_plan(db);terminalize(db,user,plan);close(db,user,plan)
+    row=db.get(PlanCompletion,plan.id)
+    if state!='pending':
+        claim=claim_report(db,user.id,plan.id)
+        if state=='schedule_pending':finish_report(db,user.id,claim,outcome='sent',message_id=77)
+        else:
+            row.started_at=datetime.now(timezone.utc)-SEND_TIMEOUT-timedelta(seconds=1)
+            row.wake_at=datetime.now(timezone.utc)-timedelta(seconds=1)
+    user.is_active=False;db.flush()
+    calls=[]
+    async def dispatch(user_id,plan_id):
+        calls.append((user_id,plan_id))
+        result=claim_report(db,user_id,plan_id);db.flush()
+        return result
+    def submit(coro):
+        future=Future();future.set_result(asyncio.run(coro));return future
+    monkeypatch.setattr(orchestrator,'send_plan_completion_message',dispatch)
+    monkeypatch.setattr(scheduler,'_submit_coroutine',submit)
+    assert (scheduler._completion_recovery_time(datetime.now(timezone.utc)) is not None)==(state=='in_flight')
+    scheduler.reconcile_plan_completions()
+    assert len(calls)==(1 if state=='in_flight' else 0) and not jobs
+    assert scheduler._completion_recovery_time(datetime.now(timezone.utc)) is None
+    scheduler.reconcile_plan_completions()
+    assert len(calls)==(1 if state=='in_flight' else 0)
+    if state=='in_flight':
+        assert row.state=='uncertain' and row.sent_at is None
+    else:
+        user.is_active=True;db.flush()
+        assert scheduler._completion_recovery_time(datetime.now(timezone.utc)) is not None
+        scheduler.reconcile_plan_completions()
+        if state=='pending':assert calls==[(user.id,plan.id)] and row.state=='in_flight'
+        else:
+            assert jobs and not row.schedule_pending
+            assert len(activation_facts(db,row.successor_plan_id))==1
+            scheduler.reconcile_plan_completions()
+            assert len(activation_facts(db,row.successor_plan_id))==1
+
+
 def test_late_confirmation_preserves_receipt_but_requires_future_reconfirmation(db):
     user,plan=source_plan(db); now=datetime.now(timezone.utc)
     terminalize(db,user,plan,at=now); close(db,user,plan,now=now)
@@ -469,7 +513,8 @@ def test_completion_activation_excludes_unstarted_successors(db, completion_jobs
         user.is_active = False
         db.flush()
     scheduler.reconcile_plan_completions()
-    assert not jobs and not row.schedule_pending
+    assert not jobs
+    assert row.schedule_pending == (control == 'inactive')
     assert activation_facts(db, successor.id) == []
     # Recovery of the builder's activation receipt cannot bypass this gate.
     _record_activation_event(LifecycleResult(user_id=user.id, plan_id=successor.id,

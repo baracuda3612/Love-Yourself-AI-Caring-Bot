@@ -418,12 +418,16 @@ def audit_admin(db, deployment_id, operator, action, target_id=None):
         action=action, target_id=target_id, occurred_at=now_utc()))
 
 
-def end_enrollment_for_replacement(db, *, user_id, handoff, operator):
+def end_enrollment_for_replacement(db, *, user_id, expected_enrollment_id, handoff,
+                                  operator, replacement_mode='same_identity'):
     """Audited manual support after new proof, never self-service recovery.
 
     A freshly issued unspent handoff proves the target identity was verified.
     Closing membership preserves every personal/history row and attribution.
     """
+    if (type(user_id) is not int or type(expected_enrollment_id) is not int
+        or replacement_mode not in {'same_identity', 'identity_change'}):
+        raise AccessDenied()
     user = db.query(User).filter(User.id == user_id).with_for_update().first()
     if user is None:
         raise AccessDenied()
@@ -433,7 +437,7 @@ def end_enrollment_for_replacement(db, *, user_id, handoff, operator):
     ent = db.get(AccessEntitlement, token.entitlement_id)
     current = db.query(DeploymentEnrollment).filter(DeploymentEnrollment.user_id == user_id,
         DeploymentEnrollment.ended_at.is_(None)).first()
-    if current is None:
+    if current is None or current.id != expected_enrollment_id:
         raise AccessDenied()
     # Both old/new deployments serialize replacement with their authority.
     for deployment_id in sorted({current.deployment_id, ent.deployment_id}):
@@ -447,9 +451,18 @@ def end_enrollment_for_replacement(db, *, user_id, handoff, operator):
     if (ent.revoked_at is not None or token.redeemed_at or token.revoked_at or token.expires_at <= at
         or token.token_version != settings.ACCESS_KEY_VERSION):
         raise AccessDenied()
+    previous = db.get(AccessEntitlement, current.entitlement_id)
+    if replacement_mode == 'same_identity' and (
+        ent.deployment_id != current.deployment_id
+        or ent.access_identity_id != previous.access_identity_id
+    ):
+        raise AccessDenied()
     current.ended_at = max(at, current.enrolled_at + timedelta(microseconds=1))
-    current.ended_reason = 'operator_replacement'
-    audit_admin(db, current.deployment_id, operator, 'end_enrollment', current.id)
+    # The immutable operator audit points to the old enrollment; its ending
+    # reason records the explicitly chosen operation and target entitlement.
+    current.ended_reason = f'operator_{replacement_mode}:{ent.id}'
+    action = 'replace_identity' if replacement_mode == 'identity_change' else 'end_enrollment'
+    audit_admin(db, current.deployment_id, operator, action, current.id)
     db.flush()
 
 

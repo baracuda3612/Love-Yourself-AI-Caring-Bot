@@ -89,7 +89,7 @@ def upgrade():
         sa.Column("action", sa.String(32), nullable=False),
         sa.Column("target_id", sa.BigInteger()),
         sa.Column("occurred_at", sa.DateTime(timezone=True), nullable=False),
-        sa.CheckConstraint("action IN ('founder_grant','revoke','end_enrollment','controls')", name="ck_access_admin_action"),
+        sa.CheckConstraint("action IN ('founder_grant','revoke','end_enrollment','replace_identity','controls')", name="ck_access_admin_action"),
     )
     op.execute("""
         CREATE FUNCTION ly_preserve_runtime_binding() RETURNS trigger LANGUAGE plpgsql AS $$
