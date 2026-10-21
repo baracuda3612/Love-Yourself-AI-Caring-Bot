@@ -121,15 +121,125 @@ def test_silent_send_claims_current_delivery_access_and_attributes_at_claim(monk
     monkeypatch.setattr(scheduler, '_send_message_async', send)
     monkeypatch.setattr(scheduler, '_submit_coroutine', Future)
     events = []
-    monkeypatch.setattr(scheduler, 'log_user_event', lambda db, **kwargs: events.append(kwargs))
+    attempts = []
+    monkeypatch.setattr(scheduler, '_record_silent_attempt', lambda *args: attempts.append(args) or True)
+    monkeypatch.setattr(scheduler, '_record_silent_receipt', lambda *args: events.append(args))
 
     scheduler.check_silent_users()
 
     assert claim_calls == [(77, True)]
+    assert len(attempts) == 1
     assert sent == ([(123, 'Reminder')] if allowed else [])
     assert len(events) == int(allowed)
     if allowed:
-        assert events[0]['attribution_at'] == now
+        assert events[0][-1] == now
+
+
+def test_queued_silent_reminder_rechecks_after_access_is_revoked(monkeypatch):
+    from app import scheduler
+    now = access.now_utc()
+    user = SimpleNamespace(id=77, tg_id=123, first_name='Member', profile=SimpleNamespace(coach_persona='empath'))
+    last_event = SimpleNamespace(occurred_at=now - timedelta(days=3))
+    class Query:
+        def __init__(self, value): self.value = value
+        def filter(self, *args): return self
+        def order_by(self, *args): return self
+        def first(self): return self.value
+        def all(self): return [user]
+    class DB:
+        def __init__(self): self.lookups = 0
+        def query(self, model):
+            self.lookups += 1
+            return Query(last_event if self.lookups == 1 else None)
+    monkeypatch.setattr(scheduler, 'SessionLocal', lambda: nullcontext(DB()))
+    monkeypatch.setattr(scheduler, '_active_plan_users_query', lambda db: Query(None))
+    monkeypatch.setattr(scheduler, 'can_send_auto_message', lambda *args: True)
+    monkeypatch.setattr(scheduler, 'get_trigger_message', lambda *args: 'Reminder')
+    monkeypatch.setattr(scheduler, '_record_silent_attempt', lambda *args: True)
+    claims = []
+    revoked = False
+    def claim(*args, **kwargs):
+        claims.append(revoked)
+        return None if revoked else now
+    monkeypatch.setattr(scheduler, 'outbound_claim', claim)
+    sent = []
+    async def send(*args): sent.append(args); return object()
+    monkeypatch.setattr(scheduler, '_send_message_async', send)
+    monkeypatch.setattr(scheduler, '_record_silent_receipt', lambda *args: pytest.fail('denied send cannot have receipt'))
+    queued = []
+    class Future:
+        def __init__(self, coro): queued.append(coro)
+        def result(self, timeout): raise TimeoutError()
+    monkeypatch.setattr(scheduler, '_submit_coroutine', Future)
+
+    scheduler.check_silent_users()
+    revoked = True
+    assert asyncio.run(queued.pop()) is False
+    assert claims == [True] and sent == []
+
+
+@pytest.mark.parametrize('confirmed', [False, True])
+def test_silent_timeout_keeps_confirmed_receipt_or_unknown_attempt_fence(monkeypatch, confirmed):
+    from app import scheduler
+    now = access.now_utc()
+    user = SimpleNamespace(id=77, tg_id=123, first_name='Member', profile=SimpleNamespace(coach_persona='empath'))
+    last_event = SimpleNamespace(occurred_at=now - timedelta(days=3))
+    attempts, receipts, queued = [], [], []
+    class Query:
+        def __init__(self, value): self.value = value
+        def filter(self, *args): return self
+        def order_by(self, *args): return self
+        def first(self): return self.value
+        def all(self): return [user]
+    class DB:
+        def __init__(self): self.lookups = 0
+        def query(self, model):
+            self.lookups += 1
+            value = last_event if self.lookups == 1 else (SimpleNamespace(occurred_at=now) if attempts else None)
+            return Query(value)
+    monkeypatch.setattr(scheduler, 'SessionLocal', lambda: nullcontext(DB()))
+    monkeypatch.setattr(scheduler, '_active_plan_users_query', lambda db: Query(None))
+    monkeypatch.setattr(scheduler, 'can_send_auto_message', lambda *args: True)
+    monkeypatch.setattr(scheduler, 'get_trigger_message', lambda *args: 'Reminder')
+    monkeypatch.setattr(scheduler, '_record_silent_attempt', lambda *args: attempts.append(args) or True)
+    monkeypatch.setattr(scheduler, 'outbound_claim', lambda *args, **kwargs: now)
+    async def send(*args): return object() if confirmed else None
+    monkeypatch.setattr(scheduler, '_send_message_async', send)
+    monkeypatch.setattr(scheduler, '_record_silent_receipt', lambda *args: receipts.append(args))
+    class Future:
+        def __init__(self, coro): queued.append(coro)
+        def result(self, timeout): raise TimeoutError()
+    monkeypatch.setattr(scheduler, '_submit_coroutine', Future)
+
+    scheduler.check_silent_users()  # The 30-second waiter expires; coroutine still owns the send.
+    assert not receipts and len(queued) == 1
+    assert asyncio.run(queued.pop()) is confirmed
+    assert len(receipts) == int(confirmed)
+    if confirmed:
+        assert receipts[0][-1] == now
+    scheduler.check_silent_users()  # A later scan sees the attempt even if send stayed unknown.
+    assert len(queued) == 0 and len(attempts) == 1
+
+
+def test_silent_attempt_and_receipt_use_distinct_idempotency_operations(monkeypatch):
+    from app import scheduler
+    operations = []
+    class DB:
+        def commit(self): pass
+    monkeypatch.setattr(scheduler, 'SessionLocal', lambda: nullcontext(DB()))
+    def attempt(db, **kwargs):
+        operations.append(kwargs['source_operation_id'])
+        return SimpleNamespace(duplicate=False)
+    def receipt(db, **kwargs):
+        operations.append(kwargs['source_operation_id'])
+    monkeypatch.setattr(scheduler, 'write_event_operation', attempt)
+    monkeypatch.setattr(scheduler, 'log_user_event', receipt)
+    claim_at = access.now_utc()
+
+    assert scheduler._record_silent_attempt(77, 'silent_2_days', 3, 'scheduler:silent:77:day')
+    scheduler._record_silent_receipt(77, 'silent_2_days', 3, 'scheduler:silent:77:day', claim_at)
+
+    assert operations == ['scheduler:silent:77:day:attempt', 'scheduler:silent:77:day:sent']
 
 
 @pytest.mark.asyncio

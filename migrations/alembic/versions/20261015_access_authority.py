@@ -14,6 +14,15 @@ depends_on = None
 
 
 def upgrade():
+    # A truthful pre-send fence prevents duplicate silent outreach when the
+    # Telegram outcome is unknown; it is distinct from a confirmed send.
+    op.execute(sa.text("""
+        INSERT INTO event_catalog (event_name, event_schema_version, event_kind,
+            allowed_property_schema, required_linkage)
+        VALUES ('silent_send_attempted', 1, 'operational'::event_kind,
+            '{"trigger":"string","days_silent":"integer"}'::jsonb,
+            '["user"]'::jsonb)
+    """))
     # Non-null legacy timezone values do not prove an explicit user choice.
     op.add_column("users", sa.Column("timezone_override_explicit", sa.Boolean(), nullable=False, server_default=sa.text("false")))
     op.add_column("user_events", sa.Column("attribution_at", sa.DateTime(timezone=True)))

@@ -451,11 +451,19 @@ def test_silent_send_receipt_keeps_authorized_claim_after_revocation(db):
     from app.db import UserEvent
     user = User(tg_id=actor().id, timezone='UTC'); db.add(user); db.flush()
     membership = enroll(db, user)
-    claim_at = access.now_utc() - timedelta(seconds=2)
+    operation_id = 'silent:'+uuid4().hex
+    attempted = write_event_operation(db, user_id=user.id, event_name='silent_send_attempted',
+        event_source='scheduler', source_operation_id=operation_id+':attempt',
+        properties={'trigger':'silent_2_days','days_silent':3})
+    assert not attempted.duplicate
+    assert write_event_operation(db, user_id=user.id, event_name='silent_send_attempted',
+        event_source='scheduler', source_operation_id=operation_id+':attempt',
+        properties={'trigger':'silent_2_days','days_silent':3}).duplicate
+    claim_at = access.now_utc()
     access.revoke_entitlement(db, entitlement_id=membership.entitlement_id)
     actual = access.now_utc()
     event = write_event_operation(db, user_id=user.id, event_name='silent_sent',
-        event_source='scheduler', source_operation_id='silent:'+uuid4().hex,
+        event_source='scheduler', source_operation_id=operation_id+':sent',
         properties={'trigger':'silent_2_days','days_silent':3},
         occurred_at=actual, attribution_at=claim_at).event
     db.flush()

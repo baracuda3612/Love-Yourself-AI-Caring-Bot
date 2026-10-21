@@ -20,7 +20,7 @@ from app.active_days import resolve_timezone, step_expires_at
 from app.plan_completion.tokens import make_report_token
 from app.db import AIPlan, AIPlanDay, AIPlanStep, SessionLocal, User, UserEvent
 from app.ai import async_client
-from app.telemetry import log_user_event
+from app.telemetry import log_user_event, write_event_operation
 from app.ux.catalog import get_trigger_message
 from app.ux.persona import get_persona
 from app.ux.pulse_prompt import generate_pulse_message
@@ -106,6 +106,7 @@ def remove_job(job_id):
 
 def _submit_coroutine(coro):
     if _event_loop is None:
+        coro.close()
         return None
     return asyncio.run_coroutine_threadsafe(coro, _event_loop)
 
@@ -785,8 +786,58 @@ def send_daily_pulse():
     asyncio.run_coroutine_threadsafe(_run(), _event_loop)
 
 
+def _record_silent_attempt(user_id, trigger_id, days_silent, operation_id):
+    with SessionLocal() as db:
+        result = write_event_operation(
+            db, user_id=user_id, event_name="silent_send_attempted",
+            event_source="scheduler", source_operation_id=operation_id + ":attempt",
+            properties={"trigger": trigger_id, "days_silent": days_silent},
+        )
+        db.commit()
+        return not result.duplicate
+
+
+def _record_silent_receipt(user_id, trigger_id, days_silent, operation_id, claim_at):
+    with SessionLocal() as db:
+        log_user_event(
+            db, user_id=user_id, event_type="silent_sent",
+            event_source="scheduler", source_operation_id=operation_id + ":sent",
+            context={"trigger": trigger_id, "days_silent": days_silent},
+            attribution_at=claim_at,
+        )
+        db.commit()
+
+
+async def _deliver_silent_reminder(user_id, tg_id, msg, trigger_id, days_silent, operation_id):
+    try:
+        # The attempt is durable before Telegram I/O. An unconfirmed attempt
+        # shares the existing six-day cooldown without claiming a known send.
+        if not await asyncio.to_thread(
+            _record_silent_attempt, user_id, trigger_id, days_silent, operation_id
+        ):
+            return False
+        # Run inside the queued coroutine, after the attempt write and just
+        # before dispatch; no deployment lock is held across network I/O.
+        claim_at = await asyncio.to_thread(outbound_claim, user_id, delivery=True)
+        if claim_at is None:
+            return False
+        result = await _send_message_async(tg_id, msg)
+        if not result:
+            return False
+        # This coroutine owns the receipt even after the scheduler's 30-second
+        # wait expires. A failed write is visible and the attempt still fences
+        # another automatic reminder during the cooldown.
+        await asyncio.to_thread(
+            _record_silent_receipt, user_id, trigger_id, days_silent, operation_id, claim_at
+        )
+        return True
+    except Exception:
+        logger.exception("[SILENT] Delivery or receipt failed user_id=%s", user_id)
+        return False
+
+
 def check_silent_users():
-    """Runs at 12:00 UTC. Max 1 re-engagement message per user."""
+    """Runs at 12:00 UTC. One re-engagement attempt per six-day window."""
     with SessionLocal() as db:
         now = datetime.now(pytz.UTC)
         today = now.date()
@@ -811,7 +862,7 @@ def check_silent_users():
 
                 sent_today = db.query(UserEvent).filter(
                     UserEvent.user_id == user.id,
-                    UserEvent.event_name == "silent_sent",
+                    UserEvent.event_name.in_(["silent_sent", "silent_send_attempted"]),
                     func.date(UserEvent.occurred_at) == today,
                 ).first()
                 if sent_today:
@@ -819,7 +870,7 @@ def check_silent_users():
 
                 recent_silent = db.query(UserEvent).filter(
                     UserEvent.user_id == user.id,
-                    UserEvent.event_name == "silent_sent",
+                    UserEvent.event_name.in_(["silent_sent", "silent_send_attempted"]),
                     UserEvent.occurred_at >= now - timedelta(days=6),
                 ).first()
                 if recent_silent:
@@ -833,10 +884,10 @@ def check_silent_users():
                 if not msg:
                     continue
 
-                claim_at = outbound_claim(user.id, delivery=True)
-                if claim_at is None:
-                    continue
-                future = _submit_coroutine(_send_message_async(user.tg_id, msg))
+                operation_id = f"scheduler:silent:{user.id}:{today}"
+                future = _submit_coroutine(_deliver_silent_reminder(
+                    user.id, user.tg_id, msg, trigger_id, days_silent, operation_id
+                ))
                 if not future:
                     continue
 
@@ -850,16 +901,6 @@ def check_silent_users():
                     logger.warning("[SILENT] Delivery returned None for user_id=%s", user.id)
                     continue
 
-                log_user_event(
-                    db,
-                    user_id=user.id,
-                    event_type="silent_sent",
-                    event_source="scheduler",
-                    source_operation_id=f"scheduler:silent:{user.id}:{today}",
-                    context={"trigger": trigger_id, "days_silent": days_silent},
-                    attribution_at=claim_at,
-                )
-                db.commit()
             except Exception:
                 logger.error("[SILENT] user_id=%s", user.id, exc_info=True)
 
