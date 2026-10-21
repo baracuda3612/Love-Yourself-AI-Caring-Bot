@@ -98,6 +98,54 @@ def test_fresh_database_and_redis_binding_fail_closed(db,monkeypatch):
     with pytest.raises(access.AccessDenied):access_environment.bind_environment(db)
 
 
+@pytest.mark.parametrize('existing', ['deployment', 'identity'])
+def test_binding_rejects_copied_authority_before_touching_redis(db, monkeypatch, existing):
+    from app import access_environment
+    from tests.test_wp_04_1_access_security import inventory
+    inventory(monkeypatch)
+    if existing == 'deployment':
+        deployment(db)
+    else:
+        db.add(AccessIdentity(identity_digest=uuid4().hex, provider='founder',
+            verification_metadata={}))
+        db.flush()
+    monkeypatch.setattr(access_environment.redis.Redis, 'from_url',
+        lambda *a, **k: pytest.fail('rejected binding must not touch Redis'))
+    with pytest.raises(access.AccessDenied):
+        access_environment.bind_environment(db)
+    assert db.get(access_environment.RuntimeAccessBinding, 1) is None
+
+
+def test_delivery_resume_rearms_due_steps_after_commit(db, monkeypatch):
+    from contextlib import nullcontext
+    from datetime import datetime, timezone
+    from app import scheduler
+    from app.content_library import load_content_library
+    from tests.test_wp_03_3_postgres_presentation import active_step
+    load_content_library(db)
+    user, _, step = active_step(db)
+    membership = access.require_access(db, user.id)
+    dep = db.get(Deployment, membership.deployment_id)
+    dep.delivery_enabled = False
+    db.flush()
+    assert scheduler._due_delivery_steps(db, datetime.now(timezone.utc)).first() is None
+    wake_requested = access.set_deployment_controls(db, deployment_id=dep.id,
+        enrollment_open=True, delivery_enabled=True, operator='founder')
+    db.flush()  # HTTP commits before scheduling the wake.
+    assert wake_requested and scheduler._due_delivery_steps(db, datetime.now(timezone.utc)).first() == (step.id,)
+    jobs = {}
+    class FakeScheduler:
+        def get_job(self, job_id, **kwargs): return jobs.get(job_id)
+        def add_job(self, *args, **kwargs):
+            jobs[kwargs['id']] = SimpleNamespace(next_run_time=kwargs['next_run_time'])
+        def modify_job(self, job_id, **kwargs): jobs[job_id].next_run_time = kwargs['next_run_time']
+        def remove_job(self, job_id, **kwargs): jobs.pop(job_id, None)
+    monkeypatch.setattr(scheduler, 'scheduler', FakeScheduler())
+    monkeypatch.setattr(scheduler, 'SessionLocal', lambda: nullcontext(db))
+    scheduler.wake_scheduled_delivery_recovery()
+    assert jobs['scheduled_delivery_recovery'].next_run_time <= datetime.now(timezone.utc)
+
+
 def test_complete_production_proof_token_enrollment_return_revocation(db, monkeypatch):
     monkeypatch.setattr(access.settings, 'ENVIRONMENT', 'prod')
     dep = deployment(db, environment='production', zone='America/New_York')

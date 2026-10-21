@@ -474,3 +474,5 @@ def set_deployment_controls(db, *, deployment_id, enrollment_open, delivery_enab
     deployment.delivery_enabled = delivery_enabled
     audit_admin(db, deployment_id, operator, 'controls')
     db.flush()
+    # A repeated "enabled" operator request can re-arm a lost post-commit wake.
+    return delivery_enabled

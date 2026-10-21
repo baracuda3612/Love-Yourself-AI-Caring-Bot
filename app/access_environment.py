@@ -6,7 +6,9 @@ from urllib.parse import urlsplit
 
 from app.access import AccessDenied, environment
 from app.config import settings
-from app.db import Deployment, RuntimeAccessBinding
+from app.db import (AccessAdminOperation, AccessEntitlement, AccessIdentity,
+    AccessProof, Deployment, DeploymentEnrollment, DeploymentInvitation,
+    DeploymentRosterEntry, DeploymentRosterVersion, RuntimeAccessBinding, User)
 
 
 def _hash(value):
@@ -69,10 +71,13 @@ def inventory_digest():
 
 
 def bind_environment(db):
-    """Explicitly bind only an empty fresh contour before any account exists."""
-    from app.db import User
+    """Explicitly bind only a fresh contour with no access authority."""
     signature = inventory_digest()
-    if db.get(RuntimeAccessBinding, 1) or db.query(User.id).first():
+    authority_tables = (User, Deployment, AccessIdentity, DeploymentRosterVersion,
+        DeploymentRosterEntry, AccessEntitlement, DeploymentInvitation,
+        DeploymentEnrollment, AccessProof, AccessAdminOperation)
+    if (db.get(RuntimeAccessBinding, 1)
+        or any(db.query(model.id).first() for model in authority_tables)):
         raise AccessDenied()
     expected = f'{environment()}:{settings.DEPLOYMENT_ID}'
     try:

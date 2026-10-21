@@ -145,6 +145,15 @@ def _enable_delivery_recovery():
                               replace_existing=True, max_instances=1, coalesce=True, misfire_grace_time=None)
 
 
+def wake_scheduled_delivery_recovery():
+    """After a committed delivery resume, wake any due work without blocking on sends."""
+    _enable_delivery_recovery()
+    with _recovery_job_lock:
+        if scheduler.get_job('scheduled_delivery_recovery', jobstore='delivery_recovery') is not None:
+            scheduler.modify_job('scheduled_delivery_recovery', jobstore='delivery_recovery',
+                                 next_run_time=datetime.now(timezone.utc))
+
+
 def _delivery_recovery_time(now):
     from app.db import ExerciseDelivery
     from app.exercise_status import pending_status_step_ids

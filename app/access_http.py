@@ -1,4 +1,5 @@
 """Enrollment and access-only operator surfaces. No employer behavior views."""
+import asyncio
 import hmac
 import html
 import secrets
@@ -201,6 +202,9 @@ async def deployment_controls(request: Request):
     if set(body) != {'deployment_id', 'enrollment_open', 'delivery_enabled'}:
         raise access.AccessDenied()
     with SessionLocal() as db:
-        access.set_deployment_controls(db, **body, operator=operator)
+        wake_delivery = access.set_deployment_controls(db, **body, operator=operator)
         db.commit()
+    if wake_delivery:
+        from app.scheduler import wake_scheduled_delivery_recovery
+        await asyncio.to_thread(wake_scheduled_delivery_recovery)
     return {'accepted': True}

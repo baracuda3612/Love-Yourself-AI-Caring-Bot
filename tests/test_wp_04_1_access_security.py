@@ -76,6 +76,24 @@ def test_operator_routes_reject_unauthenticated_request_before_db(monkeypatch):
         assert response.status_code==403 and response.json()=={'detail':'access_unavailable'}
 
 
+@pytest.mark.parametrize('enabled', [False, True])
+def test_delivery_control_wakes_only_after_commit_and_retries_when_enabled(monkeypatch, enabled):
+    from app import access_http, scheduler
+    calls = []
+    class DB:
+        def commit(self): calls.append('commit')
+    monkeypatch.setattr(access_http, '_operator', lambda request: 'founder')
+    monkeypatch.setattr(access_http, 'SessionLocal', lambda: nullcontext(DB()))
+    monkeypatch.setattr(access, 'set_deployment_controls',
+        lambda db, **kwargs: calls.append('controls') or enabled)
+    monkeypatch.setattr(scheduler, 'wake_scheduled_delivery_recovery',
+        lambda: calls.append('wake'))
+    response = TestClient(api.app).post('/access/deployment/controls',
+        json={'deployment_id': 17, 'enrollment_open': True, 'delivery_enabled': enabled})
+    assert response.status_code == 200
+    assert calls == (['controls', 'commit', 'wake'] if enabled else ['controls', 'commit'])
+
+
 def inventory(monkeypatch):
     actual=access_environment.resource_fingerprints()
     profile={'runtime_id':access.settings.DEPLOYMENT_ID,'resources':actual,
