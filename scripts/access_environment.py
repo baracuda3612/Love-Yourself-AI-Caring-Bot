@@ -6,7 +6,7 @@ import json
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--print-resources',action='store_true',help='Print only SHA256 infrastructure/credential fingerprints')
-    parser.add_argument('--bind-empty',action='store_true',help='Bind a fresh database without users or access authority and dedicated Redis')
+    parser.add_argument('--bind-empty',action='store_true',help='Bind a fresh database without product data and dedicated Redis')
     args=parser.parse_args()
     from app.access_environment import bind_environment,resource_fingerprints
     from app.db import SessionLocal,audit_startup_schema

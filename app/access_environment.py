@@ -2,13 +2,12 @@
 import hashlib
 import json
 import redis
+from sqlalchemy import inspect, text
 from urllib.parse import urlsplit
 
 from app.access import AccessDenied, environment
 from app.config import settings
-from app.db import (AccessAdminOperation, AccessEntitlement, AccessIdentity,
-    AccessProof, Deployment, DeploymentEnrollment, DeploymentInvitation,
-    DeploymentRosterEntry, DeploymentRosterVersion, RuntimeAccessBinding, User)
+from app.db import Deployment, RuntimeAccessBinding
 
 
 def _hash(value):
@@ -71,14 +70,23 @@ def inventory_digest():
 
 
 def bind_environment(db):
-    """Explicitly bind only a fresh contour with no access authority."""
+    """Explicitly bind only a fresh contour without prior product data."""
     signature = inventory_digest()
-    authority_tables = (User, Deployment, AccessIdentity, DeploymentRosterVersion,
-        DeploymentRosterEntry, AccessEntitlement, DeploymentInvitation,
-        DeploymentEnrollment, AccessProof, AccessAdminOperation)
-    if (db.get(RuntimeAccessBinding, 1)
-        or any(db.query(model.id).first() for model in authority_tables)):
+    if db.get(RuntimeAccessBinding, 1):
         raise AccessDenied()
+    # The migrated catalogue and approved exercise versions are reference data.
+    # Every other persisted row, including sealed aggregates without users,
+    # means this is not a new contour. Inspect actual tables so future business
+    # tables cannot silently bypass the provisioning boundary.
+    reference_tables = {'alembic_version', 'event_catalog', 'content_library'}
+    connection = db.connection()
+    preparer = connection.dialect.identifier_preparer
+    for table_name in inspect(connection).get_table_names():
+        if table_name in reference_tables:
+            continue
+        quoted = preparer.quote(table_name)
+        if connection.execute(text(f'SELECT 1 FROM {quoted} LIMIT 1')).first() is not None:
+            raise AccessDenied()
     expected = f'{environment()}:{settings.DEPLOYMENT_ID}'
     try:
         client = redis.Redis.from_url(settings.REDIS_URL, socket_connect_timeout=2, socket_timeout=2, decode_responses=True)

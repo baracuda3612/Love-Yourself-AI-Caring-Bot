@@ -81,8 +81,10 @@ def finish_oidc(db, *, deployment_id, provider, state, code, browser):
 
 def test_fresh_database_and_redis_binding_fail_closed(db,monkeypatch):
     from app import access_environment
+    from app.content_library import load_content_library
     from tests.test_wp_04_1_access_security import inventory
     inventory(monkeypatch)
+    load_content_library(db)  # Approved reference content may precede binding.
     class Redis:
         value=None
         def set(self,key,value,nx):
@@ -98,17 +100,38 @@ def test_fresh_database_and_redis_binding_fail_closed(db,monkeypatch):
     with pytest.raises(access.AccessDenied):access_environment.bind_environment(db)
 
 
-@pytest.mark.parametrize('existing', ['deployment', 'identity'])
+@pytest.mark.parametrize('existing', ['deployment', 'identity', 'organization', 'sealed_aggregate'])
 def test_binding_rejects_copied_authority_before_touching_redis(db, monkeypatch, existing):
     from app import access_environment
     from tests.test_wp_04_1_access_security import inventory
-    inventory(monkeypatch)
+    profiles = inventory(monkeypatch)
     if existing == 'deployment':
         deployment(db)
-    else:
+    elif existing == 'identity':
         db.add(AccessIdentity(identity_digest=uuid4().hex, provider='founder',
             verification_metadata={}))
         db.flush()
+    elif existing == 'organization':
+        from app.db import Organization
+        key = uuid4().hex
+        db.add(Organization(organization_key=key, display_name='copied company',
+            commercial_metadata={}))
+        db.flush()
+    else:
+        # A sealed cell survives removal of its user-linked contributions.
+        db.execute(text("""
+            INSERT INTO aggregate_records (record_kind, metric_name,
+                metric_schema_version, period_start, period_end, dimension_key,
+                dimensions, numeric_value, sample_count, sealed_at,
+                gate_eligible_count, gate_contributor_count)
+            VALUES ('sealed_cell', 'engagement', 1, now() - interval '1 day',
+                now(), ly_aggregate_dimension_key('{"environment":"testnet"}'::jsonb),
+                '{"environment":"testnet"}'::jsonb, 1, 1, now(), 1, 1)
+        """))
+        monkeypatch.setattr(access.settings, 'ENVIRONMENT', 'prod')
+        monkeypatch.setattr(access.settings, 'ACCESS_ISOLATION_INVENTORY',
+            json.dumps({'production': profiles['testnet'], 'testnet': profiles['production']}))
+    assert len(access_environment.inventory_digest()) == 64
     monkeypatch.setattr(access_environment.redis.Redis, 'from_url',
         lambda *a, **k: pytest.fail('rejected binding must not touch Redis'))
     with pytest.raises(access.AccessDenied):
