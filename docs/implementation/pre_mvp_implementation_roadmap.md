@@ -1773,10 +1773,10 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | `WP-04.1 — Implement deployment, entitlement, and enrollment authority` |
-| Status | `IN_PROGRESS`; B3 remains verified. WP-04.1 access authority is under scoped implementation/verification after PR #268 merge (`340561b`) |
-| Next action | Complete access acceptance and independent review, open the WP-04.1 PR against implementation/pre-mvp, and await founder merge |
-| Current blockers | No package dependency blocks WP-04.1; documentation handoff PR #268 is merged. Production roster/identity/token behavior must enforce FD-18. Gate G1 is required before durable-data rollout/company enrollment. `DG-02` keeps cold water unavailable; `DG-03` remains before beta. Final summary payload is WP-07.4; shared exhausted-recovery alerts are WP-08.2/WP-09.2 |
+| Current package | `WP-04.2 — Implement the minimum privacy and data-rights lifecycle` |
+| Status | `READY` after this documentation handoff is founder-merged; B3 and WP-04.1 are `VERIFIED` (WP-04.1 merge `bc2083b`) |
+| Next action | Founder reviews and merges the WP-04.2 documentation handoff; then the implementer fetches the integration head, creates a separate `wp/04.2-*` branch, traces the named privacy findings and begins the bounded execution contract |
+| Current blockers | No remaining package predecessor after the handoff merge. WP-04.2 must close notice, retention, data rights, deletion and report-grant access before beta. Founder/legal decisions on wording, roles and processing basis remain explicit gates; Gate G1 is required before durable-data rollout/company enrollment. `DG-02` keeps cold water unavailable; `DG-03` remains before beta. Final summary payload is WP-07.4; shared exhausted-recovery alerts are WP-08.2/WP-09.2 |
 
 ### Private founder log
 
