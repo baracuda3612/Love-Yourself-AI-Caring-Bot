@@ -4,10 +4,11 @@
 
 **Physical starting point:** Alembic revision `20260827_schema_baseline`
 
-**Current implementation candidate:** `20261015_access_authority` in WP-04.1;
-last founder-merged head is `20261014_plan_completion`, WP-03.5 PR #267
-(`efc5d08`, 2026-10-15). B3 remains verified. The WP-04.1 contract/evidence owns
-access behavior acceptance; no durable/company rollout is implied.
+**Current merged application/Alembic head:** `20261015_access_authority`.
+WP-04.1 is founder-merged in PR #269 (`bc2083b`, 2026-10-21); B3 and WP-04.1
+are verified. WP-04.2 owns the next privacy/data-rights implementation. The
+WP-04.1 contract/evidence owns access behavior acceptance; no durable/company
+rollout is implied.
 
 **Contract scope:** target design only; no DDL in WP-01.2
 
@@ -394,7 +395,7 @@ resume repair, backoff and atomic obligation clear/parking. Domain `activated_at
 remains distinct from first runnable scheduling telemetry.
 
 
-### WP-04.1 access candidate
+### WP-04.1 access authority — verified
 
 `20261015_access_authority` extends the existing access tables with restricted
 normalized email and deployment policy, expiring browser-bound proof rows,

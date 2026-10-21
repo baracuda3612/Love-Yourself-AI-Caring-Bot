@@ -1016,18 +1016,20 @@ predecessor 88 and migration/concurrency evidence are recorded in the
 
 ## 10. Block 4 — Access, privacy minimum, onboarding, and deterministic controls
 
-**Status:** `READY` — B2 and B3 are verified; WP-04.1 is next.  
+**Status:** `IN_PROGRESS` — B2/B3 and WP-04.1 are verified; WP-04.2 is next.
 **Depends on:** B2–B3  
 **Objective:** create a trustworthy entry path that remains usable without the
 Coach model.
 
 ### WP-04.1 — Implement deployment, entitlement, and enrollment authority
 
-**Status:** `IN_PROGRESS` — the documentation handoff is founder-merged as
-PR #268 (`340561b`); implementation and access acceptance are in the separate
-`wp/04.1-deployment-entitlement-enrollment` branch. See the
-[execution contract](work_packages/WP-04.1_deployment_access_authority.md). Read the [WP-04.1 start message](work_packages/WP-04.1_start_message.md)
-and form a bounded execution contract against the then-current code.
+**Status:** `VERIFIED` — founder merged implementation
+[PR #269](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/269)
+as `bc2083beb819a0cd142ee7740adee69c1c06cbe6` on 2026-10-21. The final
+implementation SHA `5aae8a7` passed independent local Phase C and configured
+automatic review without new unresolved findings. See the
+[package evidence](work_packages/WP-04.1_deployment_access_authority.md);
+the [WP-04.1 start message](work_packages/WP-04.1_start_message.md) is historical.
 
 **Scope**
 
@@ -1074,6 +1076,10 @@ therefore a primary WP-04.1 input and owner in both scope and the audit index;
 its verified-session/signed-WebApp and rate-limit requirements move with it.
 
 ### WP-04.2 — Implement the minimum privacy and data-rights lifecycle
+
+**Status:** `READY` — WP-01.4 and WP-04.1 are founder-merged. Start from the
+current integration head using the [WP-04.2 handoff](work_packages/WP-04.2_start_message.md)
+after that documentation handoff is reviewed and merged.
 
 **Scope**
 
@@ -1672,10 +1678,10 @@ Cross-package dependencies remain in the package descriptions above.
 | Content `CONTENT-01…09` | WP-01.4: `CONTENT-07` identity; WP-03.1: `CONTENT-01…06`, `CONTENT-08…09` |
 | Telemetry `TEL-01…15` | WP-07.1: `TEL-01…11`, `TEL-13`; WP-07.3: `TEL-12`; WP-07.2: `TEL-14…15` |
 | Database/Redis `DB-01…20` | WP-01.1: `DB-01`; WP-01.2: `DB-09…10`, `DB-12…14`, `DB-18…19`; WP-01.3: `DB-02…04`; WP-01.4: `DB-05…07`, `DB-11`, `DB-15`; WP-03.4: `DB-08`; WP-04.2: `DB-16…17`; WP-09.2: `DB-20` |
-| Delivery UX `UX-01…18` | WP-04.1/04.3: `UX-01`, `UX-12…13`, `UX-18`; WP-09.4: `UX-02`, `UX-04`, `UX-17`; WP-03.3: `UX-03`, `UX-15…16`; WP-03.4: `UX-05…07`; WP-05.3: `UX-08`; WP-08.1: `UX-09…10`; WP-05.2: `UX-11`; WP-07.4: `UX-14` |
+| Delivery UX `UX-01…18` | WP-04.1: `UX-01`; WP-04.2: `UX-13` privacy truth; WP-04.3: `UX-12`, `UX-18` user-facing placement; WP-09.4: `UX-02`, `UX-04`, `UX-17`; WP-03.3: `UX-03`, `UX-15…16`; WP-03.4: `UX-05…07`; WP-05.3: `UX-08`; WP-08.1: `UX-09…10`; WP-05.2: `UX-11`; WP-07.4: `UX-14` |
 | Security `SEC-01…10` | WP-00.4: `SEC-01…03`; WP-05.2: `SEC-05`; WP-05.3: `SEC-04`, `SEC-06`; WP-03.4: `SEC-07`; WP-08.2: `SEC-08…09`; WP-04.1: `SEC-10` |
 | Legacy `LEG-01…04` | WP-02.1: `LEG-01…02`; WP-08.1: `LEG-03…04` |
-| Company deployment `COMP-01…10` | WP-04.1: `COMP-01`, `COMP-04`, `COMP-06`, `COMP-08`; WP-07.1: `COMP-02`; WP-10.1: `COMP-03`, `COMP-05`, `COMP-07`; WP-10.2: `COMP-09…10` |
+| Company deployment `COMP-01…10` | WP-04.1: `COMP-01`, `COMP-04`, `COMP-06`, `COMP-08`; WP-04.2: `COMP-07` notice-version binding; WP-07.1: `COMP-02`; WP-10.1: `COMP-03`, `COMP-05`, `COMP-07` legal/company launch gate; WP-10.2: `COMP-09…10` |
 | Operations `OPS-01…12` | WP-01.1: `OPS-02`, `OPS-07`; WP-09.1: `OPS-05`; WP-09.2: `OPS-03…04`, `OPS-09`; WP-09.3: `OPS-01`, `OPS-06`, `OPS-08`; WP-09.4: `OPS-10…11`; WP-03.3/03.4: preserve `OPS-12` |
 | Exercise on demand `EOD-01…12` | WP-06.1…06.3: `EOD-01…12` according to the audit's required implementation order |
 | Miscellaneous `MISC-01…06` | WP-04.1: `MISC-01`; deferred: `MISC-02`; WP-08.3: `MISC-03…06` |
@@ -1731,7 +1737,7 @@ block exit gate passes.
   - [x] WP-03.4 — Make scheduled delivery and callbacks reconcilable
   - [x] WP-03.5 — Implement durable completion and automatic continuation
 - [ ] B4 — Access, privacy minimum, onboarding, and deterministic controls
-  - [ ] WP-04.1 — Implement deployment, entitlement, and enrollment authority
+  - [x] WP-04.1 — Implement deployment, entitlement, and enrollment authority
   - [ ] WP-04.2 — Implement the minimum privacy and data-rights lifecycle
   - [ ] WP-04.3 — Implement deterministic onboarding and user menu
 - [ ] B5 — Coach integration and bounded agency
@@ -1767,10 +1773,10 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | `WP-04.1 — Implement deployment, entitlement, and enrollment authority` |
-| Status | `IN_PROGRESS`; B3 remains verified. WP-04.1 access authority is under scoped implementation/verification after PR #268 merge (`340561b`) |
-| Next action | Complete access acceptance and independent review, open the WP-04.1 PR against implementation/pre-mvp, and await founder merge |
-| Current blockers | No package dependency blocks WP-04.1; documentation handoff PR #268 is merged. Production roster/identity/token behavior must enforce FD-18. Gate G1 is required before durable-data rollout/company enrollment. `DG-02` keeps cold water unavailable; `DG-03` remains before beta. Final summary payload is WP-07.4; shared exhausted-recovery alerts are WP-08.2/WP-09.2 |
+| Current package | `WP-04.2 — Implement the minimum privacy and data-rights lifecycle` |
+| Status | `READY` after this documentation handoff is founder-merged; B3 and WP-04.1 are `VERIFIED` (WP-04.1 merge `bc2083b`) |
+| Next action | Founder reviews and merges the WP-04.2 documentation handoff; then the implementer fetches the integration head, creates a separate `wp/04.2-*` branch, traces the named privacy findings and begins the bounded execution contract |
+| Current blockers | No remaining package predecessor after the handoff merge. WP-04.2 must close notice, retention, data rights, deletion and report-grant access before beta. Founder/legal decisions on wording, roles and processing basis remain explicit gates; Gate G1 is required before durable-data rollout/company enrollment. `DG-02` keeps cold water unavailable; `DG-03` remains before beta. Final summary payload is WP-07.4; shared exhausted-recovery alerts are WP-08.2/WP-09.2 |
 
 ### Private founder log
 
@@ -1821,7 +1827,7 @@ behavior.
 ## 22. Historical first steps after roadmap approval
 
 The sequence below was the initial handoff and has been completed through B3.
-The current next step is WP-04.1, as recorded in the current-package table
+The current next step is WP-04.2, as recorded in the current-package table
 above; do not restart WP-00.4 or WP-01.1 from this historical list.
 
 1. Complete WP-00.4 repository hardening and targeted verification.
