@@ -105,9 +105,15 @@ def _runtime_environment() -> str:
     return "production" if settings.ENVIRONMENT == "prod" else "testnet"
 
 
-def _resolve_timezone(user: User) -> pytz.BaseTzInfo:
+def _resolve_timezone(user: User, deployment: Deployment | None) -> pytz.BaseTzInfo:
+    if user.timezone_override_explicit and user.timezone_override:
+        name = user.timezone_override
+    elif deployment is not None and deployment.timezone_mode == 'single':
+        name = deployment.default_timezone
+    else:
+        name = 'UTC'
     try:
-        return pytz.timezone(user.timezone or "UTC")
+        return pytz.timezone(name or "UTC")
     except pytz.UnknownTimeZoneError:
         return pytz.UTC
 
@@ -509,7 +515,8 @@ def write_event_operation(
     )
     if "deployment" in required_linkage and deployment_id is None:
         raise EventValidationError("event catalogue requires deployment linkage")
-    local_timezone = _resolve_timezone(user)
+    local_timezone = _resolve_timezone(
+        user, db.get(Deployment, deployment_id) if deployment_id is not None else None)
     timezone_basis = getattr(local_timezone, "zone", "UTC") or "UTC"
     bucket = _time_bucket(occurrence.astimezone(local_timezone))
 

@@ -6,6 +6,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
+import pytz
 
 import psycopg2
 from psycopg2 import sql
@@ -16,7 +17,8 @@ from sqlalchemy.orm import Session
 
 from app import access, access_proof, api, access_http
 from app.db import (AccessEntitlement, AccessIdentity, AccessProof, Deployment,
-    DeploymentEnrollment, DeploymentInvitation, DeploymentRosterVersion, User)
+    DeploymentEnrollment, DeploymentInvitation, DeploymentRosterEntry,
+    DeploymentRosterVersion, User)
 from scripts.test_migrations import _run_alembic
 from tests.access_fixtures import deployment, enroll
 
@@ -209,6 +211,46 @@ def test_missed_rejected_delta_and_confirmed_snapshot(db, monkeypatch):
         access.apply_roster(db, deployment_id=dep.id, version_id=preview.version_id, confirmation=preview.confirmation, counts=preview.counts, operator='founder')
     roster(db, dep, ['b@client.org','c@client.org'])
     assert ent.revoked_at is not None
+
+
+def test_explicit_noop_delta_revoke_is_preserved_in_accepted_version(db, monkeypatch):
+    monkeypatch.setattr(access.settings, 'ENVIRONMENT', 'prod')
+    dep = deployment(db, environment='production')
+    roster(db, dep, ['member@client.org'])
+    entitlement = access.grant_verified(db, dep.id, access.email_digest('member@client.org'))
+    preview = roster(db, dep, ['member@client.org'], mode='delta',
+        rows=[{'email': 'absent@client.org', 'action': 'revoke'}], total=1)
+    removed = db.query(DeploymentRosterEntry).join(AccessIdentity).filter(
+        DeploymentRosterEntry.roster_version_id == preview.version_id,
+        AccessIdentity.normalized_email == 'absent@client.org').one()
+    assert removed.delta_action == 'remove'
+    assert removed.validation_metadata == {'input_action': 'revoke'}
+    assert preview.counts == {'add': 0, 'keep': 1, 'revoke': 0, 'total': 1}
+    assert entitlement.revoked_at is None
+    assert access._roster(db, dep.id)[1] == {entitlement.access_identity_id}
+
+
+@pytest.mark.parametrize('period', ['before-start', 'after-end'])
+def test_operator_authority_outlives_commercial_period(db, monkeypatch, period):
+    monkeypatch.setattr(access.settings, 'ENVIRONMENT', 'prod')
+    dep = deployment(db, environment='production')
+    roster(db, dep, ['member@client.org'])
+    entitlement = access.grant_verified(db, dep.id, access.email_digest('member@client.org'))
+    user = User(tg_id=actor().id); db.add(user); db.flush()
+    enroll(db, user, target=dep)
+    if period == 'before-start':
+        dep.starts_at = access.now_utc() + timedelta(days=1)
+    else:
+        dep.ends_at = access.now_utc() - timedelta(seconds=1)
+    db.flush()
+    assert not access.may_access(db, user.id)
+    roster(db, dep, ['member@client.org'])
+    assert not access.may_access(db, user.id)
+    access.set_deployment_controls(db, deployment_id=dep.id,
+        enrollment_open=False, delivery_enabled=False, operator='founder')
+    access.revoke_entitlement(db, entitlement_id=entitlement.id, operator='founder')
+    assert entitlement.revoked_at is not None
+    assert not access.may_access(db, user.id)
 
 
 @pytest.mark.parametrize('case', ['empty','missing-mode','duplicate','count','domain','action'])
@@ -542,6 +584,34 @@ def test_silent_send_receipt_keeps_authorized_claim_after_revocation(db):
     assert event.occurred_at == actual
     assert event.deployment_enrollment_id == membership.id
     assert db.query(UserEvent).filter_by(event_id=event.event_id).one().attribution_at == claim_at
+
+
+def test_late_receipt_uses_attributed_enrollment_timezone(db):
+    from app.telemetry import _time_bucket, write_event_operation
+    user = User(tg_id=actor().id); db.add(user); db.flush()
+    old_dep = deployment(db, zone='America/New_York')
+    old = enroll(db, user, target=old_dep)
+    claim_at = access.now_utc() - timedelta(milliseconds=100)
+    old.ended_at = claim_at + timedelta(milliseconds=1)
+    new_dep = deployment(db, zone='Europe/Paris')
+    enroll(db, user, target=new_dep, enrolled_at=claim_at + timedelta(milliseconds=2))
+    db.flush()
+    assert user.timezone == 'Europe/Paris'
+    actual = access.now_utc()
+    event = write_event_operation(db, user_id=user.id, event_name='silent_sent',
+        event_source='scheduler', source_operation_id='late-zone:'+uuid4().hex,
+        properties={'trigger':'silent_2_days','days_silent':3},
+        occurred_at=actual, attribution_at=claim_at).event
+    assert event.deployment_id == old_dep.id
+    assert event.deployment_enrollment_id == old.id
+    assert event.timezone_basis == 'America/New_York'
+    assert event.time_of_day_bucket == _time_bucket(actual.astimezone(pytz.timezone('America/New_York')))
+    user.timezone = 'Asia/Tokyo'; db.flush()
+    override = write_event_operation(db, user_id=user.id, event_name='silent_sent',
+        event_source='scheduler', source_operation_id='late-zone-override:'+uuid4().hex,
+        properties={'trigger':'silent_2_days','days_silent':3},
+        occurred_at=access.now_utc(), attribution_at=claim_at).event
+    assert override.timezone_basis == 'Asia/Tokyo'
 
 
 @pytest.mark.parametrize('change',['commercial-end','revoked','replacement'])

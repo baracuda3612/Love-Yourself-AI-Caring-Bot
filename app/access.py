@@ -60,13 +60,14 @@ def email_digest(email):
     return hashlib.sha256(normalize_email(email).encode()).hexdigest()
 
 
-def lock_deployment(db, deployment_id, *, joining=False, delivery=False, now=None, lock=True):
+def lock_deployment(db, deployment_id, *, joining=False, delivery=False, now=None, lock=True,
+                    require_active_period=True):
     query = db.query(Deployment).filter(Deployment.id == deployment_id).populate_existing()
     deployment = (query.with_for_update() if lock else query).first()
     now = now or now_utc()
     if (deployment is None or deployment.environment != environment()
-        or (deployment.starts_at and deployment.starts_at > now)
-        or (deployment.ends_at and deployment.ends_at <= now)
+        or (require_active_period and deployment.starts_at and deployment.starts_at > now)
+        or (require_active_period and deployment.ends_at and deployment.ends_at <= now)
         or (joining and not deployment.enrollment_open)
         or (delivery and not deployment.delivery_enabled)):
         raise AccessDenied()
@@ -163,7 +164,7 @@ class RosterPreview:
 
 
 def preview_roster(db, *, deployment_id, mode, rows, expected_total, source_ref, operator):
-    deployment = lock_deployment(db, deployment_id, lock=False)
+    deployment = lock_deployment(db, deployment_id, lock=False, require_active_period=False)
     policy = dict(deployment.access_policy)
     if (mode not in {"full_snapshot", "delta"} or not isinstance(rows, list)
         or not 1 <= len(rows) <= 10000 or not isinstance(expected_total, int)
@@ -201,7 +202,7 @@ def preview_roster(db, *, deployment_id, mode, rows, expected_total, source_ref,
     if len(effective) != expected_total or (mode == 'full_snapshot' and not effective):
         raise AccessDenied()
     counts = {'add': len(effective - previous), 'keep': len(effective & previous), 'revoke': len(previous - effective), 'total': len(effective)}
-    deployment = lock_deployment(db, deployment_id)
+    deployment = lock_deployment(db, deployment_id, require_active_period=False)
     accepted = db.query(DeploymentRosterVersion).filter(
         DeploymentRosterVersion.deployment_id == deployment_id,
         DeploymentRosterVersion.is_current.is_(True)).first()
@@ -222,14 +223,14 @@ def preview_roster(db, *, deployment_id, mode, rows, expected_total, source_ref,
     entries = [dict(roster_version_id=version.id, access_identity_id=identity_id,
         entry_key=str(identity_id), delta_action='add' if identity_id in effective else 'remove',
         validation_metadata={'input_action': explicit_actions.get(identity_id, 'carried')})
-        for identity_id in sorted(effective | (previous - effective))]
+        for identity_id in sorted(effective | (previous - effective) | removals)]
     db.execute(insert(DeploymentRosterEntry), entries)
     db.flush()
     return RosterPreview(version.id, counts, confirmation)
 
 
 def apply_roster(db, *, deployment_id, version_id, confirmation, counts, operator):
-    lock_deployment(db, deployment_id)
+    lock_deployment(db, deployment_id, require_active_period=False)
     version = db.query(DeploymentRosterVersion).filter(DeploymentRosterVersion.id == version_id,
         DeploymentRosterVersion.deployment_id == deployment_id).populate_existing().with_for_update().first()
     at = now_utc()
@@ -403,7 +404,7 @@ def revoke_entitlement(db, *, entitlement_id, operator='internal'):
     hint = db.get(AccessEntitlement, entitlement_id)
     if hint is None:
         raise AccessDenied()
-    lock_deployment(db, hint.deployment_id)
+    lock_deployment(db, hint.deployment_id, require_active_period=False)
     entitlement = db.query(AccessEntitlement).filter(AccessEntitlement.id == entitlement_id).populate_existing().with_for_update().first()
     at = now_utc()
     entitlement.revoked_at = entitlement.revoked_at or at
@@ -467,7 +468,7 @@ def end_enrollment_for_replacement(db, *, user_id, expected_enrollment_id, hando
 
 
 def set_deployment_controls(db, *, deployment_id, enrollment_open, delivery_enabled, operator):
-    deployment = lock_deployment(db, deployment_id)
+    deployment = lock_deployment(db, deployment_id, require_active_period=False)
     if type(enrollment_open) is not bool or type(delivery_enabled) is not bool:
         raise AccessDenied()
     deployment.enrollment_open = enrollment_open
