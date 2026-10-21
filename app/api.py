@@ -4,12 +4,13 @@ from typing import Dict
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict
 
 from app.config import settings
 from app.db import AIPlan, SessionLocal, User
-from app.plan_completion.cta import get_next_plan_recommendation
 from app.plan_completion.metrics import build_completion_metrics
 from app.plan_completion.pulse import build_pulse_data
 from app.plan_completion.report import _pick_observation, build_completion_report
@@ -24,6 +25,45 @@ from app.lifecycle import (
 from app.lifecycle_reconciliation import reconcile_scheduler_effects
 
 app = FastAPI()
+from app.access import AccessDenied
+from app.access_proof import RateLimited, authorize_time_slots
+from app.access_http import router as access_router
+app.include_router(access_router)
+
+
+@app.middleware("http")
+async def access_perimeter(request: Request, call_next):
+    protected = request.url.path.startswith(("/enroll", "/access", "/user/time-slots"))
+    if not protected:
+        return await call_next(request)
+    try:
+        body = bytearray()
+        async for chunk in request.stream():
+            if len(body) + len(chunk) > 1048576:
+                raise AccessDenied()
+            body.extend(chunk)
+        request._body = bytes(body)
+        response = await call_next(request)
+    except Exception:
+        # Do not let validation/provider/SQL exceptions echo identity or proof.
+        response = JSONResponse({"detail": "access_unavailable"}, status_code=403)
+    response.headers.update({"Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff", "X-Robots-Tag": "noindex, nofollow",
+        "Content-Security-Policy": "default-src 'none'; form-action 'self' https://accounts.google.com https://login.microsoftonline.com; base-uri 'none'; frame-ancestors 'none'"})
+    return response
+
+
+@app.exception_handler(AccessDenied)
+async def access_denied_handler(request, exc):
+    return JSONResponse({"detail": "access_unavailable"}, status_code=429 if isinstance(exc, RateLimited) else 403)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_handler(request, exc):
+    if request.url.path.startswith(("/enroll", "/access", "/user/time-slots")):
+        return JSONResponse({"detail": "access_unavailable"}, status_code=403)
+    from fastapi.exception_handlers import request_validation_exception_handler
+    return await request_validation_exception_handler(request, exc)
 try:
     templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 except AssertionError:
@@ -46,10 +86,7 @@ if templates is not None:
 
 
 def _deep_link(params: dict) -> str:
-    return (
-        f"https://t.me/{settings.BOT_USERNAME}"
-        f"?start=newplan_{params['duration']}_{params['load']}_{params['focus']}"
-    )
+    return f"https://t.me/{settings.BOT_USERNAME}"
 
 
 FOCUS_LABELS = {
@@ -107,8 +144,11 @@ def set_user_time_slots(
         min_length=1,
         max_length=128,
     ),
+    telegram_init_data: str = Header("", alias="X-Telegram-Init-Data", max_length=8192),
 ) -> Dict[str, int | bool | str]:
     with SessionLocal() as db:
+        # Caller proof and owner access precede every lifecycle mutation/replay.
+        user_id = authorize_time_slots(db, telegram_init_data, user_id)
         decisions = []
         try:
             for slot, hhmm in payload.to_dict().items():
@@ -286,7 +326,6 @@ async def completion_report(request: Request, token: str):
 
         report_text = build_completion_report(metrics, persona)
         observation = _pick_observation(metrics)
-        cta = get_next_plan_recommendation(metrics)
         timeline = get_plan_timeline(db, user_id, plan_id)
 
     if templates is None:
@@ -318,10 +357,8 @@ async def completion_report(request: Request, token: str):
                 (metrics.focus or "").lower(), metrics.focus or ""
             ),
             "duration_label": DUR_LABELS.get(metrics.duration or "", ""),
-            "cta_button1_text": cta.button1_text,
-            "cta_button2_text": cta.button2_text,
-            "cta_button1_link": _deep_link(cta.button1_params),
-            "cta_button2_link": _deep_link(cta.button2_params),
+            "cta_button1_text": "Повернутися в бот",
+            "cta_button1_link": _deep_link({}),
             "timeline": [{"day": d.day, "status": d.status} for d in timeline],
             "logo_long_svg": _LOGO_LONG,
             "logo_icon_svg": _LOGO_ICON,

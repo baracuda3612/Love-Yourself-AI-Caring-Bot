@@ -20,7 +20,7 @@ from app.active_days import resolve_timezone, step_expires_at
 from app.plan_completion.tokens import make_report_token
 from app.db import AIPlan, AIPlanDay, AIPlanStep, SessionLocal, User, UserEvent
 from app.ai import async_client
-from app.telemetry import log_user_event
+from app.telemetry import log_user_event, write_event_operation
 from app.ux.catalog import get_trigger_message
 from app.ux.persona import get_persona
 from app.ux.pulse_prompt import generate_pulse_message
@@ -37,6 +37,8 @@ DATABASE_URL = settings.DATABASE_URL
 jobstore_url = DATABASE_URL
 
 jobstores = {"default": SQLAlchemyJobStore(url=jobstore_url), "delivery_recovery": MemoryJobStore(), "completion_recovery": MemoryJobStore()}
+from app.access import access_predicate, may_access, outbound_claim
+
 scheduler = BackgroundScheduler(jobstores=jobstores, timezone="UTC")
 
 logger = logging.getLogger(__name__)
@@ -104,6 +106,7 @@ def remove_job(job_id):
 
 def _submit_coroutine(coro):
     if _event_loop is None:
+        coro.close()
         return None
     return asyncio.run_coroutine_threadsafe(coro, _event_loop)
 
@@ -142,6 +145,15 @@ def _enable_delivery_recovery():
                               replace_existing=True, max_instances=1, coalesce=True, misfire_grace_time=None)
 
 
+def wake_scheduled_delivery_recovery():
+    """After a committed delivery resume, wake any due work without blocking on sends."""
+    _enable_delivery_recovery()
+    with _recovery_job_lock:
+        if scheduler.get_job('scheduled_delivery_recovery', jobstore='delivery_recovery') is not None:
+            scheduler.modify_job('scheduled_delivery_recovery', jobstore='delivery_recovery',
+                                 next_run_time=datetime.now(timezone.utc))
+
+
 def _delivery_recovery_time(now):
     from app.db import ExerciseDelivery
     from app.exercise_status import pending_status_step_ids
@@ -149,7 +161,7 @@ def _delivery_recovery_time(now):
     with SessionLocal() as db:
         retry_at = db.query(func.min(case(
                 (AIPlanStep.step_status != 'pending', now),
-                (and_(AIPlan.status == 'active', User.is_active.is_(True)), func.greatest(ExerciseDelivery.next_attempt_at, AIPlanStep.scheduled_for)),
+                (and_(AIPlan.status == 'active', and_(User.is_active.is_(True), access_predicate(User.id, delivery=True))), func.greatest(ExerciseDelivery.next_attempt_at, AIPlanStep.scheduled_for)),
                 else_=func.least(AIPlanStep.expires_at, AIPlanStep.scheduled_for + LATE_GRACE),
             ))).select_from(ExerciseDelivery).join(AIPlanStep, AIPlanStep.id == ExerciseDelivery.plan_step_id).join(
                 AIPlanDay, AIPlanDay.id == AIPlanStep.day_id).join(AIPlan, AIPlan.id == AIPlanDay.plan_id).join(
@@ -172,6 +184,10 @@ def can_deliver_tasks(user: User, plan: AIPlan | None = None) -> bool:
     # Replay/recovery (if any) must be handled by adaptation/reconciliation layer.
     if not user or not user.is_active:
         return False
+    from sqlalchemy.orm import object_session
+    owning_db = object_session(user) if hasattr(user, '_sa_instance_state') else None
+    if owning_db is None or not may_access(owning_db, user.id, delivery=True):
+        return False
     if plan is not None:
         return plan.status == "active"
     return any(getattr(candidate, "status", None) == "active" for candidate in user.plans)
@@ -184,7 +200,7 @@ def _active_plan_users_query(db):
         .join(AIPlan, AIPlan.user_id == User.id)
         .filter(
             AIPlan.status == "active",
-            User.is_active == True,
+            and_(User.is_active.is_(True), access_predicate(User.id, delivery=True)),
             User.tg_id.isnot(None),
         )
     )
@@ -334,7 +350,7 @@ def _due_delivery_steps(db, now):
     from sqlalchemy.orm import aliased
     later_attempt = aliased(ExerciseDelivery)
     return db.query(AIPlanStep.id).join(AIPlanDay).join(AIPlan).join(User).filter(
-        ~blocked_successor(AIPlan.id), AIPlan.status == 'active', User.is_active.is_(True), AIPlanStep.step_status == 'pending',
+        ~blocked_successor(AIPlan.id), AIPlan.status == 'active', and_(User.is_active.is_(True), access_predicate(User.id, delivery=True)), AIPlanStep.step_status == 'pending',
         AIPlanStep.expires_at > now,
         AIPlanStep.scheduled_for <= now, AIPlanStep.scheduled_for >= now - LATE_GRACE,
         ~db.query(ExerciseDelivery.id).filter(
@@ -661,7 +677,7 @@ async def schedule_daily_loop():
             .join(User, User.id == AIPlan.user_id)
             .filter(
                 AIPlan.status == "active",
-                User.is_active == True,
+                and_(User.is_active.is_(True), access_predicate(User.id, delivery=True)),
                 AIPlanStep.step_status == "pending",
                 AIPlanStep.scheduled_for != None, # Only schedule if time is set
                 AIPlanStep.scheduled_for > now_utc
@@ -746,6 +762,9 @@ def send_daily_pulse():
                         return
 
                     # Phase 3: Telegram delivery
+                    claim_at = await asyncio.to_thread(outbound_claim, user_id, delivery=True)
+                    if claim_at is None:
+                        return
                     result = await _send_message_async(tg_id, text)
                     if not result:
                         logger.warning("[PULSE] Delivery failed for user_id=%s", user_id)
@@ -764,6 +783,7 @@ def send_daily_pulse():
                             event_source="scheduler",
                             source_operation_id=f"scheduler:pulse:{user.id}:{today_utc}",
                             context={"persona": persona or "empath"},
+                            attribution_at=claim_at,
                         )
                         db.commit()
                 except Exception:
@@ -775,8 +795,58 @@ def send_daily_pulse():
     asyncio.run_coroutine_threadsafe(_run(), _event_loop)
 
 
+def _record_silent_attempt(user_id, trigger_id, days_silent, operation_id):
+    with SessionLocal() as db:
+        result = write_event_operation(
+            db, user_id=user_id, event_name="silent_send_attempted",
+            event_source="scheduler", source_operation_id=operation_id + ":attempt",
+            properties={"trigger": trigger_id, "days_silent": days_silent},
+        )
+        db.commit()
+        return not result.duplicate
+
+
+def _record_silent_receipt(user_id, trigger_id, days_silent, operation_id, claim_at):
+    with SessionLocal() as db:
+        log_user_event(
+            db, user_id=user_id, event_type="silent_sent",
+            event_source="scheduler", source_operation_id=operation_id + ":sent",
+            context={"trigger": trigger_id, "days_silent": days_silent},
+            attribution_at=claim_at,
+        )
+        db.commit()
+
+
+async def _deliver_silent_reminder(user_id, tg_id, msg, trigger_id, days_silent, operation_id):
+    try:
+        # The attempt is durable before Telegram I/O. An unconfirmed attempt
+        # shares the existing six-day cooldown without claiming a known send.
+        if not await asyncio.to_thread(
+            _record_silent_attempt, user_id, trigger_id, days_silent, operation_id
+        ):
+            return False
+        # Run inside the queued coroutine, after the attempt write and just
+        # before dispatch; no deployment lock is held across network I/O.
+        claim_at = await asyncio.to_thread(outbound_claim, user_id, delivery=True)
+        if claim_at is None:
+            return False
+        result = await _send_message_async(tg_id, msg)
+        if not result:
+            return False
+        # This coroutine owns the receipt even after the scheduler's 30-second
+        # wait expires. A failed write is visible and the attempt still fences
+        # another automatic reminder during the cooldown.
+        await asyncio.to_thread(
+            _record_silent_receipt, user_id, trigger_id, days_silent, operation_id, claim_at
+        )
+        return True
+    except Exception:
+        logger.exception("[SILENT] Delivery or receipt failed user_id=%s", user_id)
+        return False
+
+
 def check_silent_users():
-    """Runs at 12:00 UTC. Max 1 re-engagement message per user."""
+    """Runs at 12:00 UTC. One re-engagement attempt per six-day window."""
     with SessionLocal() as db:
         now = datetime.now(pytz.UTC)
         today = now.date()
@@ -801,7 +871,7 @@ def check_silent_users():
 
                 sent_today = db.query(UserEvent).filter(
                     UserEvent.user_id == user.id,
-                    UserEvent.event_name == "silent_sent",
+                    UserEvent.event_name.in_(["silent_sent", "silent_send_attempted"]),
                     func.date(UserEvent.occurred_at) == today,
                 ).first()
                 if sent_today:
@@ -809,7 +879,7 @@ def check_silent_users():
 
                 recent_silent = db.query(UserEvent).filter(
                     UserEvent.user_id == user.id,
-                    UserEvent.event_name == "silent_sent",
+                    UserEvent.event_name.in_(["silent_sent", "silent_send_attempted"]),
                     UserEvent.occurred_at >= now - timedelta(days=6),
                 ).first()
                 if recent_silent:
@@ -823,7 +893,10 @@ def check_silent_users():
                 if not msg:
                     continue
 
-                future = _submit_coroutine(_send_message_async(user.tg_id, msg))
+                operation_id = f"scheduler:silent:{user.id}:{today}"
+                future = _submit_coroutine(_deliver_silent_reminder(
+                    user.id, user.tg_id, msg, trigger_id, days_silent, operation_id
+                ))
                 if not future:
                     continue
 
@@ -837,15 +910,6 @@ def check_silent_users():
                     logger.warning("[SILENT] Delivery returned None for user_id=%s", user.id)
                     continue
 
-                log_user_event(
-                    db,
-                    user_id=user.id,
-                    event_type="silent_sent",
-                    event_source="scheduler",
-                    source_operation_id=f"scheduler:silent:{user.id}:{today}",
-                    context={"trigger": trigger_id, "days_silent": days_silent},
-                )
-                db.commit()
             except Exception:
                 logger.error("[SILENT] user_id=%s", user.id, exc_info=True)
 
@@ -970,6 +1034,7 @@ def expire_overdue_steps() -> None:
                 .join(User, User.id == AIPlan.user_id)
                 .filter(
                     ~blocked_successor(AIPlan.id),
+                    access_predicate(User.id),
                     AIPlanStep.step_status.in_(["pending", "delivered"]),
                     or_(
                         AIPlanStep.expires_at.is_(None),
@@ -1084,7 +1149,8 @@ async def check_pulse_triggers(db, bot) -> None:
         user = db.query(User).filter(User.id == plan.user_id).first()
         if not user or not user.tg_id:
             continue
-        if not can_deliver_tasks(user, plan):
+        # Scan without holding authority locks across Telegram I/O.
+        if not user.is_active or not db.query(access_predicate(user.id, delivery=True)).scalar():
             continue
 
         today = _now_in_user_tz(user).date()
@@ -1120,6 +1186,9 @@ async def check_pulse_triggers(db, bot) -> None:
         )
 
         try:
+            claim_at = await asyncio.to_thread(outbound_claim, user.id, delivery=True)
+            if claim_at is None:
+                continue
             await bot.send_message(user.tg_id, text, reply_markup=keyboard)
         except Exception:
             continue
@@ -1132,6 +1201,7 @@ async def check_pulse_triggers(db, bot) -> None:
             source_operation_id=f"scheduler:pulse-snapshot:{plan.id}:{active_day}",
             plan_id=plan.id,
             context={"active_day": active_day, "date": str(today)},
+            attribution_at=claim_at,
         )
         db.commit()
 
@@ -1164,7 +1234,7 @@ def _terminal_completion_sources(db):
         .limit(1).correlate(AIPlan).scalar_subquery())
     return db.query(AIPlan.user_id, AIPlan.id).join(User).filter(
         or_(AIPlan.status == 'active', and_(AIPlan.status == 'paused', last_action.in_(['completed','skipped']))),
-        User.is_active.is_(True), child.exists(),
+        and_(User.is_active.is_(True), access_predicate(User.id, delivery=True)), child.exists(),
         ~child.filter(AIPlanStep.step_status.notin_(TERMINAL_STEP_STATUSES)).exists(),
     )
 
@@ -1172,7 +1242,7 @@ def _terminal_completion_sources(db):
 def _completion_recovery_time(now):
     from app.db import PlanCompletion
     with SessionLocal() as db:
-        wake = db.query(func.min(PlanCompletion.wake_at)).filter(or_(
+        wake = db.query(func.min(PlanCompletion.wake_at)).join(AIPlan, AIPlan.id == PlanCompletion.plan_id).join(User, User.id == AIPlan.user_id).filter(or_(and_(User.is_active.is_(True), access_predicate(AIPlan.user_id, delivery=True)), PlanCompletion.state.in_(['in_flight', 'release_in_flight']))).filter(or_(
             PlanCompletion.state.in_(['pending', 'in_flight', 'release_in_flight']),
             PlanCompletion.schedule_pending.is_(True),
         )).scalar()
@@ -1245,10 +1315,10 @@ def reconcile_plan_completions():
             request_plan_completion(user_id, plan_id)
         with SessionLocal() as db:
             due = db.query(PlanCompletion.plan_id, AIPlan.user_id).join(
-                AIPlan, AIPlan.id == PlanCompletion.plan_id).filter(
+                AIPlan, AIPlan.id == PlanCompletion.plan_id).join(User, User.id == AIPlan.user_id).filter(
                     PlanCompletion.state.in_(['pending', 'in_flight', 'release_in_flight']),
-                    PlanCompletion.wake_at <= now).all()
-            schedules = db.query(PlanCompletion.plan_id, PlanCompletion.successor_plan_id).filter(
+                    PlanCompletion.wake_at <= now, or_(and_(User.is_active.is_(True), access_predicate(AIPlan.user_id, delivery=True)), PlanCompletion.state.in_(['in_flight','release_in_flight']))).all()
+            schedules = db.query(PlanCompletion.plan_id, PlanCompletion.successor_plan_id).join(AIPlan, AIPlan.id == PlanCompletion.plan_id).join(User, User.id == AIPlan.user_id).filter(User.is_active.is_(True), access_predicate(AIPlan.user_id, delivery=True)).filter(
                 PlanCompletion.schedule_pending.is_(True), PlanCompletion.wake_at <= now).all()
         def dispatch(pair):
             user_id, plan_id = pair[1], pair[0]
