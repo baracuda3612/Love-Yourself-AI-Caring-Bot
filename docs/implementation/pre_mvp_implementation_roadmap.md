@@ -1827,7 +1827,7 @@ behavior.
 ## 22. Historical first steps after roadmap approval
 
 The sequence below was the initial handoff and has been completed through B3.
-The current next step is WP-04.1, as recorded in the current-package table
+The current next step is WP-04.2, as recorded in the current-package table
 above; do not restart WP-00.4 or WP-01.1 from this historical list.
 
 1. Complete WP-00.4 repository hardening and targeted verification.
