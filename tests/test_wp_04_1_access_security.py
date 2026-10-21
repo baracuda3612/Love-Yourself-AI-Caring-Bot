@@ -2,6 +2,9 @@
 import hashlib
 import hmac
 import json
+import asyncio
+import importlib
+from contextlib import nullcontext
 from datetime import timedelta
 from types import SimpleNamespace
 from urllib.parse import urlencode
@@ -82,6 +85,89 @@ def inventory(monkeypatch):
     value={'testnet':profile,'production':other}
     monkeypatch.setattr(access.settings,'ACCESS_ISOLATION_INVENTORY',json.dumps(value))
     return value
+
+
+@pytest.mark.parametrize('allowed', [False, True])
+def test_silent_send_claims_current_delivery_access_and_attributes_at_claim(monkeypatch, allowed):
+    from app import scheduler
+    now = access.now_utc()
+    user = SimpleNamespace(id=77, tg_id=123, first_name='Member', profile=SimpleNamespace(coach_persona='empath'))
+    last_event = SimpleNamespace(occurred_at=now - timedelta(days=3))
+    class Query:
+        def __init__(self, value): self.value = value
+        def filter(self, *args): return self
+        def order_by(self, *args): return self
+        def first(self): return self.value
+        def all(self): return [user]
+    class DB:
+        lookups = 0
+        def query(self, model):
+            self.lookups += 1
+            return Query(last_event if self.lookups == 1 else None)
+        def commit(self): pass
+    monkeypatch.setattr(scheduler, 'SessionLocal', lambda: nullcontext(DB()))
+    monkeypatch.setattr(scheduler, '_active_plan_users_query', lambda db: Query(None))
+    monkeypatch.setattr(scheduler, 'can_send_auto_message', lambda *args: True)
+    monkeypatch.setattr(scheduler, 'get_trigger_message', lambda *args: 'Reminder')
+    claim_calls = []
+    monkeypatch.setattr(scheduler, 'outbound_claim', lambda uid, *, delivery: claim_calls.append((uid, delivery)) or (now if allowed else None))
+    sent = []
+    async def send(*args):
+        sent.append(args)
+        return object()
+    class Future:
+        def result(self, timeout): return asyncio.run(self.coro)
+        def __init__(self, coro): self.coro = coro
+    monkeypatch.setattr(scheduler, '_send_message_async', send)
+    monkeypatch.setattr(scheduler, '_submit_coroutine', Future)
+    events = []
+    monkeypatch.setattr(scheduler, 'log_user_event', lambda db, **kwargs: events.append(kwargs))
+
+    scheduler.check_silent_users()
+
+    assert claim_calls == [(77, True)]
+    assert sent == ([(123, 'Reminder')] if allowed else [])
+    assert len(events) == int(allowed)
+    if allowed:
+        assert events[0]['attribution_at'] == now
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('is_dev', [True, False])
+async def test_runtime_startup_audits_bound_contours_only(monkeypatch, is_dev):
+    main = importlib.import_module('app.main')
+    monkeypatch.setattr(main.settings, 'IS_DEV', is_dev)
+    if is_dev:
+        monkeypatch.setattr(main.settings, 'REDIS_URL', '')
+        monkeypatch.setattr(main.settings, 'ACCESS_ISOLATION_INVENTORY', '')
+    monkeypatch.setattr(main, 'audit_startup_schema', lambda: None)
+    db = object()
+    monkeypatch.setattr('app.db.SessionLocal', lambda: nullcontext(db))
+    audit_calls = []
+    monkeypatch.setattr('app.access_environment.audit_environment', lambda session: audit_calls.append(session))
+    async def finished(*args): pass
+    monkeypatch.setattr(main, 'schedule_daily_loop', finished)
+    monkeypatch.setattr(main.dp, 'start_polling', finished)
+    monkeypatch.setattr(main.uvicorn, 'Config', lambda *args, **kwargs: object())
+    monkeypatch.setattr(main.uvicorn, 'Server', lambda config: SimpleNamespace(serve=finished))
+
+    await main.main()
+
+    assert audit_calls == ([] if is_dev else [db])
+
+
+@pytest.mark.asyncio
+async def test_bound_runtime_stops_before_polling_when_isolation_audit_fails(monkeypatch):
+    main = importlib.import_module('app.main')
+    monkeypatch.setattr(main.settings, 'IS_DEV', False)
+    monkeypatch.setattr(main, 'audit_startup_schema', lambda: None)
+    monkeypatch.setattr('app.db.SessionLocal', lambda: nullcontext(object()))
+    def rejected(db): raise access.AccessDenied()
+    monkeypatch.setattr('app.access_environment.audit_environment', rejected)
+    monkeypatch.setattr(main, 'schedule_daily_loop', lambda: pytest.fail('no scheduler before isolation proof'))
+
+    with pytest.raises(access.AccessDenied):
+        await main.main()
 
 
 def test_isolation_inventory_matches_runtime(monkeypatch):

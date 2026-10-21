@@ -22,7 +22,7 @@ def upgrade():
         "OR (event_name IN ('task_delivered','plan_completion_sent') "
         "AND attribution_at < occurred_at + INTERVAL '1 second')) "
         "AND (attribution_at = occurred_at OR event_name IN "
-        "('task_delivered','task_delivery_failed','plan_completion_sent','pulse_sent')))")
+        "('task_delivered','task_delivery_failed','plan_completion_sent','pulse_sent','silent_sent')))")
     # Keep actual receipt occurrence time; membership/commercial coverage is
     # checked at its authorized send claim. All other catalogue/link/immutability
     # checks remain byte-for-byte the installed predecessor implementation.

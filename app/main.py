@@ -18,10 +18,11 @@ from app.telegram import bot, dp
 
 async def main() -> None:
     audit_startup_schema()
-    from app.access_environment import audit_environment
-    from app.db import SessionLocal
-    with SessionLocal() as db:
-        audit_environment(db)
+    if not settings.IS_DEV:
+        from app.access_environment import audit_environment
+        from app.db import SessionLocal
+        with SessionLocal() as db:
+            audit_environment(db)
     asyncio.create_task(schedule_daily_loop())
 
     config = uvicorn.Config(

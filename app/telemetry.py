@@ -470,7 +470,7 @@ def write_event_operation(
     if duplicate is not None and attribution_at is not None and duplicate[0].attribution_at != attribution_at:
         raise EventOperationConflict("source_operation_id was already used for a different attribution")
     attribution = attribution_at or (duplicate[0].attribution_at if duplicate else None) or occurrence
-    if attribution != occurrence and event_name not in {'task_delivered','task_delivery_failed','plan_completion_sent','pulse_sent'}:
+    if attribution != occurrence and event_name not in {'task_delivered','task_delivery_failed','plan_completion_sent','pulse_sent','silent_sent'}:
         raise EventValidationError("only send receipts may use claim-time attribution")
     if duplicate is not None and deployment_id is None and deployment_enrollment_id is None:
         # Replays retain the original snapshot, including truthful legacy nulls.

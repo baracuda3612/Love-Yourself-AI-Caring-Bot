@@ -446,6 +446,25 @@ def test_event_and_aggregate_capture_enrollment_and_replay_original_snapshot(db)
     assert again.duplicate and again.event.deployment_id==dep.id
 
 
+def test_silent_send_receipt_keeps_authorized_claim_after_revocation(db):
+    from app.telemetry import write_event_operation
+    from app.db import UserEvent
+    user = User(tg_id=actor().id, timezone='UTC'); db.add(user); db.flush()
+    membership = enroll(db, user)
+    claim_at = access.now_utc() - timedelta(seconds=2)
+    access.revoke_entitlement(db, entitlement_id=membership.entitlement_id)
+    actual = access.now_utc()
+    event = write_event_operation(db, user_id=user.id, event_name='silent_sent',
+        event_source='scheduler', source_operation_id='silent:'+uuid4().hex,
+        properties={'trigger':'silent_2_days','days_silent':3},
+        occurred_at=actual, attribution_at=claim_at).event
+    db.flush()
+    assert event.attribution_at == claim_at
+    assert event.occurred_at == actual
+    assert event.deployment_enrollment_id == membership.id
+    assert db.query(UserEvent).filter_by(event_id=event.event_id).one().attribution_at == claim_at
+
+
 @pytest.mark.parametrize('change',['commercial-end','revoked','replacement'])
 def test_late_actual_exercise_receipt_keeps_claim_attribution(db,change):
     from app.content_library import load_content_library

@@ -833,6 +833,9 @@ def check_silent_users():
                 if not msg:
                     continue
 
+                claim_at = outbound_claim(user.id, delivery=True)
+                if claim_at is None:
+                    continue
                 future = _submit_coroutine(_send_message_async(user.tg_id, msg))
                 if not future:
                     continue
@@ -854,6 +857,7 @@ def check_silent_users():
                     event_source="scheduler",
                     source_operation_id=f"scheduler:silent:{user.id}:{today}",
                     context={"trigger": trigger_id, "days_silent": days_silent},
+                    attribution_at=claim_at,
                 )
                 db.commit()
             except Exception:
