@@ -901,11 +901,10 @@ async def handle_incoming_message(
     - routes ONBOARDING to the onboarding handler
     - else → calls coach_agent directly
     - executes allowlisted deterministic runtime tools
-    - returns reply
+    - returns reply; the Telegram send boundary records delivered assistant memory
     """
 
-    async def _finalize_reply(text: str) -> Dict[str, Any]:
-        await session_memory.append_message(user_id, "assistant", text)
+    def _finalize_reply(text: str) -> Dict[str, Any]:
         return {"reply_text": text}
 
     try:
@@ -930,7 +929,7 @@ async def handle_incoming_message(
             "message_text": message_text,
         }
         onboarding_result = await mock_onboarding_agent(onboarding_payload)
-        return await _finalize_reply(str(onboarding_result.get("reply_text") or ""))
+        return _finalize_reply(str(onboarding_result.get("reply_text") or ""))
 
     # All live-user states → coach_agent directly
     coach_payload = {
@@ -962,7 +961,7 @@ async def handle_incoming_message(
             user_id,
             error_payload,
         )
-        return await _finalize_reply(reply_text)
+        return _finalize_reply(reply_text)
 
     # ── Tool call execution (T5.8B) ───────────────────────────────────────────
     # Coach returns {"tool_call": {"name": "...", "arguments": {...}}}
@@ -972,6 +971,6 @@ async def handle_incoming_message(
     if raw_tool_call and isinstance(raw_tool_call, dict):
         tool_result = await _execute_plan_tool(user_id, raw_tool_call)
         if tool_result is not None:
-            return await _finalize_reply(tool_result)
+            return _finalize_reply(tool_result)
 
-    return await _finalize_reply(reply_text)
+    return _finalize_reply(reply_text)

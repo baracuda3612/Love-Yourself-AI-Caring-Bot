@@ -12,7 +12,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from app.config import settings
 from app.db import AIPlanStep, ChatHistory, SessionLocal, User, UserEvent, UserProfile
-from app.orchestrator import handle_incoming_message
+from app.orchestrator import handle_incoming_message, session_memory
 from app.telemetry import log_user_event
 from app.lifecycle import (
     CurrentMode,
@@ -376,6 +376,7 @@ async def _send_agent_response(message: Message, user_id: int, response: dict) -
         return
     reply_text = _sanitize_message_text(response.get("reply_text"))
     await message.answer(reply_text)
+    await session_memory.append_message(user_id, "assistant", reply_text)
 
     with SessionLocal() as db:
         db.add(ChatHistory(user_id=user_id, role="assistant", text=reply_text))

@@ -383,12 +383,53 @@ def test_no_legacy_issuance_or_redemption_path():
 
 async def test_revocation_during_coach_generation_denies_reply_and_history(monkeypatch):
     from unittest.mock import AsyncMock
-    from app import telegram
+    from app import orchestrator, telegram
+    from app.lifecycle import CurrentMode
+    class Memory:
+        def __init__(self): self.messages = []
+        async def append_message(self, user_id, role, text):
+            self.messages.append((user_id, role, text))
+    memory = Memory()
+    async def no_completion(_user_id): return None
+    monkeypatch.setattr(orchestrator, 'session_memory', memory)
+    monkeypatch.setattr(telegram, 'session_memory', memory)
+    monkeypatch.setattr(orchestrator, '_auto_complete_plan_if_needed_for_user_id', no_completion)
+    monkeypatch.setattr(orchestrator, 'build_user_context', AsyncMock(return_value={'current_mode': CurrentMode.ACTIVE.value}))
+    monkeypatch.setattr(orchestrator, 'coach_agent', AsyncMock(return_value={'reply_text': 'private generated reply'}))
+    response = await orchestrator.handle_incoming_message(77, 'hello')
+    assert memory.messages == [(77, 'user', 'hello')]
     monkeypatch.setattr(access,'outbound_claim',lambda *a,**k:None)
     monkeypatch.setattr(telegram,'SessionLocal',lambda:pytest.fail('denied reply must not be stored'))
     message=SimpleNamespace(answer=AsyncMock())
-    await telegram._send_agent_response(message,77,{'reply_text':'private generated reply'})
+    await telegram._send_agent_response(message,77,response)
     message.answer.assert_awaited_once_with('Доступ зараз недоступний.')
+    assert memory.messages == [(77, 'user', 'hello')]
+
+
+async def test_assistant_memory_records_only_confirmed_telegram_reply(monkeypatch):
+    from unittest.mock import AsyncMock
+    from app import telegram
+    class Memory:
+        def __init__(self): self.messages = []
+        async def append_message(self, user_id, role, text):
+            self.messages.append((user_id, role, text))
+    memory = Memory()
+    monkeypatch.setattr(telegram, 'session_memory', memory)
+    monkeypatch.setattr(access, 'outbound_claim', lambda *a, **k: access.now_utc())
+    stored = []
+    class DB:
+        def add(self, row): stored.append(row)
+        def commit(self): pass
+    monkeypatch.setattr(telegram, 'SessionLocal', lambda: nullcontext(DB()))
+    message = SimpleNamespace(answer=AsyncMock(side_effect=RuntimeError('telegram unavailable')))
+    with pytest.raises(RuntimeError, match='telegram unavailable'):
+        await telegram._send_agent_response(message, 77, {'reply_text': 'delivered reply'})
+    assert memory.messages == [] and stored == []
+
+    message.answer.side_effect = None
+    await telegram._send_agent_response(message, 77, {'reply_text': 'delivered reply'})
+    assert memory.messages == [(77, 'assistant', 'delivered reply')]
+    assert len(stored) == 1 and stored[0].text == 'delivered reply'
 
 
 async def test_revocation_during_daily_pulse_generation_prevents_send(monkeypatch):
