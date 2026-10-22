@@ -523,3 +523,134 @@ async def test_pulse_revocation_during_scan_skips_only_that_owner(engine,monkeyp
         assert db.query(m.UserEvent).filter_by(user_id=first_id,event_name='pulse_sent').count()==0
         assert db.query(m.ReportAccessGrant).filter_by(user_id=second_id,purpose='pulse_report').count()==1
         assert db.query(m.UserEvent).filter_by(user_id=second_id,event_name='pulse_sent').count()==1
+
+
+@pytest.mark.parametrize('notice_state',['unacknowledged','repinned','unavailable','retired'])
+async def test_freeform_notice_reminder_releases_ingress_locks(engine,monkeypatch,notice_state):
+    """Real separate PG sessions expose the former nested-lock self-block."""
+    from unittest.mock import AsyncMock
+    from app import telegram
+    factory=sessionmaker(engine,expire_on_commit=False)
+    with factory() as db:
+        user,dep,notice=subject(db)
+        if notice_state=='repinned':
+            privacy.acknowledge_notice(db,user.id,notice.id,f'{user.id}:old-notice')
+            notice=privacy.register_notice(db,version=uuid4().hex,notice_text='New exact notice',location='fixture-v2')
+            dep.notice_version_id=notice.id
+        elif notice_state=='unavailable':
+            notice=m.PrivacyNoticeVersion(version=uuid4().hex,published_at=privacy.utcnow(),
+                content_digest=uuid4().hex,content_location='unpublished fixture',is_current=False)
+            db.add(notice);db.flush();dep.notice_version_id=notice.id
+        elif notice_state=='retired':
+            notice.retired_at=privacy.utcnow()
+        user_id,tg_id,notice_id=user.id,user.tg_id,notice.id
+        db.commit()
+    @contextmanager
+    def ingress_session():
+        with factory() as db:
+            # The nested reminder used to time out here waiting for its caller.
+            db.execute(text("SET LOCAL lock_timeout = '300ms'"))
+            yield db
+    monkeypatch.setattr(telegram,'SessionLocal',ingress_session)
+    coach=AsyncMock(return_value={'reply_text':'accepted reply'})
+    send=AsyncMock()
+    monkeypatch.setattr(telegram,'handle_incoming_message',coach)
+    monkeypatch.setattr(telegram,'_send_agent_response',send)
+    message=SimpleNamespace(text='must not be retained before acknowledgement',message_id=1,
+        from_user=SimpleNamespace(id=tg_id,username=None,first_name=None),
+        chat=SimpleNamespace(id=tg_id,type='private'),answer=AsyncMock())
+    await telegram.on_text(message)
+    coach.assert_not_awaited();send.assert_not_awaited()
+    assert message.answer.await_count>=1
+    with factory() as db:
+        assert db.query(m.ChatHistory).filter_by(user_id=user_id).count()==0
+        assert db.query(m.UserEvent).filter_by(user_id=user_id,event_name='user_message').count()==0
+    if notice_state in {'unacknowledged','repinned'}:
+        with factory() as db:
+            privacy.acknowledge_notice(db,user_id,notice_id,f'{user_id}:accepted-current-notice');db.commit()
+        reminders=message.answer.await_count
+        for message_id in (2,3):
+            message.message_id=message_id;message.text=f'accepted turn {message_id}'
+            await telegram.on_text(message)
+        # Stored acknowledgement is reused: no repeated confirmation dialog.
+        assert message.answer.await_count==reminders
+        assert coach.await_count==2 and send.await_count==2
+        with factory() as db:
+            assert db.query(m.ChatHistory).filter_by(user_id=user_id).count()==2
+            assert db.query(m.UserEvent).filter_by(user_id=user_id,event_name='user_message').count()==2
+
+
+def test_notice_cache_reads_receipt_once_and_rechecks_version_and_access(engine):
+    from sqlalchemy import event
+    from app import privacy_notice_cache as cache
+    factory=sessionmaker(engine,expire_on_commit=False)
+    with factory() as db:
+        user,dep,notice=subject(db)
+        uid,did,nid=user.id,dep.id,notice.id
+        privacy.acknowledge_notice(db,uid,nid,'cache:seed');db.commit()
+        cache.forget_user(db,uid)  # A restarted/evicted worker starts cold.
+    reads=[]
+    def observe(conn,cursor,statement,parameters,context,executemany):
+        normalized=statement.lower().lstrip()
+        if normalized.startswith('select') and 'from notice_acknowledgements' in normalized:
+            reads.append(statement)
+    event.listen(engine,'before_cursor_execute',observe)
+    try:
+        for _ in range(5):
+            with factory() as db:
+                privacy.pinned_notice(db,uid,acknowledged=True)
+                cache.commit_read_check(db)
+        assert len(reads)==1
+        with factory() as db:
+            newer=privacy.register_notice(db,version=uuid4().hex,notice_text='Changed cache notice',location='fixture')
+            db.get(m.Deployment,did).notice_version_id=newer.id
+            new_id=newer.id;db.commit()
+        with factory() as db:
+            with pytest.raises(privacy.NoticeRequired):privacy.pinned_notice(db,uid,acknowledged=True)
+        assert len(reads)==2
+        with factory() as db:
+            privacy.acknowledge_notice(db,uid,new_id,'cache:new-version');db.commit()
+        with factory() as db:
+            privacy.pinned_notice(db,uid,acknowledged=True)
+            assert cache.has_committed_ack(db,uid,did,new_id)
+            assert not cache.has_committed_ack(db,uid,did,nid)
+            db.get(m.PrivacyNoticeVersion,new_id).retired_at=privacy.utcnow();db.commit()
+        with factory() as db:
+            with pytest.raises(privacy.NoticeRequired):privacy.pinned_notice(db,uid,acknowledged=True)
+        with factory() as db:
+            db.get(m.User,uid).is_active=False;db.commit()
+        with factory() as db:
+            with pytest.raises(access.AccessDenied):privacy.pinned_notice(db,uid,acknowledged=True)
+        assert len(reads)==2  # New acknowledgement commit warms immediately.
+    finally:
+        event.remove(engine,'before_cursor_execute',observe)
+
+
+def test_notice_cache_only_root_commit_promotes_and_invalidation_wins(engine):
+    from app import privacy_notice_cache as cache
+    factory=sessionmaker(engine,expire_on_commit=False)
+    with factory() as db:
+        user,dep,notice=subject(db)
+        uid,did,nid=user.id,dep.id,notice.id;db.commit()
+    with factory() as db:
+        privacy.acknowledge_notice(db,uid,nid,'cache:rolled-back')
+        assert not cache.has_committed_ack(db,uid,did,nid)
+        db.rollback()
+        assert not cache.has_committed_ack(db,uid,did,nid)
+        with db.begin_nested():
+            privacy.acknowledge_notice(db,uid,nid,'cache:committed')
+        assert not cache.has_committed_ack(db,uid,did,nid)
+        db.commit()
+        assert cache.has_committed_ack(db,uid,did,nid)
+        cache.forget_user(db,uid)
+        privacy.pinned_notice(db,uid,acknowledged=True)
+        cache.forget_user(db,uid)
+        db.commit()
+        assert not cache.has_committed_ack(db,uid,did,nid)
+        privacy.pinned_notice(db,uid,acknowledged=True)
+        db.close()  # Reusing a Session after close must not promote stale hints.
+        db.commit()
+        assert not cache.has_committed_ack(db,uid,did,nid)
+        with pytest.raises(privacy.NoticeRequired):
+            other,_,_=subject(db)
+            privacy.pinned_notice(db,other.id,acknowledged=True)

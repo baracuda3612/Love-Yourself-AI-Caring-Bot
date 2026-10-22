@@ -320,35 +320,41 @@ async def request_status(message: Message):
 
 @router.message(F.text)
 async def on_text(message: Message):
-    text = message.text or ""
-    with SessionLocal() as db:
-        user, _ = _ensure_user(db, message.from_user)
-        from app.privacy import pinned_notice
-        from app.access import AccessDenied
-        try:
-            pinned_notice(db, user.id, acknowledged=True)
-        except AccessDenied:
-            await _show_privacy(message, user.id)
-            return
-        db.add(ChatHistory(user_id=user.id, role="user", text=text))
-        # Log user activity for silence detection
-        # This event is read by check_silent_users() in scheduler.py
-        log_user_event(
-            db,
-            user_id=user.id,
-            event_type="user_message",
-            event_source="telegram",
-            source_operation_id=(
-                f"telegram:message:{message.chat.id}:{message.message_id}"
-            ),
-            context={"message_length": len(message.text or "")},
-        )
-        db.commit()
+    from app.privacy import pinned_notice, NoticeRequired
+    from app.access import AccessDenied
 
-    response = await handle_incoming_message(user.id, text)
+    text = message.text or ""
+    try:
+        with SessionLocal() as db:
+            user, _ = _ensure_user(db, message.from_user)
+            user_id = user.id
+            pinned_notice(db, user_id, acknowledged=True)
+            db.add(ChatHistory(user_id=user_id, role="user", text=text))
+            # Log user activity for silence detection.
+            log_user_event(
+                db,
+                user_id=user_id,
+                event_type="user_message",
+                event_source="telegram",
+                source_operation_id=(
+                    f"telegram:message:{message.chat.id}:{message.message_id}"
+                ),
+                context={"message_length": len(message.text or "")},
+            )
+            db.commit()
+    except NoticeRequired:
+        # Release ingress access locks before the reminder opens its own
+        # session, and before awaiting any Telegram I/O.
+        await _show_privacy(message, user_id)
+        return
+    except AccessDenied:
+        await message.answer("Доступ зараз недоступний.")
+        return
+
+    response = await handle_incoming_message(user_id, text)
     if not isinstance(response, dict) or "reply_text" not in response:
         raise RuntimeError("handle_incoming_message response must include reply_text")
-    await _send_agent_response(message, user.id, response)
+    await _send_agent_response(message, user_id, response)
 
 
 _STEP_REPLIES = {

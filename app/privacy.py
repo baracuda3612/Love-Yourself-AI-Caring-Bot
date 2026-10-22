@@ -14,6 +14,7 @@ from sqlalchemy import or_, and_, select
 from sqlalchemy.dialects.postgresql import insert
 
 from app import db as models
+from app import privacy_notice_cache as notice_cache
 from app.access import AccessDenied, environment, require_access
 
 RETENTION = timedelta(days=90)
@@ -37,9 +38,11 @@ def pinned_notice(db, user_id, *, acknowledged=False):
         or notice.published_at > utcnow()
         or sha256(notice.notice_text.encode()).hexdigest() != notice.content_digest):
         raise NoticeRequired()
-    if acknowledged and db.query(models.NoticeAcknowledgement.id).filter_by(
-        user_id=user_id, deployment_id=deployment.id, notice_version_id=notice.id).first() is None:
-        raise NoticeRequired()
+    if acknowledged and not notice_cache.has_committed_ack(db, user_id, deployment.id, notice.id):
+        if db.query(models.NoticeAcknowledgement.id).filter_by(
+            user_id=user_id, deployment_id=deployment.id, notice_version_id=notice.id).first() is None:
+            raise NoticeRequired()
+        notice_cache.stage_committed_ack(db, user_id, deployment.id, notice.id)
     return deployment, notice
 
 
@@ -52,6 +55,7 @@ def acknowledge_notice(db, user_id, notice_id, source_operation_id):
         user_id=user_id, deployment_id=deployment.id, notice_version_id=notice.id,
         acknowledged_at=utcnow(), source_operation_id=source_operation_id,
     ).on_conflict_do_nothing(index_elements=['user_id','deployment_id','notice_version_id']))
+    notice_cache.stage_committed_ack(db, user_id, deployment.id, notice.id)
 
 
 def register_notice(db, *, version, notice_text, location):
@@ -311,6 +315,8 @@ async def delete_account(request_id, *, memory, cancel_jobs, session_factory=Non
                 # case cannot monopolize the bounded worker after restart.
                 owned_request(db, request_id).last_attempted_at = utcnow()
             db.commit()
+            if result is not None:
+                notice_cache.forget_user(db, result[0])
             return result
     result = await asyncio.to_thread(fence)
     if result is None:

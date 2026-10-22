@@ -896,6 +896,8 @@ async def handle_incoming_message(
     try:
         with SessionLocal() as db:
             pinned_notice(db, user_id, acknowledged=True)
+            from app.privacy_notice_cache import commit_read_check
+            commit_read_check(db)
     except NoticeRequired:
         return {"reply_text": "Перед розмовою відкрий /privacy та підтвердь ознайомлення з актуальним повідомленням."}
     except AccessDenied:
