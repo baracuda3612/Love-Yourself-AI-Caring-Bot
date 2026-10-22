@@ -37,7 +37,7 @@ DATABASE_URL = settings.DATABASE_URL
 jobstore_url = DATABASE_URL
 
 jobstores = {"default": SQLAlchemyJobStore(url=jobstore_url), "delivery_recovery": MemoryJobStore(), "completion_recovery": MemoryJobStore()}
-from app.access import access_predicate, may_access, outbound_claim
+from app.access import AccessDenied, access_predicate, may_access, outbound_claim
 
 scheduler = BackgroundScheduler(jobstores=jobstores, timezone="UTC")
 
@@ -1140,14 +1140,17 @@ def _now_in_user_tz(user: User) -> datetime:
 
 
 async def check_pulse_triggers(db, bot) -> None:
-    active_plans = db.query(AIPlan).filter(AIPlan.status == "active").all()
+    # Primitive scan hints survive a per-owner rollback; current access and
+    # plan ownership are still checked by grant issuance before every send.
+    active_plans = [(p.id, p.user_id, p.duration, p.total_days)
+        for p in db.query(AIPlan).filter(AIPlan.status == "active").all()]
 
-    for plan in active_plans:
-        thresholds = PULSE_THRESHOLDS.get(plan.duration, [])
+    for plan_id, user_id, duration, total_days_hint in active_plans:
+        thresholds = PULSE_THRESHOLDS.get(duration, [])
         if not thresholds:
             continue
 
-        user = db.query(User).filter(User.id == plan.user_id).first()
+        user = db.query(User).filter(User.id == user_id).first()
         if not user or not user.tg_id:
             continue
         # Scan without holding authority locks across Telegram I/O.
@@ -1155,8 +1158,8 @@ async def check_pulse_triggers(db, bot) -> None:
             continue
 
         today = _now_in_user_tz(user).date()
-        total_days = int(getattr(plan, "total_days", None) or 1)
-        active_day = derive_current_day(db, plan.id, total_days)
+        total_days = int(total_days_hint or 1)
+        active_day = derive_current_day(db, plan_id, total_days)
 
         if active_day not in thresholds:
             continue
@@ -1164,9 +1167,9 @@ async def check_pulse_triggers(db, bot) -> None:
         already_sent = (
             db.query(UserEvent)
             .filter(
-                UserEvent.user_id == plan.user_id,
+                UserEvent.user_id == user_id,
                 UserEvent.event_name == "pulse_sent",
-                UserEvent.plan_id == plan.id,
+                UserEvent.plan_id == plan_id,
                 UserEvent.properties["active_day"].astext == str(active_day),
             )
             .first()
@@ -1174,8 +1177,14 @@ async def check_pulse_triggers(db, bot) -> None:
         if already_sent:
             continue
 
-        token = issue_report_grant(db, user.id, plan.id, 'pulse_report')
-        db.commit()
+        try:
+            token = issue_report_grant(db, user.id, plan_id, 'pulse_report')
+            db.commit()
+        except AccessDenied:
+            # Access can change after the nonlocking scan. Skip this owner,
+            # release its locks, and preserve delivery for the remaining plans.
+            db.rollback()
+            continue
         url = f"{settings.APP_BASE_URL}/pulse/{token}"
         week_num = ceil(active_day / 7)
 
@@ -1197,11 +1206,11 @@ async def check_pulse_triggers(db, bot) -> None:
 
         log_user_event(
             db,
-            user_id=plan.user_id,
+            user_id=user_id,
             event_type="pulse_sent",
             event_source="scheduler",
-            source_operation_id=f"scheduler:pulse-snapshot:{plan.id}:{active_day}",
-            plan_id=plan.id,
+            source_operation_id=f"scheduler:pulse-snapshot:{plan_id}:{active_day}",
+            plan_id=plan_id,
             context={"active_day": active_day, "date": str(today)},
             attribution_at=claim_at,
         )
@@ -1389,7 +1398,8 @@ async def privacy_maintenance():
     logger.info('privacy_retention_removed=%d', total)
     with SessionLocal() as db:
         pending = [r[0] for r in db.query(PrivacyRequest.id).filter_by(state='deleting').order_by(
-            PrivacyRequest.received_at).limit(10)]
+            PrivacyRequest.last_attempted_at.asc().nullsfirst(),
+            PrivacyRequest.received_at, PrivacyRequest.id).limit(10)]
     for request_id in pending:
         try:
             await delete_account(request_id, memory=SessionMemory(), cancel_jobs=cancel_privacy_jobs)

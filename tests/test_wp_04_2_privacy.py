@@ -100,3 +100,42 @@ def test_privacy_job_erasure_removes_custom_legacy_and_canonical_jobs(monkeypatc
         get_jobs=lambda:[SimpleNamespace(id=job,args=(100,'',4) if job=='custom-old-job' else (),func_ref='app.scheduler:send_scheduled_message') for job in ids],remove_job=lambda job:ids.remove(job)))
     scheduler.cancel_privacy_jobs(1,[7])
     assert ids=={'plan_70_day_1_step_5','privacy_maintenance'}
+
+
+async def test_pulse_scan_continues_after_one_owner_loses_access(monkeypatch):
+    from app.access import AccessDenied
+    from app.privacy import utcnow
+    plans=[SimpleNamespace(id=i,user_id=i,duration='STANDARD',total_days=21,status='active') for i in (1,2)]
+    users=iter([SimpleNamespace(id=i,tg_id=100+i,is_active=True) for i in (1,2)])
+    class Query:
+        def __init__(self,value):self.value=value
+        def filter(self,*a):return self
+        def all(self):return self.value
+        def first(self):return self.value
+        def scalar(self):return self.value
+    class DB:
+        rollbacks=0
+        def query(self,model):
+            if model is scheduler.AIPlan:return Query(plans)
+            if model is scheduler.User:return Query(next(users))
+            if model is scheduler.UserEvent:return Query(None)
+            return Query(True)  # Nonlocking access predicate passed before revoke.
+        def commit(self):pass
+        def rollback(self):self.rollbacks+=1
+    db=DB();issued=[];events=[]
+    def issue(db,user_id,plan_id,purpose):
+        issued.append((user_id,plan_id,purpose))
+        if user_id==1:raise AccessDenied()
+        return 'opaque-pulse-grant'
+    monkeypatch.setattr(scheduler,'issue_report_grant',issue)
+    monkeypatch.setattr(scheduler,'derive_current_day',lambda *a:7)
+    monkeypatch.setattr(scheduler,'_now_in_user_tz',lambda *a:utcnow())
+    monkeypatch.setattr(scheduler,'outbound_claim',lambda *a,**k:utcnow())
+    monkeypatch.setattr(scheduler,'log_user_event',lambda *a,**k:events.append(k))
+    bot=SimpleNamespace(send_message=AsyncMock())
+    await scheduler.check_pulse_triggers(db,bot)
+    assert issued==[(1,1,'pulse_report'),(2,2,'pulse_report')]
+    assert db.rollbacks==1
+    bot.send_message.assert_awaited_once()
+    assert bot.send_message.call_args.args[0]==102
+    assert [e['user_id'] for e in events]==[2]

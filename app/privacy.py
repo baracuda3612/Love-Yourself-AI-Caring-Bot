@@ -10,7 +10,7 @@ from hashlib import sha256
 import json
 from uuid import UUID, uuid4
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, and_, select
 from sqlalchemy.dialects.postgresql import insert
 
 from app import db as models
@@ -125,6 +125,21 @@ def record_manual_request(db, *, kind, received_at=None):
         verified_at=None, due_at=at+timedelta(days=30), evidence={}, expires_at=at+RETENTION)
     db.add(row); db.flush()
     return row
+
+
+def pending_request_page(db, *, after=None, limit=100):
+    """Keyset paging keeps every pending/overdue case reachable without a scan."""
+    limit = max(1, min(limit, 100))
+    query = db.query(models.PrivacyRequest).filter(models.PrivacyRequest.state != 'completed')
+    if after is not None:
+        anchor = db.get(models.PrivacyRequest, UUID(str(after)))
+        if anchor is None:
+            raise ValueError('queue_cursor_unavailable')
+        query = query.filter(or_(models.PrivacyRequest.due_at > anchor.due_at,
+            and_(models.PrivacyRequest.due_at == anchor.due_at,
+                models.PrivacyRequest.id > anchor.id)))
+    rows = query.order_by(models.PrivacyRequest.due_at, models.PrivacyRequest.id).limit(limit + 1).all()
+    return rows[:limit], str(rows[limit - 1].id) if len(rows) > limit else None
 
 
 def owned_request(db, request_id, *, kind=None):
@@ -291,6 +306,10 @@ async def delete_account(request_id, *, memory, cancel_jobs, session_factory=Non
     def fence():
         with session_factory() as db:
             result = begin_account_deletion(db, request_id)
+            if result is not None:
+                # Commit attempt advancement before external I/O; a failed
+                # case cannot monopolize the bounded worker after restart.
+                owned_request(db, request_id).last_attempted_at = utcnow()
             db.commit()
             return result
     result = await asyncio.to_thread(fence)

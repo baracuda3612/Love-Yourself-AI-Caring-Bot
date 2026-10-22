@@ -1209,6 +1209,7 @@ class PrivacyRequest(Base):
     verified_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
     evidence = Column(JSONB, nullable=False, default=dict)
+    last_attempted_at = Column(DateTime(timezone=True), nullable=True)
     expires_at = Column(DateTime(timezone=True), nullable=False)
 
 

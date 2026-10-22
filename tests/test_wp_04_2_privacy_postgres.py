@@ -436,3 +436,90 @@ async def test_erasure_removes_actual_persisted_scheduler_jobs(engine,monkeypatc
         assert [job.id for job in jobs.get_jobs()]==['unrelated-global-job']
     finally:
         jobs.shutdown()
+
+
+def test_operator_can_page_past_one_hundred_stuck_cases(db):
+    at=privacy.utcnow()-timedelta(days=31)
+    cases=[privacy.record_manual_request(db,kind='export',received_at=at) for _ in range(101)]
+    first,cursor=privacy.pending_request_page(db)
+    assert len(first)==100 and cursor is not None
+    # Completing the anchor does not make the remaining page inaccessible.
+    anchor=db.get(m.PrivacyRequest,__import__('uuid').UUID(cursor))
+    anchor.state='completed';db.flush()
+    second,last=privacy.pending_request_page(db,after=cursor)
+    assert len(second)==1 and last is None
+    assert {r.id for r in first+second}=={r.id for r in cases}
+    assert all(r.due_at<privacy.utcnow() for r in second)
+
+
+async def test_deletion_retry_rotates_past_ten_broken_cases(engine,monkeypatch):
+    from app import scheduler as scheduling
+    from app import session_memory
+    factory=sessionmaker(engine,expire_on_commit=False)
+    ids=[];case_ids=[]
+    with factory() as db:
+        for i in range(11):
+            user,_,_=subject(db)
+            request=privacy.receive_request(db,tg_id=user.tg_id,kind='deletion',source_operation_id=f'backlog:{i}')
+            privacy.begin_account_deletion(db,request.id)
+            ids.append(user.id);case_ids.append(request.id)
+        db.commit()
+    attempts=[]
+    class Memory:
+        async def delete_user(self,user_id):
+            attempts.append(user_id)
+            if user_id in ids[:10]:raise ConnectionError('subject-specific external failure')
+    monkeypatch.setattr(scheduling,'SessionLocal',factory)
+    monkeypatch.setattr(m,'SessionLocal',factory)
+    monkeypatch.setattr(session_memory,'SessionMemory',Memory)
+    monkeypatch.setattr(scheduling,'cancel_privacy_jobs',lambda *a:None)
+    await scheduling.privacy_maintenance()
+    assert set(attempts)==set(ids[:10])
+    with factory() as db:
+        assert db.get(m.PrivacyRequest,case_ids[10]).last_attempted_at is None
+    attempts.clear()
+    await scheduling.privacy_maintenance()
+    assert ids[10] in attempts
+    with factory() as db:
+        assert db.get(m.PrivacyRequest,case_ids[10]).state=='completed'
+        assert db.get(m.User,ids[10]) is None
+        for case_id in case_ids[:10]:
+            request=db.get(m.PrivacyRequest,case_id)
+            assert request.state=='deleting' and request.last_attempted_at is not None
+
+
+async def test_pulse_revocation_during_scan_skips_only_that_owner(engine,monkeypatch):
+    from app import scheduler as scheduling
+    from unittest.mock import AsyncMock
+    factory=sessionmaker(engine,expire_on_commit=False)
+    with factory() as db:
+        first,first_plan=source_plan(db)
+        second,second_plan=source_plan(db)
+        first_id,second_id,second_chat=first.id,second.id,second.tg_id
+        selected_plans={first_plan.id,second_plan.id}
+        ent_id=db.query(m.DeploymentEnrollment.entitlement_id).filter_by(user_id=first.id,ended_at=None).scalar()
+        db.commit()
+    original=scheduling.issue_report_grant
+    revoked=False
+    def revoke_before_issue(db,user_id,plan_id,purpose):
+        nonlocal revoked
+        if user_id==first_id and not revoked:
+            with factory() as other:
+                access.revoke_entitlement(other,entitlement_id=ent_id);other.commit()
+            revoked=True
+        return original(db,user_id,plan_id,purpose)
+    monkeypatch.setattr(scheduling,'issue_report_grant',revoke_before_issue)
+    monkeypatch.setattr(scheduling,'PULSE_THRESHOLDS',{'SHORT':[1]})
+    monkeypatch.setattr(scheduling,'derive_current_day',lambda db,plan_id,*a:1 if plan_id in selected_plans else 0)
+    monkeypatch.setattr(scheduling,'outbound_claim',lambda *a,**k:privacy.utcnow())
+    bot=SimpleNamespace(send_message=AsyncMock())
+    with factory() as db:
+        await scheduling.check_pulse_triggers(db,bot)
+    assert revoked
+    bot.send_message.assert_awaited_once()
+    assert bot.send_message.call_args.args[0]==second_chat
+    with factory() as db:
+        assert db.query(m.ReportAccessGrant).filter_by(user_id=first_id,purpose='pulse_report').count()==0
+        assert db.query(m.UserEvent).filter_by(user_id=first_id,event_name='pulse_sent').count()==0
+        assert db.query(m.ReportAccessGrant).filter_by(user_id=second_id,purpose='pulse_report').count()==1
+        assert db.query(m.UserEvent).filter_by(user_id=second_id,event_name='pulse_sent').count()==1

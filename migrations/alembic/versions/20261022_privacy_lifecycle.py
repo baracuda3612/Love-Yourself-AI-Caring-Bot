@@ -57,13 +57,18 @@ def upgrade():
         sa.Column("verified_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("due_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("completed_at", sa.DateTime(timezone=True)),
+        sa.Column("last_attempted_at", sa.DateTime(timezone=True)),
         sa.Column("evidence", postgresql.JSONB(), nullable=False, server_default="{}"),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint("kind IN ('access','export','correction','deletion')", name="ck_privacy_request_kind"),
         sa.CheckConstraint("state IN ('received','deleting','completed')", name="ck_privacy_request_state"),
         sa.CheckConstraint("due_at > received_at AND (verified_at IS NULL OR verified_at >= received_at)", name="ck_privacy_request_times"),
     )
-    op.create_index("ix_privacy_requests_pending", "privacy_requests", ["state", "due_at"])
+    op.create_index("ix_privacy_requests_pending", "privacy_requests", ["due_at", "id"],
+        postgresql_where=sa.text("state != 'completed'"))
+    op.create_index("ix_privacy_deletion_retry", "privacy_requests",
+        [sa.text("last_attempted_at ASC NULLS FIRST"), "received_at", "id"],
+        postgresql_where=sa.text("state = 'deleting'"))
     op.create_index("ix_privacy_receipts_expiry", "privacy_requests", ["expires_at"], postgresql_where=sa.text("state = 'completed'"))
     # Deleting accounts is immediately invisible to all current access/sends.
     # The durable request is the recovery obligation, not another user state.

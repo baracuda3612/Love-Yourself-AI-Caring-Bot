@@ -179,7 +179,7 @@ async def test_no_pulse_short_plan(monkeypatch):
             if isinstance(model, Exists):
                 return SimpleNamespace(scalar=lambda: True)
             if model is scheduler.AIPlan:
-                return _Query([SimpleNamespace(id=1, user_id=10, duration="SHORT", status="active", current_day=7)])
+                return _Query([SimpleNamespace(id=1, user_id=10, duration="SHORT", status="active", current_day=7, total_days=7)])
             if model is scheduler.User:
                 return _Query(SimpleNamespace(id=10, tg_id=100, timezone="Europe/Kyiv", is_active=True))
             if model is scheduler.AIPlanDay:

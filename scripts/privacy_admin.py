@@ -14,7 +14,7 @@ def main():
     notice.add_argument('--version',required=True);notice.add_argument('--file',required=True)
     notice.add_argument('--approved-artifact-ref',required=True)
     pin=sub.add_parser('pin-notice');pin.add_argument('--deployment',type=int,required=True);pin.add_argument('--notice',type=int,required=True)
-    sub.add_parser('queue')
+    queue=sub.add_parser('queue');queue.add_argument('--after',help='next_after cursor from the previous page')
     status=sub.add_parser('status');status.add_argument('request')
     intake=sub.add_parser('receive-email');intake.add_argument('--kind',required=True);intake.add_argument('--received-at',required=True)
     export=sub.add_parser('export');export.add_argument('request');export.add_argument('--output',required=True)
@@ -52,8 +52,9 @@ def main():
             row=privacy.record_manual_request(db,kind=args.kind,received_at=datetime.fromisoformat(args.received_at))
             db.commit();print(row.id);return
         if args.action == 'queue':
-            rows=db.query(PrivacyRequest).filter(PrivacyRequest.state!='completed').order_by(PrivacyRequest.due_at).limit(100).all()
-            print(json.dumps([{'case':str(r.id),'kind':r.kind,'state':r.state,'owner':r.owner,'due':r.due_at.isoformat(),'overdue':r.due_at<privacy.utcnow(),'verified':r.verified_at is not None} for r in rows]));return
+            rows,next_after=privacy.pending_request_page(db,after=args.after)
+            print(json.dumps({'requests':[{'case':str(r.id),'kind':r.kind,'state':r.state,'owner':r.owner,'due':r.due_at.isoformat(),'overdue':r.due_at<privacy.utcnow(),'verified':r.verified_at is not None} for r in rows],
+                'next_after':next_after}));return
         if args.action == 'retention':
             count=privacy.purge_retained_data(db);db.commit();print(count);return
         if args.action == 'status':
