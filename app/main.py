@@ -1,3 +1,6 @@
+from app.logging.privacy_logging import install_privacy_logging
+install_privacy_logging()
+
 import asyncio
 
 try:

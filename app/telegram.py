@@ -153,6 +153,7 @@ async def cmd_start(message: Message):
         await message.answer("Доступ зараз недоступний. Відкрий актуальне особисте посилання зі сторінки входу.")
         return
     await message.answer("Привіт! Доступ підтверджено. Давай познайомимось." if created else "З поверненням! Продовжуємо.")
+    await _show_privacy(message, user.id)
 
 
 # Gate all Telegram entrances before text, callbacks, Coach or history writes.
@@ -167,7 +168,7 @@ class EnrollmentMiddleware(BaseMiddleware):
         actor = getattr(event, 'from_user', None)
         if not actor or not message or message.chat.type != 'private' or message.chat.id != actor.id:
             return
-        if isinstance(event, Message) and (event.text or ' ').split(' ', 1)[0].split('@')[0] == '/start':
+        if isinstance(event, Message) and (event.text or ' ').split(' ', 1)[0].split('@')[0] in {'/start','/privacy','/data_request','/request_status'}:
             return await handler(event, data)
         try:
             with SessionLocal() as db:
@@ -232,11 +233,103 @@ async def cmd_spawn(message: Message):
     )
 
 
+async def _show_privacy(message, user_id):
+    from html import escape
+    from app.privacy import pinned_notice, SUPPORT_CONTACT
+    from app.access import AccessDenied
+    try:
+        with SessionLocal() as db:
+            deployment, notice = pinned_notice(db, user_id)
+            body, version, notice_id = notice.notice_text, notice.version, notice.id
+            contact = deployment.support_contact_ref or SUPPORT_CONTACT
+    except AccessDenied:
+        await message.answer("Повідомлення про приватність поки недоступне для цього доступу. "
+            "Для доступу до даних, копії, виправлення чи видалення: /data_request access, "
+            "export, correction або deletion. Підтримка: " + SUPPORT_CONTACT)
+        return
+    await message.answer(escape(body) + "\n\nВерсія: " + escape(version),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+            text="Ознайомився / ознайомилася", callback_data=f"privacy_ack:{notice_id}")]]))
+    await message.answer("Права щодо даних: /data_request access, /data_request export, "
+        "/data_request correction, /data_request deletion. Статус: /request_status. "
+        + ("Відповідальний контакт: " + escape(contact) if contact else "Контакт підтримки ще не активовано."))
+
+
+@router.message(Command("privacy"))
+async def privacy_notice(message: Message):
+    with SessionLocal() as db:
+        user = db.query(User).filter_by(tg_id=message.from_user.id).first()
+        if user is None:
+            await message.answer("Дані недоступні.")
+            return
+        user_id = user.id
+    await _show_privacy(message, user_id)
+
+
+@router.callback_query(F.data.startswith("privacy_ack:"))
+async def privacy_ack(callback: CallbackQuery):
+    from app.privacy import acknowledge_notice
+    from app.access import AccessDenied
+    try:
+        notice_id = int(callback.data.split(':',1)[1])
+        with SessionLocal() as db:
+            user = db.query(User).filter_by(tg_id=callback.from_user.id).first()
+            if user is None:
+                raise AccessDenied()
+            acknowledge_notice(db, user.id, notice_id,
+                f"telegram:notice:{callback.message.chat.id}:{callback.message.message_id}:{callback.id}")
+            db.commit()
+    except (AccessDenied, ValueError):
+        await callback.answer("Повідомлення змінилося або доступ недоступний. Відкрий /privacy.")
+        return
+    await callback.answer("Ознайомлення з цією версією записано.")
+
+
+@router.message(Command("data_request"))
+async def data_request(message: Message):
+    from app.privacy import receive_request, REQUEST_KINDS
+    from app.access import AccessDenied
+    args = (message.text or '').split()
+    if len(args) not in {2,3} or args[1] not in REQUEST_KINDS:
+        await message.answer("Вкажи вид: /data_request access, export, correction або deletion. "
+            "Не надсилай документи чи чутливі подробиці в цей чат.")
+        return
+    try:
+        with SessionLocal() as db:
+            row = receive_request(db, tg_id=message.from_user.id, kind=args[1],
+                source_operation_id=f"telegram:rights:{message.chat.id}:{message.message_id}",
+                case_id=args[2] if len(args)==3 else None)
+            db.commit()
+            receipt = f"Запит {row.id} отримано. Строк відповіді: {row.due_at.date().isoformat()}."
+        await message.answer(receipt)
+    except (AccessDenied, ValueError):
+        await message.answer("Запит не записано: підтримка зараз недоступна. Спробуй пізніше.")
+
+
+@router.message(Command("request_status"))
+async def request_status(message: Message):
+    from app.db import PrivacyRequest
+    with SessionLocal() as db:
+        user = db.query(User).filter_by(tg_id=message.from_user.id).first()
+        rows = [] if user is None else db.query(PrivacyRequest).filter_by(user_id=user.id).order_by(
+            PrivacyRequest.received_at.desc()).limit(10).all()
+        status_names = {'received':'отримано','deleting':'видалення триває','completed':'виконано'}
+        reply = '\n'.join(f"{r.id}: {status_names[r.state]}, строк {r.due_at.date().isoformat()}" for r in rows)
+    await message.answer(reply or "Активних записів запитів немає.")
+
+
 @router.message(F.text)
 async def on_text(message: Message):
     text = message.text or ""
     with SessionLocal() as db:
         user, _ = _ensure_user(db, message.from_user)
+        from app.privacy import pinned_notice
+        from app.access import AccessDenied
+        try:
+            pinned_notice(db, user.id, acknowledged=True)
+        except AccessDenied:
+            await _show_privacy(message, user.id)
+            return
         db.add(ChatHistory(user_id=user.id, role="user", text=text))
         # Log user activity for silence detection
         # This event is read by check_silent_users() in scheduler.py
@@ -376,11 +469,15 @@ async def _send_agent_response(message: Message, user_id: int, response: dict) -
         return
     reply_text = _sanitize_message_text(response.get("reply_text"))
     await message.answer(reply_text)
-    await session_memory.append_message(user_id, "assistant", reply_text)
-
     with SessionLocal() as db:
+        from app.access import AccessDenied, require_access
+        try:
+            require_access(db, user_id)
+        except AccessDenied:
+            return
         db.add(ChatHistory(user_id=user_id, role="assistant", text=reply_text))
         db.commit()
+    await session_memory.append_message(user_id, "assistant", reply_text)
 
 
 __all__ = ["bot", "dp", "router"]

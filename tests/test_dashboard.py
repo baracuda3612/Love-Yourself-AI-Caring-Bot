@@ -8,28 +8,13 @@ from fastapi.testclient import TestClient
 
 from app import api
 from app.plan_completion.timeline import get_plan_timeline
-from app.plan_completion.tokens import make_report_token, verify_report_token
+from app.plan_completion.tokens import verify_report_token
 
 
-def test_tokens_roundtrip_plan_id_only():
-    token = make_report_token(123, "secret")
-    assert verify_report_token(token, "secret") == 123
-
-
-def test_tokens_invalid_returns_none():
+def test_legacy_stateless_report_tokens_never_grant_access():
+    # Actual grant validity/expiry/revocation/owner checks are rehearsed on PG.
+    assert verify_report_token("MTIzOld-stateless-signature", "secret") is None
     assert verify_report_token("bad-token", "secret") is None
-
-
-def test_tokens_tampered_returns_none():
-    token = make_report_token(123, "secret")
-    tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
-    assert verify_report_token(tampered, "secret") is None
-
-
-def test_tokens_padding_edge_case_no_extra_padding_needed():
-    token = make_report_token(1, "secret")
-    if len(token) % 4 == 0:
-        assert verify_report_token(token, "secret") == 1
 
 
 @dataclass
@@ -178,7 +163,8 @@ class _ApiDB:
 
 
 def test_report_valid_token_200_contains_completion_rate(monkeypatch):
-    token = make_report_token(55, "secret")
+    token = "scoped-grant-test-double"
+    monkeypatch.setattr(api,"resolve_report_grant",lambda db,raw,purpose:55)
     monkeypatch.setattr(api.settings, "REPORT_TOKEN_SECRET", "secret")
     monkeypatch.setattr(api, "SessionLocal", lambda: _ContextSession(_ApiDB(SimpleNamespace(id=55, user_id=777), SimpleNamespace(id=777, profile={}))))
     monkeypatch.setattr(api, "build_completion_metrics", lambda *_: SimpleNamespace(completion_rate=0.5, total_days=21, best_streak=3, adaptation_count=1, dominant_time_slot="MORNING", focus="mixed", duration="STANDARD", outcome_tier="NEUTRAL"))
@@ -202,7 +188,8 @@ def test_report_invalid_token_404(monkeypatch):
 
 
 def test_report_uses_plan_user_id_not_token_user_id(monkeypatch):
-    token = make_report_token(99, "secret")
+    token = "scoped-grant-test-double"
+    monkeypatch.setattr(api,"resolve_report_grant",lambda db,raw,purpose:99)
     monkeypatch.setattr(api.settings, "REPORT_TOKEN_SECRET", "secret")
     captured = {}
 

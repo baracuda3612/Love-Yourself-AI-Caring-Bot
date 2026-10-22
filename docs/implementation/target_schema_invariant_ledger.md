@@ -40,6 +40,7 @@ immutable terminal snapshot do not become a parallel writer.
 | events | `user_events` | One allow-listed envelope per stable source operation owns personal event history. | `plan_execution_windows`, `task_stats`, `failure_signals`, logs, and aggregate rows cannot manufacture personal events. | WP-01.4 schema; WP-07.1 instrumentation |
 | feedback | `feedback_events` | One source-typed record owns the submitted value and, when allowed, exact user wording. | Coach chat, event properties, aggregate dimensions, email, and issue trackers cannot be the capture authority. | WP-01.4 schema; WP-03.4/WP-05.2 behavior |
 | notice acknowledgement | `notice_acknowledgements` | User, deployment, exact notice version, acknowledgement time, and source operation own the fact. | Current policy text, deployment default, onboarding state, and logs cannot imply acknowledgement. | WP-01.4 schema; WP-04.2 behavior |
+| data-rights requests | `privacy_requests` | Restricted case UUID, verified subject, accountable support owner, actual receipt/deadline and execution state; erased-subject receipts retain no subject/source join and expire after 90 days. | Mailbox text, user messages, Redis and events cannot prove fulfillment. | WP-04.2 |
 | report grants | `report_access_grants` | A hashed, scoped, expiring, revocable grant row owns bearer access. | A signed `plan_id`, URL possession, Redis, and current secret configuration cannot grant indefinite access. | WP-01.4 schema; WP-04.2 behavior |
 | aggregates | `aggregate_records` | The table owns both bounded personal contributions and their one-way immutable sealed cells, distinguished by `record_kind`. | Ad-hoc counters, `task_stats`, event recounts during deletion, Redis, spreadsheets, and dashboards cannot become aggregate truth. | WP-01.4 ingestion primitive; WP-07.3 sealing |
 
@@ -66,8 +67,8 @@ forward migration and compatibility tests.
 | `user_profiles` | `RESHAPE`: one row per user; keep allow-listed onboarding preferences such as display/name preference, communication style, Coach persona, `daily_time_slots`, and `active_days`. | `user_id -> users.id ON DELETE CASCADE`; unique `user_id`. |
 | `onboarding_progress` | `ADD`: `user_id`, optional `deployment_enrollment_id`, allow-listed `stage`, `started_at`, `completed_at`, `updated_at`. It owns setup progress only before a plan exists. | `user_id -> users.id ON DELETE CASCADE`; enrollment uses `ON DELETE RESTRICT`; one row per user. |
 | `chat_history` | `RETAIN`: `id`, `user_id`, `role`, `text`, `created_at`, `expires_at`. PostgreSQL is durable conversation truth and enforces the retention deadline. | `user_id -> users.id ON DELETE CASCADE`. |
-| `user_facts` | `REMOVE`: the speculative fact store, including `MEDICAL`, has no accepted production writer or retention contract. | WP-04.2 verifies deployed emptiness/use and removes it before real employee data. |
-| `user_daily_logs` | `REMOVE`: mood/stress/energy/note fields are not an accepted MVP mechanism. | WP-04.2 verifies deployed emptiness/use and removes it before real employee data. |
+| `user_facts` | `REMOVE` (WP-04.2 candidate removes only after a locked empty-target check): the speculative fact store, including `MEDICAL`, has no accepted production writer or retention contract. | WP-04.2 verifies deployed emptiness/use and removes it before real employee data. |
+| `user_daily_logs` | `REMOVE` (same guarded WP-04.2 cutover): mood/stress/energy/note fields are not an accepted MVP mechanism. | WP-04.2 verifies deployed emptiness/use and removes it before real employee data. |
 
 ### Versioned content and plan aggregate
 
@@ -230,6 +231,8 @@ duplicate single-column indexes are not copied automatically.
 | `ix_invitations_expiry` on `(expires_at, id)` where unredeemed/unrevoked | Expiry cleanup. | WP-04.1 |
 | `ix_entitlements_identity_current` on `(access_identity_id, deployment_id)` where not revoked | Authorization and reconciliation. | WP-04.1 |
 | `ix_enrollments_user_current` on `(user_id)` where not ended | Returning-user authorization. | WP-04.1 |
+| `ix_feedback_retention` / source-FK indexes | Bounded text-feedback expiry and removal before retained-chat deletion. | WP-04.2 |
+| `ix_privacy_requests_pending` / completed-receipt expiry | Bounded due/overdue operator queue and final receipt cleanup. | WP-04.2 |
 | `ix_report_grants_expiry` on `(expires_at, id)` where not revoked | Access check cleanup/revocation. | WP-04.2 |
 | `ix_feedback_user_time` on `(user_id, created_at DESC)` | Personal export/deletion and product review. | WP-01.4 |
 | `ix_aggregate_records_cell` on metric/schema/period/dimension key | Idempotent contribution/seal and approved report reads. | WP-01.4/WP-07.3 |
@@ -289,7 +292,7 @@ notice acknowledgement, report access, occurrences, or aggregates.
 
 | Namespace template | Class | TTL seconds | Failure semantics | Owner |
 |---|---|---:|---|---|
-| `ly:{environment}:session:{user_id}:messages:v1` | `transient_session` | 86400 | At most 20 Coach-context messages; each payload carries `created_at`, and every read/append prunes entries at or beyond their individual 90-day retention deadline before returning context. The one-day key TTL deliberately keeps only recently active sessions in paid RAM; rebuild from retained `chat_history` on any miss and never prefer a partial cache as newer durable truth. | WP-04.2/WP-05.1 |
+| `ly:{environment}:session:{user_id}:messages:v1` | `transient_session` | 86400 | At most 20 Coach-context messages; each payload carries `created_at` and `expires_at`; TTL is shortened to the earliest message deadline, and every read/append prunes entries at or beyond their individual 90-day retention deadline before returning context. The one-day key TTL deliberately keeps only recently active sessions in paid RAM; validate every bounded snapshot from retained `chat_history` and rebuild on missing/partial/stale cache. Cache and pending-action writes serialize with deletion on the user lock in a worker; Redis never supplies newer durable truth. | WP-04.2/WP-05.1 |
 | `ly:{environment}:session:{user_id}:pending_action:v1` | `transient_session` | 3600 | A lost key repeats or safely abandons the prompt; it cannot prove an operation committed. | Owning onboarding/runtime-action package |
 
 Any future coordination namespace must name its owning operation, version, and

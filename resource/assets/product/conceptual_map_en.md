@@ -91,8 +91,11 @@ days to 7 days.
 The user can see their own activity and exercise completion pattern in the
 summary for the completed 7 or 14 days.
 
-The company can see only anonymized, aggregated data about how the team uses
-Love Yourself as a whole.
+The company has no live, individual, free-text or small-group view. Only one
+post-pilot aggregate product-usage summary may be released, with at least 100
+eligible users and 50 distinct contributors, containing only counts eligible at launch, enrolled, and active in the
+stated 7- or 14-day window. No wellbeing, health or productivity reporting is permitted.
+Internal user-linked telemetry is personal data.
 
 The company cannot see the user's conversation, the exercises they received,
 whether they completed or skipped a specific exercise, or their individual

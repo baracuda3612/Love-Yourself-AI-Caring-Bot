@@ -322,8 +322,12 @@ def test_restart_sweep_restores_past_due_retry_and_ui(db,monkeypatch):
     from test_exercise_presentation_delivery import bot
     user,_,step=active_step(db)
     claim=claim_send(db,step.id)
-    now=datetime.now(timezone.utc)-timedelta(seconds=60)
+    now=datetime.now(timezone.utc)
     finish_send(db,claim.attempt_id,ExerciseSendResult('failed','text',claim.presentation,'x',failure_code='limit',retry_after=30),now=now)
+    # Seed a persisted overdue retry without backdating an actual event before
+    # its claim or the freshly migrated event catalogue.
+    latest_attempt(db,step.id).next_attempt_at=now-timedelta(seconds=1)
+    db.flush()
     monkeypatch.setattr(scheduler,'SessionLocal',lambda:nullcontext(db)); monkeypatch.setattr(db,'commit',db.flush)
     monkeypatch.setattr(scheduler,'_event_loop',object()); monkeypatch.setattr(active_days,'is_active_day',lambda *_a:True)
     tg=bot(chat_id=user.tg_id); monkeypatch.setattr(telegram,'bot',tg)

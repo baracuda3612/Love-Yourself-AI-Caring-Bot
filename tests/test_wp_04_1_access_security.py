@@ -414,6 +414,8 @@ async def test_revocation_during_coach_generation_denies_reply_and_history(monke
     monkeypatch.setattr(orchestrator, '_auto_complete_plan_if_needed_for_user_id', no_completion)
     monkeypatch.setattr(orchestrator, 'build_user_context', AsyncMock(return_value={'current_mode': CurrentMode.ACTIVE.value}))
     monkeypatch.setattr(orchestrator, 'coach_agent', AsyncMock(return_value={'reply_text': 'private generated reply'}))
+    from app import privacy
+    monkeypatch.setattr(privacy,'pinned_notice',lambda *a,**k:None)
     response = await orchestrator.handle_incoming_message(77, 'hello')
     assert memory.messages == [(77, 'user', 'hello')]
     monkeypatch.setattr(access,'outbound_claim',lambda *a,**k:None)
@@ -434,6 +436,7 @@ async def test_assistant_memory_records_only_confirmed_telegram_reply(monkeypatc
     memory = Memory()
     monkeypatch.setattr(telegram, 'session_memory', memory)
     monkeypatch.setattr(access, 'outbound_claim', lambda *a, **k: access.now_utc())
+    monkeypatch.setattr(access,'require_access',lambda *a,**k:None)
     stored = []
     class DB:
         def add(self, row): stored.append(row)

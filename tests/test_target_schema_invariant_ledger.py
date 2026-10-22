@@ -36,6 +36,7 @@ def test_every_required_mechanism_has_one_named_database_authority() -> None:
         "feedback": "feedback_events",
         "notice acknowledgement": "notice_acknowledgements",
         "report grants": "report_access_grants",
+        "data-rights requests": "privacy_requests",
         "aggregates": "aggregate_records",
     }
     rows = _table_rows("## Sole database authority ledger")

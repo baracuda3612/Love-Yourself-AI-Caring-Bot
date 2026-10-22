@@ -25,7 +25,17 @@ def create_redis_client(url: str | None = None) -> redis.Redis | None:
         return None
 
     try:
-        return redis.from_url(redis_url, encoding="utf-8", decode_responses=True)
+        return redis.from_url(redis_url, encoding="utf-8", decode_responses=True, socket_timeout=2, socket_connect_timeout=2)
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("Failed to create Redis client: %s", exc)
         return None
+
+
+@lru_cache
+def create_sync_redis_client():
+    """Bounded cache I/O runs in the same worker as its PostgreSQL user lock."""
+    if not settings.REDIS_URL:
+        return None
+    from redis import Redis
+    return Redis.from_url(settings.REDIS_URL, encoding='utf-8', decode_responses=True,
+        socket_timeout=2, socket_connect_timeout=2)

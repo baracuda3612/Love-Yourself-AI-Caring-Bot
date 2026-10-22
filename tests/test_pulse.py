@@ -8,7 +8,6 @@ from fastapi.testclient import TestClient
 
 from app import api, scheduler
 from app.plan_completion.pulse import build_pulse_data
-from app.plan_completion.tokens import make_report_token
 
 
 @dataclass
@@ -194,7 +193,8 @@ async def test_no_pulse_short_plan(monkeypatch):
 
 
 def test_pulse_endpoint_returns_html(monkeypatch):
-    token = make_report_token(55, "secret")
+    token = "scoped-grant-test-double"
+    monkeypatch.setattr(api,"resolve_report_grant",lambda db,raw,purpose:55)
     monkeypatch.setattr(api.settings, "REPORT_TOKEN_SECRET", "secret")
 
     class _Ctx:
@@ -223,7 +223,8 @@ def test_pulse_endpoint_returns_html(monkeypatch):
 
 
 def test_pulse_endpoint_inactive_plan(monkeypatch):
-    token = make_report_token(55, "secret")
+    token = "scoped-grant-test-double"
+    monkeypatch.setattr(api,"resolve_report_grant",lambda db,raw,purpose:55)
     monkeypatch.setattr(api.settings, "REPORT_TOKEN_SECRET", "secret")
 
     class _Ctx:

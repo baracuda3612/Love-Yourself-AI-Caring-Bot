@@ -155,29 +155,9 @@ def _safe_timezone(name: Optional[str]) -> pytz.BaseTzInfo:
 
 
 async def get_stm_history(user_id: int) -> List[Dict[str, str]]:
-    """Short-term memory with Redis primary and Postgres fallback."""
-
-    history = await session_memory.get_recent_messages(user_id)
-    if history:
-        return [
-            {"role": item.get("role"), "content": item.get("text")}
-            for item in history
-            if isinstance(item, dict)
-        ]
-
-    with SessionLocal() as db:
-        rows = (
-            db.query(ChatHistory.role, ChatHistory.text, ChatHistory.created_at)
-            .filter(ChatHistory.user_id == user_id)
-            .order_by(ChatHistory.created_at.desc())
-            .limit(session_memory.limit)
-            .all()
-        )
-
-    return [
-        {"role": row.role, "content": row.text}
-        for row in reversed(rows)
-    ]
+    """Only retained durable conversation may enter Coach context."""
+    return [{"role":item['role'], "content":item['text']}
+        for item in await session_memory.get_recent_messages(user_id)]
 
 
 async def get_ltm_snapshot(user_id: int) -> Dict[str, Any]:
@@ -910,6 +890,15 @@ async def handle_incoming_message(
     try:
         await _auto_complete_plan_if_needed_for_user_id(user_id)
     except LifecycleEntitlementError:
+        return {"reply_text": "Доступ до Love Yourself зараз неактивний."}
+    from app.privacy import pinned_notice, NoticeRequired
+    from app.access import AccessDenied
+    try:
+        with SessionLocal() as db:
+            pinned_notice(db, user_id, acknowledged=True)
+    except NoticeRequired:
+        return {"reply_text": "Перед розмовою відкрий /privacy та підтвердь ознайомлення з актуальним повідомленням."}
+    except AccessDenied:
         return {"reply_text": "Доступ до Love Yourself зараз неактивний."}
     await session_memory.append_message(user_id, "user", message_text)
 
