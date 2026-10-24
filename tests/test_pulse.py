@@ -8,7 +8,6 @@ from fastapi.testclient import TestClient
 
 from app import api, scheduler
 from app.plan_completion.pulse import build_pulse_data
-from app.plan_completion.tokens import make_report_token
 
 
 @dataclass
@@ -180,7 +179,7 @@ async def test_no_pulse_short_plan(monkeypatch):
             if isinstance(model, Exists):
                 return SimpleNamespace(scalar=lambda: True)
             if model is scheduler.AIPlan:
-                return _Query([SimpleNamespace(id=1, user_id=10, duration="SHORT", status="active", current_day=7)])
+                return _Query([SimpleNamespace(id=1, user_id=10, duration="SHORT", status="active", current_day=7, total_days=7)])
             if model is scheduler.User:
                 return _Query(SimpleNamespace(id=10, tg_id=100, timezone="Europe/Kyiv", is_active=True))
             if model is scheduler.AIPlanDay:
@@ -194,7 +193,8 @@ async def test_no_pulse_short_plan(monkeypatch):
 
 
 def test_pulse_endpoint_returns_html(monkeypatch):
-    token = make_report_token(55, "secret")
+    token = "scoped-grant-test-double"
+    monkeypatch.setattr(api,"resolve_report_grant",lambda db,raw,purpose:55)
     monkeypatch.setattr(api.settings, "REPORT_TOKEN_SECRET", "secret")
 
     class _Ctx:
@@ -223,7 +223,8 @@ def test_pulse_endpoint_returns_html(monkeypatch):
 
 
 def test_pulse_endpoint_inactive_plan(monkeypatch):
-    token = make_report_token(55, "secret")
+    token = "scoped-grant-test-double"
+    monkeypatch.setattr(api,"resolve_report_grant",lambda db,raw,purpose:55)
     monkeypatch.setattr(api.settings, "REPORT_TOKEN_SECRET", "secret")
 
     class _Ctx:

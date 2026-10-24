@@ -12,15 +12,8 @@ logger = logging.getLogger(__name__)
 
 
 async def _complete(llm_client, system: str, user: str) -> str:
-    if hasattr(llm_client, "complete"):
-        return await llm_client.complete(
-            system=system,
-            user=user,
-            max_tokens=150,
-            temperature=0.7,
-        )
-
     response = await llm_client.responses.create(
+        store=False,
         model=settings.MODEL,
         input=[
             {"role": "system", "content": system},

@@ -15,7 +15,8 @@ from app.plan_completion.metrics import build_completion_metrics
 from app.plan_completion.pulse import build_pulse_data
 from app.plan_completion.report import _pick_observation, build_completion_report
 from app.plan_completion.timeline import get_plan_timeline
-from app.plan_completion.tokens import verify_report_token
+from app.plan_completion.tokens import resolve_report_grant
+from app.access import AccessDenied
 from app.lifecycle import (
     LifecycleInvariantError,
     LifecycleTransitionError,
@@ -50,6 +51,19 @@ async def access_perimeter(request: Request, call_next):
     response.headers.update({"Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff", "X-Robots-Tag": "noindex, nofollow",
         "Content-Security-Policy": "default-src 'none'; form-action 'self' https://accounts.google.com https://login.microsoftonline.com; base-uri 'none'; frame-ancestors 'none'"})
+    return response
+
+
+@app.middleware("http")
+async def report_privacy_perimeter(request: Request, call_next):
+    if not request.url.path.startswith(("/report/", "/pulse/")):
+        return await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        response = HTMLResponse("<h1>Посилання недоступне.</h1>", status_code=404)
+    response.headers.update({"Cache-Control":"no-store", "Referrer-Policy":"no-referrer",
+        "X-Content-Type-Options":"nosniff", "X-Robots-Tag":"noindex, nofollow"})
     return response
 
 
@@ -301,24 +315,24 @@ def set_user_time_slots(
 
 @app.get("/report/{token}", response_class=HTMLResponse)
 async def completion_report(request: Request, token: str):
-    plan_id = verify_report_token(token, settings.REPORT_TOKEN_SECRET)
-    if plan_id is None:
-        return HTMLResponse("<h1>Посилання недійсне або застаріле.</h1>", status_code=404)
-
     with SessionLocal() as db:
+        try:
+            plan_id = resolve_report_grant(db, token, "completion_report")
+        except AccessDenied:
+            return HTMLResponse("<h1>Посилання недоступне.</h1>", status_code=404)
         plan = db.query(AIPlan).filter(AIPlan.id == plan_id).first()
         if not plan:
-            return HTMLResponse("<h1>План не знайдено.</h1>", status_code=404)
+            return HTMLResponse("<h1>Посилання недоступне.</h1>", status_code=404)
         user_id = plan.user_id
 
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
-            return HTMLResponse("<h1>Користувача не знайдено.</h1>", status_code=404)
+            return HTMLResponse("<h1>Посилання недоступне.</h1>", status_code=404)
 
         try:
             metrics = build_completion_metrics(db, user_id, plan_id)
         except Exception:
-            return HTMLResponse("<h1>Дані плану недоступні.</h1>", status_code=404)
+            return HTMLResponse("<h1>Посилання недоступне.</h1>", status_code=404)
 
         persona = "empath"
         if isinstance(user.profile, dict):
@@ -368,22 +382,22 @@ async def completion_report(request: Request, token: str):
 
 @app.get("/pulse/{token}", response_class=HTMLResponse)
 async def pulse_report(request: Request, token: str):
-    plan_id = verify_report_token(token, settings.REPORT_TOKEN_SECRET)
-    if plan_id is None:
-        return HTMLResponse("<h1>Посилання недійсне або застаріле.</h1>", status_code=404)
-
     with SessionLocal() as db:
+        try:
+            plan_id = resolve_report_grant(db, token, "pulse_report")
+        except AccessDenied:
+            return HTMLResponse("<h1>Посилання недоступне.</h1>", status_code=404)
         plan = db.query(AIPlan).filter(AIPlan.id == plan_id).first()
         if not plan:
-            return HTMLResponse("<h1>План не знайдено.</h1>", status_code=404)
+            return HTMLResponse("<h1>Посилання недоступне.</h1>", status_code=404)
 
         if plan.status != "active":
-            return HTMLResponse("<h1>План не активний.</h1>", status_code=404)
+            return HTMLResponse("<h1>Посилання недоступне.</h1>", status_code=404)
 
         try:
             data = build_pulse_data(plan_id, db)
         except Exception:
-            return HTMLResponse("<h1>Дані плану недоступні.</h1>", status_code=404)
+            return HTMLResponse("<h1>Посилання недоступне.</h1>", status_code=404)
 
     if templates is None:
         return HTMLResponse(f"<h1>Pulse: день {data.active_day_number}</h1>")

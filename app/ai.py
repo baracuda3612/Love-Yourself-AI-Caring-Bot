@@ -88,6 +88,7 @@ def extract_tool_call(response: Any) -> dict | None:
 async def _call_openai(messages):
     """Базовий виклик OpenAI; залишається для сумісності клієнта."""
     resp = await async_client.responses.create(
+        store=False,
         model=settings.MODEL,
         input=messages,
         max_output_tokens=settings.MAX_TOKENS,

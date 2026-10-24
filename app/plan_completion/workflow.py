@@ -128,12 +128,13 @@ def claim_report(db, user_id, plan_id, *, now=None, release_operation_id=None):
     else:
         from app.plan_completion.metrics import build_completion_metrics
         from app.plan_completion.report import build_completion_report
-        from app.plan_completion.tokens import make_report_token
+        from app.plan_completion.tokens import issue_report_grant
         from app.config import settings
         metrics = build_completion_metrics(db, user_id, plan_id)
         payload = build_completion_report(metrics, continuation=continuation)
-        url = f'{settings.APP_BASE_URL}/report/{make_report_token(plan_id, settings.REPORT_TOKEN_SECRET)}'
-        payload += f'\n\n🔗 <a href="{url}">Детальний звіт →</a>'
+        token = issue_report_grant(db, user_id, plan_id, 'completion_report')
+        url = f'{settings.APP_BASE_URL}/report/{token}'
+        payload += f'\n\n🔗 <a href="{url}">Детальний звіт →</a> (посилання діє 7 днів)'
         row.payload = payload
         row.started_at = now
         row.attempts += 1

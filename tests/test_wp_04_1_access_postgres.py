@@ -502,7 +502,8 @@ async def test_returning_telegram_start_and_revoked_text_do_not_repeat_sso(db,mo
     message=SimpleNamespace(text='/start',from_user=tg,chat=SimpleNamespace(id=tg.id,type='private'),answer=AsyncMock())
     before=db.query(User).count()
     await telegram.cmd_start(message)
-    assert message.answer.call_args.args[0]=='З поверненням! Продовжуємо.'
+    assert message.answer.call_args_list[0].args[0]=='З поверненням! Продовжуємо.'
+    assert '/data_request' in message.answer.call_args.args[0]
     assert db.query(User).count()==before
     access.revoke_entitlement(db,entitlement_id=entitlement.id)
     await telegram.cmd_start(message)

@@ -23,7 +23,7 @@ from sqlalchemy.orm import sessionmaker
 from scripts.inspect_database_schema import inspect_database
 
 
-EXPECTED_REVISION = "20261015_access_authority"
+EXPECTED_REVISION = "20261022_privacy_lifecycle"
 EXPECTED_APPLICATION_TABLES = {
     "access_proofs",
     "access_admin_operations",
@@ -55,12 +55,11 @@ EXPECTED_APPLICATION_TABLES = {
     "plan_lifecycle_operations",
     "plan_completions",
     "privacy_notice_versions",
+    "privacy_requests",
     "organizations",
     "report_access_grants",
     "task_stats",
-    "user_daily_logs",
     "user_events",
-    "user_facts",
     "user_profiles",
     "users",
 }
@@ -70,8 +69,6 @@ EXPECTED_ENUMS = {
     "deployment_timezone_mode",
     "difficulty_level",
     "engagementstatus",
-    "fact_category",
-    "factcategory",
     "feedback_category",
     "feedback_source",
     "plan_module",

@@ -786,12 +786,12 @@ def _compose_messages(payload: Dict[str, Any]) -> List[Dict[str, str]]:
 
     history_messages = _prepare_history(payload.get("short_term_history"))
 
-    messages.extend(history_messages)
+    messages.extend([{**m, "content": str(m.get("content", ""))[:4000]} for m in history_messages[-20:]])
 
-    user_text = payload.get("message_text")
+    user_text = str(payload.get("message_text") or "")[:4000]
     if user_text:
         if not messages or messages[-1].get("content") != user_text or messages[-1].get("role") != "user":
-            messages.append({"role": "user", "content": str(user_text)})
+            messages.append({"role": "user", "content": str(user_text)[:4000]})
 
     return messages
 
@@ -1131,6 +1131,7 @@ async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     request_kwargs: Dict[str, Any] = {
+        "store": False,
         "model": settings.COACH_MODEL,
         "input": messages,
         "max_output_tokens": settings.MAX_TOKENS,
@@ -1141,7 +1142,7 @@ async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         response = await async_client.responses.create(**request_kwargs)
     except Exception as exc:
-        logger.error("[coach_model_unavailable] %s: %s", exc.__class__.__name__, exc, exc_info=True)
+        logger.error("coach_model_unavailable type=%s", exc.__class__.__name__)
         return {
             "agent_name": "coach_agent",
             "reply_type": "error",
@@ -1151,7 +1152,7 @@ async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
             "debug": {
                 "note": "Coach agent unavailable",
                 "status": "temporary_unavailable",
-                "error": str(exc),
+                "error": "provider_unavailable",
                 "model": settings.COACH_MODEL,
             },
         }
@@ -1160,7 +1161,7 @@ async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
     # reply_text will be empty and tool_call carries the action.
     tool_call = extract_tool_call(response)
     if tool_call:
-        logger.info("[coach_tool_call] tool=%s args=%s", tool_call["name"], tool_call["arguments"])
+        logger.info("coach_tool_call")
         return {
             "agent_name": "coach_agent",
             "reply_type": "tool_call",
@@ -1170,7 +1171,7 @@ async def coach_agent(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     content = extract_output_text(response)
-    logger.info("[coach_response] reply_preview=%s", content[:500])
+    logger.info("coach_response_received")
 
     return {
         "agent_name": "coach_agent",

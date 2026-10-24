@@ -29,6 +29,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from sqlalchemy.sql import func
+from sqlalchemy import text as sql_text
 
 from app.config import settings
 from app.schemas.planner import PlanModule, StepType, DifficultyLevel
@@ -43,7 +44,7 @@ SessionLocal = sessionmaker(
 Base = declarative_base()
 logger = logging.getLogger(__name__)
 
-EXPECTED_ALEMBIC_REVISION = "20261015_access_authority"
+EXPECTED_ALEMBIC_REVISION = "20261022_privacy_lifecycle"
 
 
 class SchemaVersionError(RuntimeError):
@@ -72,14 +73,6 @@ class PlanStatus(PyEnum):
     PAUSED = "paused"
     COMPLETED = "completed"
     ABANDONED = "abandoned"
-
-
-class FactCategory(PyEnum):
-    GOAL = "goal"
-    PREFERENCE = "preference"
-    MEDICAL = "medical"
-    BIOGRAPHY = "biography"
-    INSIGHT = "insight"
 
 
 class EngagementStatus(PyEnum):
@@ -113,9 +106,7 @@ class User(Base):
 
     chat_history = relationship("ChatHistory", back_populates="user", cascade="all, delete-orphan")
     profile = relationship("UserProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
-    facts = relationship("UserFact", back_populates="user", cascade="all, delete-orphan")
     plans = relationship("AIPlan", back_populates="user", cascade="all, delete-orphan")
-    daily_logs = relationship("UserDailyLog", back_populates="user", cascade="all, delete-orphan")
     plan_instances = relationship("PlanInstance", back_populates="user", cascade="all, delete-orphan")
     events = relationship("UserEvent", back_populates="user", cascade="all, delete-orphan")
     feedback_events = relationship(
@@ -182,10 +173,14 @@ class ChatHistory(Base):
     user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
     role = Column(Text, nullable=False)
     text = Column(Text, nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    expires_at = Column(DateTime(timezone=True), server_default=sql_text("now() + interval '90 days'"), nullable=False)
 
     __table_args__ = (
+        Index("ix_chat_history_user_recent", "user_id", sql_text("created_at DESC"), sql_text("id DESC")),
+        Index("ix_chat_history_retention", "expires_at", "id"),
         CheckConstraint("role in ('user','assistant')", name="ck_chat_history_role"),
+        CheckConstraint("expires_at <= created_at + interval '90 days'", name="ck_chat_retention"),
     )
 
     user = relationship("User", back_populates="chat_history")
@@ -224,19 +219,6 @@ class UserProfile(Base):
     evening_slot_collected = Column(Boolean, nullable=False, default=False)
 
     user = relationship("User", back_populates="profile")
-
-
-class UserFact(Base):
-    __tablename__ = "user_facts"
-
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
-    category = Column(Enum(FactCategory), nullable=False)
-    content = Column(Text, nullable=False)
-    relevance = Column(Integer, default=0)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    user = relationship("User", back_populates="facts")
 
 
 # -------------------- PLANS --------------------
@@ -552,6 +534,7 @@ class PrivacyNoticeVersion(Base):
     published_at = Column(DateTime(timezone=True), nullable=False)
     content_digest = Column(String(128), nullable=False)
     content_location = Column(String(512), nullable=False)
+    notice_text = Column(Text, nullable=True)
     is_current = Column(Boolean, nullable=False, default=False)
     retired_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -1102,6 +1085,7 @@ class ReportAccessGrant(Base):
 
     id = Column(BigInteger, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    deployment_id = Column(BigInteger, ForeignKey("deployments.id", ondelete="RESTRICT"), nullable=True)
     plan_id = Column(Integer, nullable=False)
     purpose = Column(
         Enum("completion_report", "pulse_report", name="report_grant_purpose"),
@@ -1211,19 +1195,22 @@ class FailureSignal(Base):
     detected_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
-# -------------------- ANALYTICS --------------------
-class UserDailyLog(Base):
-    __tablename__ = "user_daily_logs"
-
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    date = Column(String, nullable=False)
-    stress_level = Column(Integer)
-    energy_level = Column(Integer)
-    mood_note = Column(Text)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    user = relationship("User", back_populates="daily_logs")
+class PrivacyRequest(Base):
+    """Restricted rights queue. Final deletion receipts contain no subject join key."""
+    __tablename__ = "privacy_requests"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    kind = Column(String(16), nullable=False)
+    state = Column(String(24), nullable=False, default="received")
+    source_operation_id = Column(String(160), nullable=True, unique=True)
+    owner = Column(String(160), nullable=False)
+    received_at = Column(DateTime(timezone=True), nullable=False)
+    due_at = Column(DateTime(timezone=True), nullable=False)
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    evidence = Column(JSONB, nullable=False, default=dict)
+    last_attempted_at = Column(DateTime(timezone=True), nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
 
 
 # -------------------- SESSION HELPERS --------------------

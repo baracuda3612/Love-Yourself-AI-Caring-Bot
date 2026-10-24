@@ -17,7 +17,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.config import settings
 from app.active_days import resolve_timezone, step_expires_at
-from app.plan_completion.tokens import make_report_token
+from app.plan_completion.tokens import issue_report_grant
 from app.db import AIPlan, AIPlanDay, AIPlanStep, SessionLocal, User, UserEvent
 from app.ai import async_client
 from app.telemetry import log_user_event, write_event_operation
@@ -37,7 +37,7 @@ DATABASE_URL = settings.DATABASE_URL
 jobstore_url = DATABASE_URL
 
 jobstores = {"default": SQLAlchemyJobStore(url=jobstore_url), "delivery_recovery": MemoryJobStore(), "completion_recovery": MemoryJobStore()}
-from app.access import access_predicate, may_access, outbound_claim
+from app.access import AccessDenied, access_predicate, may_access, outbound_claim
 
 scheduler = BackgroundScheduler(jobstores=jobstores, timezone="UTC")
 
@@ -88,6 +88,7 @@ def init_scheduler():
     scheduler.add_job("app.scheduler:check_silent_users", "cron", hour=12, minute=0, id="silent_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_plan_completions", "cron", hour=10, minute=30, id="plan_completion_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:send_plan_pulse_snapshots", "cron", hour=10, minute=0, id="pulse_snapshot_check", replace_existing=True, max_instances=1)
+    scheduler.add_job("app.scheduler:run_privacy_maintenance", "interval", minutes=5, id="privacy_maintenance", replace_existing=True, max_instances=1)
     scheduler.resume()
 
 
@@ -1139,14 +1140,17 @@ def _now_in_user_tz(user: User) -> datetime:
 
 
 async def check_pulse_triggers(db, bot) -> None:
-    active_plans = db.query(AIPlan).filter(AIPlan.status == "active").all()
+    # Primitive scan hints survive a per-owner rollback; current access and
+    # plan ownership are still checked by grant issuance before every send.
+    active_plans = [(p.id, p.user_id, p.duration, p.total_days)
+        for p in db.query(AIPlan).filter(AIPlan.status == "active").all()]
 
-    for plan in active_plans:
-        thresholds = PULSE_THRESHOLDS.get(plan.duration, [])
+    for plan_id, user_id, duration, total_days_hint in active_plans:
+        thresholds = PULSE_THRESHOLDS.get(duration, [])
         if not thresholds:
             continue
 
-        user = db.query(User).filter(User.id == plan.user_id).first()
+        user = db.query(User).filter(User.id == user_id).first()
         if not user or not user.tg_id:
             continue
         # Scan without holding authority locks across Telegram I/O.
@@ -1154,8 +1158,8 @@ async def check_pulse_triggers(db, bot) -> None:
             continue
 
         today = _now_in_user_tz(user).date()
-        total_days = int(getattr(plan, "total_days", None) or 1)
-        active_day = derive_current_day(db, plan.id, total_days)
+        total_days = int(total_days_hint or 1)
+        active_day = derive_current_day(db, plan_id, total_days)
 
         if active_day not in thresholds:
             continue
@@ -1163,9 +1167,9 @@ async def check_pulse_triggers(db, bot) -> None:
         already_sent = (
             db.query(UserEvent)
             .filter(
-                UserEvent.user_id == plan.user_id,
+                UserEvent.user_id == user_id,
                 UserEvent.event_name == "pulse_sent",
-                UserEvent.plan_id == plan.id,
+                UserEvent.plan_id == plan_id,
                 UserEvent.properties["active_day"].astext == str(active_day),
             )
             .first()
@@ -1173,13 +1177,20 @@ async def check_pulse_triggers(db, bot) -> None:
         if already_sent:
             continue
 
-        token = make_report_token(plan.id, settings.REPORT_TOKEN_SECRET)
+        try:
+            token = issue_report_grant(db, user.id, plan_id, 'pulse_report')
+            db.commit()
+        except AccessDenied:
+            # Access can change after the nonlocking scan. Skip this owner,
+            # release its locks, and preserve delivery for the remaining plans.
+            db.rollback()
+            continue
         url = f"{settings.APP_BASE_URL}/pulse/{token}"
         week_num = ceil(active_day / 7)
 
         text = (
             f"📊 Тиждень {week_num} — snapshot твого плану.\n\n"
-            f"Подивись як іде процес:"
+            f"Подивись як іде процес. Посилання діє 7 днів:"
         )
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="Відкрити", url=url)]]
@@ -1195,11 +1206,11 @@ async def check_pulse_triggers(db, bot) -> None:
 
         log_user_event(
             db,
-            user_id=plan.user_id,
+            user_id=user_id,
             event_type="pulse_sent",
             event_source="scheduler",
-            source_operation_id=f"scheduler:pulse-snapshot:{plan.id}:{active_day}",
-            plan_id=plan.id,
+            source_operation_id=f"scheduler:pulse-snapshot:{plan_id}:{active_day}",
+            plan_id=plan_id,
             context={"active_day": active_day, "date": str(today)},
             attribution_at=claim_at,
         )
@@ -1345,3 +1356,58 @@ def reconcile_plan_completions():
         _completion_source_failure = True
     finally:
         enable_completion_recovery()
+
+
+def cancel_privacy_jobs(user_id, plan_ids):
+    """Remove this subject's jobs; store errors leave erasure pending."""
+    from apscheduler.jobstores.base import JobLookupError
+    with SessionLocal() as db:
+        step_ids = {r[0] for r in db.query(AIPlanStep.id).join(AIPlanDay).filter(
+            AIPlanDay.plan_id.in_(plan_ids))}
+    prefixes = tuple(f'plan_{plan_id}_' for plan_id in plan_ids)
+    completion_ids = {f'{prefix}{plan_id}' for plan_id in plan_ids for prefix in
+        ('completion_','completion_retry_','completion_receipt_retry_')}
+    def owned(job):
+        args = getattr(job, 'args', ())
+        step_job = (getattr(job, 'func_ref', None) == 'app.scheduler:send_scheduled_message'
+            and len(args) == 3 and args[2] in step_ids)
+        return (prefixes and job.id.startswith(prefixes)) or job.id in completion_ids or step_job
+    for job in scheduler.get_jobs():
+        if owned(job):
+            try:
+                scheduler.remove_job(job.id)
+            except JobLookupError:
+                pass  # A concurrent remover already confirmed this absence.
+    if any(owned(job) for job in scheduler.get_jobs()):
+        raise RuntimeError('personal_jobs_remain')
+
+
+async def privacy_maintenance():
+    """Bounded indexed retention and pending erasure recovery; no full DB scan."""
+    from app.privacy import purge_retained_data, delete_account
+    from app.db import PrivacyRequest
+    from app.session_memory import SessionMemory
+    total = 0
+    for _ in range(10):
+        with SessionLocal() as db:
+            count = purge_retained_data(db)
+            db.commit()
+        total += count
+        if count < 500:
+            break
+    logger.info('privacy_retention_removed=%d', total)
+    with SessionLocal() as db:
+        pending = [r[0] for r in db.query(PrivacyRequest.id).filter_by(state='deleting').order_by(
+            PrivacyRequest.last_attempted_at.asc().nullsfirst(),
+            PrivacyRequest.received_at, PrivacyRequest.id).limit(10)]
+    for request_id in pending:
+        try:
+            await delete_account(request_id, memory=SessionMemory(), cancel_jobs=cancel_privacy_jobs)
+        except Exception:
+            logger.error('privacy_erasure_pending')
+
+
+def run_privacy_maintenance():
+    future = _submit_coroutine(privacy_maintenance())
+    if future is not None:
+        future.result(timeout=120)
