@@ -1016,7 +1016,7 @@ predecessor 88 and migration/concurrency evidence are recorded in the
 
 ## 10. Block 4 — Access, privacy minimum, onboarding, and deterministic controls
 
-**Status:** `IN_PROGRESS` — B2/B3 and WP-04.1 are verified; WP-04.2 is next.
+**Status:** `IN_PROGRESS` — B2/B3, WP-04.1 and WP-04.2 are verified; WP-04.3 is next.
 **Depends on:** B2–B3  
 **Objective:** create a trustworthy entry path that remains usable without the
 Coach model.
@@ -1077,9 +1077,13 @@ its verified-session/signed-WebApp and rate-limit requirements move with it.
 
 ### WP-04.2 — Implement the minimum privacy and data-rights lifecycle
 
-**Status:** `READY` — WP-01.4 and WP-04.1 are founder-merged. Start from the
-current integration head using the [WP-04.2 handoff](work_packages/WP-04.2_start_message.md)
-after that documentation handoff is reviewed and merged.
+**Status:** `VERIFIED` — founder merged [PR #271](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/271)
+on 2026-10-24 as `55645ec8fe4c0c8eee9ccbe167232c78caf14473`. Final implementation
+`9af0ce2` passed configured automatic review with no findings. See
+[package evidence](work_packages/WP-04.2_privacy_lifecycle.md); the
+[WP-04.2 start message](work_packages/WP-04.2_start_message.md) is historical.
+The privacy draft remains unpublished; legal/company terms, hosted historical
+log/backup evidence and G1/G3/G4 remain launch gates.
 
 **Scope**
 
@@ -1105,6 +1109,11 @@ after that documentation handoff is reviewed and merged.
 * company access cannot reach individual or free-text data.
 
 ### WP-04.3 — Implement deterministic onboarding and user menu
+
+**Status:** `READY_FOR_PLANNING` — implementation predecessors are verified.
+Start with the [WP-04.3 handoff](work_packages/WP-04.3_start_message.md); reconcile
+`DG-01` with the historical ONB-04 no-hard-range decision before implementing
+new delivery-time restrictions. Do not infer a company window from an example.
 
 **Scope**
 
@@ -1738,7 +1747,7 @@ block exit gate passes.
   - [x] WP-03.5 — Implement durable completion and automatic continuation
 - [ ] B4 — Access, privacy minimum, onboarding, and deterministic controls
   - [x] WP-04.1 — Implement deployment, entitlement, and enrollment authority
-  - [ ] WP-04.2 — Implement the minimum privacy and data-rights lifecycle
+  - [x] WP-04.2 — Implement the minimum privacy and data-rights lifecycle
   - [ ] WP-04.3 — Implement deterministic onboarding and user menu
 - [ ] B5 — Coach integration and bounded agency
   - [ ] WP-05.1 — Build canonical Coach context and plan-aware tool exposure
@@ -1773,10 +1782,10 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | `WP-04.2 — Implement the minimum privacy and data-rights lifecycle` |
-| Status | `READY` after this documentation handoff is founder-merged; B3 and WP-04.1 are `VERIFIED` (WP-04.1 merge `bc2083b`) |
-| Next action | Founder reviews and merges the WP-04.2 documentation handoff; then the implementer fetches the integration head, creates a separate `wp/04.2-*` branch, traces the named privacy findings and begins the bounded execution contract |
-| Current blockers | No remaining package predecessor after the handoff merge. WP-04.2 must close notice, retention, data rights, deletion and report-grant access before beta. Founder/legal decisions on wording, roles and processing basis remain explicit gates; Gate G1 is required before durable-data rollout/company enrollment. `DG-02` keeps cold water unavailable; `DG-03` remains before beta. Final summary payload is WP-07.4; shared exhausted-recovery alerts are WP-08.2/WP-09.2 |
+| Current package | `WP-04.3 — Implement deterministic onboarding and user menu` |
+| Status | `READY_FOR_PLANNING`; B3, WP-04.1 and WP-04.2 are `VERIFIED` (WP-04.2 merge `55645ec`, 2026-10-24) |
+| Next action | Founder reviews and merges the documentation handoff; then fetch the actual integration head and use the WP-04.3 start message in a new chat. Inventory onboarding/menu/enrollment touchpoints and trace full named findings; reconcile DG-01 before hardcoding schedule policy. Implement only on a separate `wp/04.3-*` branch |
+| Current blockers | No unmerged implementation predecessor. `DG-01` delivery-window/company policy needs explicit reconciliation; approved onboarding/FAQ/privacy copy and device evidence must be obtained without inventing claims. The privacy draft is unpublished; founder/legal wording, roles and company terms remain WP-10.1. G1 precedes durable-data rollout/company enrollment; G3/G4 still apply. `DG-02` keeps cold water unavailable; `DG-03` remains before beta. Final report product is WP-07; general recovery alerts/monitoring are B8/B9 |
 
 ### Private founder log
 
@@ -1827,7 +1836,7 @@ behavior.
 ## 22. Historical first steps after roadmap approval
 
 The sequence below was the initial handoff and has been completed through B3.
-The current next step is WP-04.2, as recorded in the current-package table
+The current next step is WP-04.3, as recorded in the current-package table
 above; do not restart WP-00.4 or WP-01.1 from this historical list.
 
 1. Complete WP-00.4 repository hardening and targeted verification.
