@@ -4,11 +4,12 @@
 
 **Physical starting point:** Alembic revision `20260827_schema_baseline`
 
-**Current merged application/Alembic head:** `20261015_access_authority`.
-WP-04.1 is founder-merged in PR #269 (`bc2083b`, 2026-10-21); B3 and WP-04.1
-are verified. WP-04.2 owns the next privacy/data-rights implementation. The
-WP-04.1 contract/evidence owns access behavior acceptance; no durable/company
-rollout is implied.
+**Current merged application/Alembic head:** `20261022_privacy_lifecycle`.
+WP-04.2 is founder-merged in PR #271 (`55645ec`, 2026-10-24); B3, WP-04.1 and
+WP-04.2 are verified. WP-04.3 owns the next deterministic onboarding/menu
+implementation. Access and privacy behavior acceptance remains in the respective
+package evidence; no durable/company rollout or completed deployment migration
+is implied by the merged schema head.
 
 **Contract scope:** target design only; no DDL in WP-01.2
 
