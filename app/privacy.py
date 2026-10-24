@@ -194,13 +194,24 @@ def export_request(db, request_id):
     instance_ids = select(models.PlanInstance.id).where(models.PlanInstance.user_id == user_id)
     for model, predicate in (
         (models.ExerciseDelivery, models.ExerciseDelivery.plan_step_id.in_(step_ids)),
-        (models.PlanCompletion, models.PlanCompletion.plan_id.in_(plan_ids)),
         (models.AIPlanVersion, models.AIPlanVersion.plan_id.in_(plan_ids)),
         (models.PlanDraftStep, models.PlanDraftStep.draft_id.in_(draft_ids)),
         (models.PlanExecutionWindow, models.PlanExecutionWindow.instance_id.in_(instance_ids)),
         (models.PlanLifecycleOperation, models.PlanLifecycleOperation.user_id == user_id),
     ):
         data[model.__tablename__] = _rows(db, model, predicate)
+    # Completion message bodies contain live report bearer URLs. Select only
+    # declared metadata, so neither bodies nor future columns leak into exports.
+    completion = models.PlanCompletion
+    completion_fields = (
+        'plan_id', 'successor_plan_id', 'report_at', 'state', 'wake_at',
+        'attempts', 'started_at', 'chat_id', 'message_id', 'sent_at',
+        'failure_code', 'schedule_pending', 'release_started_at',
+        'release_message_id', 'released_at',
+    )
+    data['plan_completions'] = [dict(row) for row in db.execute(
+        select(*(getattr(completion, name) for name in completion_fields))
+        .where(completion.plan_id.in_(plan_ids))).mappings()]
     enrollment_ids = [r['entitlement_id'] for r in data['deployment_enrollments']]
     entitlements = _rows(db, models.AccessEntitlement, models.AccessEntitlement.id.in_(enrollment_ids))
     data['access_entitlements'] = entitlements

@@ -201,6 +201,33 @@ def test_scoped_grant_current_owner_and_neutral_errors(db,monkeypatch,case):
         with pytest.raises(access.AccessDenied,match='access_unavailable'):tokens.resolve_report_grant(db,raw,purpose)
 
 
+@pytest.mark.parametrize('kind', ['access', 'export'])
+def test_personal_export_excludes_completion_bearers_and_preserves_receipts(db, kind):
+    import re
+    from app.plan_completion.workflow import claim_report, finish_report
+    user,plan=source_plan(db)
+    now=privacy.utcnow()
+    terminalize(db,user,plan,at=now)
+    close(db,user,plan,now=now)
+    completion=db.get(m.PlanCompletion,plan.id)
+    claim=claim_report(db,user.id,plan.id,now=completion.report_at)
+    raw=re.search(r'/report/([A-Za-z0-9_-]{43})',claim.payload).group(1)
+    assert tokens.resolve_report_grant(db,raw,'completion_report')==plan.id
+    finish_report(db,user.id,claim,outcome='sent',message_id=789,now=completion.report_at)
+    original_payload=completion.payload
+    request=privacy.receive_request(db,tg_id=user.tg_id,kind=kind,source_operation_id=f'completion:{kind}')
+    exported=privacy.export_request(db,request.id)
+    serialized=json.dumps(exported,default=str)
+    assert raw not in serialized and '/report/' not in serialized
+    record=next(r for r in exported['plan_completions'] if r['plan_id']==plan.id)
+    assert 'payload' not in record and 'release_payload' not in record
+    assert record['state']=='sent' and record['message_id']==789 and record['sent_at']
+    assert record['successor_plan_id']==completion.successor_plan_id
+    db.expire(completion)
+    assert completion.payload==original_payload and completion.message_id==789
+    assert tokens.resolve_report_grant(db,raw,'completion_report')==plan.id
+
+
 def test_manual_correction_requires_verified_case_and_preserves_events(db):
     user,_,_=subject(db)
     request=privacy.receive_request(db,tg_id=user.tg_id,kind='correction',source_operation_id='correction')
