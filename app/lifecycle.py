@@ -1797,9 +1797,13 @@ def change_schedule_calendar(
         user.timezone_override if user.timezone_override_explicit else None
     )
     if same_days or same_zone:
+        # The preferences may already have committed while scheduler effects
+        # failed. A fresh user retry repairs jobs from the saved timestamps;
+        # it must not reanchor dates or increment the plan version again.
         return LifecycleResult(
             user_id=user_id, plan_id=plan.id, status=str(plan.status),
             operation="change_schedule_calendar", applied=False, code="unchanged",
+            effects=(_plan_schedule_effect(plan),),
         )
 
     now = datetime.now(timezone.utc)

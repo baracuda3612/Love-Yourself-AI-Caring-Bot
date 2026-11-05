@@ -5,6 +5,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Optional
+from weakref import WeakValueDictionary
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -202,6 +203,42 @@ async def stop_setup(message: Message):
 from aiogram import BaseMiddleware
 
 
+class ActorIngressMiddleware(BaseMiddleware):
+    """Keep private message/callback routing ordered before asynchronous filters.
+
+    This is an in-process ingress lock for the single polling writer. Durable
+    ownership/idempotency remains in PostgreSQL. on_text releases it after its
+    routing transaction, so a slow Coach cannot block the user's menu.
+    """
+
+    def __init__(self):
+        self.locks = WeakValueDictionary()
+
+    async def __call__(self, handler, event, data):
+        message = event if isinstance(event, Message) else getattr(event, "message", None)
+        actor = getattr(event, "from_user", None)
+        if not actor or not message or message.chat.type != "private" or message.chat.id != actor.id:
+            return await handler(event, data)
+        lock = self.locks.get(actor.id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self.locks[actor.id] = lock
+        await lock.acquire()
+        held = True
+
+        def release_ingress():
+            nonlocal held
+            if held:
+                held = False
+                lock.release()
+
+        data["release_ingress"] = release_ingress
+        try:
+            return await handler(event, data)
+        finally:
+            release_ingress()
+
+
 class EnrollmentMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         from app.access import AccessDenied, require_access
@@ -227,6 +264,9 @@ class EnrollmentMiddleware(BaseMiddleware):
         return await handler(event, data)
 
 
+_actor_ingress = ActorIngressMiddleware()
+router.message.outer_middleware(_actor_ingress)
+router.callback_query.outer_middleware(_actor_ingress)
 router.message.outer_middleware(EnrollmentMiddleware())
 router.callback_query.outer_middleware(EnrollmentMiddleware())
 
@@ -802,11 +842,16 @@ async def _reconcile_menu_schedule(result):
             return "Не вдалося підтвердити оновлення розкладу."
         return ""
     outcome = await asyncio.to_thread(reconcile_scheduler_effects, result)
-    return "" if outcome.external_effects_succeeded else "Оновлення надсилання ще не підтверджено."
+    if outcome.external_effects_succeeded:
+        return ""
+    hint = "Оновлення надсилання ще не підтверджено."
+    if result.operation == "change_schedule_calendar":
+        hint += " Відкрий «Змінити налаштування» й повторно застосуй ті самі дні або часовий пояс."
+    return hint
 
 
 @router.message(F.text)
-async def on_text(message: Message):
+async def on_text(message: Message, release_ingress=None):
     from app.privacy import pinned_notice, NoticeRequired
     from app.access import AccessDenied
     from app.plan_drafts.plan_builder_v5 import NoCandidatesError
@@ -859,6 +904,9 @@ async def on_text(message: Message):
     except AccessDenied:
         await message.answer("Доступ зараз недоступний.")
         return
+
+    if release_ingress is not None:
+        release_ingress()
 
     if submitted is not None:
         hint = submitted.hint
