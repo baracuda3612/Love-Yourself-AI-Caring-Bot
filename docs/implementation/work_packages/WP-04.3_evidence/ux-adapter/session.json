@@ -1,0 +1,4049 @@
+{
+  "events": [
+    {
+      "callback": "setup:0:start"
+    },
+    {
+      "text": "99:99"
+    },
+    {
+      "text": "іпольлоіпкаж"
+    },
+    {
+      "text": "14:34"
+    },
+    {
+      "callback": "setup:2:settings"
+    },
+    {
+      "callback": "setup:3:days"
+    },
+    {
+      "callback": "setup:4:day_5"
+    },
+    {
+      "text": "Про проєкт"
+    },
+    {
+      "callback": "menu:help:faq"
+    },
+    {
+      "callback": "menu:help:how"
+    },
+    {
+      "callback": "menu:setup"
+    },
+    {
+      "callback": "setup:5:cancel"
+    },
+    {
+      "callback": "setup:6:settings"
+    },
+    {
+      "callback": "setup:7:time"
+    },
+    {
+      "text": "16:10"
+    },
+    {
+      "callback": "setup:9:settings"
+    },
+    {
+      "callback": "setup:10:zone"
+    },
+    {
+      "callback": "setup:11:page_2"
+    },
+    {
+      "callback": "setup:11:zone_14"
+    },
+    {
+      "callback": "setup:12:settings"
+    },
+    {
+      "callback": "setup:13:zone"
+    },
+    {
+      "callback": "setup:14:default_zone"
+    },
+    {
+      "callback": "setup:15:confirm_4d7017b16990c2fb"
+    },
+    {
+      "text": "Мій розклад"
+    },
+    {
+      "callback": "menu:plan:pause:1:1"
+    },
+    {
+      "callback": "menu:plan:resume:1:2"
+    },
+    {
+      "callback": "menu:plan:confirm_end:1:3"
+    },
+    {
+      "callback": "menu:Мій розклад"
+    },
+    {
+      "text": "Мої дані"
+    },
+    {
+      "callback": "menu:edit_data"
+    },
+    {
+      "callback": "menu:edit_name"
+    },
+    {
+      "text": "Олена"
+    },
+    {
+      "callback": "menu:export"
+    },
+    {
+      "text": "Мої дані"
+    },
+    {
+      "callback": "menu:requests"
+    },
+    {
+      "text": "Про проєкт"
+    },
+    {
+      "callback": "menu:feedback"
+    },
+    {
+      "text": "UX-тест: вдалося повернутися до своїх налаштувань."
+    },
+    {
+      "text": "Підтримка"
+    },
+    {
+      "text": "Мій розклад"
+    },
+    {
+      "callback": "menu:plan:format:1:3"
+    },
+    {
+      "callback": "menu:confirm:4edc5f2ccccd4403812acf69bb97bf19"
+    },
+    {
+      "text": "99:99"
+    },
+    {
+      "text": "18:30"
+    },
+    {
+      "callback": "menu:plan:settings:2:1"
+    },
+    {
+      "callback": "menu:plan:days:2:1"
+    },
+    {
+      "callback": "menu:cal:f4b71be19a774e1a87f96ad0f0b3621f:day_0"
+    },
+    {
+      "callback": "menu:cal:d6c0c404ef4441b8a007f74041b48d23:day_1"
+    },
+    {
+      "callback": "menu:cal:daf49f9938274e94945ef80e873d70d3:day_2"
+    },
+    {
+      "callback": "menu:cal:a06307bcee6047ca9c20ec34c9b811a4:day_3"
+    },
+    {
+      "callback": "menu:cal:f26e1a4512474a2e9204c37e68704544:day_4"
+    },
+    {
+      "callback": "menu:cal:bce880122e864a2781887b7884233e24:apply"
+    },
+    {
+      "text": "Про проєкт"
+    },
+    {
+      "callback": "menu:help:overview"
+    },
+    {
+      "callback": "menu:help:about"
+    },
+    {
+      "callback": "menu:help:overview"
+    },
+    {
+      "callback": "menu:help:exercises"
+    },
+    {
+      "callback": "menu:help:overview"
+    },
+    {
+      "callback": "menu:help:pause"
+    },
+    {
+      "callback": "menu:help:overview"
+    },
+    {
+      "callback": "menu:help:assistant"
+    },
+    {
+      "callback": "menu:help:overview"
+    },
+    {
+      "callback": "menu:help:boundaries"
+    },
+    {
+      "callback": "menu:help:overview"
+    },
+    {
+      "callback": "menu:Про проєкт"
+    },
+    {
+      "callback": "menu:help:reminders"
+    },
+    {
+      "callback": "menu:help:schedule"
+    },
+    {
+      "callback": "menu:help:reminders"
+    },
+    {
+      "callback": "menu:help:rhythms"
+    },
+    {
+      "callback": "menu:help:reminders"
+    },
+    {
+      "callback": "menu:help:completion"
+    },
+    {
+      "callback": "menu:help:reminders"
+    },
+    {
+      "callback": "menu:help:manage"
+    },
+    {
+      "callback": "menu:help:reminders"
+    },
+    {
+      "callback": "menu:Про проєкт"
+    },
+    {
+      "callback": "menu:help:faq"
+    },
+    {
+      "callback": "menu:help:how"
+    },
+    {
+      "callback": "menu:help:faq"
+    },
+    {
+      "callback": "menu:help:why"
+    },
+    {
+      "callback": "menu:help:faq"
+    },
+    {
+      "callback": "menu:help:missed"
+    },
+    {
+      "callback": "menu:help:faq"
+    },
+    {
+      "callback": "menu:help:stop"
+    },
+    {
+      "callback": "menu:help:faq"
+    },
+    {
+      "callback": "menu:Про проєкт"
+    },
+    {
+      "callback": "menu:help:confidentiality"
+    },
+    {
+      "callback": "menu:help:retention"
+    },
+    {
+      "callback": "menu:help:confidentiality"
+    },
+    {
+      "callback": "menu:help:visibility"
+    },
+    {
+      "callback": "menu:help:confidentiality"
+    },
+    {
+      "callback": "menu:help:deletion"
+    },
+    {
+      "callback": "menu:help:confidentiality"
+    },
+    {
+      "callback": "menu:help:notice"
+    },
+    {
+      "callback": "menu:help:confidentiality"
+    },
+    {
+      "callback": "menu:Про проєкт"
+    },
+    {
+      "text": "Мій розклад"
+    },
+    {
+      "callback": "menu:plan:settings:2:1"
+    },
+    {
+      "callback": "menu:plan:days:2:1"
+    },
+    {
+      "callback": "menu:cal:3ba400189734484399289a17e217dae9:cancel"
+    }
+  ],
+  "messages": [
+    {
+      "id": 6,
+      "text": "Меню",
+      "markup": {
+        "keyboard": [
+          [
+            {
+              "text": "Мої дані"
+            },
+            {
+              "text": "Про проєкт"
+            }
+          ],
+          [
+            {
+              "text": "Підтримка"
+            }
+          ]
+        ],
+        "is_persistent": true,
+        "resize_keyboard": true
+      }
+    },
+    {
+      "id": 7,
+      "text": "LY Workday допомагає зробити коротку перерву серед робочого дня.\nУ вибраний тобою час бот запропонує одну просту дію, щоб ненадовго перемкнути увагу з роботи на себе.\nТридцять секунд, щоб перервати робочий потік і відчути свій стан.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Налаштувати час",
+              "callback_data": "setup:0:start"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "text": "Коли отримувати нагадування про перерву?\nРекомендуємо другу половину твого робочого дня.\nВведи час у форматі <b>ГГ:ХХ</b>, наприклад <b>14:30</b>.",
+      "markup": {}
+    },
+    {
+      "text": "99:99",
+      "markup": {},
+      "user": true
+    },
+    {
+      "id": 11,
+      "text": "Не вдалося прочитати час.\n\nКоли отримувати нагадування про перерву?\nРекомендуємо другу половину твого робочого дня.\nВведи час у форматі <b>ГГ:ХХ</b>, наприклад <b>14:30</b>.",
+      "markup": {}
+    },
+    {
+      "text": "іпольлоіпкаж",
+      "markup": {},
+      "user": true
+    },
+    {
+      "id": 13,
+      "text": "Не вдалося прочитати час.\n\nКоли отримувати нагадування про перерву?\nРекомендуємо другу половину твого робочого дня.\nВведи час у форматі <b>ГГ:ХХ</b>, наприклад <b>14:30</b>.",
+      "markup": {}
+    },
+    {
+      "text": "14:34",
+      "markup": {},
+      "user": true
+    },
+    {
+      "id": 15,
+      "text": "Час нагадування: <b>14:34</b>\nДні: <b>понеділок–п’ятниця</b>\nЧасовий пояс: <b>Київ</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Підтвердити",
+              "callback_data": "setup:2:confirm_b281599a667384e9"
+            },
+            {
+              "text": "Змінити налаштування",
+              "callback_data": "setup:2:settings"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 17,
+      "text": "Що змінити?",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Час нагадування",
+              "callback_data": "setup:3:time"
+            }
+          ],
+          [
+            {
+              "text": "Дні надсилання",
+              "callback_data": "setup:3:days"
+            }
+          ],
+          [
+            {
+              "text": "Часовий пояс",
+              "callback_data": "setup:3:zone"
+            }
+          ],
+          [
+            {
+              "text": "Назад до підтвердження",
+              "callback_data": "setup:3:cancel"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 19,
+      "text": "Вибери дні надсилання.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "✓ понеділок",
+              "callback_data": "setup:4:day_0"
+            }
+          ],
+          [
+            {
+              "text": "✓ вівторок",
+              "callback_data": "setup:4:day_1"
+            }
+          ],
+          [
+            {
+              "text": "✓ середа",
+              "callback_data": "setup:4:day_2"
+            }
+          ],
+          [
+            {
+              "text": "✓ четвер",
+              "callback_data": "setup:4:day_3"
+            }
+          ],
+          [
+            {
+              "text": "✓ п’ятниця",
+              "callback_data": "setup:4:day_4"
+            }
+          ],
+          [
+            {
+              "text": "субота",
+              "callback_data": "setup:4:day_5"
+            }
+          ],
+          [
+            {
+              "text": "неділя",
+              "callback_data": "setup:4:day_6"
+            }
+          ],
+          [
+            {
+              "text": "Застосувати",
+              "callback_data": "setup:4:apply"
+            }
+          ],
+          [
+            {
+              "text": "Скасувати зміну",
+              "callback_data": "setup:4:cancel"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 21,
+      "text": "Вибери дні надсилання.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "✓ понеділок",
+              "callback_data": "setup:5:day_0"
+            }
+          ],
+          [
+            {
+              "text": "✓ вівторок",
+              "callback_data": "setup:5:day_1"
+            }
+          ],
+          [
+            {
+              "text": "✓ середа",
+              "callback_data": "setup:5:day_2"
+            }
+          ],
+          [
+            {
+              "text": "✓ четвер",
+              "callback_data": "setup:5:day_3"
+            }
+          ],
+          [
+            {
+              "text": "✓ п’ятниця",
+              "callback_data": "setup:5:day_4"
+            }
+          ],
+          [
+            {
+              "text": "✓ субота",
+              "callback_data": "setup:5:day_5"
+            }
+          ],
+          [
+            {
+              "text": "неділя",
+              "callback_data": "setup:5:day_6"
+            }
+          ],
+          [
+            {
+              "text": "Застосувати",
+              "callback_data": "setup:5:apply"
+            }
+          ],
+          [
+            {
+              "text": "Скасувати зміну",
+              "callback_data": "setup:5:cancel"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "text": "Про проєкт",
+      "markup": {},
+      "user": true
+    },
+    {
+      "id": 23,
+      "text": "<b>Про проєкт</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Опис проєкту",
+              "callback_data": "menu:help:overview"
+            }
+          ],
+          [
+            {
+              "text": "Як приходять нагадування",
+              "callback_data": "menu:help:reminders"
+            }
+          ],
+          [
+            {
+              "text": "Часті запитання",
+              "callback_data": "menu:help:faq"
+            }
+          ],
+          [
+            {
+              "text": "Конфіденційність",
+              "callback_data": "menu:help:confidentiality"
+            }
+          ],
+          [
+            {
+              "text": "Залишити відгук",
+              "callback_data": "menu:feedback"
+            }
+          ],
+          [
+            {
+              "text": "Повернутися до налаштувань",
+              "callback_data": "menu:setup"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 25,
+      "text": "<b>Часті запитання</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Як це працює?",
+              "callback_data": "menu:help:how"
+            }
+          ],
+          [
+            {
+              "text": "Чому саме ця вправа?",
+              "callback_data": "menu:help:why"
+            }
+          ],
+          [
+            {
+              "text": "Що, якщо не встигну?",
+              "callback_data": "menu:help:missed"
+            }
+          ],
+          [
+            {
+              "text": "Як призупинити або завершити нагадування?",
+              "callback_data": "menu:help:stop"
+            }
+          ],
+          [
+            {
+              "text": "Назад до «Про проєкт»",
+              "callback_data": "menu:Про проєкт"
+            }
+          ],
+          [
+            {
+              "text": "Повернутися до налаштувань",
+              "callback_data": "menu:setup"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 27,
+      "text": "<b>Як це працює?</b>\n\nТи обираєш час і дні, а бот надсилає в Telegram коротку вправу для перерви серед робочого дня. Відкрий повідомлення й виконай вправу за інструкцією.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Назад до розділу",
+              "callback_data": "menu:help:faq"
+            }
+          ],
+          [
+            {
+              "text": "Повернутися до налаштувань",
+              "callback_data": "menu:setup"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 29,
+      "text": "Вибери дні надсилання.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "✓ понеділок",
+              "callback_data": "setup:5:day_0"
+            }
+          ],
+          [
+            {
+              "text": "✓ вівторок",
+              "callback_data": "setup:5:day_1"
+            }
+          ],
+          [
+            {
+              "text": "✓ середа",
+              "callback_data": "setup:5:day_2"
+            }
+          ],
+          [
+            {
+              "text": "✓ четвер",
+              "callback_data": "setup:5:day_3"
+            }
+          ],
+          [
+            {
+              "text": "✓ п’ятниця",
+              "callback_data": "setup:5:day_4"
+            }
+          ],
+          [
+            {
+              "text": "✓ субота",
+              "callback_data": "setup:5:day_5"
+            }
+          ],
+          [
+            {
+              "text": "неділя",
+              "callback_data": "setup:5:day_6"
+            }
+          ],
+          [
+            {
+              "text": "Застосувати",
+              "callback_data": "setup:5:apply"
+            }
+          ],
+          [
+            {
+              "text": "Скасувати зміну",
+              "callback_data": "setup:5:cancel"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 31,
+      "text": "Час нагадування: <b>14:34</b>\nДні: <b>понеділок–п’ятниця</b>\nЧасовий пояс: <b>Київ</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Підтвердити",
+              "callback_data": "setup:6:confirm_b281599a667384e9"
+            },
+            {
+              "text": "Змінити налаштування",
+              "callback_data": "setup:6:settings"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 33,
+      "text": "Що змінити?",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Час нагадування",
+              "callback_data": "setup:7:time"
+            }
+          ],
+          [
+            {
+              "text": "Дні надсилання",
+              "callback_data": "setup:7:days"
+            }
+          ],
+          [
+            {
+              "text": "Часовий пояс",
+              "callback_data": "setup:7:zone"
+            }
+          ],
+          [
+            {
+              "text": "Назад до підтвердження",
+              "callback_data": "setup:7:cancel"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 35,
+      "text": "Поточний час: <b>14:34</b>.\nВведи новий час у форматі <b>ГГ:ХХ</b>, наприклад <b>15:30</b>, і надішли повідомлення.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Скасувати зміну",
+              "callback_data": "setup:8:cancel"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "text": "16:10",
+      "markup": {},
+      "user": true
+    },
+    {
+      "id": 37,
+      "text": "Час нагадування: <b>16:10</b>\nДні: <b>понеділок–п’ятниця</b>\nЧасовий пояс: <b>Київ</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Підтвердити",
+              "callback_data": "setup:9:confirm_4d7017b16990c2fb"
+            },
+            {
+              "text": "Змінити налаштування",
+              "callback_data": "setup:9:settings"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 39,
+      "text": "Що змінити?",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Час нагадування",
+              "callback_data": "setup:10:time"
+            }
+          ],
+          [
+            {
+              "text": "Дні надсилання",
+              "callback_data": "setup:10:days"
+            }
+          ],
+          [
+            {
+              "text": "Часовий пояс",
+              "callback_data": "setup:10:zone"
+            }
+          ],
+          [
+            {
+              "text": "Назад до підтвердження",
+              "callback_data": "setup:10:cancel"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 41,
+      "text": "Поточний часовий пояс: <b>Київ</b>.\nФіксований зсув UTC не змінюється при переведенні годинника.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "UTC−03:00",
+              "callback_data": "setup:11:zone_-3"
+            },
+            {
+              "text": "UTC−02:00",
+              "callback_data": "setup:11:zone_-2"
+            },
+            {
+              "text": "UTC−01:00",
+              "callback_data": "setup:11:zone_-1"
+            }
+          ],
+          [
+            {
+              "text": "UTC+00:00",
+              "callback_data": "setup:11:zone_0"
+            },
+            {
+              "text": "UTC+01:00",
+              "callback_data": "setup:11:zone_1"
+            },
+            {
+              "text": "UTC+02:00",
+              "callback_data": "setup:11:zone_2"
+            }
+          ],
+          [
+            {
+              "text": "UTC+03:00",
+              "callback_data": "setup:11:zone_3"
+            },
+            {
+              "text": "UTC+04:00",
+              "callback_data": "setup:11:zone_4"
+            },
+            {
+              "text": "UTC+05:00",
+              "callback_data": "setup:11:zone_5"
+            }
+          ],
+          [
+            {
+              "text": "‹",
+              "callback_data": "setup:11:page_0"
+            },
+            {
+              "text": "›",
+              "callback_data": "setup:11:page_2"
+            }
+          ],
+          [
+            {
+              "text": "Стандартний часовий пояс",
+              "callback_data": "setup:11:default_zone"
+            }
+          ],
+          [
+            {
+              "text": "Скасувати зміну",
+              "callback_data": "setup:11:cancel"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 43,
+      "text": "Поточний часовий пояс: <b>Київ</b>.\nФіксований зсув UTC не змінюється при переведенні годинника.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "UTC+06:00",
+              "callback_data": "setup:11:zone_6"
+            },
+            {
+              "text": "UTC+07:00",
+              "callback_data": "setup:11:zone_7"
+            },
+            {
+              "text": "UTC+08:00",
+              "callback_data": "setup:11:zone_8"
+            }
+          ],
+          [
+            {
+              "text": "UTC+09:00",
+              "callback_data": "setup:11:zone_9"
+            },
+            {
+              "text": "UTC+10:00",
+              "callback_data": "setup:11:zone_10"
+            },
+            {
+              "text": "UTC+11:00",
+              "callback_data": "setup:11:zone_11"
+            }
+          ],
+          [
+            {
+              "text": "UTC+12:00",
+              "callback_data": "setup:11:zone_12"
+            },
+            {
+              "text": "UTC+13:00",
+              "callback_data": "setup:11:zone_13"
+            },
+            {
+              "text": "UTC+14:00",
+              "callback_data": "setup:11:zone_14"
+            }
+          ],
+          [
+            {
+              "text": "‹",
+              "callback_data": "setup:11:page_1"
+            }
+          ],
+          [
+            {
+              "text": "Стандартний часовий пояс",
+              "callback_data": "setup:11:default_zone"
+            }
+          ],
+          [
+            {
+              "text": "Скасувати зміну",
+              "callback_data": "setup:11:cancel"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 45,
+      "text": "Час нагадування: <b>16:10</b>\nДні: <b>понеділок–п’ятниця</b>\nЧасовий пояс: <b>UTC+14:00</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Підтвердити",
+              "callback_data": "setup:12:confirm_743ffe7281975883"
+            },
+            {
+              "text": "Змінити налаштування",
+              "callback_data": "setup:12:settings"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 47,
+      "text": "Що змінити?",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Час нагадування",
+              "callback_data": "setup:13:time"
+            }
+          ],
+          [
+            {
+              "text": "Дні надсилання",
+              "callback_data": "setup:13:days"
+            }
+          ],
+          [
+            {
+              "text": "Часовий пояс",
+              "callback_data": "setup:13:zone"
+            }
+          ],
+          [
+            {
+              "text": "Назад до підтвердження",
+              "callback_data": "setup:13:cancel"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 49,
+      "text": "Поточний часовий пояс: <b>UTC+14:00</b>.\nФіксований зсув UTC не змінюється при переведенні годинника.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "UTC+06:00",
+              "callback_data": "setup:14:zone_6"
+            },
+            {
+              "text": "UTC+07:00",
+              "callback_data": "setup:14:zone_7"
+            },
+            {
+              "text": "UTC+08:00",
+              "callback_data": "setup:14:zone_8"
+            }
+          ],
+          [
+            {
+              "text": "UTC+09:00",
+              "callback_data": "setup:14:zone_9"
+            },
+            {
+              "text": "UTC+10:00",
+              "callback_data": "setup:14:zone_10"
+            },
+            {
+              "text": "UTC+11:00",
+              "callback_data": "setup:14:zone_11"
+            }
+          ],
+          [
+            {
+              "text": "UTC+12:00",
+              "callback_data": "setup:14:zone_12"
+            },
+            {
+              "text": "UTC+13:00",
+              "callback_data": "setup:14:zone_13"
+            },
+            {
+              "text": "UTC+14:00",
+              "callback_data": "setup:14:zone_14"
+            }
+          ],
+          [
+            {
+              "text": "‹",
+              "callback_data": "setup:14:page_1"
+            }
+          ],
+          [
+            {
+              "text": "Стандартний часовий пояс",
+              "callback_data": "setup:14:default_zone"
+            }
+          ],
+          [
+            {
+              "text": "Скасувати зміну",
+              "callback_data": "setup:14:cancel"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 51,
+      "text": "Час нагадування: <b>16:10</b>\nДні: <b>понеділок–п’ятниця</b>\nЧасовий пояс: <b>Київ</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Підтвердити",
+              "callback_data": "setup:15:confirm_4d7017b16990c2fb"
+            },
+            {
+              "text": "Змінити налаштування",
+              "callback_data": "setup:15:settings"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 53,
+      "text": "Меню",
+      "markup": {
+        "keyboard": [
+          [
+            {
+              "text": "Мій розклад"
+            }
+          ],
+          [
+            {
+              "text": "Мої дані"
+            },
+            {
+              "text": "Про проєкт"
+            }
+          ],
+          [
+            {
+              "text": "Підтримка"
+            }
+          ]
+        ],
+        "is_persistent": true,
+        "resize_keyboard": true
+      }
+    },
+    {
+      "id": 54,
+      "text": "Готово. Перше планове нагадування прийде <b>06.11.2026 о 16:10</b>.",
+      "markup": {}
+    },
+    {
+      "text": "Мій розклад",
+      "markup": {},
+      "user": true
+    },
+    {
+      "id": 56,
+      "text": "<b>Мій розклад</b>\n\nСтан: активний\nДні: понеділок, вівторок, середа, четвер, п’ятниця\nЧас: 16:10\nЧасовий пояс: Київ\nНаступне заплановане нагадування: 06.11.2026 о 16:10",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Змінити налаштування",
+              "callback_data": "menu:plan:settings:1:1"
+            }
+          ],
+          [
+            {
+              "text": "Змінити формат",
+              "callback_data": "menu:plan:format:1:1"
+            }
+          ],
+          [
+            {
+              "text": "Призупинити",
+              "callback_data": "menu:plan:pause:1:1"
+            }
+          ],
+          [
+            {
+              "text": "Завершити",
+              "callback_data": "menu:plan:confirm_end:1:1"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 58,
+      "text": "<b>Мій розклад</b>\n\nСтан: призупинено\nДні: понеділок, вівторок, середа, четвер, п’ятниця\nЧас: 16:10\nЧасовий пояс: Київ",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Змінити налаштування",
+              "callback_data": "menu:plan:settings:1:2"
+            }
+          ],
+          [
+            {
+              "text": "Змінити формат",
+              "callback_data": "menu:plan:format:1:2"
+            }
+          ],
+          [
+            {
+              "text": "Відновити",
+              "callback_data": "menu:plan:resume:1:2"
+            }
+          ],
+          [
+            {
+              "text": "Завершити",
+              "callback_data": "menu:plan:confirm_end:1:2"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 60,
+      "text": "<b>Мій розклад</b>\n\nСтан: активний\nДні: понеділок, вівторок, середа, четвер, п’ятниця\nЧас: 16:10\nЧасовий пояс: Київ\nНаступне заплановане нагадування: 06.11.2026 о 16:10",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Змінити налаштування",
+              "callback_data": "menu:plan:settings:1:3"
+            }
+          ],
+          [
+            {
+              "text": "Змінити формат",
+              "callback_data": "menu:plan:format:1:3"
+            }
+          ],
+          [
+            {
+              "text": "Призупинити",
+              "callback_data": "menu:plan:pause:1:3"
+            }
+          ],
+          [
+            {
+              "text": "Завершити",
+              "callback_data": "menu:plan:confirm_end:1:3"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 62,
+      "text": "Завершити поточний розклад?",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Підтвердити завершення",
+              "callback_data": "menu:confirm:2e218e6ce20e43eb8fe8a044cfd49128"
+            }
+          ],
+          [
+            {
+              "text": "Скасувати",
+              "callback_data": "menu:Мій розклад"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 64,
+      "text": "<b>Мій розклад</b>\n\nСтан: активний\nДні: понеділок, вівторок, середа, четвер, п’ятниця\nЧас: 16:10\nЧасовий пояс: Київ\nНаступне заплановане нагадування: 06.11.2026 о 16:10",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Змінити налаштування",
+              "callback_data": "menu:plan:settings:1:3"
+            }
+          ],
+          [
+            {
+              "text": "Змінити формат",
+              "callback_data": "menu:plan:format:1:3"
+            }
+          ],
+          [
+            {
+              "text": "Призупинити",
+              "callback_data": "menu:plan:pause:1:3"
+            }
+          ],
+          [
+            {
+              "text": "Завершити",
+              "callback_data": "menu:plan:confirm_end:1:3"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "text": "Мої дані",
+      "markup": {},
+      "user": true
+    },
+    {
+      "id": 66,
+      "text": "<b>Мої дані</b>\n\nІм’я: friend\nЧасовий пояс: Київ\nКомпанія: disposable fixture\nДоступ: чинний",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Виправити дані",
+              "callback_data": "menu:edit_data"
+            }
+          ],
+          [
+            {
+              "text": "Отримати копію даних",
+              "callback_data": "menu:export"
+            }
+          ],
+          [
+            {
+              "text": "Видалити мої дані",
+              "callback_data": "menu:delete"
+            }
+          ],
+          [
+            {
+              "text": "Мої звернення",
+              "callback_data": "menu:requests"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 68,
+      "text": "Виправити дані",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Як до тебе звертатися",
+              "callback_data": "menu:edit_name"
+            }
+          ],
+          [
+            {
+              "text": "Часовий пояс",
+              "callback_data": "menu:plan:zone:1:3"
+            }
+          ],
+          [
+            {
+              "text": "Назад до моїх даних",
+              "callback_data": "menu:Мої дані"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 70,
+      "text": "Як до тебе звертатися? Надішли ім’я одним повідомленням.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Скасувати",
+              "callback_data": "menu:input_cancel:7b9532c27c064ad79b05f50e004f077a"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "text": "Олена",
+      "markup": {},
+      "user": true
+    },
+    {
+      "id": 72,
+      "text": "Ім’я збережено.\n\n<b>Мої дані</b>\n\nІм’я: Олена\nЧасовий пояс: Київ\nКомпанія: disposable fixture\nДоступ: чинний",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Виправити дані",
+              "callback_data": "menu:edit_data"
+            }
+          ],
+          [
+            {
+              "text": "Отримати копію даних",
+              "callback_data": "menu:export"
+            }
+          ],
+          [
+            {
+              "text": "Видалити мої дані",
+              "callback_data": "menu:delete"
+            }
+          ],
+          [
+            {
+              "text": "Мої звернення",
+              "callback_data": "menu:requests"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 74,
+      "text": "Запит 97ad20f5-84b2-475c-b28e-f4c1583ae845 отримано. Строк відповіді: 05.12.2026.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "text": "Мої дані",
+      "markup": {},
+      "user": true
+    },
+    {
+      "id": 76,
+      "text": "<b>Мої дані</b>\n\nІм’я: Олена\nЧасовий пояс: Київ\nКомпанія: disposable fixture\nДоступ: чинний",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Виправити дані",
+              "callback_data": "menu:edit_data"
+            }
+          ],
+          [
+            {
+              "text": "Отримати копію даних",
+              "callback_data": "menu:export"
+            }
+          ],
+          [
+            {
+              "text": "Видалити мої дані",
+              "callback_data": "menu:delete"
+            }
+          ],
+          [
+            {
+              "text": "Мої звернення",
+              "callback_data": "menu:requests"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 78,
+      "text": "97ad20f5-84b2-475c-b28e-f4c1583ae845: отримано, строк 05.12.2026",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "text": "Про проєкт",
+      "markup": {},
+      "user": true
+    },
+    {
+      "id": 80,
+      "text": "<b>Про проєкт</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Опис проєкту",
+              "callback_data": "menu:help:overview"
+            }
+          ],
+          [
+            {
+              "text": "Як приходять нагадування",
+              "callback_data": "menu:help:reminders"
+            }
+          ],
+          [
+            {
+              "text": "Часті запитання",
+              "callback_data": "menu:help:faq"
+            }
+          ],
+          [
+            {
+              "text": "Конфіденційність",
+              "callback_data": "menu:help:confidentiality"
+            }
+          ],
+          [
+            {
+              "text": "Залишити відгук",
+              "callback_data": "menu:feedback"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 82,
+      "text": "Розкажи, що в LY Workday було корисно, заважало або чого бракувало. Як відгук збережеться лише наступне твоє повідомлення.\n\nЯкщо потрібна відповідь на запитання або допомога з акаунтом, відкрий «Підтримка» у меню.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Скасувати",
+              "callback_data": "menu:input_cancel:63243cd2acd3438d9bb98612250dd426"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "text": "UX-тест: вдалося повернутися до своїх налаштувань.",
+      "markup": {},
+      "user": true
+    },
+    {
+      "id": 84,
+      "text": "Відгук збережено.\n\n<b>Про проєкт</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Опис проєкту",
+              "callback_data": "menu:help:overview"
+            }
+          ],
+          [
+            {
+              "text": "Як приходять нагадування",
+              "callback_data": "menu:help:reminders"
+            }
+          ],
+          [
+            {
+              "text": "Часті запитання",
+              "callback_data": "menu:help:faq"
+            }
+          ],
+          [
+            {
+              "text": "Конфіденційність",
+              "callback_data": "menu:help:confidentiality"
+            }
+          ],
+          [
+            {
+              "text": "Залишити відгук",
+              "callback_data": "menu:feedback"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "text": "Підтримка",
+      "markup": {},
+      "user": true
+    },
+    {
+      "id": 86,
+      "text": "<b>Підтримка</b>\n\nНапиши на <b>hello@loveyourselfua.com</b> і коротко опиши, що сталося. Якщо звернення вже є, додай його номер. Для першого повідомлення достатньо опису проблеми.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "text": "Мій розклад",
+      "markup": {},
+      "user": true
+    },
+    {
+      "id": 88,
+      "text": "<b>Мій розклад</b>\n\nСтан: активний\nДні: понеділок, вівторок, середа, четвер, п’ятниця\nЧас: 16:10\nЧасовий пояс: Київ\nНаступне заплановане нагадування: 06.11.2026 о 16:10",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Змінити налаштування",
+              "callback_data": "menu:plan:settings:1:3"
+            }
+          ],
+          [
+            {
+              "text": "Змінити формат",
+              "callback_data": "menu:plan:format:1:3"
+            }
+          ],
+          [
+            {
+              "text": "Призупинити",
+              "callback_data": "menu:plan:pause:1:3"
+            }
+          ],
+          [
+            {
+              "text": "Завершити",
+              "callback_data": "menu:plan:confirm_end:1:3"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 90,
+      "text": "Перейти на 14 робочих днів? Поточний розклад завершиться, і почнеться новий.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Підтвердити зміну",
+              "callback_data": "menu:confirm:4edc5f2ccccd4403812acf69bb97bf19"
+            }
+          ],
+          [
+            {
+              "text": "Скасувати",
+              "callback_data": "menu:Мій розклад"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 92,
+      "text": "Введи час вечірнього нагадування у форматі ГГ:ХХ, наприклад 18:30.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Скасувати",
+              "callback_data": "menu:input_cancel:216287ab135e41daaa0fbf023f2a6d6c"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "text": "99:99",
+      "markup": {},
+      "user": true
+    },
+    {
+      "id": 94,
+      "text": "Введи час у форматі ГГ:ХХ, наприклад 14:30.\n\nВведи час у форматі ГГ:ХХ, наприклад 14:30, і надішли повідомлення.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Скасувати",
+              "callback_data": "menu:input_cancel:216287ab135e41daaa0fbf023f2a6d6c"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "text": "18:30",
+      "markup": {},
+      "user": true
+    },
+    {
+      "id": 96,
+      "text": "<b>Мій розклад</b>\n\nСтан: активний\nДні: понеділок, вівторок, середа, четвер, п’ятниця\nЧас: 16:10 і 18:30\nЧасовий пояс: Київ\nНаступне заплановане нагадування: 06.11.2026 о 16:10",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Змінити налаштування",
+              "callback_data": "menu:plan:settings:2:1"
+            }
+          ],
+          [
+            {
+              "text": "Змінити формат",
+              "callback_data": "menu:plan:format:2:1"
+            }
+          ],
+          [
+            {
+              "text": "Призупинити",
+              "callback_data": "menu:plan:pause:2:1"
+            }
+          ],
+          [
+            {
+              "text": "Завершити",
+              "callback_data": "menu:plan:confirm_end:2:1"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 98,
+      "text": "Що змінити в розкладі?",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Змінити час",
+              "callback_data": "menu:plan:day:2:1"
+            }
+          ],
+          [
+            {
+              "text": "Змінити вечірній час",
+              "callback_data": "menu:plan:evening:2:1"
+            }
+          ],
+          [
+            {
+              "text": "Дні надсилання",
+              "callback_data": "menu:plan:days:2:1"
+            }
+          ],
+          [
+            {
+              "text": "Часовий пояс",
+              "callback_data": "menu:plan:zone:2:1"
+            }
+          ],
+          [
+            {
+              "text": "Назад до розкладу",
+              "callback_data": "menu:Мій розклад"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 100,
+      "text": "Вибери дні надсилання.\n\nМайбутні нагадування за новим розкладом почнуться з найближчого вибраного дня після сьогодні.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "✓ понеділок",
+              "callback_data": "menu:cal:f4b71be19a774e1a87f96ad0f0b3621f:day_0"
+            }
+          ],
+          [
+            {
+              "text": "✓ вівторок",
+              "callback_data": "menu:cal:f4b71be19a774e1a87f96ad0f0b3621f:day_1"
+            }
+          ],
+          [
+            {
+              "text": "✓ середа",
+              "callback_data": "menu:cal:f4b71be19a774e1a87f96ad0f0b3621f:day_2"
+            }
+          ],
+          [
+            {
+              "text": "✓ четвер",
+              "callback_data": "menu:cal:f4b71be19a774e1a87f96ad0f0b3621f:day_3"
+            }
+          ],
+          [
+            {
+              "text": "✓ п’ятниця",
+              "callback_data": "menu:cal:f4b71be19a774e1a87f96ad0f0b3621f:day_4"
+            }
+          ],
+          [
+            {
+              "text": "субота",
+              "callback_data": "menu:cal:f4b71be19a774e1a87f96ad0f0b3621f:day_5"
+            }
+          ],
+          [
+            {
+              "text": "неділя",
+              "callback_data": "menu:cal:f4b71be19a774e1a87f96ad0f0b3621f:day_6"
+            }
+          ],
+          [
+            {
+              "text": "Застосувати",
+              "callback_data": "menu:cal:f4b71be19a774e1a87f96ad0f0b3621f:apply"
+            }
+          ],
+          [
+            {
+              "text": "Скасувати зміну",
+              "callback_data": "menu:cal:f4b71be19a774e1a87f96ad0f0b3621f:cancel"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 102,
+      "text": "Вибери дні надсилання.\n\nМайбутні нагадування за новим розкладом почнуться з найближчого вибраного дня після сьогодні.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "понеділок",
+              "callback_data": "menu:cal:d6c0c404ef4441b8a007f74041b48d23:day_0"
+            }
+          ],
+          [
+            {
+              "text": "✓ вівторок",
+              "callback_data": "menu:cal:d6c0c404ef4441b8a007f74041b48d23:day_1"
+            }
+          ],
+          [
+            {
+              "text": "✓ середа",
+              "callback_data": "menu:cal:d6c0c404ef4441b8a007f74041b48d23:day_2"
+            }
+          ],
+          [
+            {
+              "text": "✓ четвер",
+              "callback_data": "menu:cal:d6c0c404ef4441b8a007f74041b48d23:day_3"
+            }
+          ],
+          [
+            {
+              "text": "✓ п’ятниця",
+              "callback_data": "menu:cal:d6c0c404ef4441b8a007f74041b48d23:day_4"
+            }
+          ],
+          [
+            {
+              "text": "субота",
+              "callback_data": "menu:cal:d6c0c404ef4441b8a007f74041b48d23:day_5"
+            }
+          ],
+          [
+            {
+              "text": "неділя",
+              "callback_data": "menu:cal:d6c0c404ef4441b8a007f74041b48d23:day_6"
+            }
+          ],
+          [
+            {
+              "text": "Застосувати",
+              "callback_data": "menu:cal:d6c0c404ef4441b8a007f74041b48d23:apply"
+            }
+          ],
+          [
+            {
+              "text": "Скасувати зміну",
+              "callback_data": "menu:cal:d6c0c404ef4441b8a007f74041b48d23:cancel"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 104,
+      "text": "Вибери дні надсилання.\n\nМайбутні нагадування за новим розкладом почнуться з найближчого вибраного дня після сьогодні.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "понеділок",
+              "callback_data": "menu:cal:daf49f9938274e94945ef80e873d70d3:day_0"
+            }
+          ],
+          [
+            {
+              "text": "вівторок",
+              "callback_data": "menu:cal:daf49f9938274e94945ef80e873d70d3:day_1"
+            }
+          ],
+          [
+            {
+              "text": "✓ середа",
+              "callback_data": "menu:cal:daf49f9938274e94945ef80e873d70d3:day_2"
+            }
+          ],
+          [
+            {
+              "text": "✓ четвер",
+              "callback_data": "menu:cal:daf49f9938274e94945ef80e873d70d3:day_3"
+            }
+          ],
+          [
+            {
+              "text": "✓ п’ятниця",
+              "callback_data": "menu:cal:daf49f9938274e94945ef80e873d70d3:day_4"
+            }
+          ],
+          [
+            {
+              "text": "субота",
+              "callback_data": "menu:cal:daf49f9938274e94945ef80e873d70d3:day_5"
+            }
+          ],
+          [
+            {
+              "text": "неділя",
+              "callback_data": "menu:cal:daf49f9938274e94945ef80e873d70d3:day_6"
+            }
+          ],
+          [
+            {
+              "text": "Застосувати",
+              "callback_data": "menu:cal:daf49f9938274e94945ef80e873d70d3:apply"
+            }
+          ],
+          [
+            {
+              "text": "Скасувати зміну",
+              "callback_data": "menu:cal:daf49f9938274e94945ef80e873d70d3:cancel"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 106,
+      "text": "Вибери дні надсилання.\n\nМайбутні нагадування за новим розкладом почнуться з найближчого вибраного дня після сьогодні.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "понеділок",
+              "callback_data": "menu:cal:a06307bcee6047ca9c20ec34c9b811a4:day_0"
+            }
+          ],
+          [
+            {
+              "text": "вівторок",
+              "callback_data": "menu:cal:a06307bcee6047ca9c20ec34c9b811a4:day_1"
+            }
+          ],
+          [
+            {
+              "text": "середа",
+              "callback_data": "menu:cal:a06307bcee6047ca9c20ec34c9b811a4:day_2"
+            }
+          ],
+          [
+            {
+              "text": "✓ четвер",
+              "callback_data": "menu:cal:a06307bcee6047ca9c20ec34c9b811a4:day_3"
+            }
+          ],
+          [
+            {
+              "text": "✓ п’ятниця",
+              "callback_data": "menu:cal:a06307bcee6047ca9c20ec34c9b811a4:day_4"
+            }
+          ],
+          [
+            {
+              "text": "субота",
+              "callback_data": "menu:cal:a06307bcee6047ca9c20ec34c9b811a4:day_5"
+            }
+          ],
+          [
+            {
+              "text": "неділя",
+              "callback_data": "menu:cal:a06307bcee6047ca9c20ec34c9b811a4:day_6"
+            }
+          ],
+          [
+            {
+              "text": "Застосувати",
+              "callback_data": "menu:cal:a06307bcee6047ca9c20ec34c9b811a4:apply"
+            }
+          ],
+          [
+            {
+              "text": "Скасувати зміну",
+              "callback_data": "menu:cal:a06307bcee6047ca9c20ec34c9b811a4:cancel"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 108,
+      "text": "Вибери дні надсилання.\n\nМайбутні нагадування за новим розкладом почнуться з найближчого вибраного дня після сьогодні.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "понеділок",
+              "callback_data": "menu:cal:f26e1a4512474a2e9204c37e68704544:day_0"
+            }
+          ],
+          [
+            {
+              "text": "вівторок",
+              "callback_data": "menu:cal:f26e1a4512474a2e9204c37e68704544:day_1"
+            }
+          ],
+          [
+            {
+              "text": "середа",
+              "callback_data": "menu:cal:f26e1a4512474a2e9204c37e68704544:day_2"
+            }
+          ],
+          [
+            {
+              "text": "четвер",
+              "callback_data": "menu:cal:f26e1a4512474a2e9204c37e68704544:day_3"
+            }
+          ],
+          [
+            {
+              "text": "✓ п’ятниця",
+              "callback_data": "menu:cal:f26e1a4512474a2e9204c37e68704544:day_4"
+            }
+          ],
+          [
+            {
+              "text": "субота",
+              "callback_data": "menu:cal:f26e1a4512474a2e9204c37e68704544:day_5"
+            }
+          ],
+          [
+            {
+              "text": "неділя",
+              "callback_data": "menu:cal:f26e1a4512474a2e9204c37e68704544:day_6"
+            }
+          ],
+          [
+            {
+              "text": "Застосувати",
+              "callback_data": "menu:cal:f26e1a4512474a2e9204c37e68704544:apply"
+            }
+          ],
+          [
+            {
+              "text": "Скасувати зміну",
+              "callback_data": "menu:cal:f26e1a4512474a2e9204c37e68704544:cancel"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 110,
+      "text": "Вибери дні надсилання.\n\nМайбутні нагадування за новим розкладом почнуться з найближчого вибраного дня після сьогодні.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "понеділок",
+              "callback_data": "menu:cal:bce880122e864a2781887b7884233e24:day_0"
+            }
+          ],
+          [
+            {
+              "text": "вівторок",
+              "callback_data": "menu:cal:bce880122e864a2781887b7884233e24:day_1"
+            }
+          ],
+          [
+            {
+              "text": "середа",
+              "callback_data": "menu:cal:bce880122e864a2781887b7884233e24:day_2"
+            }
+          ],
+          [
+            {
+              "text": "четвер",
+              "callback_data": "menu:cal:bce880122e864a2781887b7884233e24:day_3"
+            }
+          ],
+          [
+            {
+              "text": "п’ятниця",
+              "callback_data": "menu:cal:bce880122e864a2781887b7884233e24:day_4"
+            }
+          ],
+          [
+            {
+              "text": "субота",
+              "callback_data": "menu:cal:bce880122e864a2781887b7884233e24:day_5"
+            }
+          ],
+          [
+            {
+              "text": "неділя",
+              "callback_data": "menu:cal:bce880122e864a2781887b7884233e24:day_6"
+            }
+          ],
+          [
+            {
+              "text": "Застосувати",
+              "callback_data": "menu:cal:bce880122e864a2781887b7884233e24:apply"
+            }
+          ],
+          [
+            {
+              "text": "Скасувати зміну",
+              "callback_data": "menu:cal:bce880122e864a2781887b7884233e24:cancel"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 112,
+      "text": "Вибери хоча б один день.\n\nВибери дні надсилання.\n\nМайбутні нагадування за новим розкладом почнуться з найближчого вибраного дня після сьогодні.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "понеділок",
+              "callback_data": "menu:cal:bce880122e864a2781887b7884233e24:day_0"
+            }
+          ],
+          [
+            {
+              "text": "вівторок",
+              "callback_data": "menu:cal:bce880122e864a2781887b7884233e24:day_1"
+            }
+          ],
+          [
+            {
+              "text": "середа",
+              "callback_data": "menu:cal:bce880122e864a2781887b7884233e24:day_2"
+            }
+          ],
+          [
+            {
+              "text": "четвер",
+              "callback_data": "menu:cal:bce880122e864a2781887b7884233e24:day_3"
+            }
+          ],
+          [
+            {
+              "text": "п’ятниця",
+              "callback_data": "menu:cal:bce880122e864a2781887b7884233e24:day_4"
+            }
+          ],
+          [
+            {
+              "text": "субота",
+              "callback_data": "menu:cal:bce880122e864a2781887b7884233e24:day_5"
+            }
+          ],
+          [
+            {
+              "text": "неділя",
+              "callback_data": "menu:cal:bce880122e864a2781887b7884233e24:day_6"
+            }
+          ],
+          [
+            {
+              "text": "Застосувати",
+              "callback_data": "menu:cal:bce880122e864a2781887b7884233e24:apply"
+            }
+          ],
+          [
+            {
+              "text": "Скасувати зміну",
+              "callback_data": "menu:cal:bce880122e864a2781887b7884233e24:cancel"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "text": "Про проєкт",
+      "markup": {},
+      "user": true
+    },
+    {
+      "id": 114,
+      "text": "<b>Про проєкт</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Опис проєкту",
+              "callback_data": "menu:help:overview"
+            }
+          ],
+          [
+            {
+              "text": "Як приходять нагадування",
+              "callback_data": "menu:help:reminders"
+            }
+          ],
+          [
+            {
+              "text": "Часті запитання",
+              "callback_data": "menu:help:faq"
+            }
+          ],
+          [
+            {
+              "text": "Конфіденційність",
+              "callback_data": "menu:help:confidentiality"
+            }
+          ],
+          [
+            {
+              "text": "Залишити відгук",
+              "callback_data": "menu:feedback"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 116,
+      "text": "<b>Опис проєкту</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Про LY Workday",
+              "callback_data": "menu:help:about"
+            }
+          ],
+          [
+            {
+              "text": "Які тут вправи",
+              "callback_data": "menu:help:exercises"
+            }
+          ],
+          [
+            {
+              "text": "Що дає коротка пауза?",
+              "callback_data": "menu:help:pause"
+            }
+          ],
+          [
+            {
+              "text": "ШІ-асистент",
+              "callback_data": "menu:help:assistant"
+            }
+          ],
+          [
+            {
+              "text": "Це психологічна допомога?",
+              "callback_data": "menu:help:boundaries"
+            }
+          ],
+          [
+            {
+              "text": "Назад до «Про проєкт»",
+              "callback_data": "menu:Про проєкт"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 118,
+      "text": "<b>Про LY Workday</b>\n\nLY Workday допомагає зробити коротку перерву серед робочого дня. У вибраний тобою час бот запропонує одну просту дію, щоб ненадовго перемкнути увагу з роботи на себе.\n\nТридцять секунд, щоб перервати робочий потік і відчути свій стан.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Назад до розділу",
+              "callback_data": "menu:help:overview"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 120,
+      "text": "<b>Опис проєкту</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Про LY Workday",
+              "callback_data": "menu:help:about"
+            }
+          ],
+          [
+            {
+              "text": "Які тут вправи",
+              "callback_data": "menu:help:exercises"
+            }
+          ],
+          [
+            {
+              "text": "Що дає коротка пауза?",
+              "callback_data": "menu:help:pause"
+            }
+          ],
+          [
+            {
+              "text": "ШІ-асистент",
+              "callback_data": "menu:help:assistant"
+            }
+          ],
+          [
+            {
+              "text": "Це психологічна допомога?",
+              "callback_data": "menu:help:boundaries"
+            }
+          ],
+          [
+            {
+              "text": "Назад до «Про проєкт»",
+              "callback_data": "menu:Про проєкт"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 122,
+      "text": "<b>Які тут вправи</b>\n\nОдин тип вправ допомагає ненадовго перевести увагу на щось конкретне: дихання, рух руки, відчуття дотику, звук або погляд удалину.\n\nІнший тип — короткі записи ближче до кінця дня. Наприклад, можна виписати думки, які крутяться в голові, або занотувати перший крок на завтра.\n\nБот пропонує одну вправу за раз. У повідомленні є кроки й тривалість саме цієї вправи. Деякі вправи також мають коротку анімацію, яка показує рух.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Назад до розділу",
+              "callback_data": "menu:help:overview"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 124,
+      "text": "<b>Опис проєкту</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Про LY Workday",
+              "callback_data": "menu:help:about"
+            }
+          ],
+          [
+            {
+              "text": "Які тут вправи",
+              "callback_data": "menu:help:exercises"
+            }
+          ],
+          [
+            {
+              "text": "Що дає коротка пауза?",
+              "callback_data": "menu:help:pause"
+            }
+          ],
+          [
+            {
+              "text": "ШІ-асистент",
+              "callback_data": "menu:help:assistant"
+            }
+          ],
+          [
+            {
+              "text": "Це психологічна допомога?",
+              "callback_data": "menu:help:boundaries"
+            }
+          ],
+          [
+            {
+              "text": "Назад до «Про проєкт»",
+              "callback_data": "menu:Про проєкт"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 126,
+      "text": "<b>Що дає коротка пауза?</b>\n\nНа кілька секунд ти відкладаєш поточну справу й переводиш увагу на щось конкретне. Наприклад, помічаєш один звук або відчуваєш, як рука торкається поверхні. Цього достатньо, щоб перервати робочий потік і звернути увагу на свій стан. Під час паузи легше помітити, чи ти вже втомився або втомилася.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Назад до розділу",
+              "callback_data": "menu:help:overview"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 128,
+      "text": "<b>Опис проєкту</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Про LY Workday",
+              "callback_data": "menu:help:about"
+            }
+          ],
+          [
+            {
+              "text": "Які тут вправи",
+              "callback_data": "menu:help:exercises"
+            }
+          ],
+          [
+            {
+              "text": "Що дає коротка пауза?",
+              "callback_data": "menu:help:pause"
+            }
+          ],
+          [
+            {
+              "text": "ШІ-асистент",
+              "callback_data": "menu:help:assistant"
+            }
+          ],
+          [
+            {
+              "text": "Це психологічна допомога?",
+              "callback_data": "menu:help:boundaries"
+            }
+          ],
+          [
+            {
+              "text": "Назад до «Про проєкт»",
+              "callback_data": "menu:Про проєкт"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 130,
+      "text": "<b>ШІ-асистент</b>\n\nУ цьому чаті можна спілкуватися із ШІ-асистентом LY Workday. Для відповіді частина розмови й потрібні відомості про розклад передаються OpenAI. Налаштування, меню й нагадування працюють без ШІ.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Назад до розділу",
+              "callback_data": "menu:help:overview"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 132,
+      "text": "<b>Опис проєкту</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Про LY Workday",
+              "callback_data": "menu:help:about"
+            }
+          ],
+          [
+            {
+              "text": "Які тут вправи",
+              "callback_data": "menu:help:exercises"
+            }
+          ],
+          [
+            {
+              "text": "Що дає коротка пауза?",
+              "callback_data": "menu:help:pause"
+            }
+          ],
+          [
+            {
+              "text": "ШІ-асистент",
+              "callback_data": "menu:help:assistant"
+            }
+          ],
+          [
+            {
+              "text": "Це психологічна допомога?",
+              "callback_data": "menu:help:boundaries"
+            }
+          ],
+          [
+            {
+              "text": "Назад до «Про проєкт»",
+              "callback_data": "menu:Про проєкт"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 134,
+      "text": "<b>Це психологічна допомога?</b>\n\nНі. Бот не проводить діагностику, не надає психологічної, медичної чи кризової допомоги й не замінює психолога або призначене лікування.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Назад до розділу",
+              "callback_data": "menu:help:overview"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 136,
+      "text": "<b>Опис проєкту</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Про LY Workday",
+              "callback_data": "menu:help:about"
+            }
+          ],
+          [
+            {
+              "text": "Які тут вправи",
+              "callback_data": "menu:help:exercises"
+            }
+          ],
+          [
+            {
+              "text": "Що дає коротка пауза?",
+              "callback_data": "menu:help:pause"
+            }
+          ],
+          [
+            {
+              "text": "ШІ-асистент",
+              "callback_data": "menu:help:assistant"
+            }
+          ],
+          [
+            {
+              "text": "Це психологічна допомога?",
+              "callback_data": "menu:help:boundaries"
+            }
+          ],
+          [
+            {
+              "text": "Назад до «Про проєкт»",
+              "callback_data": "menu:Про проєкт"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 138,
+      "text": "<b>Про проєкт</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Опис проєкту",
+              "callback_data": "menu:help:overview"
+            }
+          ],
+          [
+            {
+              "text": "Як приходять нагадування",
+              "callback_data": "menu:help:reminders"
+            }
+          ],
+          [
+            {
+              "text": "Часті запитання",
+              "callback_data": "menu:help:faq"
+            }
+          ],
+          [
+            {
+              "text": "Конфіденційність",
+              "callback_data": "menu:help:confidentiality"
+            }
+          ],
+          [
+            {
+              "text": "Залишити відгук",
+              "callback_data": "menu:feedback"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 140,
+      "text": "<b>Як приходять нагадування</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Розклад",
+              "callback_data": "menu:help:schedule"
+            }
+          ],
+          [
+            {
+              "text": "Ритми нагадувань",
+              "callback_data": "menu:help:rhythms"
+            }
+          ],
+          [
+            {
+              "text": "Виконання та пропуск",
+              "callback_data": "menu:help:completion"
+            }
+          ],
+          [
+            {
+              "text": "Як керувати розкладом",
+              "callback_data": "menu:help:manage"
+            }
+          ],
+          [
+            {
+              "text": "Назад до «Про проєкт»",
+              "callback_data": "menu:Про проєкт"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 142,
+      "text": "<b>Розклад</b>\n\nНагадування приходять у вибрані дні за твоїм часовим поясом. Початково запропоновано понеділок–п’ятницю. Час, дні й часовий пояс можна змінити будь-коли. У розділі «Мій розклад» видно, коли заплановане наступне нагадування.\n\nРекомендуємо обрати час після обіду, у другій половині твого робочого дня.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Назад до розділу",
+              "callback_data": "menu:help:reminders"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 144,
+      "text": "<b>Як приходять нагадування</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Розклад",
+              "callback_data": "menu:help:schedule"
+            }
+          ],
+          [
+            {
+              "text": "Ритми нагадувань",
+              "callback_data": "menu:help:rhythms"
+            }
+          ],
+          [
+            {
+              "text": "Виконання та пропуск",
+              "callback_data": "menu:help:completion"
+            }
+          ],
+          [
+            {
+              "text": "Як керувати розкладом",
+              "callback_data": "menu:help:manage"
+            }
+          ],
+          [
+            {
+              "text": "Назад до «Про проєкт»",
+              "callback_data": "menu:Про проєкт"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 146,
+      "text": "<b>Ритми нагадувань</b>\n\nСпочатку бот пропонує одну коротку вправу в кожен із семи вибраних робочих днів. Якщо вибрано понеділок–п’ятницю, сім днів нагадувань охоплять частини двох робочих тижнів. Після завершення семи днів нагадування автоматично продовжуються ще на сім вибраних днів за тим самим графіком.\n\nМожна обрати формат на 14 робочих днів із додатковою вечірньою вправою. Увечері бот може запропонувати короткий запис, щоб вивантажити накопичені думки або занотувати перший крок на завтра. Час вечірнього нагадування обираєш ти.\n\nНаприкінці кожного періоду бот надсилає підсумок. Обраний формат, час і дні зберігаються.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Назад до розділу",
+              "callback_data": "menu:help:reminders"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 148,
+      "text": "<b>Як приходять нагадування</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Розклад",
+              "callback_data": "menu:help:schedule"
+            }
+          ],
+          [
+            {
+              "text": "Ритми нагадувань",
+              "callback_data": "menu:help:rhythms"
+            }
+          ],
+          [
+            {
+              "text": "Виконання та пропуск",
+              "callback_data": "menu:help:completion"
+            }
+          ],
+          [
+            {
+              "text": "Як керувати розкладом",
+              "callback_data": "menu:help:manage"
+            }
+          ],
+          [
+            {
+              "text": "Назад до «Про проєкт»",
+              "callback_data": "menu:Про проєкт"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 150,
+      "text": "<b>Виконання та пропуск</b>\n\nПісля вправи натисни «Виконано». Якщо зараз незручно, можеш зробити вправу пізніше. Якщо вправа не підходить, натисни «Пропустити».\n\nВідмітити виконання або пропуск планової вправи можна до кінця доби. Після пропуску нагадування про наступну вправу прийде за розкладом.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Назад до розділу",
+              "callback_data": "menu:help:reminders"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 152,
+      "text": "<b>Як приходять нагадування</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Розклад",
+              "callback_data": "menu:help:schedule"
+            }
+          ],
+          [
+            {
+              "text": "Ритми нагадувань",
+              "callback_data": "menu:help:rhythms"
+            }
+          ],
+          [
+            {
+              "text": "Виконання та пропуск",
+              "callback_data": "menu:help:completion"
+            }
+          ],
+          [
+            {
+              "text": "Як керувати розкладом",
+              "callback_data": "menu:help:manage"
+            }
+          ],
+          [
+            {
+              "text": "Назад до «Про проєкт»",
+              "callback_data": "menu:Про проєкт"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 154,
+      "text": "<b>Як керувати розкладом</b>\n\nУ розділі «Мій розклад» можна змінити формат. Обери <b>7 робочих днів</b>, якщо тобі достатньо однієї короткої паузи на день. Обери <b>14 робочих днів</b>, якщо хочеш додати ще й вечірній момент, щоб занотувати думки або підготувати перший крок на завтра. Зміна формату завершує поточний період і починає новий.\n\nЯкщо хочеш тимчасово зупинити нагадування, натисни «Призупинити». Зможеш відновити їх у тому самому розділі. Щоб закрити поточний розклад, обери «Завершити».",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Назад до розділу",
+              "callback_data": "menu:help:reminders"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 156,
+      "text": "<b>Як приходять нагадування</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Розклад",
+              "callback_data": "menu:help:schedule"
+            }
+          ],
+          [
+            {
+              "text": "Ритми нагадувань",
+              "callback_data": "menu:help:rhythms"
+            }
+          ],
+          [
+            {
+              "text": "Виконання та пропуск",
+              "callback_data": "menu:help:completion"
+            }
+          ],
+          [
+            {
+              "text": "Як керувати розкладом",
+              "callback_data": "menu:help:manage"
+            }
+          ],
+          [
+            {
+              "text": "Назад до «Про проєкт»",
+              "callback_data": "menu:Про проєкт"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 158,
+      "text": "<b>Про проєкт</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Опис проєкту",
+              "callback_data": "menu:help:overview"
+            }
+          ],
+          [
+            {
+              "text": "Як приходять нагадування",
+              "callback_data": "menu:help:reminders"
+            }
+          ],
+          [
+            {
+              "text": "Часті запитання",
+              "callback_data": "menu:help:faq"
+            }
+          ],
+          [
+            {
+              "text": "Конфіденційність",
+              "callback_data": "menu:help:confidentiality"
+            }
+          ],
+          [
+            {
+              "text": "Залишити відгук",
+              "callback_data": "menu:feedback"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 160,
+      "text": "<b>Часті запитання</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Як це працює?",
+              "callback_data": "menu:help:how"
+            }
+          ],
+          [
+            {
+              "text": "Чому саме ця вправа?",
+              "callback_data": "menu:help:why"
+            }
+          ],
+          [
+            {
+              "text": "Що, якщо не встигну?",
+              "callback_data": "menu:help:missed"
+            }
+          ],
+          [
+            {
+              "text": "Як призупинити або завершити нагадування?",
+              "callback_data": "menu:help:stop"
+            }
+          ],
+          [
+            {
+              "text": "Назад до «Про проєкт»",
+              "callback_data": "menu:Про проєкт"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 162,
+      "text": "<b>Як це працює?</b>\n\nТи обираєш час і дні, а бот надсилає в Telegram коротку вправу для перерви серед робочого дня. Відкрий повідомлення й виконай вправу за інструкцією.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Назад до розділу",
+              "callback_data": "menu:help:faq"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 164,
+      "text": "<b>Часті запитання</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Як це працює?",
+              "callback_data": "menu:help:how"
+            }
+          ],
+          [
+            {
+              "text": "Чому саме ця вправа?",
+              "callback_data": "menu:help:why"
+            }
+          ],
+          [
+            {
+              "text": "Що, якщо не встигну?",
+              "callback_data": "menu:help:missed"
+            }
+          ],
+          [
+            {
+              "text": "Як призупинити або завершити нагадування?",
+              "callback_data": "menu:help:stop"
+            }
+          ],
+          [
+            {
+              "text": "Назад до «Про проєкт»",
+              "callback_data": "menu:Про проєкт"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 166,
+      "text": "<b>Чому саме ця вправа?</b>\n\nЩоб на час паузи перемкнутися з роботи, зосередься на чомусь конкретному: рух, звук, дотик або дихання. Увечері бот може запропонувати короткий запис, щоб зібрати думки наприкінці дня. Вправи чергуються, щоб кожна дія допомагала свідомо перемкнути увагу й не перетворювалася на звичний рух на автопілоті.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Назад до розділу",
+              "callback_data": "menu:help:faq"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 168,
+      "text": "<b>Часті запитання</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Як це працює?",
+              "callback_data": "menu:help:how"
+            }
+          ],
+          [
+            {
+              "text": "Чому саме ця вправа?",
+              "callback_data": "menu:help:why"
+            }
+          ],
+          [
+            {
+              "text": "Що, якщо не встигну?",
+              "callback_data": "menu:help:missed"
+            }
+          ],
+          [
+            {
+              "text": "Як призупинити або завершити нагадування?",
+              "callback_data": "menu:help:stop"
+            }
+          ],
+          [
+            {
+              "text": "Назад до «Про проєкт»",
+              "callback_data": "menu:Про проєкт"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 170,
+      "text": "<b>Що, якщо не встигну?</b>\n\nДо кінця свого дня можеш повернутися до планової вправи. Якщо час уже минув, наступне нагадування прийде за розкладом. Якщо регулярно незручно виконувати вправу в цей час, обери інший у розділі «Мій розклад».",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Назад до розділу",
+              "callback_data": "menu:help:faq"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 172,
+      "text": "<b>Часті запитання</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Як це працює?",
+              "callback_data": "menu:help:how"
+            }
+          ],
+          [
+            {
+              "text": "Чому саме ця вправа?",
+              "callback_data": "menu:help:why"
+            }
+          ],
+          [
+            {
+              "text": "Що, якщо не встигну?",
+              "callback_data": "menu:help:missed"
+            }
+          ],
+          [
+            {
+              "text": "Як призупинити або завершити нагадування?",
+              "callback_data": "menu:help:stop"
+            }
+          ],
+          [
+            {
+              "text": "Назад до «Про проєкт»",
+              "callback_data": "menu:Про проєкт"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 174,
+      "text": "<b>Як призупинити або завершити нагадування?</b>\n\nВідкрий «Мій розклад» у меню. «Призупинити» тимчасово зупиняє нагадування й залишає можливість відновити їх. «Завершити» закриває поточний розклад. Якщо пізніше почнеш новий, збережені налаштування залишаться доступними.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Назад до розділу",
+              "callback_data": "menu:help:faq"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 176,
+      "text": "<b>Часті запитання</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Як це працює?",
+              "callback_data": "menu:help:how"
+            }
+          ],
+          [
+            {
+              "text": "Чому саме ця вправа?",
+              "callback_data": "menu:help:why"
+            }
+          ],
+          [
+            {
+              "text": "Що, якщо не встигну?",
+              "callback_data": "menu:help:missed"
+            }
+          ],
+          [
+            {
+              "text": "Як призупинити або завершити нагадування?",
+              "callback_data": "menu:help:stop"
+            }
+          ],
+          [
+            {
+              "text": "Назад до «Про проєкт»",
+              "callback_data": "menu:Про проєкт"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 178,
+      "text": "<b>Про проєкт</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Опис проєкту",
+              "callback_data": "menu:help:overview"
+            }
+          ],
+          [
+            {
+              "text": "Як приходять нагадування",
+              "callback_data": "menu:help:reminders"
+            }
+          ],
+          [
+            {
+              "text": "Часті запитання",
+              "callback_data": "menu:help:faq"
+            }
+          ],
+          [
+            {
+              "text": "Конфіденційність",
+              "callback_data": "menu:help:confidentiality"
+            }
+          ],
+          [
+            {
+              "text": "Залишити відгук",
+              "callback_data": "menu:feedback"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 180,
+      "text": "<b>Конфіденційність</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Що зберігається",
+              "callback_data": "menu:help:retention"
+            }
+          ],
+          [
+            {
+              "text": "Хто може бачити дані про виконання?",
+              "callback_data": "menu:help:visibility"
+            }
+          ],
+          [
+            {
+              "text": "Як видалити свої дані?",
+              "callback_data": "menu:help:deletion"
+            }
+          ],
+          [
+            {
+              "text": "Приватність",
+              "callback_data": "menu:help:notice"
+            }
+          ],
+          [
+            {
+              "text": "Назад до «Про проєкт»",
+              "callback_data": "menu:Про проєкт"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 182,
+      "text": "<b>Що зберігається</b>\n\nLove Yourself зберігає дані акаунта й доступу, налаштування нагадувань, історію отриманих вправ і відповідей на них, надіслані відгуки та звернення щодо даних. Текст розмови з ШІ зберігається до 90 днів для збереження контексту діалогу.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Назад до розділу",
+              "callback_data": "menu:help:confidentiality"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 184,
+      "text": "<b>Конфіденційність</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Що зберігається",
+              "callback_data": "menu:help:retention"
+            }
+          ],
+          [
+            {
+              "text": "Хто може бачити дані про виконання?",
+              "callback_data": "menu:help:visibility"
+            }
+          ],
+          [
+            {
+              "text": "Як видалити свої дані?",
+              "callback_data": "menu:help:deletion"
+            }
+          ],
+          [
+            {
+              "text": "Приватність",
+              "callback_data": "menu:help:notice"
+            }
+          ],
+          [
+            {
+              "text": "Назад до «Про проєкт»",
+              "callback_data": "menu:Про проєкт"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 186,
+      "text": "<b>Хто може бачити дані про виконання?</b>\n\nТвій особистий підсумок виконання вправ бачиш тільки ти. Для оцінки використання продукту команда проєкту працює зі зведеними показниками. Історія вправ зберігається у твоєму акаунті. Уповноважені працівники можуть звертатися до цих даних за робочої потреби, наприклад щоб опрацювати твоє звернення.\n\nЗа корпоративного доступу роботодавець не отримує твою особисту історію вправ чи переписку. Роботодавець може отримати лише зведені дані, і лише якщо корпоративний доступ мають понад 100 людей у компанії.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Назад до розділу",
+              "callback_data": "menu:help:confidentiality"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 188,
+      "text": "<b>Конфіденційність</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Що зберігається",
+              "callback_data": "menu:help:retention"
+            }
+          ],
+          [
+            {
+              "text": "Хто може бачити дані про виконання?",
+              "callback_data": "menu:help:visibility"
+            }
+          ],
+          [
+            {
+              "text": "Як видалити свої дані?",
+              "callback_data": "menu:help:deletion"
+            }
+          ],
+          [
+            {
+              "text": "Приватність",
+              "callback_data": "menu:help:notice"
+            }
+          ],
+          [
+            {
+              "text": "Назад до «Про проєкт»",
+              "callback_data": "menu:Про проєкт"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 190,
+      "text": "<b>Як видалити свої дані?</b>\n\nУ «Мої дані» вибери «Видалити мої дані» й підтвердь запит. Бот покаже номер звернення і строк відповіді. За номером у «Мої звернення» можна перевірити, чи опрацьовано запит.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Назад до розділу",
+              "callback_data": "menu:help:confidentiality"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 192,
+      "text": "<b>Конфіденційність</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Що зберігається",
+              "callback_data": "menu:help:retention"
+            }
+          ],
+          [
+            {
+              "text": "Хто може бачити дані про виконання?",
+              "callback_data": "menu:help:visibility"
+            }
+          ],
+          [
+            {
+              "text": "Як видалити свої дані?",
+              "callback_data": "menu:help:deletion"
+            }
+          ],
+          [
+            {
+              "text": "Приватність",
+              "callback_data": "menu:help:notice"
+            }
+          ],
+          [
+            {
+              "text": "Назад до «Про проєкт»",
+              "callback_data": "menu:Про проєкт"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 194,
+      "text": "<b>Приватність</b>\n\nТут можна прочитати актуальне повідомлення про приватність Love Yourself. У ньому описано, які дані використовуються, кому вони можуть передаватися і як отримати копію, виправити або видалити свої дані.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Прочитати повідомлення",
+              "callback_data": "menu:help_notice"
+            }
+          ],
+          [
+            {
+              "text": "Назад до розділу",
+              "callback_data": "menu:help:confidentiality"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 196,
+      "text": "<b>Конфіденційність</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Що зберігається",
+              "callback_data": "menu:help:retention"
+            }
+          ],
+          [
+            {
+              "text": "Хто може бачити дані про виконання?",
+              "callback_data": "menu:help:visibility"
+            }
+          ],
+          [
+            {
+              "text": "Як видалити свої дані?",
+              "callback_data": "menu:help:deletion"
+            }
+          ],
+          [
+            {
+              "text": "Приватність",
+              "callback_data": "menu:help:notice"
+            }
+          ],
+          [
+            {
+              "text": "Назад до «Про проєкт»",
+              "callback_data": "menu:Про проєкт"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 198,
+      "text": "<b>Про проєкт</b>",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Опис проєкту",
+              "callback_data": "menu:help:overview"
+            }
+          ],
+          [
+            {
+              "text": "Як приходять нагадування",
+              "callback_data": "menu:help:reminders"
+            }
+          ],
+          [
+            {
+              "text": "Часті запитання",
+              "callback_data": "menu:help:faq"
+            }
+          ],
+          [
+            {
+              "text": "Конфіденційність",
+              "callback_data": "menu:help:confidentiality"
+            }
+          ],
+          [
+            {
+              "text": "Залишити відгук",
+              "callback_data": "menu:feedback"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "text": "Мій розклад",
+      "markup": {},
+      "user": true
+    },
+    {
+      "id": 200,
+      "text": "<b>Мій розклад</b>\n\nСтан: активний\nДні: понеділок, вівторок, середа, четвер, п’ятниця\nЧас: 16:10 і 18:30\nЧасовий пояс: Київ\nНаступне заплановане нагадування: 06.11.2026 о 16:10",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Змінити налаштування",
+              "callback_data": "menu:plan:settings:2:1"
+            }
+          ],
+          [
+            {
+              "text": "Змінити формат",
+              "callback_data": "menu:plan:format:2:1"
+            }
+          ],
+          [
+            {
+              "text": "Призупинити",
+              "callback_data": "menu:plan:pause:2:1"
+            }
+          ],
+          [
+            {
+              "text": "Завершити",
+              "callback_data": "menu:plan:confirm_end:2:1"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 202,
+      "text": "Що змінити в розкладі?",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Змінити час",
+              "callback_data": "menu:plan:day:2:1"
+            }
+          ],
+          [
+            {
+              "text": "Змінити вечірній час",
+              "callback_data": "menu:plan:evening:2:1"
+            }
+          ],
+          [
+            {
+              "text": "Дні надсилання",
+              "callback_data": "menu:plan:days:2:1"
+            }
+          ],
+          [
+            {
+              "text": "Часовий пояс",
+              "callback_data": "menu:plan:zone:2:1"
+            }
+          ],
+          [
+            {
+              "text": "Назад до розкладу",
+              "callback_data": "menu:Мій розклад"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 204,
+      "text": "Вибери дні надсилання.\n\nМайбутні нагадування за новим розкладом почнуться з найближчого вибраного дня після сьогодні.",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "✓ понеділок",
+              "callback_data": "menu:cal:3ba400189734484399289a17e217dae9:day_0"
+            }
+          ],
+          [
+            {
+              "text": "✓ вівторок",
+              "callback_data": "menu:cal:3ba400189734484399289a17e217dae9:day_1"
+            }
+          ],
+          [
+            {
+              "text": "✓ середа",
+              "callback_data": "menu:cal:3ba400189734484399289a17e217dae9:day_2"
+            }
+          ],
+          [
+            {
+              "text": "✓ четвер",
+              "callback_data": "menu:cal:3ba400189734484399289a17e217dae9:day_3"
+            }
+          ],
+          [
+            {
+              "text": "✓ п’ятниця",
+              "callback_data": "menu:cal:3ba400189734484399289a17e217dae9:day_4"
+            }
+          ],
+          [
+            {
+              "text": "субота",
+              "callback_data": "menu:cal:3ba400189734484399289a17e217dae9:day_5"
+            }
+          ],
+          [
+            {
+              "text": "неділя",
+              "callback_data": "menu:cal:3ba400189734484399289a17e217dae9:day_6"
+            }
+          ],
+          [
+            {
+              "text": "Застосувати",
+              "callback_data": "menu:cal:3ba400189734484399289a17e217dae9:apply"
+            }
+          ],
+          [
+            {
+              "text": "Скасувати зміну",
+              "callback_data": "menu:cal:3ba400189734484399289a17e217dae9:cancel"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "id": 206,
+      "text": "<b>Мій розклад</b>\n\nСтан: активний\nДні: понеділок, вівторок, середа, четвер, п’ятниця\nЧас: 16:10 і 18:30\nЧасовий пояс: Київ\nНаступне заплановане нагадування: 06.11.2026 о 16:10",
+      "markup": {
+        "inline_keyboard": [
+          [
+            {
+              "text": "Змінити налаштування",
+              "callback_data": "menu:plan:settings:2:1"
+            }
+          ],
+          [
+            {
+              "text": "Змінити формат",
+              "callback_data": "menu:plan:format:2:1"
+            }
+          ],
+          [
+            {
+              "text": "Призупинити",
+              "callback_data": "menu:plan:pause:2:1"
+            }
+          ],
+          [
+            {
+              "text": "Завершити",
+              "callback_data": "menu:plan:confirm_end:2:1"
+            }
+          ],
+          [
+            {
+              "text": "Назад до меню",
+              "callback_data": "menu:root"
+            }
+          ]
+        ]
+      }
+    }
+  ],
+  "keyboard": [
+    [
+      {
+        "text": "Мій розклад"
+      }
+    ],
+    [
+      {
+        "text": "Мої дані"
+      },
+      {
+        "text": "Про проєкт"
+      }
+    ],
+    [
+      {
+        "text": "Підтримка"
+      }
+    ]
+  ]
+}

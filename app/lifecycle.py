@@ -1725,6 +1725,128 @@ def change_delivery_time(
     )
 
 
+def change_schedule_calendar(
+    db: Session,
+    *,
+    user_id: int,
+    plan_id: int,
+    plan_version: int,
+    source_operation_id: str,
+    active_days: list[str] | None = None,
+    timezone_override: str | None = None,
+) -> LifecycleResult:
+    """Apply one calendar edit under the lifecycle lock, preserving delivery facts."""
+    from app.access import AccessDenied, require_planning_timezone
+    from app.active_days import VALID_DAYS, normalize_active_days, resolve_active_days
+    from app.db import ExerciseDelivery, UserProfile
+    from app.plan_completion.workflow import refresh_report_time
+    from app.time_slots import TimeSlotError, reanchor_pending_plan_steps
+
+    user = _lock_user(db, user_id)
+    if active_days is not None and (
+        not isinstance(active_days, list) or not active_days
+        or any(not isinstance(day, str) or day not in VALID_DAYS for day in active_days)
+        or len(active_days) != len(set(active_days)) or timezone_override is not None
+    ):
+        raise LifecycleTransitionError("invalid_active_days")
+    if timezone_override is not None:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(timezone_override)
+        except (TypeError, ValueError, ZoneInfoNotFoundError):
+            raise LifecycleTransitionError("invalid_timezone") from None
+    normalized_days = normalize_active_days(active_days) if active_days is not None else None
+    material = repr((plan_id, plan_version, normalized_days, timezone_override))
+    receipt_status = "c1:" + hashlib.sha256(material.encode()).hexdigest()[:20]
+    existing = find_lifecycle_operation(db, user_id, source_operation_id)
+    plan = get_current_plan(db, user_id, lock=True)
+    if plan is None:
+        try:
+            plan = _lifecycle_context_plan(db, user_id)
+        except LifecycleTransitionError:
+            plan = None
+    if existing is not None:
+        _duplicate_operation_result(
+            existing, expected_operation="change_schedule_calendar",
+            expected_result_status=receipt_status,
+        )
+        still_current = plan is not None and plan.id == existing.plan_id
+        if normalized_days is not None:
+            matches = normalized_days == resolve_active_days(user.profile)
+        else:
+            matches = timezone_override == (user.timezone_override if user.timezone_override_explicit else None)
+        still_authoritative = still_current and matches
+        effects = (_plan_schedule_effect(plan),) if still_authoritative else ()
+        if still_authoritative and refresh_report_time(db, user, plan.id, calendar_changed=True):
+            effects += (ExternalEffect(kind="reconcile_completion_schedule", target_ids=(plan.id,)),)
+        return LifecycleResult(
+            user_id=user_id, plan_id=existing.plan_id,
+            status=str(plan.status) if still_current else "superseded",
+            operation="change_schedule_calendar", duplicate=True, applied=still_authoritative,
+            code="replayed" if still_authoritative else "superseded",
+            effects=effects,
+        )
+    if plan is None or (plan.id, plan.version) != (plan_id, plan_version):
+        raise LifecycleTransitionError("schedule_calendar_superseded")
+    if plan.status != "abandoned" and not _switch_schedule_ready(db, user_id, plan.id):
+        raise LifecycleTransitionError("switch_schedule_pending")
+
+    same_days = active_days is not None and normalize_active_days(active_days) == resolve_active_days(user.profile)
+    same_zone = active_days is None and timezone_override == (
+        user.timezone_override if user.timezone_override_explicit else None
+    )
+    if same_days or same_zone:
+        # The preferences may already have committed while scheduler effects
+        # failed. A fresh user retry repairs jobs from the saved timestamps;
+        # it must not reanchor dates or increment the plan version again.
+        return LifecycleResult(
+            user_id=user_id, plan_id=plan.id, status=str(plan.status),
+            operation="change_schedule_calendar", applied=False, code="unchanged",
+            effects=(_plan_schedule_effect(plan),),
+        )
+
+    now = datetime.now(timezone.utc)
+    future_ids = {
+        step.id for day in plan.days for step in day.steps
+        if step.step_status == "pending" and (step.scheduled_for is None or step.scheduled_for > now)
+    }
+    # Existing attempts own their delivery facts and retry deadlines.
+    if future_ids and db.query(ExerciseDelivery.id).filter(
+        ExerciseDelivery.plan_step_id.in_(future_ids)
+    ).first() is not None:
+        raise LifecycleTransitionError("delivery_attempt_in_schedule")
+
+    if user.profile is None:
+        user.profile = UserProfile()
+    if active_days is not None:
+        user.profile.active_days = normalize_active_days(active_days)
+    else:
+        user.timezone = timezone_override
+    try:
+        require_planning_timezone(user)
+        updated_ids = reanchor_pending_plan_steps(
+            user, plan, resumed_at=now, eligible_step_ids=future_ids,
+        )
+    except (AccessDenied, TimeSlotError) as exc:
+        raise LifecycleTransitionError("schedule_calendar_unavailable") from exc
+
+    plan.version += 1
+    record_lifecycle_operation(
+        db, user_id=user_id, plan_id=plan.id, source_operation_id=source_operation_id,
+        operation="change_schedule_calendar", result_status=receipt_status,
+    )
+    effects = (_plan_schedule_effect(plan),)
+    if refresh_report_time(db, user, plan.id, calendar_changed=True):
+        effects += (ExternalEffect(kind="reconcile_completion_schedule", target_ids=(plan.id,)),)
+    db.flush()
+    return LifecycleResult(
+        user_id=user_id, plan_id=plan.id, status=str(plan.status),
+        operation="change_schedule_calendar", effects=effects,
+        details={"updated_step_ids": tuple(updated_ids)},
+    )
+
+
 def record_evening_time_preference(
     db: Session,
     *,

@@ -234,6 +234,7 @@ def reanchor_pending_plan_steps(
     *,
     resumed_at: Optional[datetime] = None,
     daily_time_slots: Optional[Dict[str, str]] = None,
+    eligible_step_ids: set[int] | None = None,
 ) -> list[int]:
     """Move remaining pending work to consecutive selected work days.
 
@@ -265,7 +266,9 @@ def reanchor_pending_plan_steps(
 
     for day in sorted(plan.days, key=lambda item: int(item.day_number)):
         pending_steps = [
-            step for step in day.steps if str(step.step_status) == "pending"
+            step for step in day.steps
+            if str(step.step_status) == "pending"
+            and (eligible_step_ids is None or step.id in eligible_step_ids)
         ]
         if not pending_steps:
             continue

@@ -1,0 +1,10 @@
+{
+  "initial_candidate": "e62e4f646906c3ee91bfdd3ef5b5c6bc9d6c1168",
+  "base": "05dcee5e90b18a17ba88cdd5883e9d7af1c8ca43",
+  "files": {
+    "app/telegram.py": "af97d2b25b216d7636b160b7aa870c45f5137a2c3ef611e27fb47df0da3dc33e",
+    "app/lifecycle.py": "3ab11de7a758786787fad7937ff3217e988ba2da64425bc9a8f88cf8cb695cc5",
+    "app/privacy.py": "08e431de7319e4b6025fdd4ff3e540cec5d8b0e0f6b6801d99382f007a7ded72",
+    "tests/test_wp_04_3_review_fixes_postgres.py": "c584c5e792878122e89c35ec35bcd90a1e0d4205e26a446e859fbd3af053126f"
+  }
+}

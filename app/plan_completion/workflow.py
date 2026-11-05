@@ -33,7 +33,7 @@ def lock_obligation(db, user_id, plan_id):
     return db.query(PlanCompletion).filter(PlanCompletion.plan_id == plan_id).populate_existing().with_for_update().first()
 
 
-def refresh_report_time(db, user, successor_id):
+def refresh_report_time(db, user, successor_id, *, calendar_changed=False):
     """A saved DAY change also updates a not-yet-attempted no-action report."""
     from app.plan_completion.chronology import report_due_at, next_workday_day_at, last_terminal_step
     row = db.query(PlanCompletion).filter(
@@ -45,7 +45,7 @@ def refresh_report_time(db, user, successor_id):
     if last is not None and last.step_status == 'expired':
         saved_day = (user.profile.daily_time_slots or {}).get('DAY')
         previous = utc(row.report_at)
-        if previous.astimezone(resolve_timezone(user.timezone)).strftime('%H:%M') == saved_day:
+        if not calendar_changed and previous.astimezone(resolve_timezone(user.timezone)).strftime('%H:%M') == saved_day:
             return True
         now = datetime.now(timezone.utc)
         due = report_due_at(user, last, now=now)

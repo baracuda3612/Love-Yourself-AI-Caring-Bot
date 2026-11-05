@@ -1110,10 +1110,27 @@ log/backup evidence and G1/G3/G4 remain launch gates.
 
 ### WP-04.3 — Implement deterministic onboarding and user menu
 
-**Status:** `READY_FOR_PLANNING` — implementation predecessors are verified.
-Start with the [WP-04.3 handoff](work_packages/WP-04.3_start_message.md); reconcile
-`DG-01` with the historical ONB-04 no-hard-range decision before implementing
-new delivery-time restrictions. Do not infer a company window from an example.
+**Status:** `IN_PROGRESS` — local implementation and author verification
+completed; initial independent review, founder commit/push permission and
+device evidence remain pending. The documentation handoff is merged in PR #272. Use the
+[execution contract](work_packages/WP-04.3_execution_contract.md) and
+[copy candidate](work_packages/WP-04.3_copy_uk.md).
+Founder resolved `DG-01` on 2026-10-29: any valid `00:00`–`23:59`, individual
+choice with purpose-framed guidance, no company window/configuration for MVP.
+The founder approved onboarding, menu and article copy. Current references:
+[approved articles](work_packages/WP-04.3_menu_articles_uk.md) and
+[local verification](work_packages/WP-04.3_verification.md).
+
+Founder menu clarification 2026-10-31: a contextual Telegram reply keyboard
+exposes three helper sections before setup and the approved five-section
+menu afterward; commands are optional, not required user navigation. Every
+helper screen during setup offers return to the exact suspended setup/editor
+with retained accepted settings/draft. See the current
+[concise menu map](work_packages/WP-04.3_menu_map_uk.md) and
+[technical backlog/ownership ledger](work_packages/WP-04.3_technical_backlog.md).
+Founder confirmed the G01 active day/timezone editor and lifecycle writer for
+WP-04.3 on 2026-11-04. G02 self-service display-name correction and G03 explicit
+product feedback are implemented locally in WP-04.3.
 
 **Scope**
 
@@ -1123,20 +1140,33 @@ new delivery-time restrictions. Do not infer a company window from an example.
 * verify the complete company-link → browser/provider or email verification →
   Telegram journey, including return, expired links/codes and retry;
 * canonical `/start` handoff after authorization;
-* FD-04 deterministic mechanism-sale onboarding;
-* collect exact DAY time and selected work days;
+* FD-04 deterministic mechanism-sale onboarding. Founder clarified 2026-11-04
+  that setup validates the expected input only and uses fixed step guidance for
+  other text. Separate distress/danger classification and crisis responses are
+  outside this package;
+* collect exact DAY time; founder decision 2026-10-29 defaults to Monday–Friday for
+  the first MVP, shown and accepted on schedule confirmation without a separate
+  day-selection step; confirm directly creates the first plan, then gives
+  the actual first-delivery promise. The later approved copy puts cycle
+  duration and controls in the menu/reference sections; the optional immediate
+  pause and its CTA are connected only with the real B6 service. Confirmation
+  offers only confirm/change-settings; optional time/day/timezone edits each
+  return to the same short confirmation with current values;
 * create the first plan through the canonical service;
 * confirm the finalized first delivery date/time;
 * keep internal slot tags out of user-facing copy;
 * deterministic menu for status, next delivery, time, pause/resume/cancel,
-  format switch, privacy/data, support, and about;
+  format switch via the existing WP-02.2/WP-02.3 service, privacy/data, support,
+  and about. WP-04.3 owns G01 active weekday/timezone changes; reuse the
+  existing lifecycle and scheduler reconciliation boundaries;
 * already-onboarded, invalid/revoked token, repeat start, and recovery paths.
 
 **Primary audit coverage:** `ONB-01…08`, `UX-12`, `UX-18`, `FD-03…04`.
 
-**Decision gate:** the exact allowed delivery window/company configurability
-must be founder-approved before hardcoding constraints. `MISC-02` time picker
-remains post-MVP.
+**Decision gate:** `DG-01` resolved on 2026-10-29 without a company window;
+ONB-04's no-hard-range policy is confirmed. `MISC-02` time picker remains
+post-MVP. Product-learning aggregates of selected times need a separate WP-07
+privacy/reporting contract; WP-04.3 adds no analytics surface.
 
 **Exit criteria**
 
@@ -1233,6 +1263,15 @@ Verify resolved and preserved behavior as well as new work:
 **Objective:** implement FD-19 without coupling voluntary requests to plan
 lifecycle or corrupting scheduled-channel evidence.
 
+Founder product revision 2026-10-30: user-facing name is **Вправа зараз**.
+Offer it directly after successful setup/first-plan scheduling and retain the
+same action in the deterministic menu. Both enter the same B6 occurrence
+service; no separate onboarding demo, plan step zero, schedule mutation or
+automatic unsolicited exercise. The post-setup offer is optional, with neutral
+copy and no assumed tension or promised one-minute relief. This revises FD-04's
+base-version no-demo decision specifically after setup completion. B6 remains
+not started; this is a release integration requirement, not completed behavior.
+
 ### WP-06.1 — Add the occurrence aggregate, service, and selector
 
 **Scope**
@@ -1251,6 +1290,9 @@ lifecycle or corrupting scheduled-channel evidence.
 **Scope**
 
 * deterministic command-menu entry before catch-all text;
+* `Вправа зараз` button on successful onboarding completion over that same
+  service, with truthful source attribution and no fake/live dead-end button
+  before its backend is available;
 * explicit-intent Coach tool over the same service;
 * availability after onboarding in active, paused, and no-plan modes and
   outside work schedule;
@@ -1559,6 +1601,9 @@ privacy, support, measurement, or recovery.
 **Scope**
 
 * legal roles, notice, contracts, subprocessor facts, and DPIA determination;
+* replace the founder-authorized temporary policy reader asset
+  `app/assets/privacy_policy_uk.md` at `/enroll/privacy-policy` with the final
+  approved policy, keeping the enrollment link and bot policy consistent;
 * organization/champion/support owner;
 * pilot start/end, observation window, renewal boundary, free/paid status and
   pricing basis without building speculative billing;
@@ -1630,7 +1675,7 @@ policy.
 
 | Gate | Needed by | Required decision/evidence | Default while open |
 |---|---|---|---|
-| `DG-01` | WP-04.3 | Exact employee delivery window and company configurability | Do not hardcode an audit example |
+| `DG-01` | WP-04.3 | Closed 2026-10-29: founder confirmed any valid `00:00`–`23:59`, individual choice with workday guidance; no company window/configuration for MVP | Shared clock validation; company-window hypothesis deferred |
 | `DG-02` | WP-03.1 | Cool-water medical review and asset approval | Exclude cool water from eligible content |
 | `DG-03` | WP-03.3 / WP-09.4 | Real-device preview choice, e.g. `Пауза` vs `Перерва` | Keep copy provisional and neutral |
 | `DG-04` | WP-05.3 | Real product-question escalation destination or removal of promise | Do not promise escalation |
@@ -1649,7 +1694,8 @@ The implementation program must not silently add:
   hidden future-cycle changes;
 * exercise levels, unlocks, runtime variations, or catalogue expansion to
   rescue retention before beta evidence;
-* time picker, Mini App, persistent keyboard, user-browsable catalogue, or
+* time picker, Mini App, general persistent-keyboard redesign (except the
+  bounded contextual menu approved for WP-04.3 on 2026-10-31), user-browsable catalogue, or
   workflow/calendar/IDE triggers;
 * Slack, WhatsApp, native app, or speculative channel adapters;
 * company dashboard, live analytics, team/office slices, individual employer
@@ -1783,9 +1829,9 @@ block exit gate passes.
 | Field | Value |
 |---|---|
 | Current package | `WP-04.3 — Implement deterministic onboarding and user menu` |
-| Status | `READY_FOR_PLANNING`; B3, WP-04.1 and WP-04.2 are `VERIFIED` (WP-04.2 merge `55645ec`, 2026-10-24) |
-| Next action | Founder reviews and merges the documentation handoff; then fetch the actual integration head and use the WP-04.3 start message in a new chat. Inventory onboarding/menu/enrollment touchpoints and trace full named findings; reconcile DG-01 before hardcoding schedule policy. Implement only on a separate `wp/04.3-*` branch |
-| Current blockers | No unmerged implementation predecessor. `DG-01` delivery-window/company policy needs explicit reconciliation; approved onboarding/FAQ/privacy copy and device evidence must be obtained without inventing claims. The privacy draft is unpublished; founder/legal wording, roles and company terms remain WP-10.1. G1 precedes durable-data rollout/company enrollment; G3/G4 still apply. `DG-02` keeps cold water unavailable; `DG-03` remains before beta. Final report product is WP-07; general recovery alerts/monitoring are B8/B9 |
+| Status | `IN_PROGRESS`; local WP-04.3 implementation and verification, awaiting initial independent review. B3, WP-04.1 and WP-04.2 remain `VERIFIED`. |
+| Next action | Handoff merged in PR #272; fetched integration head `05dcee5` in the new WP-04.3 chat. Local code, approved copy, enrollment design and author evidence are on `wp/04.3-deterministic-onboarding-menu`. Founder authorized the local candidate commit and separate systemic matrix review on 2026-11-05. Freeze the candidate and complete that independent review; no push/PR permission yet |
+| Current blockers | No unmerged implementation predecessor; DG-01 resolved 2026-10-29 with unrestricted valid clock time and individual choice. Onboarding/menu/reference copy is approved; device evidence is pending. The enrollment policy link shows the founder-authorized labeled draft, not an approved/pinned notice; founder/legal wording, roles and company terms remain WP-10.1. G1 precedes durable-data rollout/company enrollment; G3/G4 still apply. `DG-02` keeps cold water unavailable; `DG-03` remains before beta. Final report/product-learning aggregates are WP-07; general recovery alerts/monitoring are B8/B9 |
 
 ### Private founder log
 

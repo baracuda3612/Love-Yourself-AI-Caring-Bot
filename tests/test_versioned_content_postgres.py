@@ -281,9 +281,9 @@ def test_db_rejects_in_place_content_and_referenced_deletion(db):
 def test_downgrade_is_refused_without_losing_versions(migrated_engine):
     result=subprocess.run([sys.executable,'-m','alembic','downgrade','20260905_event_privacy'],
         env={**os.environ,'DATABASE_URL':migrated_engine.url.render_as_string(hide_password=False)},capture_output=True,text=True)
-    assert result.returncode!=0 and 'forward-only' in result.stderr
+    assert result.returncode!=0 and 'forward-only' in result.stderr.lower()
     with migrated_engine.connect() as connection:
-        assert connection.execute(text('SELECT version_num FROM alembic_version')).scalar_one()=='20261015_access_authority'
+        assert connection.execute(text('SELECT version_num FROM alembic_version')).scalar_one()=='20261104_menu_input'
         assert connection.execute(text('SELECT count(*) FROM content_library')).scalar_one()==9
 
 

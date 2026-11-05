@@ -22,7 +22,7 @@ from app.logging.router_logging import log_metric
 from app.session_memory import SessionMemory
 from app.ux.persona import get_persona
 from app.workers.coach_agent import _build_idle_finished_context, coach_agent
-from app.workers.mock_workers import mock_onboarding_agent
+from app.onboarding import FALLBACK as SETUP_FALLBACK
 from app.telemetry import log_user_event
 from app.plan_drafts.plan_builder_v5 import NoCandidatesError
 from app.lifecycle import (
@@ -878,7 +878,7 @@ async def handle_incoming_message(
     - appends message to session memory
     - auto-completes plan if needed
     - builds user context from one derived current mode
-    - routes ONBOARDING to the onboarding handler
+    - fences unfinished setup before conversation memory and Coach
     - else → calls coach_agent directly
     - executes allowlisted deterministic runtime tools
     - returns reply; the Telegram send boundary records delivered assistant memory
@@ -897,6 +897,8 @@ async def handle_incoming_message(
         with SessionLocal() as db:
             pinned_notice(db, user_id, acknowledged=True)
             from app.privacy_notice_cache import commit_read_check
+            if derive_current_mode(db, user_id) is CurrentMode.ONBOARDING:
+                return _finalize_reply(SETUP_FALLBACK)
             commit_read_check(db)
     except NoticeRequired:
         return {"reply_text": "Перед розмовою відкрий /privacy та підтвердь ознайомлення з актуальним повідомленням."}
@@ -912,15 +914,6 @@ async def handle_incoming_message(
             completion_context = _build_idle_finished_context(db, user_id)
         if completion_context is not None:
             context_payload["completion_context"] = completion_context
-
-    if current_mode == CurrentMode.ONBOARDING.value:
-        onboarding_payload = {
-            "user_id": user_id,
-            **context_payload,
-            "message_text": message_text,
-        }
-        onboarding_result = await mock_onboarding_agent(onboarding_payload)
-        return _finalize_reply(str(onboarding_result.get("reply_text") or ""))
 
     # All live-user states → coach_agent directly
     coach_payload = {

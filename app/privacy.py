@@ -169,7 +169,7 @@ def export_request(db, request_id):
     now = utcnow()
     data = {'format':'love-yourself-personal-export-v1', 'generated_at':now,
         'retention_days':90}
-    for model in (models.User, models.UserProfile, models.OnboardingProgress,
+    for model in (models.User, models.UserProfile, models.OnboardingProgress, models.MenuInput,
         models.AIPlan, models.PlanDraftRecord, models.UserEvent, models.FeedbackEvent,
         models.NoticeAcknowledgement, models.DeploymentEnrollment, models.TaskStats,
         models.FailureSignal, models.PlanInstance, models.AggregateRecord):

@@ -1,0 +1,31 @@
+{
+  "base_commit": "05dcee5e90b18a17ba88cdd5883e9d7af1c8ca43",
+  "status": "source/test fingerprint before authorized local candidate freeze; exact candidate SHA is in the separate review launch assignment",
+  "source_and_test_digest": "fdd7637b1d43993ddc0b1d2952f0f444a5276d69865c607298e81103101f877d",
+  "files": {
+    "app/access_http.py": "f3721cfb027df6d65edbfa54cad2a0841d16e110613dfac7ec768f26db409bb4",
+    "app/api.py": "e1d83fc66d8274b24e4c9dd77e90f1add1b1d86b408af7f3f99717273a9a9da4",
+    "app/assets/privacy_policy_uk.md": "56876fadf5e3f73d9bcd41b64f972ed6800b0761b1043b97fca419d1d26d891a",
+    "app/db.py": "5743fc6cd4721442e5ebb7ac557690d079ac147a48f56cdb67ad3023bb35b7bf",
+    "app/lifecycle.py": "c19a45cc88f7ae0517f771ab62327b84a403c18c3a6d87640d6867c9bac345a6",
+    "app/menu_articles_uk.json": "7f1986d20864ae5aea9268d9525845f6629007078987f8c550fdf295722fe8bc",
+    "app/menu_input.py": "a1c8abc049eac33606fdcf78fbdd1ca9c18ba0b495c360dec8c108a28a4baab1",
+    "app/onboarding.py": "f6acf11539f7a0eb93cc01722f0a6edcb5bdce249717a64e4a974aa0df50e6a2",
+    "app/orchestrator.py": "99e6d61d7fec7a51b998ce772a11a171b4c8caea2e3f0699710b52ffc4d3e449",
+    "app/plan_completion/workflow.py": "98e6bb29498cebc8649eb1a6beb2b22d3776bcda4d8e53bcdf780a7bc4e4ac2e",
+    "app/telegram.py": "2a6809635b4d52316efb67013d71124b0d030c6684f5d3928fe2d8073699da4f",
+    "app/time_slots.py": "aeaaf784489395e7ed9efb894bc0edf527cf665002875e0cba2b78ebf5adbf76",
+    "app/user_menu.py": "7a7b3822a20550220182a45a0ad7ae389dc3ae73ffd34c66ef6cd322d9b1d6ba",
+    "migrations/alembic/versions/20261104_menu_input.py": "50222ce5f60d355ce4eb4bb4b9b2d89d02a685857a8c4a3938ebd5386e7d0d64",
+    "migrations/alembic/versions/20261104_onboarding_controls.py": "4986e3592993e03ae8a33b44fe3a846fc156a1ee55c77626d494f450fbdafdbb",
+    "scripts/test_migrations.py": "ab625b65e26e20ffc28c03c80e151f7b1546e05fa394c1a1b56592bcdc12ff8a",
+    "tests/test_alembic_authority.py": "be40c443c87d65801ee008959c7f3d15633cc1b8656f5aa338a670a7869e436a",
+    "tests/test_event_privacy_deployment_primitives.py": "365fdf6e7f767c892257a2af42b3bf7395b27ecc73daf61577ccb3069307fb03",
+    "tests/test_versioned_content_postgres.py": "5f53cb9e1b33f3bf8bb02ec24f93c526d7f40357b3393dcbb99999639d77df76",
+    "tests/test_wp_04_1_access_postgres.py": "6d93ad16a6352834029c38e454b80648d9f8a8246083764d063d6a342c86a24d",
+    "tests/test_wp_04_1_access_security.py": "9fc414f5a70b7b012e1477033d728f07494cc4f0cc46cf934b39c14ea21a283c",
+    "tests/test_wp_04_2_privacy_postgres.py": "5180fd4fe891dc5ef6adc3503ea7378acc4317d97bf29a4623f32c31bb66d346",
+    "tests/test_wp_04_3_onboarding.py": "39217feb1dc32484f396297cba1e211ef3fbad2e811c5a1fc0e206299e475bc6",
+    "tests/test_wp_04_3_onboarding_postgres.py": "eb44d19be6ad86c7850da04cc731b703bbeab94d621d5504b8acfd5b45d56578"
+  }
+}
