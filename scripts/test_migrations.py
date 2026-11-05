@@ -23,7 +23,7 @@ from sqlalchemy.orm import sessionmaker
 from scripts.inspect_database_schema import inspect_database
 
 
-EXPECTED_REVISION = "20261022_privacy_lifecycle"
+EXPECTED_REVISION = "20261104_menu_input"
 EXPECTED_APPLICATION_TABLES = {
     "access_proofs",
     "access_admin_operations",
@@ -48,6 +48,7 @@ EXPECTED_APPLICATION_TABLES = {
     "feedback_events",
     "notice_acknowledgements",
     "onboarding_progress",
+    "menu_input",
     "plan_draft_steps",
     "plan_drafts",
     "plan_execution_windows",

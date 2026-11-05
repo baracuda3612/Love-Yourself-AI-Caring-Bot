@@ -3,6 +3,8 @@ import asyncio
 import hmac
 import html
 import secrets
+import re
+from pathlib import Path
 from urllib.parse import parse_qsl
 
 from fastapi import APIRouter, HTTPException, Request
@@ -34,7 +36,10 @@ def _browser(request):
 
 
 async def _form(request, deployment_id):
-    pairs = parse_qsl((await request.body()).decode(), keep_blank_values=True, strict_parsing=True)
+    try:
+        pairs = parse_qsl((await request.body()).decode(), keep_blank_values=True, strict_parsing=True)
+    except ValueError:
+        raise access.AccessDenied() from None
     form = dict(pairs)
     browser = _browser(request)
     if (len(pairs) != len(form) or request.headers.get('origin') != settings.APP_BASE_URL
@@ -43,21 +48,174 @@ async def _form(request, deployment_id):
     return form, browser
 
 
-def _page(deployment_id, browser, *, note=''):
-    csrf = access.digest(f'{browser}:{deployment_id}', 'csrf')
-    return f'''<!doctype html><html lang="uk"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-+<title>LY Workday — вхід</title><main><h1>LY Workday</h1>
-+<p>Корпоративна адреса використовується для перевірки доступу, його адміністрування та безпеки. Роботодавець не отримує індивідуальну активність чи статус входу.</p>
-+<p>{html.escape(note)}</p>
-+<form method="post" action="/enroll/{deployment_id}/email"><input type="hidden" name="csrf" value="{csrf}"><label>Email <input type="email" name="email" required maxlength="254"></label><button>Отримати код</button></form>
-+<form method="post" action="/enroll/{deployment_id}/verify"><input type="hidden" name="csrf" value="{csrf}"><label>Код із листа <input name="code" required maxlength="128" autocomplete="one-time-code"></label><button>Підтвердити</button></form>
-+<form method="post" action="/enroll/{deployment_id}/oidc/google"><input type="hidden" name="csrf" value="{csrf}"><button>Google Workspace</button></form>
-+<form method="post" action="/enroll/{deployment_id}/oidc/microsoft"><input type="hidden" name="csrf" value="{csrf}"><button>Microsoft 365</button></form></main></html>'''.replace('\n+', '\n')
+ENROLLMENT_STYLE = """:root {
+  color-scheme: light;
+  --ink: #2e1a0e;
+  --muted: #786b60;
+  --paper: #faf7f2;
+  --line: #e5ddd2;
+  --accent: #7547a5;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.layout { min-height: 100svh; display: grid; grid-template-columns: minmax(300px, 42%) 1fr; }
+.brand {
+  display: flex; flex-direction: column; justify-content: space-between;
+  padding: 48px clamp(28px, 5vw, 80px);
+  background: #2e1a0e; color: #f8f4f1;
+}
+.brand-logo svg { display: block; width: 174px; height: auto; }
+.brand-copy { margin: 64px 0; max-width: 380px; }
+.brand-copy h2 { font: 400 clamp(40px, 4vw, 60px)/1.12 Georgia, serif; letter-spacing: -.025em; margin: 0 0 24px; }
+.brand-copy p { color: #d2c4b6; max-width: 310px; margin: 0; font-size: 17px; }
+.brand-footer { margin: 0; color: #c4a8e8; font-size: 13px; letter-spacing: .12em; text-transform: uppercase; }
+main { display: flex; align-items: center; justify-content: center; padding: 48px 32px; }
+.entry { width: 100%; max-width: 430px; }
+.product-name { margin: 0 0 28px; font-weight: 650; font-size: 14px; letter-spacing: .04em; }
+h1 { margin: 0 0 16px; font-size: clamp(27px, 3vw, 34px); font-weight: 600; line-height: 1.2; letter-spacing: -.035em; }
+p { margin: 0 0 18px; }
+.entry > p { color: var(--muted); }
+form { display: grid; gap: 10px; margin: 28px 0 16px; }
+label { font-size: 14px; font-weight: 600; }
+input, button, .primary { width: 100%; font: inherit; min-height: 50px; border-radius: 10px; }
+input { border: 1px solid #baada0; background: #fff; padding: 12px 14px; color: var(--ink); }
+input:focus { outline: 3px solid #d9c6ed; outline-offset: 2px; border-color: var(--accent); }
+button, .primary {
+  border: 1px solid var(--accent); background: var(--accent); color: #fff;
+  padding: 12px 18px; font-weight: 600; cursor: pointer; text-align: center; text-decoration: none;
+}
+button:hover, .primary:hover { background: #63358f; }
+button:focus-visible, a:focus-visible { outline: 3px solid #b294d5; outline-offset: 3px; }
+.provider { margin-top: 14px; }
+.separator { display: flex; align-items: center; gap: 14px; color: var(--muted); font-size: 13px; margin: 24px 0 8px; }
+.separator::before, .separator::after { content: ""; height: 1px; flex: 1; background: var(--line); }
+.success-mark {
+  display: grid; place-items: center; width: 46px; height: 46px; margin-bottom: 24px;
+  border-radius: 50%; background: #e8f0e8; color: #42674a; font-size: 24px;
+}
+.policy-copy p { white-space: pre-line; overflow-wrap: anywhere; }
+.help-link { display: inline-block; margin-top: 12px; font-size: 13px; }
+.provider button { color: var(--ink); background: transparent; border-color: var(--line); }
+.provider button:hover { background: #f0eae0; }
+.provider button span { float: left; width: 22px; font-size: 18px; }
+.primary { display: block; margin: 28px 0 20px; }
+a { color: var(--accent); text-underline-offset: 3px; }
+[role="status"] { padding: 14px 16px; border-left: 3px solid var(--accent); background: #f0e8f7; color: var(--ink); border-radius: 0 8px 8px 0; }
+.privacy-note { padding-top: 24px; margin-top: 28px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+@media (max-width: 760px) {
+  .layout { display: block; }
+  .brand { padding: 24px; gap: 24px; }
+  .brand-logo svg { width: 138px; }
+  .brand-copy { margin: 0; max-width: none; }
+  .brand-copy h2 { font-size: 32px; margin: 0; }
+  .brand-copy p, .brand-footer { display: none; }
+  main { padding: 30px 24px 40px; align-items: start; }
+  .product-name { margin-bottom: 20px; }
+}
+"""
+
+_BRAND_LOGO = (Path(__file__).parent / "assets" / "logo_long.svg").read_text(encoding="utf-8")
+_BRAND_LOGO = _BRAND_LOGO[_BRAND_LOGO.index("<svg"):]
+_BRAND_LOGO = re.sub(r"<defs>.*?</defs>", "", _BRAND_LOGO, flags=re.S)
+_BRAND_LOGO = _BRAND_LOGO.replace('class="cls-1"', 'fill="#F8F4F1"')
 
 
-def _handoff(raw):
-    link = f'https://t.me/{settings.BOT_USERNAME}?start={raw}'
-    return HTMLResponse(f'<!doctype html><html lang="uk"><meta charset="utf-8"><title>LY Workday</title><a rel="noreferrer" href="{html.escape(link, quote=True)}">Відкрити Telegram</a><p>Посилання одноразове, чинне 10 хвилин.</p></html>')
+def _shell(title, body):
+    return f"""<!doctype html>
+<html lang="uk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{html.escape(title)} · LY Workday</title>
+<style>{ENROLLMENT_STYLE}</style></head><body>
+<div class="layout">
+<aside class="brand" aria-label="Love Yourself">
+  <div class="brand-logo" role="img" aria-label="Love Yourself">{_BRAND_LOGO}</div>
+  <div class="brand-copy"><h2>Пауза серед<br>робочого дня.</h2>
+  <p>Тридцять секунд, щоб перервати робочий потік і відчути свій стан.</p></div>
+  <p class="brand-footer">LY Workday · by Love Yourself</p>
+</aside>
+<main><div class="entry"><p class="product-name">LY Workday</p>{body}
+<footer class="privacy-note">Робоча адреса потрібна для перевірки доступу.
+<a class="help-link" href="/enroll/privacy-policy" target="_blank" rel="noopener noreferrer">Політика конфіденційності</a><br>
+<a class="help-link" href="mailto:hello@loveyourselfua.com">Звернутися до підтримки</a></footer>
+</div></main></div></body></html>"""
+
+
+def _page(deployment_id, browser, *, note='', email_step='address'):
+    csrf = html.escape(access.digest(f'{browser}:{deployment_id}', 'csrf'), quote=True)
+    hidden = f'<input type="hidden" name="csrf" value="{csrf}">'
+    base = f'/enroll/{deployment_id}'
+    methods = []
+    if email_step == 'code':
+        methods.append(f'<form method="post" action="{base}/verify">{hidden}'
+            '<label for="code">Код із листа</label>'
+            '<input id="code" name="code" required maxlength="128" autocomplete="one-time-code">'
+            '<button>Підтвердити код</button></form>'
+            f'<p><a href="{base}">Почати вхід заново</a></p>')
+    else:
+        if all((settings.SMTP_HOST, settings.SMTP_FROM, settings.SMTP_USERNAME, settings.SMTP_PASSWORD)):
+            methods.append(f'<form method="post" action="{base}/email">{hidden}'
+                '<label for="email">Робоча електронна адреса</label>'
+                '<input id="email" type="email" name="email" required maxlength="254" autocomplete="email" placeholder="name@company.com">'
+                '<button>Отримати код</button></form>')
+        has_email = bool(methods)
+        has_providers = False
+        for provider, label in (('google', 'Google Workspace'), ('microsoft', 'Microsoft 365')):
+            prefix = provider.upper()
+            if getattr(settings, f'{prefix}_CLIENT_ID') and getattr(settings, f'{prefix}_CLIENT_SECRET'):
+                if has_email and not has_providers:
+                    methods.append('<div class="separator"><span>або</span></div>')
+                has_providers = True
+                methods.append(f'<form class="provider" method="post" action="{base}/oidc/{provider}">{hidden}'
+                    f'<button>Увійти через {label}</button></form>')
+    if not methods:
+        methods.append('<p>Спосіб входу зараз недоступний. Спробуй пізніше або звернися до підтримки.</p>')
+    announcement = f'<p role="status">{html.escape(note)}</p>' if note else ''
+    return _shell('Вхід', '<h1>Вхід до LY Workday</h1>'
+        '<p>Підтвердь робочий акаунт, щоб відкрити бота в Telegram.</p>'
+        + announcement + ''.join(methods))
+
+
+def enrollment_error(deployment_id, *, rate_limited=False):
+    note = 'Забагато спроб. Спробуй трохи пізніше.' if rate_limited else (
+        'Не вдалося підтвердити доступ. Почни вхід заново, щоб отримати новий код або посилання.'
+    )
+    heading = "Забагато спроб входу" if rate_limited else "Не вдалося увійти"
+    return HTMLResponse(
+        _shell('Вхід', f'<h1>{heading}</h1><p role="status">{note}</p>'
+               f'<a class="primary" href="/enroll/{deployment_id}">Повернутися до входу</a>'),
+        status_code=429 if rate_limited else 403,
+    )
+
+
+def _handoff(deployment_id, raw):
+    link = html.escape(f'https://t.me/{settings.BOT_USERNAME}?start={raw}', quote=True)
+    return HTMLResponse(_shell('Відкрити Telegram',
+        '<div class="success-mark" aria-hidden="true">✓</div><h1>Доступ підтверджено</h1><p>Відкрий бота в Telegram і натисни «Старт», якщо Telegram покаже цю кнопку.</p>'
+        f'<a class="primary" rel="noreferrer" href="{link}">Відкрити Telegram</a>'
+        '<p>Посилання одноразове й діє 10 хвилин.</p>'
+        f'<p><a href="/enroll/{deployment_id}">Повернутися до входу</a></p>'))
+
+
+@router.get('/enroll/privacy-policy', response_class=HTMLResponse)
+async def enrollment_privacy_policy():
+    # Temporary reader draft authorized by the founder on 2026-11-05.
+    # WP-10.1 replaces this asset with the approved policy before launch.
+    text = (Path(__file__).parent / 'assets' / 'privacy_policy_uk.md').read_text(encoding='utf-8')
+    blocks = []
+    for block in text.strip().split('\n\n'):
+        if block.startswith('# '):
+            blocks.append(f'<h1>{html.escape(block[2:])}</h1>')
+        elif block.startswith('## '):
+            blocks.append(f'<h2>{html.escape(block[3:])}</h2>')
+        else:
+            safe = html.escape(block)
+            safe = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', safe)
+            blocks.append(f'<p>{safe}</p>')
+    return HTMLResponse(_shell('Політика конфіденційності', '<article class="policy-copy">' + ''.join(blocks) + '</article>'))
 
 
 @router.get('/enroll/{deployment_id}', response_class=HTMLResponse)
@@ -83,7 +241,7 @@ async def email_start(deployment_id: int, request: Request):
     except Exception:
         # No secret/SMTP/provider exception logging or response detail.
         pass
-    return HTMLResponse(_page(deployment_id, browser, note='Якщо адресу можна підтвердити, введи код із листа.'))
+    return HTMLResponse(_page(deployment_id, browser, note='Якщо адресу можна підтвердити, введи код із листа.', email_step='code'))
 
 
 @router.post('/enroll/{deployment_id}/verify')
@@ -93,7 +251,7 @@ async def email_verify(deployment_id: int, request: Request):
     with SessionLocal() as db:
         raw = access_proof.finish_email(db, deployment_id=deployment_id, raw=form.get('code', ''), browser=browser)
         db.commit()
-    return _handoff(raw)
+    return _handoff(deployment_id, raw)
 
 
 @router.post('/enroll/{deployment_id}/oidc/{provider}')
@@ -123,7 +281,7 @@ def oidc_callback(deployment_id: int, provider: str, request: Request):
         result = access_proof.finish_oidc(db, prepared=prepared, claims=claims, browser=browser)
         db.commit()
     if 'handoff' in result:
-        return _handoff(result['handoff'])
+        return _handoff(deployment_id, result['handoff'])
     if result.get('email_required'):
         return HTMLResponse(_page(deployment_id, browser,
             note='Microsoft підтвердив вхід. Вкажи адресу для доступу й підтвердь її кодом із листа.'))
@@ -131,7 +289,7 @@ def oidc_callback(deployment_id: int, provider: str, request: Request):
         access_proof.send_email(result['email'], result['challenge'])
     except Exception:
         pass
-    return HTMLResponse(_page(deployment_id, browser, note='Введи код підтвердження адреси з листа.'))
+    return HTMLResponse(_page(deployment_id, browser, note='Введи код підтвердження адреси з листа.', email_step='code'))
 
 
 @router.post('/access/roster/preview')

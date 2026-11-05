@@ -1,0 +1,1 @@
+Rendered fixture-only product HTML under actual CSP at 390×844 and 1280×800. Verified configured method visibility, address→code→handoff navigation, expired-link return and no mobile overflow. Network requests were intercepted. This is browser rendering evidence; backend proof is in PostgreSQL tests. Physical Telegram/iOS/Android journey remains pending.

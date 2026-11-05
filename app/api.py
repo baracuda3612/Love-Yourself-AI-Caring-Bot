@@ -1,3 +1,5 @@
+from base64 import b64encode
+from hashlib import sha256
 from dataclasses import asdict
 from pathlib import Path
 from typing import Dict
@@ -28,7 +30,7 @@ from app.lifecycle_reconciliation import reconcile_scheduler_effects
 app = FastAPI()
 from app.access import AccessDenied
 from app.access_proof import RateLimited, authorize_time_slots
-from app.access_http import router as access_router
+from app.access_http import ENROLLMENT_STYLE, router as access_router
 app.include_router(access_router)
 
 
@@ -48,9 +50,10 @@ async def access_perimeter(request: Request, call_next):
     except Exception:
         # Do not let validation/provider/SQL exceptions echo identity or proof.
         response = JSONResponse({"detail": "access_unavailable"}, status_code=403)
+    style_hash = b64encode(sha256(ENROLLMENT_STYLE.encode()).digest()).decode()
     response.headers.update({"Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff", "X-Robots-Tag": "noindex, nofollow",
-        "Content-Security-Policy": "default-src 'none'; form-action 'self' https://accounts.google.com https://login.microsoftonline.com; base-uri 'none'; frame-ancestors 'none'"})
+        "Content-Security-Policy": f"default-src 'none'; style-src 'sha256-{style_hash}'; form-action 'self' https://accounts.google.com https://login.microsoftonline.com; base-uri 'none'; frame-ancestors 'none'"})
     return response
 
 
@@ -69,6 +72,11 @@ async def report_privacy_perimeter(request: Request, call_next):
 
 @app.exception_handler(AccessDenied)
 async def access_denied_handler(request, exc):
+    deployment_id = request.path_params.get("deployment_id")
+    if request.url.path.startswith("/enroll/") and str(deployment_id).isascii() and str(deployment_id).isdigit():
+        from app.access_http import enrollment_error
+
+        return enrollment_error(int(deployment_id), rate_limited=isinstance(exc, RateLimited))
     return JSONResponse({"detail": "access_unavailable"}, status_code=429 if isinstance(exc, RateLimited) else 403)
 
 

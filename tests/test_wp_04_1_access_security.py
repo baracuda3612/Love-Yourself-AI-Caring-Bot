@@ -412,6 +412,7 @@ async def test_revocation_during_coach_generation_denies_reply_and_history(monke
     monkeypatch.setattr(orchestrator, 'session_memory', memory)
     monkeypatch.setattr(telegram, 'session_memory', memory)
     monkeypatch.setattr(orchestrator, '_auto_complete_plan_if_needed_for_user_id', no_completion)
+    monkeypatch.setattr(orchestrator, 'derive_current_mode', lambda *_: CurrentMode.ACTIVE)
     monkeypatch.setattr(orchestrator, 'build_user_context', AsyncMock(return_value={'current_mode': CurrentMode.ACTIVE.value}))
     monkeypatch.setattr(orchestrator, 'coach_agent', AsyncMock(return_value={'reply_text': 'private generated reply'}))
     from app import privacy
@@ -483,3 +484,15 @@ async def test_revocation_during_daily_pulse_generation_prevents_send(monkeypatc
     scheduler.send_daily_pulse();await scheduled[0]
     sender.assert_not_awaited()
     assert profile.pulse_sent_indices==[]
+
+
+def test_enrollment_policy_draft_is_readable_before_login():
+    client = TestClient(api.app)
+    entry = client.get('/enroll/123')
+    assert 'href="/enroll/privacy-policy"' in entry.text
+    policy = client.get('/enroll/privacy-policy')
+    assert policy.status_code == 200
+    assert 'draft-2026-10-22' in policy.text
+    assert 'Драфт для обговорення' in policy.text
+    assert 'Content-Security-Policy' in policy.headers
+    assert not policy.headers.get('set-cookie')

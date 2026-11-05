@@ -560,6 +560,8 @@ async def test_freeform_notice_reminder_releases_ingress_locks(engine,monkeypatc
     factory=sessionmaker(engine,expire_on_commit=False)
     with factory() as db:
         user,dep,notice=subject(db)
+        # This test exercises the conversation entry after setup.
+        db.add(m.OnboardingProgress(user_id=user.id, stage="COMPLETED"))
         if notice_state=='repinned':
             privacy.acknowledge_notice(db,user.id,notice.id,f'{user.id}:old-notice')
             notice=privacy.register_notice(db,version=uuid4().hex,notice_text='New exact notice',location='fixture-v2')

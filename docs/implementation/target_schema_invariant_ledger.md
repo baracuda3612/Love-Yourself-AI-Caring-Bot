@@ -11,6 +11,11 @@ implementation. Access and privacy behavior acceptance remains in the respective
 package evidence; no durable/company rollout or completed deployment migration
 is implied by the merged schema head.
 
+**Local WP-04.3 candidate:** `20261104_menu_input` after
+`20261104_onboarding_controls`. These revisions are uncommitted and have only
+been exercised on newly created disposable databases. The merged head above
+remains the deployment reference until founder merge and an approved migration.
+
 **Contract scope:** target design only; no DDL in WP-01.2
 
 This document is the canonical target contract for the forward migrations owned
@@ -66,7 +71,8 @@ forward migration and compatibility tests.
 |---|---|---|
 | `users` | `RESHAPE`: keep `id`, unique `tg_id`, account creation metadata; add immutable `first_seen_at`; keep a user timezone override only if explicitly set. Remove lifecycle/access/activity summaries. | Root personal record. Personal children cascade only through the tested WP-04.2 deletion service. |
 | `user_profiles` | `RESHAPE`: one row per user; keep allow-listed onboarding preferences such as display/name preference, communication style, Coach persona, `daily_time_slots`, and `active_days`. | `user_id -> users.id ON DELETE CASCADE`; unique `user_id`. |
-| `onboarding_progress` | `ADD`: `user_id`, optional `deployment_enrollment_id`, allow-listed `stage`, `started_at`, `completed_at`, `updated_at`. It owns setup progress only before a plan exists. | `user_id -> users.id ON DELETE CASCADE`; enrollment uses `ON DELETE RESTRICT`; one row per user. |
+| `onboarding_progress` | `ADD`: `user_id`, optional `deployment_enrollment_id`, allow-listed `stage`, `started_at`, `completed_at`, `updated_at`. WP-04.3 adds callback `revision`, `last_text_message_id` and nullable unapplied `draft_days`. It owns setup progress only before a plan exists. | `user_id -> users.id ON DELETE CASCADE`; enrollment uses `ON DELETE RESTRICT`; one row per user. |
+| `menu_input` | `ADD` in WP-04.3: one explicit input/confirmation intent per user; action, nonce, notice/enrollment binding, expiry, optional plan target/version, optional unapplied weekdays and last message id. Submitted content is absent. | User and enrollment FKs cascade. The row cannot authorize a later enrollment or revive an erased subject. |
 | `chat_history` | `RETAIN`: `id`, `user_id`, `role`, `text`, `created_at`, `expires_at`. PostgreSQL is durable conversation truth and enforces the retention deadline. | `user_id -> users.id ON DELETE CASCADE`. |
 | `user_facts` | `REMOVE` (WP-04.2 candidate removes only after a locked empty-target check): the speculative fact store, including `MEDICAL`, has no accepted production writer or retention contract. | WP-04.2 verifies deployed emptiness/use and removes it before real employee data. |
 | `user_daily_logs` | `REMOVE` (same guarded WP-04.2 cutover): mood/stress/energy/note fields are not an accepted MVP mechanism. | WP-04.2 verifies deployed emptiness/use and removes it before real employee data. |
@@ -109,7 +115,7 @@ enrolment instead of rewriting history.
 |---|---|---|
 | `event_catalog` | `ADD`: `(event_name, event_schema_version)`, event kind, allowed property schema, and activation chronology. | `user_events` references the composite key; catalogue rows are never deleted while referenced. |
 | `user_events` | `RESHAPE`: canonical `event_id`, catalogue identity, `occurred_at`, `recorded_at`, `event_source`, `source_operation_id`, nullable personal/deployment/plan/step/content linkage, immutable attribution snapshots, and allow-listed `properties`. | FKs to user, organization, deployment, plan, step, and composite content version. Personal events are removed through user deletion; historical attribution is never rewritten. |
-| `feedback_events` | `ADD`: `user_id`, `source`, stable source operation, explicit target FKs, `value`, optional reason/category, authoritative source message, optional extracted text, bounded context, and `created_at`. | Target columns reference plan step, `on_demand_request_id`, or chat message rather than a polymorphic unvalidated ID. User deletion cascades. |
+| `feedback_events` | `ADD`: `user_id`, `source`, stable source operation, explicit target FKs, `value`, optional reason/category, authoritative source message, optional extracted text, bounded context, and `created_at`. WP-04.3 allows a direct Telegram message source for explicit product feedback, with exact text and actor-bound source-operation identity, outside conversation history. | Target columns reference plan step, `on_demand_request_id`, chat message or the validated direct Telegram source. Direct source identity must match the owning user's Telegram actor. User deletion cascades. |
 | `privacy_notice_versions` | `ADD`: immutable version, publication time, content digest/location, current marker, and retirement time. | Deployment and acknowledgement references use `ON DELETE RESTRICT`. |
 | `notice_acknowledgements` | `ADD`: user, deployment, notice version, `acknowledged_at`, and stable source operation. | FKs to user/deployment/notice; user deletion cascades, other references restrict. |
 | `report_access_grants` | `ADD`: user, plan, purpose, unique token digest, token version, issued/expires/revoked chronology, and revocation reason. | User and plan deletion invalidate/remove grants; no token contains personal fields. |

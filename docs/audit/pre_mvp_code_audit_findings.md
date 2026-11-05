@@ -441,6 +441,14 @@ Core onboarding is a **deterministic scripted funnel, not an AI conversation**. 
 sells the **mechanism** (timely interception at the user's own low-energy moment),
 not exercises or content. No demo exercise in the base version.
 
+Founder revision 2026-10-30: after successful setup and finalized first-plan
+scheduling, offer optional **Вправа зараз**, using the same independent B6
+on-demand mechanism exposed in the menu. This supersedes no-demo for that
+post-completion entry only. No forced exercise inside setup, extra plan step,
+changed first scheduled time or assumed therapeutic result. The old first-two-
+minutes activation hypothesis below is under test, not proof that scheduling
+alone supplies enough immediate value.
+
 Why a script beats a human/AI here: the funnel must be consistent, measurable, free
 of extra questions, and guarantee the privacy promise. Human craft goes into writing
 the script once — not improvising each run. A different pitch per run makes the
@@ -477,7 +485,9 @@ recognition
   real onboarding logs. Do not hardcode a fixed "objection count".
 * AI (Coach) may pick up non-standard questions **only after onboarding completes** —
   never inside the critical funnel, never for privacy. Safety/crisis handling is a
-  **separate guard**, not Coach improvisation.
+  **separate guard**, not Coach improvisation. **Superseded for onboarding on
+  2026-11-04:** the founder excluded separate crisis detection and responses
+  from WP-04.3. Off-script text gets fixed guidance for the current step.
 * One selected moment per day is an existing product invariant (contract 2.4 /
   t23_t24) — restated, **not a new decision**. Evening only in the 14-day format.
 * First real task arrives today **only when the chosen time is still ahead**;
@@ -532,8 +542,8 @@ be checked when the script and onboarding implementation are reviewed:
   than the system guarantees.
 * **Off-script input risk:** because AI is excluded from the critical funnel, arbitrary
   text during onboarding must not strand the user or silently reset progress. It needs
-  deterministic handling: approved FAQ where matched, separate crisis guard where
-  applicable, and a safe return to the current onboarding step.
+  deterministic handling: fixed guidance and a safe return to the current
+  onboarding step. Approved FAQ is available through menu buttons.
 * **Control-path risk:** back, edit, restart, stop, and time/work-day correction paths
   must preserve a comprehensible state and must not create duplicate plans.
 * **Measurement risk:** onboarding completion alone can hide a broken activation loop.
@@ -2421,6 +2431,15 @@ The user remains stuck in onboarding.
 
 #### ONB-02 — User-selected time and work_days are not collected
 
+WP-04.3 founder revision (2026-10-29): retain explicit exact-time input, but
+replace the separate work-day selection below with a fixed Monday–Friday
+schedule. Show those days with time/timezone on final confirmation; the user's
+confirmation accepts that schedule and creates the plan. Final same-day founder
+clarification: optional day editing is available behind `Змінити налаштування`,
+alongside time/timezone editing; every accepted edit returns to the short
+schedule confirmation. No mandatory day-choice screen. Earlier separate-day-
+selection requirements below are historical and superseded by this decision.
+
 Severity: BLOCKER  
 Status: confirmed
 
@@ -2458,6 +2477,11 @@ Internal slot tags remain available for storage, generation, and scheduling only
 
 Severity: P2 (consistency cleanup)
 Status: founder decision made (2026-07-22) — no hard range; reconcile legacy claims
+
+Founder confirmation (2026-10-29, WP-04.3 / DG-01): any valid `00:00`–`23:59`
+remains allowed. Give useful guidance for choosing a workday moment; each
+employee chooses their own time. No company window or its configuration for
+MVP. UX-18's later window hypothesis does not supersede this decision.
 
 Current code contains conflicting behavior:
 
@@ -2553,7 +2577,7 @@ Minimal fix: build the confirmation copy from the actual first step's `scheduled
 * implement onboarding as the FD-04 deterministic mechanism-sale script (recognition → mechanism → setup → promise + control + privacy), with an approved privacy text and approved FAQ;
 * keep the core script short and review funnel drop-off before and at time selection;
 * verify the approved privacy statement against actual data access, reporting, logs, and HR/company surfaces before beta;
-* handle arbitrary onboarding text deterministically without losing the current step, with approved FAQ matching and the separate crisis guard;
+* handle arbitrary onboarding text deterministically without losing the current step, with fixed current-step guidance and menu access to the approved FAQ;
 * test back/edit/restart/stop paths and ensure retries cannot create duplicate plans;
 * instrument the full activation chain: onboarding start, setup saved, plan created, first task delivered at the confirmed moment, and first response;
 * add onboarding tests for state transition, persistence, forbidden questions, time validation (any time up to `23:59` accepted; one shared validator), first-plan creation, and confirmation copy.
@@ -6418,7 +6442,14 @@ for deterministic transitions; perform device QA before beta invitations.
 #### UX-18 — Delivery-time ownership remains an explicit MVP hypothesis
 
 Severity: P1 product/UX hypothesis; exact policy not yet accepted
-Status: open; linked to ONB-04 and MISC-02
+Status: resolved policy for MVP (founder, 2026-10-29); linked to ONB-04 and MISC-02
+
+Current MVP policy: individually selected valid `00:00`–`23:59` with useful
+workday guidance, no company-window restriction/configuration. The founder
+rejected imposing a company window before any companies are signed. The window
+proposal below is historical and deferred, not an implementation requirement.
+Learning from anonymized chosen-time distributions requires a separate WP-07
+privacy/aggregation contract; personal preferences are not anonymous telemetry.
 
 Current behavior: time handling is inconsistent across legacy onboarding,
 Coach natural-language tools, and deferred picker concepts. The current system
@@ -6444,7 +6475,7 @@ picker constraints.
 ### Open implementation choices, not founder decisions
 
 * the exact neutral preview word after device testing (`Пауза` vs `Перерва`);
-* the exact allowed delivery window and whether a company can configure it;
+* future company-window hypothesis, deferred after the 2026-10-29 DG-01 decision;
 * detailed menu information architecture and labels;
 * final GIF art direction and asset-production process;
 * future workflow-trigger integrations and their consent/privacy model.
@@ -8664,7 +8695,7 @@ research evidence.
 | Coach is a reactive, non-clinical support and control channel. | **DIRECT weak signal + HYPOTHESIS** | One participant reported using Claude for conversation, journaling, and weekly review; another used a wellness app. Most interviews did not test AI Coach demand. (`EU-17`; `EU-04` rejects wellness apps; `EU-ALL`) | Coach value remains a separate beta hypothesis. Distinguish free-text support, product questions, controls, and explicit on-demand exercise requests. |
 | Coach tool execution uses a bounded tool-result loop and deterministic backend authorization. | **SYSTEM** | This follows consistency and authorization requirements, not market research. | The model may select an allowed tool but never becomes the source of truth for state, access, delivery, or success. |
 | Coach has no user-visible quota, while invisible concurrency, abuse, and cost controls apply. | **HYPOTHESIS + SYSTEM** | No primary evidence establishes expected Coach frequency or tolerance for quotas. (`EU-ALL`: no quota test) | Measure cost per complete turn and refusal events privately; revisit only with beta usage and an explicit loss budget. |
-| Crisis handling routes to bounded safety language and professional/emergency support rather than therapy by the bot. | **SECONDARY + SYSTEM** | Evidence reviews require trauma-informed safeguards and non-clinical boundaries; interviews were not crisis-efficacy tests. (`EVID-LY` positioning/privacy; `EVID-MICRO` Trauma-informed safeguards) | Test deterministic detection/routing and do not claim treatment, monitoring, or human escalation unless it exists. |
+| Crisis handling routes to bounded safety language and professional/emergency support rather than therapy by the bot. | **SECONDARY + SYSTEM** | Evidence reviews require trauma-informed safeguards and non-clinical boundaries; interviews were not crisis-efficacy tests. (`EVID-LY` positioning/privacy; `EVID-MICRO` Trauma-informed safeguards) | Historical routing recommendation. The founder excluded a separate detector and response from WP-04.3 onboarding on 2026-11-04. Do not claim treatment, monitoring, or human escalation unless it exists. |
 
 ### Constructor G — Telemetry, privacy, company reporting, and experiment truth
 

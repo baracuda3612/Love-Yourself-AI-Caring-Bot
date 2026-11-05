@@ -44,7 +44,7 @@ SessionLocal = sessionmaker(
 Base = declarative_base()
 logger = logging.getLogger(__name__)
 
-EXPECTED_ALEMBIC_REVISION = "20261022_privacy_lifecycle"
+EXPECTED_ALEMBIC_REVISION = "20261104_menu_input"
 
 
 class SchemaVersionError(RuntimeError):
@@ -152,10 +152,17 @@ class OnboardingProgress(Base):
     __tablename__ = "onboarding_progress"
     __table_args__ = (
         CheckConstraint("length(btrim(stage)) > 0", name="ck_onboarding_progress_stage"),
+        CheckConstraint(
+            "revision >= 0 AND (draft_days IS NULL OR draft_days BETWEEN 0 AND 127)",
+            name="ck_onboarding_progress_controls",
+        ),
     )
 
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     stage = Column(String(64), nullable=False, default="START")
+    revision = Column(BigInteger, nullable=False, default=0, server_default="0")
+    last_text_message_id = Column(BigInteger, nullable=False, default=0, server_default="0")
+    draft_days = Column(Integer, nullable=True)
     started_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     completed_at = Column(DateTime(timezone=True), nullable=True)
     updated_at = Column(
@@ -163,6 +170,23 @@ class OnboardingProgress(Base):
     )
 
     user = relationship("User", back_populates="onboarding_progress")
+
+
+class MenuInput(Base):
+    """One explicit text prompt per Telegram actor; no submitted text here."""
+
+    __tablename__ = "menu_input"
+
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    action = Column(String(16), nullable=True)
+    nonce = Column(String(32), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    enrollment_id = Column(BigInteger, ForeignKey("deployment_enrollments.id", ondelete="CASCADE"), nullable=False)
+    notice_id = Column(BigInteger, nullable=False)
+    draft_days = Column(Integer, nullable=True)
+    target_plan_id = Column(Integer, nullable=True)
+    target_version = Column(Integer, nullable=True)
+    last_message_id = Column(BigInteger, nullable=False)
 
 
 # -------------------- MEMORY --------------------
@@ -1027,6 +1051,7 @@ class FeedbackEvent(Base):
     source_message_id = Column(
         BigInteger, ForeignKey("chat_history.id", ondelete="RESTRICT"), nullable=True
     )
+    telegram_message_id = Column(BigInteger, nullable=True)
     value = Column(String(64), nullable=False)
     reason = Column(String(160), nullable=True)
     category = Column(
