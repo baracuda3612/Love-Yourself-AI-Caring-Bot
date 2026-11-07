@@ -1229,6 +1229,16 @@ product operation.
 * deterministic unsupported-input and OpenAI-outage responses;
 * `store=False` and minimized request payload;
 * privacy-safe token/model/latency/outcome/cost telemetry;
+* founder-only view by user and period with Coach message count, model-call
+  count, and estimated total cost. Show each message's total and constituent
+  calls with model, uncached input, cache reads and writes where applicable,
+  output tokens, latency, and outcome. Record the rate used for the estimate.
+  Mark missing usage or cost as unknown. Exclude message content;
+* before beta, measure 20–30 synthetic Coach messages with the configured
+  beta model and prompt. Cover short and long chat history, stable repeated
+  prefixes, changed tool sets, and turns with a second model call. Report
+  observed cache reads and writes, cost per call and per message, and the
+  total. Verify that the founder view reconciles to recorded provider usage;
 * one in-flight Coach worker per user and bounded FIFO;
 * FD-17 flood limits, timeout, retry, global cost circuit breaker, and neutral
   refusal;
