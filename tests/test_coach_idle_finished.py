@@ -186,7 +186,6 @@ def test_compose_messages_injects_english_product_map_before_runtime_context():
             "ACTIVE",
             {
                 "pause_plan",
-                "cancel_plan",
                 "switch_plan_format",
                 "retry_switch_plan_format",
                 "retry_plan_action",
@@ -198,7 +197,6 @@ def test_compose_messages_injects_english_product_map_before_runtime_context():
             "ACTIVE_PAUSED",
             {
                 "resume_plan",
-                "cancel_plan",
                 "switch_plan_format",
                 "retry_switch_plan_format",
                 "retry_plan_action",
@@ -217,7 +215,7 @@ def test_compose_messages_injects_english_product_map_before_runtime_context():
 )
 def test_coach_tools_are_filtered_by_state(state, expected_names):
     actual_names = {
-        tool["name"] for tool in coach_agent._coach_tools_for_state(state)
+        tool["name"] for tool in coach_agent._coach_tools_for_state(state, plan_type="SHORT")
     }
     assert actual_names == expected_names
 
@@ -230,7 +228,7 @@ def test_coach_tools_follow_plan_type_abandoned_state_and_pending_intent():
         }
 
     medium_active = names(
-        "ACTIVE", plan_type="MEDIUM", evening_slot_collected=True
+        "ACTIVE", plan_type="MEDIUM", evening_slot_collected=True, evening_time_configured=True
     )
     assert "change_evening_time" in medium_active
     assert "record_evening_time" not in medium_active
@@ -280,7 +278,6 @@ def test_coach_tool_schemas_are_strict_and_validate_hhmm_shape():
             "ACTIVE",
             {
                 "pause_plan",
-                "cancel_plan",
                 "switch_plan_format",
                 "retry_switch_plan_format",
                 "retry_plan_action",
@@ -309,79 +306,17 @@ async def test_coach_agent_sends_only_tools_available_in_current_state(
     monkeypatch.setattr(coach_agent, "extract_output_text", lambda _response: "ok")
 
     payload = {
-        "user_id": 42,
+        "access": (12, 34),
+        "runtime_plan_type": "SHORT",
         "current_mode": state,
         "message_text": "Привіт",
     }
     if state == "NO_ACTIVE_PLAN_WITHOUT_HISTORY":
         payload["completion_context"] = {}
 
-    await coach_agent.coach_agent(payload)
+    await coach_agent.coach_agent(payload, available_tools=coach_agent.coach_tools(payload))
 
     if expected_names is None:
         assert "tools" not in captured
     else:
         assert {tool["name"] for tool in captured["tools"]} == expected_names
-
-
-@pytest.mark.anyio
-async def test_coach_agent_injects_completion_context_for_idle_finished(monkeypatch):
-    captured = {}
-
-    def fake_compose_messages(payload):
-        captured["payload"] = payload
-        return [{"role": "user", "content": "hi"}]
-
-    async def fake_create(**_kwargs):
-        return {"id": "resp"}
-
-    class _Responses:
-        create = staticmethod(fake_create)
-
-    monkeypatch.setattr(coach_agent, "_compose_messages", fake_compose_messages)
-    monkeypatch.setattr(coach_agent, "extract_output_text", lambda _response: "ok")
-    monkeypatch.setattr(coach_agent, "_build_idle_finished_context", lambda _db, _uid: {"total_days": 10})
-    monkeypatch.setattr(coach_agent.async_client, "responses", _Responses())
-
-    class _Session:
-        def __enter__(self):
-            return object()
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    monkeypatch.setattr(coach_agent, "SessionLocal", lambda: _Session())
-
-    payload = {"user_id": 42, "current_mode": "NO_ACTIVE_PLAN", "message_text": "hey"}
-    await coach_agent.coach_agent(payload)
-
-    assert captured["payload"]["completion_context"] == {"total_days": 10}
-
-
-@pytest.mark.anyio
-async def test_coach_agent_does_not_inject_completion_context_for_other_states(monkeypatch):
-    captured = {}
-
-    def fake_compose_messages(payload):
-        captured["payload"] = payload
-        return [{"role": "user", "content": "hi"}]
-
-    async def fake_create(**_kwargs):
-        return {"id": "resp"}
-
-    class _Responses:
-        create = staticmethod(fake_create)
-
-    monkeypatch.setattr(coach_agent, "_compose_messages", fake_compose_messages)
-    monkeypatch.setattr(coach_agent, "extract_output_text", lambda _response: "ok")
-
-    def fail_if_called(_db, _uid):
-        raise AssertionError("_build_idle_finished_context should not be called")
-
-    monkeypatch.setattr(coach_agent, "_build_idle_finished_context", fail_if_called)
-    monkeypatch.setattr(coach_agent.async_client, "responses", _Responses())
-
-    payload = {"user_id": 42, "current_mode": "ACTIVE", "message_text": "hey"}
-    await coach_agent.coach_agent(payload)
-
-    assert "completion_context" not in captured["payload"]

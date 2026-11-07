@@ -68,11 +68,11 @@ def extract_tool_call(response: Any) -> dict | None:
         for item in output:
             if getattr(item, "type", None) == "function_call":
                 name = getattr(item, "name", None)
-                raw_args = getattr(item, "arguments", None) or "{}"
+                raw_args = getattr(item, "arguments", None)
                 try:
                     arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
                 except (ValueError, TypeError):
-                    arguments = {}
+                    arguments = None
                 if name:
                     return {
                         "name": name,

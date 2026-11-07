@@ -110,7 +110,7 @@ def claim_send(db, step_id, *, now=None):
     return SendClaim(attempt.id, attempt.chat_id, presentation)
 
 
-def confirm_delivery(db, attempt, step, *, variant, payload, message_id, occurred_at):
+def confirm_delivery(db, attempt, step, *, variant, payload, message_id, occurred_at, sent_at=None):
     """Receipt, opportunity and lifecycle fact commit in the caller's transaction.
 
     A pause/cancel can win while Telegram is sending. Preserve the confirmed
@@ -120,7 +120,7 @@ def confirm_delivery(db, attempt, step, *, variant, payload, message_id, occurre
     attempt.variant = variant
     attempt.rendered_payload = payload
     attempt.message_id = message_id
-    attempt.confirmed_at = occurred_at
+    attempt.confirmed_at = sent_at or occurred_at
     attempt.failure_code = None
     attempt.next_attempt_at = None
     accept_confirmed_step_delivery(db, step_id=step.id, source_operation_id=attempt.source_operation_id, message_id=message_id)
@@ -148,7 +148,8 @@ def finish_send(db, attempt_id, result, *, now=None):
         if result.chat_id != attempt.chat_id or type(result.message_id) is not int or result.message_id <= 0:
             raise ValueError('invalid Telegram receipt identity')
         confirm_delivery(db, attempt, step, variant=result.variant, payload=result.rendered_payload,
-                         message_id=result.message_id, occurred_at=now)
+                         message_id=result.message_id, occurred_at=now,
+                         sent_at=utc(result.sent_at) if result.sent_at else None)
         return
     attempt.variant = result.variant
     attempt.rendered_payload = result.rendered_payload

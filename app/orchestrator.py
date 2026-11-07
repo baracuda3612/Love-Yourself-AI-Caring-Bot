@@ -1,14 +1,15 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
-
 import logging
 import re
+from datetime import datetime, timedelta, timezone
+from functools import partial
+from typing import Any, Dict, List, Optional
 
-import pytz
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.access import AccessDenied
+from app.active_days import resolve_timezone
 from app.config import settings
 from app.db import (
     AIPlan,
@@ -16,12 +17,17 @@ from app.db import (
     SessionLocal,
     User,
     UserEvent,
-    UserProfile,
+    OnboardingProgress,
 )
 from app.logging.router_logging import log_metric
 from app.session_memory import SessionMemory
 from app.ux.persona import get_persona
-from app.workers.coach_agent import _build_idle_finished_context, coach_agent
+from app.workers.coach_agent import (
+    _build_idle_finished_context,
+    coach_agent,
+    coach_tools,
+    validated_tool_arguments,
+)
 from app.onboarding import FALLBACK as SETUP_FALLBACK
 from app.telemetry import log_user_event
 from app.plan_drafts.plan_builder_v5 import NoCandidatesError
@@ -32,12 +38,19 @@ from app.lifecycle import (
     LifecycleResult,
     complete_current_plan_if_ready,
     derive_current_mode,
+    derive_current_mode_from_facts,
+    has_pending_medium_intent,
+    read_lifecycle_status,
     get_current_plan as get_authoritative_current_plan,
     require_lifecycle_entitlement,
 )
 
 session_memory = SessionMemory(limit=20)
 logger = logging.getLogger(__name__)
+_ACCESS_DENIED_REPLY = "Доступ до Love Yourself зараз неактивний."
+_NOTICE_REQUIRED_REPLY = (
+    "Перед розмовою відкрий /privacy та підтвердь ознайомлення з актуальним повідомленням."
+)
 _SWITCH_UNAVAILABLE_REPLY = (
     "⚠️ Новий формат зараз недоступний. Поточний план не змінено. "
     "Спробуй змінити формат пізніше."
@@ -147,50 +160,14 @@ async def _auto_complete_plan_if_needed_for_user_id(user_id: int) -> None:
         await send_plan_completion_message(user_id, completion.plan_id)
 
 
-def _safe_timezone(name: Optional[str]) -> pytz.BaseTzInfo:
-    try:
-        return pytz.timezone(name or "Europe/Kyiv")
-    except pytz.UnknownTimeZoneError:
-        return pytz.timezone("Europe/Kyiv")
-
-
 async def get_stm_history(user_id: int) -> List[Dict[str, str]]:
     """Only retained durable conversation may enter Coach context."""
     return [{"role":item['role'], "content":item['text']}
         for item in await session_memory.get_recent_messages(user_id)]
 
 
-async def get_ltm_snapshot(user_id: int) -> Dict[str, Any]:
-    """Long-term snapshot: поля профілю користувача."""
-    with SessionLocal() as db:
-        profile: Optional[UserProfile] = (
-            db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
-        )
-
-        if profile:
-            # Access all relationship data while the session is active
-            return {
-                "main_goal": profile.main_goal,
-                "communication_style": profile.communication_style,
-                "name_preference": profile.name_preference,
-                "timezone": profile.user.timezone if profile.user else None,
-            }
-
-    return {}
-
-
-async def get_temporal_context(user_id: int) -> Optional[str]:
-    with SessionLocal() as db:
-        user: Optional[User] = db.query(User).filter(User.id == user_id).first()
-        timezone_name = user.timezone if user else None
-
-    if not user:
-        return None
-
-    tz = _safe_timezone(timezone_name)
-    localized_now = datetime.now(tz)
-    hour = localized_now.hour
-
+def _temporal_context(local_now: datetime) -> str:
+    hour = local_now.hour
     if 5 <= hour < 12:
         period = "Morning"
     elif 12 <= hour < 17:
@@ -199,75 +176,133 @@ async def get_temporal_context(user_id: int) -> Optional[str]:
         period = "Evening"
     else:
         period = "Night"
+    return local_now.strftime(f"%A, %H:%M ({period})")
 
-    return f"{localized_now.strftime('%A')}, {localized_now.strftime('%H:%M')} ({period})"
+
+def _coach_plan_facts(db: Session, user: User) -> dict:
+    """Read the current plan and runtime prerequisites while holding the user lock."""
+    from app.time_slots import TimeSlotError, canonicalize_hhmm
+
+    current = get_authoritative_current_plan(db, user.id)
+    progress = db.get(OnboardingProgress, user.id) if current is None else None
+    mode = derive_current_mode_from_facts(
+        onboarding_stage=progress.stage if progress else None,
+        onboarding_completed_at=progress.completed_at if progress else None,
+        current_plan_status=current.status if current else None,
+    )
+    latest = current
+    if mode is CurrentMode.NO_ACTIVE_PLAN:
+        latest = (
+            db.query(AIPlan).filter_by(user_id=user.id)
+            .order_by(AIPlan.cycle_number.desc(), AIPlan.id.desc()).first()
+        )
+    # After abandonment, WP-02.3 still permits editing the saved preferences.
+    runtime_plan = current or (latest if latest and latest.status == "abandoned" else None)
+    profile = user.profile
+    slots = profile.daily_time_slots if profile else None
+    evening_time = None
+    if profile and profile.evening_slot_collected and isinstance(slots, dict):
+        try:
+            evening_time = canonicalize_hhmm(slots.get("EVENING"))
+        except TimeSlotError:
+            pass
+    plan_type = {7: "SHORT", 14: "MEDIUM"}.get(runtime_plan.total_days) if runtime_plan else None
+    return {
+        "current_mode": mode.value,
+        "current_plan_id": current.id if current else None,
+        "runtime_plan_id": runtime_plan.id if runtime_plan else None,
+        "runtime_plan_version": runtime_plan.version if runtime_plan else None,
+        "plan_type": plan_type if current else None,
+        "runtime_plan_type": plan_type,
+        "latest_plan_status": latest.status if latest else None,
+        "evening_slot_collected": bool(profile and profile.evening_slot_collected),
+        "evening_time": evening_time,
+    }
 
 
-async def get_fsm_state(user_id: int) -> Optional[str]:
-    """Compatibility name returning the single derived current mode."""
-    with SessionLocal() as db:
-        user: Optional[User] = db.query(User).filter(User.id == user_id).first()
-        if not user:
-            return None
-        return derive_current_mode(db, user_id).value
+def _pending_medium_action(db: Session, user_id: int, facts: dict, pending: str | None) -> str | None:
+    if not isinstance(pending, str) or facts["evening_slot_collected"]:
+        return None
+    prefix, _, source = pending.partition(":")
+    if not re.fullmatch(r"[A-Za-z0-9:_-]{1,160}", source):
+        return None
+    if (
+        prefix == "collect_evening_time_for_switch"
+        and facts["current_plan_id"] is not None
+        and facts["plan_type"] == "SHORT"
+    ):
+        context = "switch"
+    elif (
+        prefix == "collect_evening_time_for_medium"
+        and facts["current_mode"] == CurrentMode.NO_ACTIVE_PLAN.value
+        and facts["latest_plan_status"] == "abandoned"
+    ):
+        context = "followup"
+    else:
+        return None
+    if has_pending_medium_intent(
+        db, user_id=user_id, plan_id=facts["runtime_plan_id"],
+        context=context, source_operation_id=source,
+    ):
+        return pending
+    return None
+
+
+def _coach_access(db: Session, user_id: int) -> tuple[int, int]:
+    from app.privacy import pinned_notice
+
+    deployment, notice = pinned_notice(db, user_id, acknowledged=True)
+    return deployment.id, notice.id
 
 
 async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
     stm_history = await get_stm_history(user_id)
-    current_mode = await get_fsm_state(user_id)
-    temporal_context = await get_temporal_context(user_id)
-    pending_action = await session_memory.get_pending_action(user_id)
-
-    plan_type = None
-    evening_slot_collected = False
-    latest_plan_status = None
-    exercise_context = None
+    pending_hint = await session_memory.get_pending_action(user_id)
     with SessionLocal() as db:
-        user = db.query(User).filter(User.id == user_id).first()
-        if user is not None:
-            evening_slot_collected = bool(
-                user.profile and user.profile.evening_slot_collected
+        access = _coach_access(db, user_id)
+        user = db.get(User, user_id)
+        facts = _coach_plan_facts(db, user)
+        pending = _pending_medium_action(
+            db, user_id, facts, pending_hint,
+        )
+        tz = resolve_timezone(user.timezone)
+        now = datetime.now(timezone.utc)
+        context = {
+            **facts,
+            "message_text": message_text,
+            "short_term_history": stm_history,
+            "temporal_context": _temporal_context(now.astimezone(tz)),
+            "access": access,
+            "pending_action": pending,
+            "current_day": None,
+            "total_days": None,
+            "days_remaining": None,
+            "current_exercise_context": None,
+        }
+        if facts["current_plan_id"] is not None and facts["plan_type"] is not None:
+            from app.exercise_presentation import current_exercise_context
+
+            status = read_lifecycle_status(db, user_id).to_runtime_payload()
+            context.update(
+                current_day=status["current_day"],
+                total_days=status["days_total"],
+                days_remaining=status["days_remaining"],
+                current_exercise_context=current_exercise_context(
+                    db, user_id, facts["current_plan_id"], user_timezone=tz, now=now,
+                ),
             )
-            latest_plan = (
-                db.query(AIPlan)
-                .filter(AIPlan.user_id == user_id)
-                .order_by(AIPlan.cycle_number.desc(), AIPlan.id.desc())
-                .first()
-            )
-            if latest_plan is not None:
-                latest_plan_status = str(latest_plan.status)
-                plan_type = "MEDIUM" if int(latest_plan.total_days) == 14 else "SHORT"
-                if latest_plan.status in ('active', 'paused'):
-                    from app.active_days import resolve_timezone
-                    from app.exercise_presentation import current_exercise_context
-
-                    exercise_context = current_exercise_context(
-                        db, user_id, latest_plan.id,
-                        user_timezone=resolve_timezone(user.timezone),
-                    )
-
-    return {
-        "message_text": message_text,
-        "short_term_history": stm_history,
-        "current_mode": current_mode,
-        "temporal_context": temporal_context,
-        "plan_type": plan_type,
-        "evening_slot_collected": evening_slot_collected,
-        "latest_plan_status": latest_plan_status,
-        "pending_action": pending_action,
-        "current_exercise_context": exercise_context,
-    }
-
-
-# Tool name → callable map (allowlist).
-# Only these tools may be invoked by Coach via tool_call signal.
-_PLAN_TOOL_REGISTRY: Dict[str, Any] = {}
+        elif facts["current_mode"] == CurrentMode.NO_ACTIVE_PLAN.value:
+            context["completion_context"] = _build_idle_finished_context(db, user_id)
+        from app.privacy_notice_cache import commit_read_check
+        commit_read_check(db)
+    return context
 
 
 def _recover_retained_switch(
     user_id: int,
     source_operation_id: str,
     hhmm: str,
+    **authorization,
 ) -> dict:
     """Use the internal receipt-gated recovery entrance, not a Coach tool."""
     from app.plan_runtime.tools import recover_plan_format_switch
@@ -277,13 +312,13 @@ def _recover_retained_switch(
         "MEDIUM",
         hhmm,
         source_operation_id=source_operation_id,
+        **authorization,
     )
 
 
 def _build_tool_registry() -> Dict[str, Any]:
     """Lazy-build the tool registry so imports stay at call time."""
     from app.plan_runtime.tools import (
-        cancel_plan,
         change_day_time,
         change_evening_time,
         create_followup_plan,
@@ -300,6 +335,7 @@ def _build_tool_registry() -> Dict[str, Any]:
             uid,
             args["plan_type"],
             source_operation_id=args["_source_operation_id"],
+            **args.get("_authorization", {}),
         ),
         "record_evening_time":  lambda uid, args: record_evening_time(
             uid,
@@ -307,40 +343,47 @@ def _build_tool_registry() -> Dict[str, Any]:
             context=args["_evening_collection_context"],
             pending_source_operation_id=args["_evening_collection_source_id"],
             source_operation_id=args["_source_operation_id"],
+            **args.get("_authorization", {}),
         ),
         "change_day_time":      lambda uid, args: change_day_time(
             uid,
             args["hhmm"],
             source_operation_id=args["_source_operation_id"],
+            **args.get("_authorization", {}),
         ),
         "change_evening_time":  lambda uid, args: change_evening_time(
             uid,
             args["hhmm"],
             source_operation_id=args["_source_operation_id"],
+            **args.get("_authorization", {}),
         ),
-        "get_plan_status":      lambda uid, _args: get_plan_status(uid),
+        "get_plan_status":      lambda uid, args: get_plan_status(
+            uid, **args.get("_authorization", {}),
+        ),
         "pause_plan":           lambda uid, args: pause_plan(
-            uid, source_operation_id=args["_source_operation_id"]
+            uid, source_operation_id=args["_source_operation_id"],
+            **args.get("_authorization", {}),
         ),
         "resume_plan":          lambda uid, args: resume_plan(
-            uid, source_operation_id=args["_source_operation_id"]
-        ),
-        "cancel_plan":          lambda uid, args: cancel_plan(
-            uid, source_operation_id=args["_source_operation_id"]
+            uid, source_operation_id=args["_source_operation_id"],
+            **args.get("_authorization", {}),
         ),
         "switch_plan_format":   lambda uid, args: switch_plan_format(
             uid,
             args["plan_type"],
             source_operation_id=args["_source_operation_id"],
+            **args.get("_authorization", {}),
         ),
         "retry_switch_plan_format": lambda uid, args: retry_switch_plan_format(
             uid,
             switch_source_operation_id=args.get("switch_source_operation_id"),
+            **args.get("_authorization", {}),
         ),
         "retry_plan_action": lambda uid, args: retry_plan_action(
             uid,
             args["action"],
             args["original_source_operation_id"],
+            **args.get("_authorization", {}),
         ),
     }
 
@@ -354,7 +397,6 @@ _TOOL_REPLY_TEMPLATES: Dict[str, str] = {
     "get_plan_status":      None,   # returns dynamic data — formatted below
     "pause_plan":           "⏸ План поставлено на паузу. Завдання не надходитимуть до відновлення.",
     "resume_plan":          "▶️ План відновлено. Майбутній розклад потребує узгодження.",
-    "cancel_plan":          "🛑 Поточну серію вправ скасовано.",
     "switch_plan_format":   "✅ Формат змінено, новий розклад узгоджено.",
     "retry_switch_plan_format": "✅ Зміну формату перевірено, розклад узгоджено.",
 }
@@ -416,8 +458,6 @@ def _humanize_tool_error(tool_name: str, raw: str) -> str:
         return "Вечірній час можна змінювати лише для 14-денного плану."
     if "saved_day_time_missing" in r or "saved_day_time_invalid" in r:
         return "Спочатку потрібно налаштувати коректний денний час."
-    if "cancel_plan requires" in r:
-        return "Скасувати можна тільки активний або призупинений план."
     if "pause_plan requires" in r:
         return "Поставити на паузу можна тільки активний план."
     if "resume_plan requires" in r:
@@ -467,10 +507,68 @@ def _followup_success_reply(result: Dict[str, Any]) -> str:
     return _TOOL_REPLY_TEMPLATES["create_followup_plan"]
 
 
-async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optional[str]:
+_STALE_COACH_ACTION_REPLY = "Обставини змінилися. Перевір поточний стан і повтори запит."
+_INVALID_COACH_ACTION_REPLY = "Не вдалося виконати цю дію. Сформулюй запит ще раз."
+
+
+class _CoachContextChanged(ValueError):
+    pass
+
+
+async def _execute_coach_tool(user_id: int, tool_call: dict, context: dict, offered_tools: list[dict]) -> str:
+    """Authorize untrusted model output against this request and the live aggregate."""
+    name = tool_call.get("name")
+    offered = next((tool for tool in offered_tools if tool["name"] == name), None)
+    if offered is None:
+        return _INVALID_COACH_ACTION_REPLY
+    try:
+        arguments = validated_tool_arguments(offered, tool_call.get("arguments"))
+    except ValueError:
+        return _INVALID_COACH_ACTION_REPLY
+    call_id = tool_call.get("call_id")
+    if name != "get_plan_status" and (
+        not isinstance(call_id, str) or not re.fullmatch(r"[A-Za-z0-9:_-]{1,160}", call_id)
+    ):
+        return _INVALID_COACH_ACTION_REPLY
+
+    def recheck(db: Session, *, after_evening_save: bool = False) -> None:
+        # pinned_notice locks the actor and enrollment deployment. Keep these
+        # locks through the lifecycle decision and commit in the tool's session.
+        access = _coach_access(db, user_id)
+        live = _coach_plan_facts(db, db.get(User, user_id))
+        identity = ("current_mode", "runtime_plan_id", "runtime_plan_version", "runtime_plan_type")
+        if access != context["access"] or any(live[key] != context[key] for key in identity):
+            raise _CoachContextChanged()
+        live["access"] = access
+        if name == "record_evening_time":
+            pending = session_memory.read_pending_action(user_id)
+            if pending != context["pending_action"]:
+                raise _CoachContextChanged()
+            if after_evening_save:
+                if live["evening_time"] != arguments["hhmm"] or _pending_medium_action(
+                    db, user_id, {**live, "evening_slot_collected": False}, pending,
+                ) != pending:
+                    raise _CoachContextChanged()
+                return
+            live["pending_action"] = _pending_medium_action(db, user_id, live, pending)
+        if name not in {tool["name"] for tool in coach_tools(live)}:
+            raise _CoachContextChanged()
+        if name == "switch_plan_format" and arguments["plan_type"] == live["plan_type"]:
+            raise ValueError("requested_plan_type_already_current")
+
+    return await _execute_plan_tool(
+        user_id, {"name": name, "arguments": arguments, "call_id": call_id},
+        authorize=recheck,
+        pending_action=context.get("pending_action"),
+    ) or _INVALID_COACH_ACTION_REPLY
+
+
+async def _execute_plan_tool(
+    user_id: int, tool_call: Dict[str, Any], *, authorize=None, pending_action=None,
+) -> Optional[str]:
     """
-    Execute an allowlisted plan_runtime tool and return a user-facing reply string.
-    Returns None if the tool name is not in the allowlist (orchestrator continues normally).
+    Execute a backend-authorized runtime command and format its deterministic result.
+    Model output must enter through _execute_coach_tool.
     """
     tool_name = str(tool_call.get("name") or "")
     tool_args = tool_call.get("arguments") or {}
@@ -486,7 +584,6 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
         "change_evening_time",
         "pause_plan",
         "resume_plan",
-        "cancel_plan",
         "switch_plan_format",
         "retry_switch_plan_format",
         "retry_plan_action",
@@ -500,9 +597,11 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
         return "⚠️ Не вдалось виконати дію. Спробуй ще раз."
     tool_args["_source_operation_id"] = str(source_operation_id or "")
 
-    pending_action = None
+    if authorize is not None:
+        tool_args["_authorization"] = {"authorize": authorize}
     if tool_name == "record_evening_time":
-        pending_action = await session_memory.get_pending_action(user_id)
+        if authorize is None:
+            pending_action = await session_memory.get_pending_action(user_id)
         if str(pending_action).startswith("collect_evening_time_for_medium:"):
             tool_args["_evening_collection_context"] = "followup"
         elif str(pending_action).startswith("collect_evening_time_for_switch:"):
@@ -517,6 +616,8 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
         logger.warning("[TOOL] Unknown tool_call name=%r for user=%s — skipping", tool_name, user_id)
         return None
 
+    from app.privacy import NoticeRequired
+
     if (
         tool_name == "record_evening_time"
         and tool_args.get("_evening_collection_context") == "switch"
@@ -528,10 +629,17 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
                 user_id,
                 retained_source,
                 str(tool_args.get("hhmm") or ""),
+                **tool_args.get("_authorization", {}),
             )
         except NoCandidatesError:
             logger.exception("[TOOL] retained switch generation unavailable user=%s", user_id)
             return _SWITCH_UNAVAILABLE_REPLY
+        except _CoachContextChanged:
+            return _STALE_COACH_ACTION_REPLY
+        except NoticeRequired:
+            return _NOTICE_REQUIRED_REPLY
+        except AccessDenied:
+            return _ACCESS_DENIED_REPLY
         except ValueError as exc:
             raw_error = str(exc)
             logger.warning(
@@ -589,6 +697,12 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
         # Keep their worker-owned edit loop outside the polling event loop.
         result = await asyncio.to_thread(handler, user_id, tool_args)
         log_metric("plan_tool_executed", extra={"user_id": user_id, "tool": tool_name})
+    except _CoachContextChanged:
+        return _STALE_COACH_ACTION_REPLY
+    except NoticeRequired:
+        return _NOTICE_REQUIRED_REPLY
+    except AccessDenied:
+        return _ACCESS_DENIED_REPLY
     except ValueError as exc:
         logger.warning("[TOOL] tool=%s user=%s failed: %s", tool_name, user_id, exc)
         return _humanize_tool_error(tool_name, str(exc))
@@ -725,20 +839,26 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
         ):
             activation_source_id = str(pending).split(":", 1)[1]
             registry = _build_tool_registry()
+            cascade_tool = (
+                "switch_plan_format"
+                if str(pending).startswith(switch_prefix)
+                else "create_followup_plan"
+            )
+            retry_instruction = (
+                "Попроси перевірити зміну формату."
+                if cascade_tool == "switch_plan_format"
+                else "Попроси ще раз запустити 14-денний план."
+            )
             try:
-                cascade_tool = (
-                    "switch_plan_format"
-                    if str(pending).startswith(switch_prefix)
-                    else "create_followup_plan"
-                )
-                activation = await asyncio.to_thread(
-                    registry[cascade_tool],
-                    user_id,
-                    {
-                        "plan_type": "MEDIUM",
-                        "_source_operation_id": activation_source_id,
-                    },
-                )
+                activation_args = {
+                    "plan_type": "MEDIUM",
+                    "_source_operation_id": activation_source_id,
+                }
+                if authorize is not None:
+                    activation_args["_authorization"] = {
+                        "authorize": partial(authorize, after_evening_save=True),
+                    }
+                activation = await asyncio.to_thread(registry[cascade_tool], user_id, activation_args)
                 if not isinstance(activation, dict) or activation.get("status") != "ok":
                     if (
                         isinstance(activation, dict)
@@ -746,7 +866,7 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
                     ):
                         return (
                             "⚠️ План збережено, але його розклад не вдалося "
-                            "повністю узгодити. Повтори введення часу."
+                            "повністю узгодити. Попроси перевірити запуск плану."
                             + _retry_reference_note(activation_source_id)
                         )
                     if (
@@ -757,8 +877,7 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
                     ):
                         return (
                             "⚠️ Новий 14-денний план уже збережено, але його "
-                            "розклад ще не узгоджено. Повтори введення того "
-                            "самого часу — новий план вдруге не створиться."
+                            "розклад ще не узгоджено. Попроси перевірити зміну формату."
                             + _retry_reference_note(activation_source_id)
                         )
                     if (
@@ -768,13 +887,12 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
                     ):
                         return (
                             "⚠️ Розклад узгоджено, але підтвердження ще не збережено. "
-                            "Повтори введення того самого часу."
+                            "Попроси перевірити зміну формату."
                             + _retry_reference_note(activation_source_id)
                         )
                     return (
                         "⚠️ Час збережено, але план не вдалось запустити. "
-                        "Спробуй ще раз."
-                        + _retry_reference_note(activation_source_id)
+                        + retry_instruction + _retry_reference_note(activation_source_id)
                     )
                 log_metric("plan_tool_executed", extra={"user_id": user_id, "tool": cascade_tool})
                 await session_memory.clear_pending_action(user_id)  # only after success
@@ -786,38 +904,15 @@ async def _execute_plan_tool(user_id: int, tool_call: Dict[str, Any]) -> Optiona
             except NoCandidatesError:
                 logger.exception("[TOOL] cascade plan generation unavailable user=%s", user_id)
                 if cascade_tool == "switch_plan_format":
-                    return "Вечірній час збережено. " + _SWITCH_UNAVAILABLE_REPLY
-                return "⚠️ Вечірній час збережено, але новий план зараз недоступний. Спробуй пізніше."
+                    return "Вечірній час збережено. " + _SWITCH_UNAVAILABLE_REPLY + _retry_reference_note(activation_source_id)
+                return "⚠️ Вечірній час збережено. Попроси запустити 14-денний план пізніше."
             except Exception as exc:
                 logger.error("[TOOL] cascade create_followup_plan(MEDIUM) user=%s: %s", user_id, exc, exc_info=True)
                 # pending_action preserved — user can retry
                 return (
-                    "⚠️ Час збережено, але план не вдалось запустити. Спробуй ще раз."
-                    + _retry_reference_note(activation_source_id)
+                    "⚠️ Час збережено, але план не вдалось запустити. "
+                    + retry_instruction + _retry_reference_note(activation_source_id)
                 )
-
-    if tool_name == "cancel_plan":
-        total_days = result.get("total_days")
-        if total_days in {7, 14}:
-            if result.get("historical_cleanup"):
-                reply = (
-                    f"🛑 Попередні {total_days} днів скасовано; "
-                    "поточний план не змінено."
-                )
-                if result.get("keyboard_cleanup_pending"):
-                    reply += (
-                        " Не вдалося прибрати старі кнопки; натисни їх ще раз "
-                        "або повтори перевірку за кодом."
-                        + _retry_reference_note(result.get("original_source_operation_id"))
-                    )
-                return reply
-            if result.get("keyboard_cleanup_pending"):
-                return (
-                    f"🛑 Поточні {total_days} днів скасовано. "
-                    "Не вдалося прибрати старі кнопки; натисни їх ще раз або повтори перевірку за кодом."
-                    + _retry_reference_note(result.get("original_source_operation_id"))
-                )
-            return f"🛑 Поточні {total_days} днів скасовано."
 
     if tool_name == "retry_plan_action":
         action = result.get("action")
@@ -890,9 +985,8 @@ async def handle_incoming_message(
     try:
         await _auto_complete_plan_if_needed_for_user_id(user_id)
     except LifecycleEntitlementError:
-        return {"reply_text": "Доступ до Love Yourself зараз неактивний."}
-    from app.privacy import pinned_notice, NoticeRequired
-    from app.access import AccessDenied
+        return _finalize_reply(_ACCESS_DENIED_REPLY)
+    from app.privacy import NoticeRequired, pinned_notice
     try:
         with SessionLocal() as db:
             pinned_notice(db, user_id, acknowledged=True)
@@ -901,27 +995,22 @@ async def handle_incoming_message(
                 return _finalize_reply(SETUP_FALLBACK)
             commit_read_check(db)
     except NoticeRequired:
-        return {"reply_text": "Перед розмовою відкрий /privacy та підтвердь ознайомлення з актуальним повідомленням."}
+        return _finalize_reply(_NOTICE_REQUIRED_REPLY)
     except AccessDenied:
-        return {"reply_text": "Доступ до Love Yourself зараз неактивний."}
+        return _finalize_reply(_ACCESS_DENIED_REPLY)
     await session_memory.append_message(user_id, "user", message_text)
 
-    context_payload = await build_user_context(user_id, message_text)
-    current_mode = context_payload.get("current_mode")
+    try:
+        context_payload = await build_user_context(user_id, message_text)
+    except NoticeRequired:
+        return _finalize_reply(_NOTICE_REQUIRED_REPLY)
+    except (AccessDenied, LifecycleEntitlementError):
+        return _finalize_reply(_ACCESS_DENIED_REPLY)
+    if context_payload.get("current_mode") == CurrentMode.ONBOARDING.value:
+        return _finalize_reply(SETUP_FALLBACK)
 
-    if current_mode == CurrentMode.NO_ACTIVE_PLAN.value:
-        with SessionLocal() as db:
-            completion_context = _build_idle_finished_context(db, user_id)
-        if completion_context is not None:
-            context_payload["completion_context"] = completion_context
-
-    # All live-user states → coach_agent directly
-    coach_payload = {
-        "user_id": user_id,
-        **context_payload,
-        "message_text": message_text,
-    }
-    worker_result = await coach_agent(coach_payload)
+    offered_tools = coach_tools(context_payload)
+    worker_result = await coach_agent(context_payload, available_tools=offered_tools)
 
     reply_text = str(worker_result.get("reply_text") or "")
     error_payload = worker_result.get("error")
@@ -947,14 +1036,11 @@ async def handle_incoming_message(
         )
         return _finalize_reply(reply_text)
 
-    # ── Tool call execution (T5.8B) ───────────────────────────────────────────
-    # Coach returns {"tool_call": {"name": "...", "arguments": {...}}}
-    # Orchestrator executes allowlisted plan_runtime tools, then returns
-    # a deterministic confirmation message — no second LLM round-trip needed.
     raw_tool_call = worker_result.get("tool_call")
-    if raw_tool_call and isinstance(raw_tool_call, dict):
-        tool_result = await _execute_plan_tool(user_id, raw_tool_call)
-        if tool_result is not None:
-            return _finalize_reply(tool_result)
+    if raw_tool_call is not None:
+        if not isinstance(raw_tool_call, dict):
+            return _finalize_reply(_INVALID_COACH_ACTION_REPLY)
+        tool_result = await _execute_coach_tool(user_id, raw_tool_call, context_payload, offered_tools)
+        return _finalize_reply(tool_result)
 
     return _finalize_reply(reply_text)

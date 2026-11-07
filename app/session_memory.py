@@ -47,6 +47,16 @@ class SessionMemory:
                 logger.warning('pending_action_read_failed')
         return None
 
+    def read_pending_action(self, user_id):
+        """Read the current hint from a worker already holding the user lock."""
+        if self.cache is not None:
+            try:
+                raw = self.cache.get(self._pending_action_key(user_id))
+                return raw.decode() if isinstance(raw, bytes) else raw
+            except Exception:
+                logger.warning('pending_action_read_failed')
+        return None
+
     async def clear_pending_action(self, user_id):
         if user_id is not None and self.redis is not None:
             try:

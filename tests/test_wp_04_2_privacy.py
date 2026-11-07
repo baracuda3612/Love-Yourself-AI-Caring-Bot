@@ -21,7 +21,7 @@ async def test_actual_coach_provider_request_omits_account_identity_and_bounds_h
         'username':identifiers[2],'email':identifiers[3],'employer':identifiers[4],
         'profile':{'email':identifiers[3]},'current_mode':'ACTIVE','message_text':'A normal Coach question',
         'short_term_history':[{'role':'user','content':'x'*6000} for _ in range(40)]}
-    result=await coach.coach_agent(payload)
+    result=await coach.coach_agent(payload, available_tools=coach.coach_tools(payload))
     assert result['reply_text']=='ok'
     request=create.call_args.kwargs
     assert request['store'] is False

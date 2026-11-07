@@ -1539,6 +1539,30 @@ def _followup_evening_source_id(source_operation_id: str) -> str:
     return f"followup-evening:{digest}"
 
 
+def has_pending_medium_intent(
+    db: Session, *, user_id: int, plan_id: int, context: str, source_operation_id: str,
+) -> bool:
+    """Bind the transient Coach wait to the latest persisted MEDIUM intent."""
+    if context == "followup":
+        operation = "prepare_followup_evening"
+        source_operation_id = _followup_evening_source_id(source_operation_id)
+    elif context == "switch":
+        operation = "switch_plan_format"
+    else:
+        return False
+    receipt = (
+        db.query(PlanLifecycleOperation)
+        .filter_by(user_id=user_id, plan_id=plan_id, operation=operation)
+        .order_by(PlanLifecycleOperation.id.desc())
+        .first()
+    )
+    return (
+        receipt is not None
+        and receipt.source_operation_id == source_operation_id
+        and receipt.result_status == "MEDIUM"
+    )
+
+
 def prepare_followup_evening_collection(
     db: Session,
     *,
