@@ -1016,7 +1016,10 @@ predecessor 88 and migration/concurrency evidence are recorded in the
 
 ## 10. Block 4 — Access, privacy minimum, onboarding, and deterministic controls
 
-**Status:** `IN_PROGRESS` — B2/B3, WP-04.1 and WP-04.2 are verified; WP-04.3 is next.
+**Status:** `COMPLETE` for integration. The founder closed B4 on 2026-11-07
+following the [WP-04.3 merge](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/273).
+WP-04.1 through WP-04.3 are integrated. The remaining release acceptance
+checks retain their owners and gates in [A43-01…06](work_packages/WP-04.3_acceptance_followups.md).
 **Depends on:** B2–B3  
 **Objective:** create a trustworthy entry path that remains usable without the
 Coach model.
@@ -1110,11 +1113,14 @@ log/backup evidence and G1/G3/G4 remain launch gates.
 
 ### WP-04.3 — Implement deterministic onboarding and user menu
 
-**Status:** `IN_PROGRESS` — local implementation and author verification
-completed; initial independent review, founder commit/push permission and
-device evidence remain pending. The documentation handoff is merged in PR #272. Use the
-[execution contract](work_packages/WP-04.3_execution_contract.md) and
-[copy candidate](work_packages/WP-04.3_copy_uk.md).
+**Status:** `VERIFIED` for B4 integration. The founder merged
+[PR #273](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/273)
+on 2026-11-05 as `88d39a4409d78cfba0bc7093cb3528fa5e6a5f5c`.
+Reviewed head `dd65797ecdc061702832efc32bdad14924a0cc33` cleared the three
+initial P2 findings in an independent full-package re-review. GitHub Codex
+review completed on that head with zero findings. Full release acceptance
+remains open. See the [execution contract](work_packages/WP-04.3_execution_contract.md)
+and [acceptance checks A43-01…06](work_packages/WP-04.3_acceptance_followups.md).
 Founder resolved `DG-01` on 2026-10-29: any valid `00:00`–`23:59`, individual
 choice with purpose-framed guidance, no company window/configuration for MVP.
 The founder approved onboarding, menu and article copy. Current references:
@@ -1122,15 +1128,15 @@ The founder approved onboarding, menu and article copy. Current references:
 [local verification](work_packages/WP-04.3_verification.md).
 
 Founder menu clarification 2026-10-31: a contextual Telegram reply keyboard
-exposes three helper sections before setup and the approved five-section
-menu afterward; commands are optional, not required user navigation. Every
+exposes three helper sections before setup and four sections afterward.
+B6 adds the fifth section, «Вправа зараз». Users can navigate with buttons. Every
 helper screen during setup offers return to the exact suspended setup/editor
 with retained accepted settings/draft. See the current
 [concise menu map](work_packages/WP-04.3_menu_map_uk.md) and
 [technical backlog/ownership ledger](work_packages/WP-04.3_technical_backlog.md).
 Founder confirmed the G01 active day/timezone editor and lifecycle writer for
 WP-04.3 on 2026-11-04. G02 self-service display-name correction and G03 explicit
-product feedback are implemented locally in WP-04.3.
+product feedback are implemented in WP-04.3.
 
 **Scope**
 
@@ -1173,8 +1179,9 @@ privacy/reporting contract; WP-04.3 adds no analytics surface.
 * onboarding requires no LLM and creates one valid first plan;
 * first delivery confirmation uses the actual finalized step;
 * product controls work during OpenAI degradation;
-* enrollment and bot entry meet the cross-cutting UI/transition contract in
-  section 2.2.1, with rendered evidence and a complete mobile handoff;
+* enrollment and bot entry meet the local presentation and transition checks
+  in section 2.2.1. Release acceptance for real devices and provider handoff
+  requires A43-01 and A43-02 in the owning packages;
 * no abandoned plan-parameter UI remains reachable.
 
 ---
@@ -1505,6 +1512,13 @@ restart, and recovery conditions.
 
 **Primary audit coverage:** `OPS-05`, all stale-test cross-references.
 
+**Concrete WP-04.3 test acceptance:** implement automated **A43-03**
+(persistent-jobstore failure/retry/restart) and **A43-05** (DST/calendar edit/
+concurrent delivery) from [the acceptance scenarios](work_packages/WP-04.3_acceptance_followups.md).
+Both must run successfully in the canonical suite, with DB/job/delivery-receipt
+assertions. Mock-only scheduler or timezone-only unit tests do not close them.
+Record executable test references for WP-09.4's exact-artifact rerun.
+
 ### WP-09.2 — Implement runtime supervision, health, and monitoring
 
 **Scope**
@@ -1537,6 +1551,12 @@ restart, and recovery conditions.
 
 **Primary audit coverage:** `OPS-01`, `OPS-06…08`, completion of `FD-12`.
 
+**Concrete WP-04.3 rehearsal acceptance:** prepare executable **A43-04**
+stop-old/start-new and rollback/restore/job-reconstruction steps in the release
+contract. WP-09.4 must execute them in isolation and retain writer non-overlap,
+artifact/schema and scheduler evidence; a written runbook alone is not PASS.
+See [the acceptance scenarios](work_packages/WP-04.3_acceptance_followups.md).
+
 ### WP-09.4 — Run testnet acceptance, device QA, drills, and capacity tests
 
 **Scope**
@@ -1555,6 +1575,14 @@ restart, and recovery conditions.
 
 **Primary audit coverage:** `UX-02`, `UX-04`, `UX-17`, `OPS-10…11`, all
 cross-domain beta acceptance requirements.
+
+**Concrete WP-04.3 exit evidence:** execute and retain **A43-01/A43-02**
+on real iOS and Android with actual configured email/OIDC and Telegram return;
+run **A43-03/A43-05** from WP-09.1 on the pinned release artifact and execute
+**A43-04** from WP-09.3. Use the steps, expected results and evidence requirements
+in [the acceptance scenarios](work_packages/WP-04.3_acceptance_followups.md).
+Keep any unexecuted/failed row open; author adapters, source review or a merge
+do not close these acceptance requirements or Gate G3.
 
 ### Block 9 Go/No-Go
 
@@ -1615,6 +1643,11 @@ privacy, support, measurement, or recovery.
 **Primary audit coverage:** `COMP-03`, `COMP-05`, `COMP-07`; pilot pricing
 remains the recorded open founder decision.
 
+**Concrete policy acceptance:** close **A43-06**: approved full policy actually
+replaces the enrollment draft, bot/document references agree, and deployment
+notice pin/ack behavior is tested. Retain version/digest and rendered/receipt
+evidence; see [the acceptance scenarios](work_packages/WP-04.3_acceptance_followups.md).
+
 ### WP-10.2 — Complete the per-deployment launch checklist
 
 Run and retain the full 27-point Company Deployment Checklist from the audit,
@@ -1634,6 +1667,11 @@ including:
 
 **Primary audit coverage:** `COMP-09…10`, `SEC-10`, `FD-18`.
 
+**Concrete company acceptance:** rerun the company-specific **A43-02** entry/
+return/failure path and verify **A43-06** actual document links and notice pin.
+Retain real corporate device/network/provider evidence for the named deployment;
+do not inherit these results solely from the generic testnet run.
+
 ### WP-10.3 — Execute the controlled production release
 
 **Scope**
@@ -1647,6 +1685,11 @@ including:
 * run production-safe smoke without behavioral test pollution;
 * open enrollment only after operational verification;
 * keep rollback/restore and kill switches immediately reachable.
+
+**Concrete cutover evidence:** record the authorized production execution of
+**A43-04** using the rehearsed WP-09.3 contract: old writer stopped before new
+writer starts, exact approved artifact/schema, readiness/smoke and job/receipt
+consistency. This is in addition to, not a substitute for, isolated rehearsal.
 
 ### WP-10.4 — Monitor launch and close the deployment round
 
@@ -1791,10 +1834,10 @@ block exit gate passes.
   - [x] WP-03.3 — Introduce canonical ExercisePresentation and media delivery
   - [x] WP-03.4 — Make scheduled delivery and callbacks reconcilable
   - [x] WP-03.5 — Implement durable completion and automatic continuation
-- [ ] B4 — Access, privacy minimum, onboarding, and deterministic controls
+- [x] B4 — Access, privacy minimum, onboarding, and deterministic controls
   - [x] WP-04.1 — Implement deployment, entitlement, and enrollment authority
   - [x] WP-04.2 — Implement the minimum privacy and data-rights lifecycle
-  - [ ] WP-04.3 — Implement deterministic onboarding and user menu
+  - [x] WP-04.3 — Implement deterministic onboarding and user menu
 - [ ] B5 — Coach integration and bounded agency
   - [ ] WP-05.1 — Build canonical Coach context and plan-aware tool exposure
   - [ ] WP-05.2 — Implement the bounded tool-result loop
@@ -1828,10 +1871,10 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | `WP-04.3 — Implement deterministic onboarding and user menu` |
-| Status | `IN_PROGRESS`; local WP-04.3 implementation and verification, awaiting initial independent review. B3, WP-04.1 and WP-04.2 remain `VERIFIED`. |
-| Next action | Handoff merged in PR #272; fetched integration head `05dcee5` in the new WP-04.3 chat. Local code, approved copy, enrollment design and author evidence are on `wp/04.3-deterministic-onboarding-menu`. Founder authorized the local candidate commit and separate systemic matrix review on 2026-11-05. Freeze the candidate and complete that independent review; no push/PR permission yet |
-| Current blockers | No unmerged implementation predecessor; DG-01 resolved 2026-10-29 with unrestricted valid clock time and individual choice. Onboarding/menu/reference copy is approved; device evidence is pending. The enrollment policy link shows the founder-authorized labeled draft, not an approved/pinned notice; founder/legal wording, roles and company terms remain WP-10.1. G1 precedes durable-data rollout/company enrollment; G3/G4 still apply. `DG-02` keeps cold water unavailable; `DG-03` remains before beta. Final report/product-learning aggregates are WP-07; general recovery alerts/monitoring are B8/B9 |
+| Current package | [WP-05.1 — Build canonical Coach context and plan-aware tool exposure](#wp-051--build-canonical-coach-context-and-plan-aware-tool-exposure) |
+| Status | `READY` after this documentation closeout merges. B4 integration is complete through PR #273. |
+| Next action | Start WP-05.1 in its own session from the updated integration head. Read the WP-05.1 scope, its named audit rows, WP-02.3 and WP-03.3 contracts, and the WP-04.3 merged behavior before changing Coach. |
+| Open release acceptance | Read [A43-01…06](work_packages/WP-04.3_acceptance_followups.md) when preparing WP-09.1, WP-09.3, WP-09.4, WP-10.1, WP-10.2 and WP-10.3. Carry each assigned scenario and its expected result and evidence into the owning WP plan. G1/G3/G4 and the applicable medical/device gates remain in force. |
 
 ### Private founder log
 
@@ -1882,8 +1925,8 @@ behavior.
 ## 22. Historical first steps after roadmap approval
 
 The sequence below was the initial handoff and has been completed through B3.
-The current next step is WP-04.3, as recorded in the current-package table
-above; do not restart WP-00.4 or WP-01.1 from this historical list.
+Use the current-package table above for the next step. This list records
+historical startup work.
 
 1. Complete WP-00.4 repository hardening and targeted verification.
 2. Rotate compromised provider credentials with founder approval.
