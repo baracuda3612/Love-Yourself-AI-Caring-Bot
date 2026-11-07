@@ -4,17 +4,13 @@
 
 **Physical starting point:** Alembic revision `20260827_schema_baseline`
 
-**Current merged application/Alembic head:** `20261022_privacy_lifecycle`.
-WP-04.2 is founder-merged in PR #271 (`55645ec`, 2026-10-24); B3, WP-04.1 and
-WP-04.2 are verified. WP-04.3 owns the next deterministic onboarding/menu
-implementation. Access and privacy behavior acceptance remains in the respective
-package evidence; no durable/company rollout or completed deployment migration
-is implied by the merged schema head.
-
-**Local WP-04.3 candidate:** `20261104_menu_input` after
-`20261104_onboarding_controls`. These revisions are uncommitted and have only
-been exercised on newly created disposable databases. The merged head above
-remains the deployment reference until founder merge and an approved migration.
+**Current merged application/Alembic head:** `20261104_menu_input`, following
+`20261104_onboarding_controls`. The founder merged WP-04.3 in
+[PR #273](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/273)
+on 2026-11-05 as `88d39a4409d78cfba0bc7093cb3528fa5e6a5f5c`. B4 is complete
+for integration. The migration evidence comes from disposable databases.
+Deployment migration and cutover require their own approval and evidence.
+See [the remaining acceptance checks](work_packages/WP-04.3_acceptance_followups.md).
 
 **Contract scope:** target design only; no DDL in WP-01.2
 
