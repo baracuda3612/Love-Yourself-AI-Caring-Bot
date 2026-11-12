@@ -198,7 +198,7 @@ async def stop_setup(message: Message):
         await _open_menu(message, message.from_user.id, user_menu.SCHEDULE)
 
 
-# Gate all Telegram entrances before text, callbacks, Coach or history writes.
+# Gate all Telegram entrances before text, callbacks, the AI assistant or history writes.
 # Start alone may redeem a token; it implements the same guard above.
 from aiogram import BaseMiddleware
 
@@ -208,7 +208,7 @@ class ActorIngressMiddleware(BaseMiddleware):
 
     This is an in-process ingress lock for the single polling writer. Durable
     ownership/idempotency remains in PostgreSQL. on_text releases it after its
-    routing transaction, so a slow Coach cannot block the user's menu.
+    routing transaction, so a slow the AI assistant cannot block the user's menu.
     """
 
     def __init__(self):
@@ -277,42 +277,9 @@ async def register_public_commands(bot: Bot):
     try:
         await bot.set_my_commands([
             BotCommand(command="start", description="Почати або повернутися"),
-            BotCommand(command="continue_plan", description="Розблокувати продовження після підсумку"),
         ])
     except Exception:
         logger.exception("Could not update Telegram command menu")
-
-
-@router.message(Command("continue_plan"))
-async def handle_continue_plan(message: Message):
-
-    await _release_continuation(
-        message, message.from_user.id, f"telegram:continue:{message.chat.id}:{message.message_id}",
-    )
-
-
-async def _release_continuation(message, telegram_user_id, source_operation_id):
-    from app.plan_completion.workflow import deliver_report
-    from app.db import AIPlan, PlanCompletion
-    from sqlalchemy.orm import aliased
-
-    def find_source():
-        with SessionLocal() as db:
-            successor = aliased(AIPlan)
-            return (db.query(PlanCompletion.plan_id, User.id).join(AIPlan, AIPlan.id == PlanCompletion.plan_id)
-                .join(successor, successor.id == PlanCompletion.successor_plan_id)
-                .join(User, User.id == AIPlan.user_id)
-                .filter(User.tg_id == telegram_user_id, User.is_active.is_(True),
-                    successor.status.in_(['active','paused']),
-                    PlanCompletion.state.in_(['uncertain', 'release_uncertain', 'failed', 'sent_held']))
-                .order_by(PlanCompletion.plan_id.desc()).first())
-    source = await asyncio.to_thread(find_source)
-    if source is None:
-        await message.answer('Немає продовження, яке потребує розблокування.')
-        return
-    result = await deliver_report(source[1], source[0], release_operation_id=source_operation_id)
-    if not result.succeeded:
-        await message.answer('Продовження ще заблоковане. Спробуй ще раз через 10 хвилин після попередньої спроби. Підсумок повторно не надсилаємо.')
 
 
 @router.message(Command("spawn"))
@@ -451,7 +418,6 @@ async def _open_menu(message, tg_id, route, *, operation_id=None, denied_start=F
         return
 
     result = None
-    release_continuation = False
     with SessionLocal() as db:
         user = db.query(User).filter(User.tg_id == tg_id).with_for_update().first()
         deployment = None
@@ -543,9 +509,6 @@ async def _open_menu(message, tg_id, route, *, operation_id=None, denied_start=F
             )
             pending.target_version = progress.revision
             screen = menu_input.calendar_screen(user, pending)
-        elif route == "release_continuation" and ready and operation_id:
-            release_continuation = True
-            screen = page("Оновлюємо стан нагадувань.")
         elif route.startswith("profile_zone:") and schedule and operation_id:
             latest = db.query(AIPlan).filter_by(user_id=user.id).order_by(AIPlan.cycle_number.desc()).first()
             if latest is not None and latest.status == "abandoned" and route == f"profile_zone:{latest.id}:{latest.version}":
@@ -736,14 +699,6 @@ async def _open_menu(message, tg_id, route, *, operation_id=None, denied_start=F
                 if screen is None and result is None:
                     actions = []
                     if plan is not None:
-                        from app.db import PlanCompletion
-
-                        blocked = db.query(PlanCompletion.plan_id).filter(
-                            PlanCompletion.successor_plan_id == plan.id,
-                            PlanCompletion.state.in_(("uncertain", "release_uncertain", "failed", "sent_held")),
-                        ).first()
-                        if blocked is not None:
-                            actions.append(("Продовжити нагадування", "release_continuation"))
                         target = f"{plan.id}:{plan.version}"
                         actions.extend((
                             ("Змінити налаштування", f"plan:settings:{target}"),
@@ -819,10 +774,6 @@ async def _open_menu(message, tg_id, route, *, operation_id=None, denied_start=F
         if user is not None:
             db.commit()
 
-    if release_continuation:
-        await _release_continuation(message, tg_id, operation_id)
-        await _open_menu(message, tg_id, user_menu.SCHEDULE)
-        return
     if result is not None:
         hint = await _reconcile_menu_schedule(result)
         await _open_menu(message, tg_id, user_menu.SCHEDULE, hint=hint)
@@ -1117,20 +1068,6 @@ async def handle_task_feedback(callback_query: CallbackQuery):
     label = {"better": "краще", "same": "так само", "worse": "гірше"}[recorded]
     await callback_query.answer(f"Відгук збережено: {label}")
     await _project_step_status(step_id)
-
-
-@router.callback_query(F.data == "adapt_suggest")
-async def handle_adapt_suggest(callback_query: CallbackQuery):
-    await callback_query.answer()
-    with SessionLocal() as db:
-        user, _ = _ensure_user(db, callback_query.from_user)
-
-    response = await handle_incoming_message(
-        user.id,
-        "хочу переглянути план через пропуски",
-    )
-    if callback_query.message:
-        await _send_agent_response(callback_query.message, user.id, response)
 
 
 async def _send_agent_response(message: Message, user_id: int, response: dict) -> None:

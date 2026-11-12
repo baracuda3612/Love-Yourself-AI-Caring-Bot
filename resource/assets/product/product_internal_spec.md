@@ -1,7 +1,7 @@
 # Love Yourself — Product Internal Spec (content contract 2026-10-03)
 
 > Content Library synchronized 2026-10-03 · other sections retain their separately owned scope
-> conceptual_map.md — user-facing версія для Coach
+> conceptual_map.md — user-facing версія для ШІ-асистента
 
 ---
 
@@ -119,7 +119,7 @@ eligible = completed | skipped | expired, scheduled_for ≤ now, not canceled
 
 ---
 
-## 8. Coach — правила мови
+## 8. ШІ-асистент — правила мови
 
 | ❌ НЕ казати | ✅ Казати натомість |
 |-------------|-------------------|
@@ -129,4 +129,4 @@ eligible = completed | skipped | expired, scheduled_for ≤ now, not canceled
 | "21 / 90 днів" | не згадувати |
 | назви слотів MORNING/DAY/EVENING | конкретний час (14:30) |
 
-Coach пояснює — не виконує. Зміни тільки через адаптацію з підтвердженням.
+ШІ-асистент пояснює — не виконує. Зміни тільки через адаптацію з підтвердженням.

@@ -52,7 +52,7 @@ async def test_coach_context_is_owned_and_receipt_proven(db,monkeypatch,terminal
     assert current_exercise_context(db,user.id,plan.id+1000) is None
     monkeypatch.setattr(orchestrator,'SessionLocal',lambda:retained_session(db))
     monkeypatch.setattr(orchestrator,'get_stm_history',AsyncMock(return_value=[]))
-    monkeypatch.setattr(orchestrator,'_coach_access',lambda *_: (1, 1))
+    monkeypatch.setattr(orchestrator,'_assistant_access',lambda *_: ((1, 1), True))
     monkeypatch.setattr(orchestrator.session_memory,'get_pending_action',AsyncMock(return_value=None))
     payload = await orchestrator.build_user_context(user.id,'Як виконати вправу?')
     assert payload['current_exercise_context']['steps'] == context['steps']
@@ -133,7 +133,7 @@ async def test_coach_tool_rechecks_real_postgres_authority(db, monkeypatch, chan
     from dataclasses import replace
     from unittest.mock import Mock
     from app import access, db as models, lifecycle, lifecycle_reconciliation, orchestrator, privacy
-    from app.workers import coach_agent
+    from app.workers import assistant_agent
 
     user, plan, _ = active_step(db)
     enrollment = access.require_access(db, user.id)
@@ -181,7 +181,7 @@ async def test_coach_tool_rechecks_real_postgres_authority(db, monkeypatch, chan
             arguments='{"hhmm":"20:30"}' if pending else '{}',
         )], usage=None)
 
-    monkeypatch.setattr(coach_agent, 'async_client', SimpleNamespace(
+    monkeypatch.setattr(assistant_agent, 'async_client', SimpleNamespace(
         responses=SimpleNamespace(create=AsyncMock(side_effect=respond)),
     ))
     message = 'О 20:30' if pending else 'Призупини план'

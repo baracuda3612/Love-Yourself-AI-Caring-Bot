@@ -29,7 +29,7 @@ def extract_output_text(response: Any) -> str:
     The Responses API may expose the generated text via ``output_text``
     (newer SDKs) or nested under ``output[0].content[0].text``. Using this
     helper prevents AttributeErrors that would otherwise force the
-    orchestrator to fall back to the default coach agent.
+    orchestrator to fall back to the default AI assistant.
     """
 
     text = getattr(response, "output_text", None)

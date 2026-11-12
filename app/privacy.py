@@ -1,4 +1,4 @@
-"""Minimum privacy authority. Local operators own manual fulfillment, never Coach.
+"""Minimum privacy authority. Local operators own manual fulfillment, never the AI assistant.
 
 Lock order is user -> deployments -> request. Callers commit notice/request
 operations; delete_account owns its explicit recovery transactions.

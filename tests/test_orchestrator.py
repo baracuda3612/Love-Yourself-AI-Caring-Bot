@@ -134,6 +134,11 @@ class _AutoCompleteDB:
     def query(self, *_args, **_kwargs):
         return _AutoCompleteQuery(self._plans)
 
+    def begin_nested(self):
+        from contextlib import nullcontext
+
+        return nullcontext()
+
     def add(self, obj):
         self.added.append(obj)
 
@@ -1063,11 +1068,15 @@ async def test_superseded_evening_preference_blocks_activation_cascade(monkeypat
 
 @pytest.mark.anyio
 async def test_inactive_sender_gets_access_denied_before_coach(monkeypatch):
+    from contextlib import nullcontext
+    from app import privacy
+    from app.access import AccessDenied
+
     memory = DummyMemory()
     coach_called = False
 
-    async def reject_completion(_user_id):
-        raise LifecycleEntitlementError("user_not_entitled")
+    def reject_access(*_args, **_kwargs):
+        raise AccessDenied()
 
     async def fail_coach(_payload):
         nonlocal coach_called
@@ -1075,12 +1084,9 @@ async def test_inactive_sender_gets_access_denied_before_coach(monkeypatch):
         return {"reply_text": "should not run"}
 
     monkeypatch.setattr(orchestrator, "session_memory", memory)
-    monkeypatch.setattr(
-        orchestrator,
-        "_auto_complete_plan_if_needed_for_user_id",
-        reject_completion,
-    )
-    monkeypatch.setattr(orchestrator, "coach_agent", fail_coach)
+    monkeypatch.setattr(orchestrator, "SessionLocal", lambda: nullcontext(object()))
+    monkeypatch.setattr(privacy, "pinned_notice", reject_access)
+    monkeypatch.setattr(orchestrator, "assistant_agent", fail_coach)
 
     result = await orchestrator.handle_incoming_message(17, "Привіт")
 

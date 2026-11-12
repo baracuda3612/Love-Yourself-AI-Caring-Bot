@@ -9,10 +9,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.access import AccessDenied
-from app.active_days import resolve_timezone
+from app.active_days import resolve_active_days, resolve_timezone
 from app.config import settings
 from app.db import (
     AIPlan,
+    AIPlanDay,
+    AIPlanStep,
+    PlanLifecycleOperation,
     ChatHistory,
     SessionLocal,
     User,
@@ -22,15 +25,17 @@ from app.db import (
 from app.logging.router_logging import log_metric
 from app.session_memory import SessionMemory
 from app.ux.persona import get_persona
-from app.workers.coach_agent import (
+from app.workers.assistant_agent import (
     _build_idle_finished_context,
-    coach_agent,
-    coach_tools,
+    assistant_agent,
+    assistant_tools,
     validated_tool_arguments,
 )
 from app.onboarding import FALLBACK as SETUP_FALLBACK
 from app.telemetry import log_user_event
 from app.plan_drafts.plan_builder_v5 import NoCandidatesError
+from app.plan_schedule import read_next_reminder
+from app.time_slots import resolve_daily_time_slots
 from app.lifecycle import (
     CompletionDeliveryResult,
     CurrentMode,
@@ -93,7 +98,8 @@ def _auto_complete_plan_if_needed(
     try:
         from app.plan_metrics import get_completion_rate
 
-        completion_rate = get_completion_rate(db, user.id, result.plan_id)
+        with db.begin_nested():
+            completion_rate = get_completion_rate(db, user.id, result.plan_id)
     except Exception as e:
         metrics_error = True
         logger.warning(
@@ -104,23 +110,24 @@ def _auto_complete_plan_if_needed(
         )
 
     try:
-        log_user_event(
-            db=db,
-            user_id=user.id,
-            event_type="plan_completed",
-            event_source="runtime",
-            source_operation_id=f"runtime:complete:{result.plan_id}",
-            plan_id=result.plan_id,
-            context={
-                "total_days": plan.total_days,
-                "focus": plan.focus,
-                "load": plan.load,
-                "duration": plan.duration,
-                "completion_rate": round(completion_rate, 4) if completion_rate is not None else None,
-                "adaptation_count": adaptation_count,
-                "metrics_error": metrics_error,
-            },
-        )
+        with db.begin_nested():
+            log_user_event(
+                db=db,
+                user_id=user.id,
+                event_type="plan_completed",
+                event_source="runtime",
+                source_operation_id=f"runtime:complete:{result.plan_id}",
+                plan_id=result.plan_id,
+                context={
+                    "total_days": plan.total_days,
+                    "focus": plan.focus,
+                    "load": plan.load,
+                    "duration": plan.duration,
+                    "completion_rate": round(completion_rate, 4) if completion_rate is not None else None,
+                    "adaptation_count": adaptation_count,
+                    "metrics_error": metrics_error,
+                },
+            )
     except Exception as e:
         logger.error("[COMPLETION] log event failed user=%s: %s", user.id, e)
 
@@ -139,29 +146,31 @@ def _trigger_plan_completion(user_id: int, plan_id: int) -> None:
 
 
 async def _auto_complete_plan_if_needed_for_user_id(user_id: int) -> None:
-    def prepare():
-        with SessionLocal() as db:
-            user = db.query(User).filter(User.id == user_id).first()
-            if user is None:
-                raise LifecycleEntitlementError("user_not_entitled")
-            completion = _auto_complete_plan_if_needed(db, user)
-            db.commit()
-            return completion
+    from app.plan_completion.continuation import prepare_automatic_continuation
+
     try:
-        completion = await asyncio.to_thread(prepare)
+        completion = await asyncio.to_thread(
+            prepare_automatic_continuation, SessionLocal, user_id, _auto_complete_plan_if_needed,
+        )
     except LifecycleEntitlementError:
         raise
     except Exception:
         logger.exception("Completion preparation pending user=%s", user_id)
+        from app.scheduler import flag_completion_recovery
+        recovery = flag_completion_recovery
+    else:
+        if completion is None:
+            return
         from app.scheduler import enable_completion_recovery
-        await asyncio.to_thread(enable_completion_recovery)
-        raise LifecycleEntitlementError("access_unavailable") from None
-    if completion is not None:
-        await send_plan_completion_message(user_id, completion.plan_id)
+        recovery = enable_completion_recovery
+    try:
+        await asyncio.to_thread(recovery)
+    except Exception:
+        logger.exception("Completion recovery wake failed user=%s", user_id)
 
 
 async def get_stm_history(user_id: int) -> List[Dict[str, str]]:
-    """Only retained durable conversation may enter Coach context."""
+    """Only retained durable conversation may enter the AI assistant context."""
     return [{"role":item['role'], "content":item['text']}
         for item in await session_memory.get_recent_messages(user_id)]
 
@@ -179,7 +188,7 @@ def _temporal_context(local_now: datetime) -> str:
     return local_now.strftime(f"%A, %H:%M ({period})")
 
 
-def _coach_plan_facts(db: Session, user: User) -> dict:
+def _assistant_plan_facts(db: Session, user: User) -> dict:
     """Read the current plan and runtime prerequisites while holding the user lock."""
     from app.time_slots import TimeSlotError, canonicalize_hhmm
 
@@ -207,7 +216,13 @@ def _coach_plan_facts(db: Session, user: User) -> dict:
         except TimeSlotError:
             pass
     plan_type = {7: "SHORT", 14: "MEDIUM"}.get(runtime_plan.total_days) if runtime_plan else None
+    cycle_ending, can_retry_switch, retry_actions = (
+        _assistant_current_plan_actions(db, current) if current else (False, False, ())
+    )
     return {
+        "cycle_ending": cycle_ending,
+        "can_retry_switch": can_retry_switch,
+        "retry_actions": retry_actions,
         "current_mode": mode.value,
         "current_plan_id": current.id if current else None,
         "runtime_plan_id": runtime_plan.id if runtime_plan else None,
@@ -218,6 +233,41 @@ def _coach_plan_facts(db: Session, user: User) -> dict:
         "evening_slot_collected": bool(profile and profile.evening_slot_collected),
         "evening_time": evening_time,
     }
+
+
+def _assistant_current_plan_actions(db: Session, plan: AIPlan) -> tuple[bool, bool, tuple[str, ...]]:
+    steps = db.query(AIPlanStep.id).join(AIPlanDay).filter(AIPlanDay.plan_id == plan.id)
+    receipts = db.query(PlanLifecycleOperation).filter_by(user_id=plan.user_id, plan_id=plan.id)
+    previous_status = (
+        db.query(AIPlan.status)
+        .filter(AIPlan.user_id == plan.user_id, AIPlan.cycle_number < plan.cycle_number)
+        .order_by(AIPlan.cycle_number.desc()).limit(1).scalar_subquery()
+    )
+    latest_control = (
+        receipts.with_entities(PlanLifecycleOperation.operation)
+        .filter(PlanLifecycleOperation.operation.in_(("pause", "resume")))
+        .order_by(PlanLifecycleOperation.id.desc()).limit(1).scalar_subquery()
+    )
+    switch_activation = PlanLifecycleOperation.source_operation_id.startswith("switch-activate:")
+    has_steps, has_open, has_switch, has_switch_activation, has_activation, previous, control = db.query(
+        steps.filter(AIPlanStep.step_status != "canceled").exists(),
+        steps.filter(AIPlanStep.step_status.in_(("pending", "delivered"))).exists(),
+        receipts.filter_by(operation="switch_plan_format").exists(),
+        receipts.filter_by(operation="activate").filter(switch_activation).exists(),
+        receipts.filter_by(operation="activate").filter(~switch_activation).exists(),
+        previous_status,
+        latest_control,
+    ).one()
+    retry_actions = []
+    if control == ("pause" if plan.status == "paused" else "resume"):
+        retry_actions.append(control)
+    if has_activation and previous == "abandoned":
+        retry_actions.append("followup")
+    return (
+        plan.status == "active" and has_steps and not has_open,
+        bool(has_switch or has_switch_activation),
+        tuple(retry_actions),
+    )
 
 
 def _pending_medium_action(db: Session, user_id: int, facts: dict, pending: str | None) -> str | None:
@@ -248,25 +298,27 @@ def _pending_medium_action(db: Session, user_id: int, facts: dict, pending: str 
     return None
 
 
-def _coach_access(db: Session, user_id: int) -> tuple[int, int]:
+def _assistant_access(db: Session, user_id: int) -> tuple[tuple[int, int], bool]:
     from app.privacy import pinned_notice
 
     deployment, notice = pinned_notice(db, user_id, acknowledged=True)
-    return deployment.id, notice.id
+    return (deployment.id, notice.id), deployment.delivery_enabled
 
 
 async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
     stm_history = await get_stm_history(user_id)
     pending_hint = await session_memory.get_pending_action(user_id)
     with SessionLocal() as db:
-        access = _coach_access(db, user_id)
+        access, delivery_enabled = _assistant_access(db, user_id)
         user = db.get(User, user_id)
-        facts = _coach_plan_facts(db, user)
+        facts = _assistant_plan_facts(db, user)
         pending = _pending_medium_action(
             db, user_id, facts, pending_hint,
         )
-        tz = resolve_timezone(user.timezone)
+        timezone_name = user.timezone
+        tz = resolve_timezone(timezone_name)
         now = datetime.now(timezone.utc)
+        profile = user.profile
         context = {
             **facts,
             "message_text": message_text,
@@ -278,15 +330,34 @@ async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
             "total_days": None,
             "days_remaining": None,
             "current_exercise_context": None,
+            "name_preference": profile.name_preference if profile else None,
         }
+        if facts["cycle_ending"]:
+            from app.plan_completion.continuation import read_continuation_status
+
+            context["continuation_state"] = read_continuation_status(db, facts["current_plan_id"], now)
         if facts["current_plan_id"] is not None and facts["plan_type"] is not None:
             from app.exercise_presentation import current_exercise_context
 
             status = read_lifecycle_status(db, user_id).to_runtime_payload()
+            reminder_state, next_reminder = read_next_reminder(
+                db, facts["current_plan_id"],
+                paused=status["current_mode"] == CurrentMode.ACTIVE_PAUSED.value,
+                timezone_name=timezone_name, delivery=delivery_enabled, now=now,
+            )
             context.update(
                 current_day=status["current_day"],
                 total_days=status["days_total"],
                 days_remaining=status["days_remaining"],
+                steps_completed=status["steps_completed"],
+                steps_total=status["steps_total"],
+                schedule={
+                    "day_time": resolve_daily_time_slots(profile)["DAY"],
+                    "active_days": resolve_active_days(profile),
+                    "timezone": timezone_name,
+                    "reminder_state": reminder_state,
+                    "next_reminder_at": next_reminder.isoformat(timespec="minutes") if next_reminder else None,
+                },
                 current_exercise_context=current_exercise_context(
                     db, user_id, facts["current_plan_id"], user_timezone=tz, now=now,
                 ),
@@ -304,7 +375,7 @@ def _recover_retained_switch(
     hhmm: str,
     **authorization,
 ) -> dict:
-    """Use the internal receipt-gated recovery entrance, not a Coach tool."""
+    """Use the internal receipt-gated recovery entrance, outside the AI assistant tool registry."""
     from app.plan_runtime.tools import recover_plan_format_switch
 
     return recover_plan_format_switch(
@@ -507,52 +578,54 @@ def _followup_success_reply(result: Dict[str, Any]) -> str:
     return _TOOL_REPLY_TEMPLATES["create_followup_plan"]
 
 
-_STALE_COACH_ACTION_REPLY = "Обставини змінилися. Перевір поточний стан і повтори запит."
-_INVALID_COACH_ACTION_REPLY = "Не вдалося виконати цю дію. Сформулюй запит ще раз."
+_STALE_ASSISTANT_ACTION_REPLY = "Обставини змінилися. Перевір поточний стан і повтори запит."
+_INVALID_ASSISTANT_ACTION_REPLY = "Не вдалося виконати цю дію. Сформулюй запит ще раз."
 
 
-class _CoachContextChanged(ValueError):
+class _AssistantContextChanged(ValueError):
     pass
 
 
-async def _execute_coach_tool(user_id: int, tool_call: dict, context: dict, offered_tools: list[dict]) -> str:
+async def _execute_assistant_tool(user_id: int, tool_call: dict, context: dict, offered_tools: list[dict]) -> str:
     """Authorize untrusted model output against this request and the live aggregate."""
     name = tool_call.get("name")
     offered = next((tool for tool in offered_tools if tool["name"] == name), None)
     if offered is None:
-        return _INVALID_COACH_ACTION_REPLY
+        return _INVALID_ASSISTANT_ACTION_REPLY
     try:
         arguments = validated_tool_arguments(offered, tool_call.get("arguments"))
     except ValueError:
-        return _INVALID_COACH_ACTION_REPLY
+        return _INVALID_ASSISTANT_ACTION_REPLY
     call_id = tool_call.get("call_id")
     if name != "get_plan_status" and (
         not isinstance(call_id, str) or not re.fullmatch(r"[A-Za-z0-9:_-]{1,160}", call_id)
     ):
-        return _INVALID_COACH_ACTION_REPLY
+        return _INVALID_ASSISTANT_ACTION_REPLY
 
     def recheck(db: Session, *, after_evening_save: bool = False) -> None:
         # pinned_notice locks the actor and enrollment deployment. Keep these
         # locks through the lifecycle decision and commit in the tool's session.
-        access = _coach_access(db, user_id)
-        live = _coach_plan_facts(db, db.get(User, user_id))
+        access, _ = _assistant_access(db, user_id)
+        live = _assistant_plan_facts(db, db.get(User, user_id))
         identity = ("current_mode", "runtime_plan_id", "runtime_plan_version", "runtime_plan_type")
         if access != context["access"] or any(live[key] != context[key] for key in identity):
-            raise _CoachContextChanged()
+            raise _AssistantContextChanged()
         live["access"] = access
         if name == "record_evening_time":
             pending = session_memory.read_pending_action(user_id)
             if pending != context["pending_action"]:
-                raise _CoachContextChanged()
+                raise _AssistantContextChanged()
             if after_evening_save:
                 if live["evening_time"] != arguments["hhmm"] or _pending_medium_action(
                     db, user_id, {**live, "evening_slot_collected": False}, pending,
                 ) != pending:
-                    raise _CoachContextChanged()
+                    raise _AssistantContextChanged()
                 return
             live["pending_action"] = _pending_medium_action(db, user_id, live, pending)
-        if name not in {tool["name"] for tool in coach_tools(live)}:
-            raise _CoachContextChanged()
+        if name not in {tool["name"] for tool in assistant_tools(live)}:
+            raise _AssistantContextChanged()
+        if name == "retry_plan_action" and arguments["action"] not in live["retry_actions"]:
+            raise _AssistantContextChanged()
         if name == "switch_plan_format" and arguments["plan_type"] == live["plan_type"]:
             raise ValueError("requested_plan_type_already_current")
 
@@ -560,7 +633,7 @@ async def _execute_coach_tool(user_id: int, tool_call: dict, context: dict, offe
         user_id, {"name": name, "arguments": arguments, "call_id": call_id},
         authorize=recheck,
         pending_action=context.get("pending_action"),
-    ) or _INVALID_COACH_ACTION_REPLY
+    ) or _INVALID_ASSISTANT_ACTION_REPLY
 
 
 async def _execute_plan_tool(
@@ -568,7 +641,7 @@ async def _execute_plan_tool(
 ) -> Optional[str]:
     """
     Execute a backend-authorized runtime command and format its deterministic result.
-    Model output must enter through _execute_coach_tool.
+    Model output must enter through _execute_assistant_tool.
     """
     tool_name = str(tool_call.get("name") or "")
     tool_args = tool_call.get("arguments") or {}
@@ -634,8 +707,8 @@ async def _execute_plan_tool(
         except NoCandidatesError:
             logger.exception("[TOOL] retained switch generation unavailable user=%s", user_id)
             return _SWITCH_UNAVAILABLE_REPLY
-        except _CoachContextChanged:
-            return _STALE_COACH_ACTION_REPLY
+        except _AssistantContextChanged:
+            return _STALE_ASSISTANT_ACTION_REPLY
         except NoticeRequired:
             return _NOTICE_REQUIRED_REPLY
         except AccessDenied:
@@ -697,8 +770,8 @@ async def _execute_plan_tool(
         # Keep their worker-owned edit loop outside the polling event loop.
         result = await asyncio.to_thread(handler, user_id, tool_args)
         log_metric("plan_tool_executed", extra={"user_id": user_id, "tool": tool_name})
-    except _CoachContextChanged:
-        return _STALE_COACH_ACTION_REPLY
+    except _AssistantContextChanged:
+        return _STALE_ASSISTANT_ACTION_REPLY
     except NoticeRequired:
         return _NOTICE_REQUIRED_REPLY
     except AccessDenied:
@@ -973,8 +1046,8 @@ async def handle_incoming_message(
     - appends message to session memory
     - auto-completes plan if needed
     - builds user context from one derived current mode
-    - fences unfinished setup before conversation memory and Coach
-    - else → calls coach_agent directly
+    - fences unfinished setup before conversation memory and the AI assistant
+    - else → calls assistant_agent directly
     - executes allowlisted deterministic runtime tools
     - returns reply; the Telegram send boundary records delivered assistant memory
     """
@@ -982,10 +1055,6 @@ async def handle_incoming_message(
     def _finalize_reply(text: str) -> Dict[str, Any]:
         return {"reply_text": text}
 
-    try:
-        await _auto_complete_plan_if_needed_for_user_id(user_id)
-    except LifecycleEntitlementError:
-        return _finalize_reply(_ACCESS_DENIED_REPLY)
     from app.privacy import NoticeRequired, pinned_notice
     try:
         with SessionLocal() as db:
@@ -998,6 +1067,10 @@ async def handle_incoming_message(
         return _finalize_reply(_NOTICE_REQUIRED_REPLY)
     except AccessDenied:
         return _finalize_reply(_ACCESS_DENIED_REPLY)
+    try:
+        await _auto_complete_plan_if_needed_for_user_id(user_id)
+    except (AccessDenied, LifecycleEntitlementError):
+        return _finalize_reply(_ACCESS_DENIED_REPLY)
     await session_memory.append_message(user_id, "user", message_text)
 
     try:
@@ -1009,8 +1082,8 @@ async def handle_incoming_message(
     if context_payload.get("current_mode") == CurrentMode.ONBOARDING.value:
         return _finalize_reply(SETUP_FALLBACK)
 
-    offered_tools = coach_tools(context_payload)
-    worker_result = await coach_agent(context_payload, available_tools=offered_tools)
+    offered_tools = assistant_tools(context_payload)
+    worker_result = await assistant_agent(context_payload, available_tools=offered_tools)
 
     reply_text = str(worker_result.get("reply_text") or "")
     error_payload = worker_result.get("error")
@@ -1039,8 +1112,8 @@ async def handle_incoming_message(
     raw_tool_call = worker_result.get("tool_call")
     if raw_tool_call is not None:
         if not isinstance(raw_tool_call, dict):
-            return _finalize_reply(_INVALID_COACH_ACTION_REPLY)
-        tool_result = await _execute_coach_tool(user_id, raw_tool_call, context_payload, offered_tools)
+            return _finalize_reply(_INVALID_ASSISTANT_ACTION_REPLY)
+        tool_result = await _execute_assistant_tool(user_id, raw_tool_call, context_payload, offered_tools)
         return _finalize_reply(tool_result)
 
     return _finalize_reply(reply_text)

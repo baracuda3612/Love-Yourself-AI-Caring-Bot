@@ -18,7 +18,7 @@ from app import telegram
 from app.content_library import DEFAULT_SEED_PATH, FIELDS
 from app.db import (
     AIPlan, AIPlanDay, AIPlanStep, Base, ContentLibrary,
-    OnboardingProgress, PlanLifecycleOperation, User, UserProfile,
+    OnboardingProgress, PlanCompletion, PlanContinuationAttempt, PlanLifecycleOperation, User, UserProfile,
 )
 from app.exercise_presentation import current_exercise_context
 
@@ -43,7 +43,7 @@ def coach_db():
         engine, tables=[
             User.__table__, ContentLibrary.__table__, AIPlan.__table__,
             AIPlanDay.__table__, AIPlanStep.__table__, PlanLifecycleOperation.__table__,
-            UserProfile.__table__, OnboardingProgress.__table__,
+            UserProfile.__table__, OnboardingProgress.__table__, PlanCompletion.__table__, PlanContinuationAttempt.__table__,
         ],
     )
     with Session(engine) as db:
@@ -173,3 +173,37 @@ def test_coach_uses_delivery_day_and_send_order(coach_db, timestamps, expected_i
         assert result['exercise_id'] == expected['id']
         assert result['steps'] == expected['display']['steps']
         assert result['duration_label'] == expected['display']['duration_label']
+
+
+def test_latest_delivered_exercise_survives_automatic_cycle_change(coach_db):
+    db, records = coach_db
+    now = datetime(2026, 11, 7, 21, 55, tzinfo=timezone.utc)
+    tz = ZoneInfo('Europe/Kyiv')
+    plan = db.get(AIPlan, 1)
+    plan.status = 'completed'
+    step = db.get(AIPlanStep, 2)
+    step.step_status = 'completed'
+    step.terminal_at = now
+    db.flush()
+    db.add(AIPlan(
+        id=2, user_id=1, title='Successor', cycle_number=2, total_days=7,
+        status='active', activated_at=now,
+    ))
+    db.add(PlanLifecycleOperation(
+        id=1, user_id=1, plan_id=1, plan_step_id=2,
+        source_operation_id='test:last-delivery', operation='step_delivered',
+        result_status='delivered', created_at=now - timedelta(minutes=3),
+    ))
+    db.flush()
+    assert current_exercise_context(db, 1, 2, user_timezone=tz, now=now) is None
+
+    db.add(PlanCompletion(
+        plan_id=1, successor_plan_id=2, state='failed', report_at=now, wake_at=now,
+    ))
+    db.flush()
+    context = current_exercise_context(db, 1, 2, user_timezone=tz, now=now)
+    assert context['exercise_id'] == records[1]['id']
+    assert context['from_completed_cycle'] is True
+    assert context['available_actions'] == []
+    assert current_exercise_context(db, 2, 2, user_timezone=tz, now=now) is None
+    assert current_exercise_context(db, 1, 2, user_timezone=tz, now=now + timedelta(minutes=10)) is None

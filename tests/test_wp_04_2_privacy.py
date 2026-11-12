@@ -8,20 +8,20 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app import ai, privacy, orchestrator, telegram, scheduler
-from app.workers import coach_agent as coach
+from app.workers import assistant_agent
 from app.ux import pulse_prompt
 from app.logging.privacy_logging import install_privacy_logging
 
 
 async def test_actual_coach_provider_request_omits_account_identity_and_bounds_history(monkeypatch):
     create = AsyncMock(return_value=SimpleNamespace(output_text='ok',usage=None,output=[]))
-    monkeypatch.setattr(coach,'async_client',SimpleNamespace(responses=SimpleNamespace(create=create)))
+    monkeypatch.setattr(assistant_agent,'async_client',SimpleNamespace(responses=SimpleNamespace(create=create)))
     identifiers=['9876543210123','Direct First Name','@direct_username','employee@employer.test','Private Employer']
     payload={'user_id':222,'tg_id':identifiers[0],'first_name':identifiers[1],
         'username':identifiers[2],'email':identifiers[3],'employer':identifiers[4],
-        'profile':{'email':identifiers[3]},'current_mode':'ACTIVE','message_text':'A normal Coach question',
+        'profile':{'email':identifiers[3]},'current_mode':'ACTIVE','message_text':'A normal question for the AI assistant',
         'short_term_history':[{'role':'user','content':'x'*6000} for _ in range(40)]}
-    result=await coach.coach_agent(payload, available_tools=coach.coach_tools(payload))
+    result=await assistant_agent.assistant_agent(payload, available_tools=assistant_agent.assistant_tools(payload))
     assert result['reply_text']=='ok'
     request=create.call_args.kwargs
     assert request['store'] is False
@@ -51,7 +51,7 @@ async def test_unacknowledged_turn_never_reaches_cache_context_or_provider(monke
     monkeypatch.setattr(privacy,'pinned_notice',deny)
     context=AsyncMock();provider=AsyncMock()
     monkeypatch.setattr(orchestrator,'build_user_context',context)
-    monkeypatch.setattr(orchestrator,'coach_agent',provider)
+    monkeypatch.setattr(orchestrator,'assistant_agent',provider)
     reply=await orchestrator.handle_incoming_message(1,'private unsaved turn')
     assert '/privacy' in reply['reply_text']
     memory.append_message.assert_not_awaited();context.assert_not_awaited();provider.assert_not_awaited()

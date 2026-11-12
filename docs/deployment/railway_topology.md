@@ -22,7 +22,7 @@ activation. Production promotion remains manual and digest-based.
 
 The beta application topology is exactly one replica, one Telegram polling
 owner, and one scheduler writer. Scaling above one replica is prohibited until
-polling, Coach serialization, and scheduler ownership are distributed safely.
+polling, AI assistant serialization, and scheduler ownership are distributed safely.
 
 ## Environment isolation
 
@@ -87,13 +87,15 @@ document.
 | `TZ` | no | optional | optional | optional | default `Europe/Kyiv` |
 | `MODEL` | no | optional | optional | optional | general model selection |
 | `PLAN_MODEL` | no | optional | optional | optional | plan generation model |
-| `COACH_MODEL` | no | optional | optional | optional | Coach model |
+| `COACH_MODEL` | no | optional | optional | optional | AI assistant model |
 | `MAX_TOKENS` | no | optional | optional | optional | integer 1–32768; default 300 |
 | `TEMPERATURE` | no | optional | optional | optional | number 0–2; default 0.7 |
 
 Future enrollment, telemetry, and aggregate variables must be added here and
 to the typed settings contract by the package that introduces their runtime
 consumer. Unsupported aliases are not accepted silently.
+
+Регулярна перевірка моделі описана в [регламенті ТО ШІ-асистента](ai_assistant_model_maintenance.md).
 
 ## Credential disposition
 
@@ -235,7 +237,10 @@ Operator JSON endpoints require the bearer credential and bounded input:
   invitations, retaining the account/history.
 * `/access/deployment/controls`: `deployment_id`, `enrollment_open`,
   `delivery_enabled`. Delivery pause and enrollment closure are independent;
-  plan-pause callback actionability remains unchanged.
+  plan-pause callback actionability remains unchanged. WP-08.2 adds a required
+  participant-facing reason for disabling delivery. The panel and endpoint
+  must record it with the switch change and make it available to the AI
+  assistant. WP-10.2 rehearses the operator procedure before launch.
 * `/access/enrollment/replace`: `user_id`, `expected_enrollment_id`, freshly
   issued `handoff` after re-verification, and explicit `replacement_mode`.
   The expected enrollment must still be current for that user. Ordinary

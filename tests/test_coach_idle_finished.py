@@ -17,7 +17,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
-from app.workers import coach_agent
+from app.workers import assistant_agent
 
 
 @pytest.fixture
@@ -64,7 +64,7 @@ def test_build_idle_finished_context_returns_dict_for_completed_plan(monkeypatch
 
     monkeypatch.setattr(metrics_mod, "build_completion_metrics", fake_build_metrics)
 
-    result = coach_agent._build_idle_finished_context(_DummyDB(plan), user_id=7)
+    result = assistant_agent._build_idle_finished_context(_DummyDB(plan), user_id=7)
 
     assert result == {
         "total_days": 14,
@@ -90,7 +90,7 @@ def test_build_idle_finished_context_no_legacy_fields(monkeypatch):
 
     monkeypatch.setattr(metrics_mod, "build_completion_metrics", fake_build_metrics)
 
-    result = coach_agent._build_idle_finished_context(_DummyDB(plan), user_id=1)
+    result = assistant_agent._build_idle_finished_context(_DummyDB(plan), user_id=1)
 
     assert "adaptation_count" not in result
     assert "recommended_duration" not in result
@@ -99,7 +99,7 @@ def test_build_idle_finished_context_no_legacy_fields(monkeypatch):
 
 
 def test_build_idle_finished_context_returns_none_when_plan_missing():
-    result = coach_agent._build_idle_finished_context(_DummyDB(plan=None), user_id=7)
+    result = assistant_agent._build_idle_finished_context(_DummyDB(plan=None), user_id=7)
     assert result is None
 
 
@@ -115,7 +115,7 @@ def test_build_idle_finished_context_ignores_older_completion_after_abandonment(
 
     monkeypatch.setattr(metrics_mod, "build_completion_metrics", fail_metrics)
 
-    result = coach_agent._build_idle_finished_context(
+    result = assistant_agent._build_idle_finished_context(
         _DummyDB(latest_plan),
         user_id=7,
     )
@@ -133,7 +133,7 @@ def test_build_idle_finished_context_returns_none_on_metrics_exception(monkeypat
 
     monkeypatch.setattr(metrics_mod, "build_completion_metrics", fail_metrics)
 
-    result = coach_agent._build_idle_finished_context(_DummyDB(plan), user_id=7)
+    result = assistant_agent._build_idle_finished_context(_DummyDB(plan), user_id=7)
     assert result is None
 
 
@@ -144,7 +144,7 @@ def test_context_message_includes_completion_context_when_present():
         "completion_context": {"total_days": 14, "completion_rate": 95},
     }
 
-    message = coach_agent._context_message(payload)
+    message = assistant_agent._context_message(payload)
 
     assert '"completion_context"' in message
     assert '"total_days": 14' in message
@@ -157,13 +157,13 @@ def test_context_message_no_profile_snapshot():
         "temporal_context": "2026-01-01T10:00:00Z",
         "current_mode": "NO_ACTIVE_PLAN",
     }
-    message = coach_agent._context_message(payload)
+    message = assistant_agent._context_message(payload)
     assert "profile_snapshot" not in message
     assert "user_profile" not in message
 
 
 def test_compose_messages_injects_english_product_map_before_runtime_context():
-    messages = coach_agent._compose_messages(
+    messages = assistant_agent._compose_messages(
         {
             "current_mode": "ACTIVE",
             "temporal_context": "2026-01-01T10:00:00Z",
@@ -171,8 +171,8 @@ def test_compose_messages_injects_english_product_map_before_runtime_context():
         }
     )
 
-    assert messages[0] == {"role": "system", "content": coach_agent.COACH_SYSTEM_PROMPT}
-    assert messages[1] == {"role": "system", "content": coach_agent.COACH_PRODUCT_MAP}
+    assert messages[0] == {"role": "system", "content": assistant_agent.ASSISTANT_SYSTEM_PROMPT}
+    assert messages[1] == {"role": "system", "content": assistant_agent.ASSISTANT_PRODUCT_MAP}
     assert messages[1]["content"].startswith("# Love Yourself Product Map")
     assert messages[2]["role"] == "system"
     assert messages[2]["content"].startswith("Current runtime context")
@@ -187,8 +187,6 @@ def test_compose_messages_injects_english_product_map_before_runtime_context():
             {
                 "pause_plan",
                 "switch_plan_format",
-                "retry_switch_plan_format",
-                "retry_plan_action",
                 "change_day_time",
                 "get_plan_status",
             },
@@ -198,8 +196,6 @@ def test_compose_messages_injects_english_product_map_before_runtime_context():
             {
                 "resume_plan",
                 "switch_plan_format",
-                "retry_switch_plan_format",
-                "retry_plan_action",
                 "change_day_time",
                 "get_plan_status",
             },
@@ -215,7 +211,7 @@ def test_compose_messages_injects_english_product_map_before_runtime_context():
 )
 def test_coach_tools_are_filtered_by_state(state, expected_names):
     actual_names = {
-        tool["name"] for tool in coach_agent._coach_tools_for_state(state, plan_type="SHORT")
+        tool["name"] for tool in assistant_agent._assistant_tools_for_state(state, plan_type="SHORT")
     }
     assert actual_names == expected_names
 
@@ -224,7 +220,7 @@ def test_coach_tools_follow_plan_type_abandoned_state_and_pending_intent():
     def names(mode, **context):
         return {
             tool["name"]
-            for tool in coach_agent._coach_tools_for_state(mode, **context)
+            for tool in assistant_agent._assistant_tools_for_state(mode, **context)
         }
 
     medium_active = names(
@@ -254,7 +250,7 @@ def test_coach_tools_follow_plan_type_abandoned_state_and_pending_intent():
 
 
 def test_coach_tool_schemas_are_strict_and_validate_hhmm_shape():
-    for tool in coach_agent.COACH_TOOLS:
+    for tool in assistant_agent.ASSISTANT_TOOLS:
         assert tool["strict"] is True
         assert tool["parameters"]["additionalProperties"] is False
 
@@ -263,7 +259,7 @@ def test_coach_tool_schemas_are_strict_and_validate_hhmm_shape():
         "change_day_time",
         "change_evening_time",
     }
-    for tool in coach_agent.COACH_TOOLS:
+    for tool in assistant_agent.ASSISTANT_TOOLS:
         if tool["name"] in hhmm_tools:
             assert tool["parameters"]["properties"]["hhmm"]["pattern"] == (
                 r"^(?:[01]\d|2[0-3]):[0-5]\d$"
@@ -279,8 +275,6 @@ def test_coach_tool_schemas_are_strict_and_validate_hhmm_shape():
             {
                 "pause_plan",
                 "switch_plan_format",
-                "retry_switch_plan_format",
-                "retry_plan_action",
                 "change_day_time",
                 "get_plan_status",
             },
@@ -302,8 +296,8 @@ async def test_coach_agent_sends_only_tools_available_in_current_state(
     class _Responses:
         create = staticmethod(fake_create)
 
-    monkeypatch.setattr(coach_agent.async_client, "responses", _Responses())
-    monkeypatch.setattr(coach_agent, "extract_output_text", lambda _response: "ok")
+    monkeypatch.setattr(assistant_agent.async_client, "responses", _Responses())
+    monkeypatch.setattr(assistant_agent, "extract_output_text", lambda _response: "ok")
 
     payload = {
         "access": (12, 34),
@@ -314,7 +308,7 @@ async def test_coach_agent_sends_only_tools_available_in_current_state(
     if state == "NO_ACTIVE_PLAN_WITHOUT_HISTORY":
         payload["completion_context"] = {}
 
-    await coach_agent.coach_agent(payload, available_tools=coach_agent.coach_tools(payload))
+    await assistant_agent.assistant_agent(payload, available_tools=assistant_agent.assistant_tools(payload))
 
     if expected_names is None:
         assert "tools" not in captured

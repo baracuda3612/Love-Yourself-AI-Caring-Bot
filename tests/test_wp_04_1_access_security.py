@@ -414,7 +414,7 @@ async def test_revocation_during_coach_generation_denies_reply_and_history(monke
     monkeypatch.setattr(orchestrator, '_auto_complete_plan_if_needed_for_user_id', no_completion)
     monkeypatch.setattr(orchestrator, 'derive_current_mode', lambda *_: CurrentMode.ACTIVE)
     monkeypatch.setattr(orchestrator, 'build_user_context', AsyncMock(return_value={'current_mode': CurrentMode.ACTIVE.value}))
-    monkeypatch.setattr(orchestrator, 'coach_agent', AsyncMock(return_value={'reply_text': 'private generated reply'}))
+    monkeypatch.setattr(orchestrator, 'assistant_agent', AsyncMock(return_value={'reply_text': 'private generated reply'}))
     from app import privacy
     monkeypatch.setattr(privacy,'pinned_notice',lambda *a,**k:None)
     response = await orchestrator.handle_incoming_message(77, 'hello')

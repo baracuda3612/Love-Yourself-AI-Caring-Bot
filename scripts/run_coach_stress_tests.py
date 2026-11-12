@@ -1,4 +1,4 @@
-"""Manual stress-test runner for the coaching agent.
+"""Manual stress-test runner for the AI assistant.
 
 This script simulates three independent users running through pre-scripted
 stress scenarios. Each scenario mirrors a real-world flow with slang-heavy
@@ -10,7 +10,7 @@ Usage:
     BOT_TOKEN=... DATABASE_URL=... OPENAI_API_KEY=... python scripts/run_coach_stress_tests.py
 
 The environment variables must match the usual application settings so
-``coach_agent`` can talk to the model. The script is intentionally simple
+``assistant_agent`` can talk to the model. The script is intentionally simple
 and does not touch the database; user separation is maintained via distinct
 ``user_id`` values per scenario.
 """
@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
-from app.workers.coach_agent import coach_agent
+from app.workers.assistant_agent import assistant_agent
 
 
 @dataclass(frozen=True)
@@ -45,7 +45,7 @@ class Scenario:
 
 
 class CoachStressTestRunner:
-    """Runs scripted conversations against the coach agent."""
+    """Runs scripted conversations against the AI assistant."""
 
     def __init__(self, log_path: Path | str = "logs/coach_stress_tests.log") -> None:
         self.log_path = Path(log_path)
@@ -68,7 +68,7 @@ class CoachStressTestRunner:
         history: List[Dict[str, str]] = []
         for idx, step in enumerate(scenario.steps, start=1):
             payload = self._build_payload(scenario.user_id, step.message, history)
-            response = await coach_agent(payload)
+            response = await assistant_agent(payload, available_tools=[])
 
             reply_text = response.get("reply_text", "")
             log_entry = {

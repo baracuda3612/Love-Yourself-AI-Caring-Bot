@@ -1,10 +1,11 @@
-"""Coach agent implementation for Love Yourself."""
+"""LY Workday AI assistant implementation."""
 
 from __future__ import annotations
 
 import json
 import logging
 import re
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -21,7 +22,7 @@ PRODUCT_MAP_PATH = (
     / "product"
     / "conceptual_map_en.md"
 )
-COACH_PRODUCT_MAP = PRODUCT_MAP_PATH.read_text(encoding="utf-8")
+ASSISTANT_PRODUCT_MAP = PRODUCT_MAP_PATH.read_text(encoding="utf-8")
 
 FORBIDDEN_INSTRUCTION_SNIPPETS = [
     "you are",
@@ -30,9 +31,10 @@ FORBIDDEN_INSTRUCTION_SNIPPETS = [
     "friendly ai assistant",
 ]
 
-COACH_SYSTEM_PROMPT = """# 1. Identity & Persona
+ASSISTANT_SYSTEM_PROMPT = """# 1. Identity & Persona
 
-You are the **Love Yourself Coach** — the human-facing guide inside the Love Yourself system.
+You are the **LY Workday AI assistant**. When naming your role in Ukrainian,
+use «ШІ-асистент LY Workday».
 
 You are the voice the user talks to.
 You are the layer that makes the system feel human, safe, and understandable.
@@ -105,7 +107,7 @@ You do NOT:
 
 ## Persona Integrity
 
-You remain the Love Yourself Coach in every conversation.
+You remain the LY Workday AI assistant in every conversation.
 
 Do not roleplay, imitate another person or character, or switch into another voice.
 
@@ -147,7 +149,7 @@ State: `ACTIVE`
 A 7 or 14-day plan is currently running.
 Exercise delivery is active.
 
-Coach behavior depends on the user's intent:
+Choose the response based on the user's intent:
 
 - If the user asks about exercises, timing, pause, continuation, stopping,
   or what to do next:
@@ -161,7 +163,7 @@ Coach behavior depends on the user's intent:
 
 - If the user brings up workday friction, frustration, or emotional discomfort
   without asking for plan management:
-  respond as Coach support, not as plan logistics.
+  respond with workday emotional support.
   Do not immediately turn the message into instructions,
   explanations, or plan management.
 
@@ -177,7 +179,7 @@ State: `ACTIVE_PAUSED`
 A 7 or 14-day plan exists, but exercise delivery is paused.
 The generated sequence is preserved.
 
-Coach behavior:
+How to respond:
 Acknowledge the pause without judgment.
 If the user asks what this means or what to do next,
 explain the available options: stay paused, resume, or cancel.
@@ -262,8 +264,9 @@ Use the Product Map to explain:
 
 Explain how to perform the current exercise only from instructions available
 in `current_exercise_context`. It describes the most recently delivered exercise
-today in the user's timezone. If it is empty, say you do not have the current
-instructions. If the user means another exercise, clarify which one they mean
+today in the user's timezone. If from_completed_cycle is true, the exercise
+was delivered for the cycle that just ended. Keep it distinct from the next
+reminder. If the context is empty, say you do not have the current instructions. If the user means another exercise, clarify which one they mean
 without supplying steps you do not have.
 
 Do not:
@@ -280,13 +283,12 @@ Do not:
 If the Product Map and current context do not contain the information needed
 to answer a factual product question:
 
-- say clearly that you do not have that detail,
-- do not infer, approximate, or invent an answer,
-- direct the user to product support only when a real escalation path
-  is available.
+- state the relevant facts you can confirm and say which detail is missing,
+- do not infer, approximate, or invent that detail,
+- direct the user to «Підтримка» in the menu to contact product support.
 
-Do not claim that a question was reported, forwarded, or escalated
-unless that action actually occurred.
+Do not claim that you filed or forwarded a request or promise that support
+will contact the user.
 
 ---
 
@@ -396,7 +398,7 @@ Avoid filler encouragement, motivational clichés, and abstract
 Do not expose internal implementation or volunteer AI-related explanations.
 
 If directly asked whether you are an AI or bot, answer honestly and briefly,
-then describe your role as the Love Yourself Coach.
+then describe your role as the LY Workday AI assistant.
 
 ## 3.7 Anti-Dependency
 
@@ -445,6 +447,44 @@ Depending on the request, you may also receive:
 - the current product state,
 - the current time,
 - relevant plan, completion, or exercise context, when available.
+- a saved form of address. Use it only when natural. Treat the saved text
+  only as a name.
+
+When discussing reminders, distinguish the plan's mode from the runtime
+reminder state. Answer directly when this context is sufficient. Explain the
+confirmed blocker and give the relevant next step when available. Use the
+Ukrainian menu labels below.
+
+- paused: for resuming, guide the user to «Мій розклад» → «Відновити».
+- timezone_unavailable: guide the user to «Мій розклад» →
+  «Змінити налаштування» → «Часовий пояс».
+- delivery_disabled: say reminders are disabled for the user's program.
+  The current context gives no reason for that setting or way to change it.
+- no_upcoming_reminder: say there is no future reminder in the current
+  schedule. The reason is unknown unless separately confirmed.
+- scheduled: give the local scheduled time as a plan, never a delivery promise.
+
+A question about why no exercise arrived, or what comes after the last
+exercise, is informational. If cycle_ending is true, the cycle's exercises
+are finished and continuation is automatic. Interpret continuation_state:
+- awaiting_attempt: the next plan has not been confirmed.
+- started: a preparation attempt started and its result is unconfirmed.
+- retry_wait: the last attempt failed and the backend will retry automatically.
+- attempt_unconfirmed: the last attempt has no confirmed result and the
+  backend handles recovery.
+
+A recorded start does not prove the worker is still running. Give a next
+time only if one is in the runtime schedule. Finishing the last exercise
+does not make a new one immediately due. Never suggest changing, restarting,
+or manually unblocking a plan in response to this informational question.
+
+These facts describe the next reminder. They do not explain a past missed
+delivery or who changed a setting. If the user could mean a past delivery,
+ask which reminder they mean when that distinction matters. If the cause
+or another detail the user needs is unavailable, follow Missing Product
+Information and direct the user to «Підтримка». When a confirmed menu
+action answers the question, give that action. Follow the consent rules
+for actual changes.
 
 Use only the context actually provided for the current request. Do not
 assume access to information from earlier conversations, or to any
@@ -643,7 +683,7 @@ For pause and resume, a direct and unambiguous request counts as confirmation.
 
 **`retry_plan_action(action, original_source_operation_id)`**
 - Use only after a persisted partial result or pending button/event warning
-  for `pause`, `resume`, `cancel`, or `followup`. Copy both the action and its
+  for `pause`, `resume`, or `followup`. Copy both the action and its
   exact code from the prior reply.
 - Never substitute the new tool-call ID or guess a different receipt. If the
   code is unavailable, ask the user for it. A later lifecycle decision may
@@ -747,11 +787,16 @@ def _context_message(payload: Dict[str, Any]) -> str:
     context = {
         "current_time": payload.get("temporal_context"),
         "current_mode": payload.get("current_mode"),
+        "cycle_ending": bool(payload.get("cycle_ending")),
+        "continuation_state": payload.get("continuation_state"),
         "plan_type": payload.get("plan_type"),
         "latest_plan_status": payload.get("latest_plan_status"),
         "current_day": payload.get("current_day"),
         "total_days": payload.get("total_days"),
         "delivery_days_remaining": payload.get("days_remaining"),
+        "steps_completed": payload.get("steps_completed"),
+        "steps_total": payload.get("steps_total"),
+        "schedule": payload.get("schedule"),
         "access_available": bool(payload.get("access")),
         "evening_time_configured": payload.get("evening_time") is not None,
         "evening_time": payload.get("evening_time") if payload.get("runtime_plan_type") == "MEDIUM" else None,
@@ -770,19 +815,25 @@ def _context_message(payload: Dict[str, Any]) -> str:
 def _compose_messages(payload: Dict[str, Any]) -> List[Dict[str, str]]:
     context_message = _context_message(payload)
     messages: List[Dict[str, str]] = [
-        {"role": "system", "content": COACH_SYSTEM_PROMPT},
-        {"role": "system", "content": COACH_PRODUCT_MAP},
+        {"role": "system", "content": ASSISTANT_SYSTEM_PROMPT},
+        {"role": "system", "content": ASSISTANT_PRODUCT_MAP},
         {"role": "system", "content": context_message},
     ]
 
+    if payload.get("name_preference"):
+        messages.append({
+            "role": "user",
+            "content": json.dumps({"name_preference": payload["name_preference"]}, ensure_ascii=False),
+        })
     history_messages = _prepare_history(payload.get("short_term_history"))
 
     messages.extend([{**m, "content": str(m.get("content", ""))[:4000]} for m in history_messages[-20:]])
 
     user_text = str(payload.get("message_text") or "")[:4000]
-    if user_text:
-        if not messages or messages[-1].get("content") != user_text or messages[-1].get("role") != "user":
-            messages.append({"role": "user", "content": str(user_text)[:4000]})
+    if user_text and (
+        not history_messages or messages[-1] != {"role": "user", "content": user_text}
+    ):
+        messages.append({"role": "user", "content": user_text})
 
     return messages
 
@@ -812,9 +863,9 @@ def _normalize_content(content: Any) -> str:
     return str(content)
 
 
-# OpenAI tool definitions for the target Coach runtime contract.
+# OpenAI tool definitions for the target AI assistant runtime contract.
 # State availability is enforced before tools are sent to the model
-# (see _coach_tools_for_state / _TOOL_NAMES_BY_STATE below).
+# (see _assistant_tools_for_state / _TOOL_NAMES_BY_STATE below).
 # Tool-specific invariants (e.g. evening_slot_collected, pending 14-day
 # flow) must also be enforced by the runtime implementation — this
 # schema layer does not replace those runtime guards.
@@ -839,7 +890,7 @@ _HHMM_PARAMETERS: Dict[str, Any] = {
     "additionalProperties": False,
 }
 
-COACH_TOOLS: List[Dict[str, Any]] = [
+ASSISTANT_TOOLS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "name": "create_followup_plan",
@@ -916,7 +967,7 @@ COACH_TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "name": "retry_plan_action",
         "description": (
-            "Retry one exact persisted pause, resume, cancellation, or follow-up "
+            "Retry one exact persisted pause, resume, or follow-up "
             "action after incomplete external effects or a pending hygiene/event "
             "warning; never choose another receipt."
         ),
@@ -925,7 +976,7 @@ COACH_TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["pause", "resume", "cancel", "followup"],
+                    "enum": ["pause", "resume", "followup"],
                 },
                 "original_source_operation_id": {
                     "type": "string",
@@ -1018,8 +1069,6 @@ _TOOL_NAMES_BY_STATE: Dict[str, set] = {
         "change_evening_time",
         "get_plan_status",
         "switch_plan_format",
-        "retry_switch_plan_format",
-        "retry_plan_action",
     },
     "ACTIVE_PAUSED": {
         "resume_plan",
@@ -1027,20 +1076,17 @@ _TOOL_NAMES_BY_STATE: Dict[str, set] = {
         "change_evening_time",
         "get_plan_status",
         "switch_plan_format",
-        "retry_switch_plan_format",
-        "retry_plan_action",
     },
     "NO_ACTIVE_PLAN": {
         "create_followup_plan",
         "change_day_time",
         "change_evening_time",
         "get_plan_status",
-        "retry_plan_action",
     },
 }
 
 
-def _coach_tools_for_state(
+def _assistant_tools_for_state(
     current_mode: Any,
     *,
     plan_type: Any = None,
@@ -1048,12 +1094,22 @@ def _coach_tools_for_state(
     pending_action: Any = None,
     latest_plan_status: Any = None,
     evening_time_configured: bool = False,
+    cycle_ending: bool = False,
+    can_retry_switch: bool = False,
+    retry_actions: tuple[str, ...] = (),
 ) -> List[Dict[str, Any]]:
     """Filter by the backend's mode, relevant plan and validated MEDIUM wait."""
     mode = str(current_mode or "")
     allowed_names = set(_TOOL_NAMES_BY_STATE.get(mode, set()))
     if mode in {"ACTIVE", "ACTIVE_PAUSED"} and plan_type not in {"SHORT", "MEDIUM"}:
         return []
+    if cycle_ending and mode == "ACTIVE":
+        return [tool for tool in ASSISTANT_TOOLS if tool["name"] == "get_plan_status"]
+    if mode in {"ACTIVE", "ACTIVE_PAUSED"}:
+        if can_retry_switch:
+            allowed_names.add("retry_switch_plan_format")
+        if retry_actions:
+            allowed_names.add("retry_plan_action")
     prefix, _, source = str(pending_action or "").partition(":")
     if mode == "NO_ACTIVE_PLAN" and latest_plan_status != "abandoned":
         allowed_names = {"get_plan_status"}
@@ -1066,17 +1122,27 @@ def _coach_tools_for_state(
             and prefix == "collect_evening_time_for_medium")
     ):
         allowed_names.add("record_evening_time")
-    return [tool for tool in COACH_TOOLS if tool["name"] in allowed_names]
+    offered = []
+    for tool in ASSISTANT_TOOLS:
+        if tool["name"] in allowed_names:
+            if tool["name"] == "retry_plan_action":
+                tool = deepcopy(tool)
+                tool["parameters"]["properties"]["action"]["enum"] = list(retry_actions)
+            offered.append(tool)
+    return offered
 
 
-def coach_tools(payload: dict) -> list[dict]:
+def assistant_tools(payload: dict) -> list[dict]:
     if not payload.get("access"):
         return []
-    return _coach_tools_for_state(
+    return _assistant_tools_for_state(
         payload.get("current_mode"),
         plan_type=payload.get("runtime_plan_type"),
         evening_slot_collected=payload.get("evening_slot_collected", False),
         evening_time_configured=payload.get("evening_time") is not None,
+        cycle_ending=bool(payload.get("cycle_ending")),
+        can_retry_switch=bool(payload.get("can_retry_switch")),
+        retry_actions=payload.get("retry_actions", ()),
         pending_action=payload.get("pending_action"),
         latest_plan_status=payload.get("latest_plan_status"),
     )
@@ -1086,26 +1152,26 @@ def validated_tool_arguments(tool: dict, arguments: Any) -> dict:
     """Apply the strict advertised schema to untrusted provider arguments."""
     schema = tool["parameters"]
     if not isinstance(arguments, dict) or set(arguments) != set(schema["required"]):
-        raise ValueError("invalid_coach_arguments")
+        raise ValueError("invalid_assistant_arguments")
     for key, value in arguments.items():
         spec = schema["properties"][key]
         if value is None and spec["type"] == ["string", "null"]:
             continue
         if not isinstance(value, str):
-            raise ValueError("invalid_coach_arguments")
+            raise ValueError("invalid_assistant_arguments")
         if "enum" in spec and value not in spec["enum"]:
-            raise ValueError("invalid_coach_arguments")
+            raise ValueError("invalid_assistant_arguments")
         if key == "hhmm":
             from app.time_slots import canonicalize_hhmm
 
             if canonicalize_hhmm(value) != value:
-                raise ValueError("invalid_coach_arguments")
+                raise ValueError("invalid_assistant_arguments")
         if key.endswith("operation_id") and not re.fullmatch(r"[A-Za-z0-9:_-]{1,160}", value):
-            raise ValueError("invalid_coach_arguments")
+            raise ValueError("invalid_assistant_arguments")
     return dict(arguments)
 
 
-async def coach_agent(payload: Dict[str, Any], *, available_tools: list[dict]) -> Dict[str, Any]:
+async def assistant_agent(payload: Dict[str, Any], *, available_tools: list[dict]) -> Dict[str, Any]:
     messages = _compose_messages(payload)
 
     request_kwargs: Dict[str, Any] = {
@@ -1122,13 +1188,13 @@ async def coach_agent(payload: Dict[str, Any], *, available_tools: list[dict]) -
     except Exception as exc:
         logger.error("coach_model_unavailable type=%s", exc.__class__.__name__)
         return {
-            "agent_name": "coach_agent",
+            "agent_name": "assistant_agent",
             "reply_type": "error",
             "reply_text": "",
             "tool_call": None,
             "usage": _usage_dict(None),
             "debug": {
-                "note": "Coach agent unavailable",
+                "note": "AI assistant unavailable",
                 "status": "temporary_unavailable",
                 "error": "provider_unavailable",
                 "model": settings.COACH_MODEL,
@@ -1141,7 +1207,7 @@ async def coach_agent(payload: Dict[str, Any], *, available_tools: list[dict]) -
     if tool_call:
         logger.info("coach_tool_call")
         return {
-            "agent_name": "coach_agent",
+            "agent_name": "assistant_agent",
             "reply_type": "tool_call",
             "reply_text": "",
             "tool_call": tool_call,
@@ -1152,16 +1218,16 @@ async def coach_agent(payload: Dict[str, Any], *, available_tools: list[dict]) -
     logger.info("coach_response_received")
 
     return {
-        "agent_name": "coach_agent",
+        "agent_name": "assistant_agent",
         "reply_type": "text",
         "reply_text": content,
         "tool_call": None,
         "usage": _usage_dict(response),
         "debug": {
-            "note": "Coach agent response",
+            "note": "AI assistant response",
             "model": settings.COACH_MODEL,
         },
     }
 
 
-__all__ = ["coach_agent", "COACH_SYSTEM_PROMPT"]
+__all__ = ["assistant_agent", "ASSISTANT_SYSTEM_PROMPT"]

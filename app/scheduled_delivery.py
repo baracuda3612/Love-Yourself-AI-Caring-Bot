@@ -60,11 +60,8 @@ def claim_send(db, step_id, *, now=None):
             prior.state = 'uncertain'
             prior.failure_code = 'interrupted_send'
         return None
-    from app.plan_completion.workflow import blocked_successor
     from app.access import may_access
-    blocked = db.query(blocked_successor(plan.id)).scalar()
     eligible = (
-        not blocked and
         user.is_active and may_access(db, user_id, delivery=True) and plan.status == 'active' and step.step_status == 'pending'
         and step.scheduled_for and utc(step.scheduled_for) <= now
         and now <= utc(step.scheduled_for) + LATE_GRACE

@@ -44,7 +44,7 @@ SessionLocal = sessionmaker(
 Base = declarative_base()
 logger = logging.getLogger(__name__)
 
-EXPECTED_ALEMBIC_REVISION = "20261104_menu_input"
+EXPECTED_ALEMBIC_REVISION = "20261111_continuation_attempt"
 
 
 class SchemaVersionError(RuntimeError):
@@ -991,6 +991,27 @@ class ExerciseDelivery(Base):
     projection_failure_code = Column(String(64))
 
 
+class PlanContinuationAttempt(Base):
+    """Latest preparation attempt. The successor receipt remains lifecycle authority."""
+
+    __tablename__ = "plan_continuation_attempts"
+    __table_args__ = (
+        CheckConstraint("attempt > 0", name="ck_continuation_attempt_positive"),
+        CheckConstraint(
+            "(state IN ('started', 'retry_wait') AND retry_at IS NOT NULL) OR "
+            "(state IN ('created', 'superseded') AND retry_at IS NULL)",
+            name="ck_continuation_attempt_state",
+        ),
+        Index("ix_continuation_attempt_retry", "retry_at"),
+    )
+    source_plan_id = Column(Integer, ForeignKey("ai_plans.id", ondelete="CASCADE"), primary_key=True)
+    attempt = Column(Integer, nullable=False)
+    started_at = Column(DateTime(timezone=True), nullable=False)
+    retry_at = Column(DateTime(timezone=True))
+    state = Column(String(20), nullable=False)
+    failure_code = Column(String(32))
+
+
 class PlanCompletion(Base):
     """One durable closing obligation and continuation identity per source plan."""
     __tablename__ = "plan_completions"
@@ -1016,6 +1037,8 @@ class PlanCompletion(Base):
     sent_at = Column(DateTime(timezone=True))
     failure_code = Column(String(64))
     schedule_pending = Column(Boolean, nullable=False, default=False)
+    schedule_wake_at = Column(DateTime(timezone=True))
+    legacy_schedule_repair = Column(Boolean, nullable=False, default=False, server_default=text("false"))
     release_started_at = Column(DateTime(timezone=True))
     release_payload = Column(Text)
     release_message_id = Column(BigInteger)

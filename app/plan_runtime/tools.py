@@ -1,5 +1,5 @@
 """
-Plan runtime tools — callable by Coach agent.
+Plan runtime tools callable by the AI assistant.
 
 Each function opens its own DB session, delegates persisted decisions to the
 authoritative lifecycle service, commits, and then reconciles explicit external
@@ -8,7 +8,7 @@ effects when the WP-02.2 contract owns them. Returns a plain dict result.
 All DB / external imports are lazy (inside function bodies) so tests can stub
 the authoritative lifecycle and reconciliation boundaries.
 
-Tool registration in Coach prompt is T5.7.
+Tool registration in the AI assistant prompt is T5.7.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
-CoachAuthorization = Callable[["Session"], None]
+AssistantAuthorization = Callable[["Session"], None]
 
 
 logger = logging.getLogger(__name__)
@@ -59,7 +59,7 @@ def create_followup_plan(
     plan_type: str,
     *,
     source_operation_id: str,
-    authorize: CoachAuthorization | None = None,
+    authorize: AssistantAuthorization | None = None,
 ) -> dict:
     """Create a follow-up plan after a plan has ended.
 
@@ -343,7 +343,7 @@ def switch_plan_format(
     plan_type: str,
     *,
     source_operation_id: str,
-    authorize: CoachAuthorization | None = None,
+    authorize: AssistantAuthorization | None = None,
 ) -> dict:
     """Atomically replace the current 7/14-day sequence with the other format."""
     normalized = str(plan_type).strip().upper()
@@ -376,7 +376,7 @@ def recover_plan_format_switch(
     hhmm: str,
     *,
     source_operation_id: str,
-    authorize: CoachAuthorization | None = None,
+    authorize: AssistantAuthorization | None = None,
 ) -> dict:
     """Resume only a durable switch intent or committed switch receipt."""
     normalized = str(plan_type).strip().upper()
@@ -410,7 +410,7 @@ def recover_plan_format_switch(
 
 def retry_switch_plan_format(
     user_id: int, *, switch_source_operation_id: str | None = None,
-    authorize: CoachAuthorization | None = None,
+    authorize: AssistantAuthorization | None = None,
 ) -> dict:
     """Retry only the switch receipt attached to the current plan."""
     from app.db import SessionLocal
@@ -443,7 +443,7 @@ def retry_plan_action(
     action: str,
     original_source_operation_id: str,
     *,
-    authorize: CoachAuthorization | None = None,
+    authorize: AssistantAuthorization | None = None,
 ) -> dict:
     """Retry one exact accepted pause/resume/cancel/follow-up receipt."""
     from app.db import SessionLocal
@@ -529,7 +529,7 @@ def record_evening_time(
     context: str,
     pending_source_operation_id: str,
     source_operation_id: str,
-    authorize: CoachAuthorization | None = None,
+    authorize: AssistantAuthorization | None = None,
 ) -> dict:
     """Persist the user's chosen evening delivery time and mark slot as collected.
 
@@ -588,7 +588,7 @@ def change_day_time(
     hhmm: str,
     *,
     source_operation_id: str,
-    authorize: CoachAuthorization | None = None,
+    authorize: AssistantAuthorization | None = None,
 ) -> dict:
     """Change the DAY slot delivery time and reschedule pending/delivered steps.
 
@@ -680,7 +680,7 @@ def change_evening_time(
     hhmm: str,
     *,
     source_operation_id: str,
-    authorize: CoachAuthorization | None = None,
+    authorize: AssistantAuthorization | None = None,
 ) -> dict:
     """Change the EVENING slot delivery time and reschedule pending/delivered steps.
 
@@ -828,7 +828,7 @@ def cancel_plan(user_id: int, *, source_operation_id: str) -> dict:
     }
 
 
-def get_plan_status(user_id: int, *, authorize: CoachAuthorization | None = None) -> dict:
+def get_plan_status(user_id: int, *, authorize: AssistantAuthorization | None = None) -> dict:
     """Return the one derived current mode and current-plan summary."""
     from app.db import SessionLocal  # lazy
     from app.lifecycle import (  # lazy
@@ -848,7 +848,7 @@ def get_plan_status(user_id: int, *, authorize: CoachAuthorization | None = None
     return status.to_runtime_payload()
 
 
-def pause_plan(user_id: int, *, source_operation_id: str, authorize: CoachAuthorization | None = None) -> dict:
+def pause_plan(user_id: int, *, source_operation_id: str, authorize: AssistantAuthorization | None = None) -> dict:
     """Pause an active plan.
 
     Delegates to the plan-centric aggregate operation.
@@ -916,7 +916,7 @@ def pause_plan(user_id: int, *, source_operation_id: str, authorize: CoachAuthor
     }
 
 
-def resume_plan(user_id: int, *, source_operation_id: str, authorize: CoachAuthorization | None = None) -> dict:
+def resume_plan(user_id: int, *, source_operation_id: str, authorize: AssistantAuthorization | None = None) -> dict:
     """Resume a paused plan.
 
     Delegates to the plan-centric aggregate operation.

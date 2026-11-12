@@ -256,7 +256,7 @@ async def test_rejected_cached_handle_is_evicted_and_same_text_sent(records):
 
 
 def test_coach_message_forwards_only_canonical_facts(records):
-    from app.workers.coach_agent import _context_message
+    from app.workers.assistant_agent import _context_message
     context = presentation(records[0]).to_payload()
     message = _context_message({'current_exercise_context':context})
     payload = json.loads(message.split('\n',1)[1])
