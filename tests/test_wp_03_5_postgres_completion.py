@@ -437,7 +437,7 @@ def test_two_database_workers_finalize_and_claim_once(pg_engine):
         db.commit()  # leave no automatic work from this standalone race fixture
 
 
-def test_successor_jobs_are_exact_and_recovery_parks_when_work_finishes(db,monkeypatch):
+def test_successor_jobs_are_exact_and_recovery_parks_when_work_finishes(db,monkeypatch,completion_workers_inline):
     from app import scheduler
     user,plan=source_plan(db); terminalize(db,user,plan); close(db,user,plan)
     claim=claim_report(db,user.id,plan.id)
@@ -465,7 +465,25 @@ def test_successor_jobs_are_exact_and_recovery_parks_when_work_finishes(db,monke
 
 
 @pytest.fixture
-def completion_jobs(db, monkeypatch):
+def completion_workers_inline(monkeypatch):
+    from app import scheduler
+    from concurrent.futures import Future
+
+    class ImmediateExecutor:
+        def submit(self, work, *args):
+            result = Future()
+            try:
+                result.set_result(work(*args))
+            except BaseException as exc:
+                result.set_exception(exc)
+            return result
+
+    for name in ('_continuation_workers', '_schedule_workers', '_report_workers'):
+        monkeypatch.setattr(scheduler, name, ImmediateExecutor())
+
+
+@pytest.fixture
+def completion_jobs(db, monkeypatch, completion_workers_inline):
     from app import db as database, scheduler
     @contextmanager
     def retained(): yield db

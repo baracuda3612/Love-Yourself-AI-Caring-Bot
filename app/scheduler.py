@@ -1257,39 +1257,67 @@ _completion_source_failure = False
 _continuation_workers = ThreadPoolExecutor(max_workers=8, thread_name_prefix='continuation')
 _continuation_inflight_lock = Lock()
 _continuation_inflight: set[int] = set()
+_schedule_workers = ThreadPoolExecutor(max_workers=8, thread_name_prefix='completion-schedule')
+_schedule_inflight_lock = Lock()
+_schedule_inflight: set[int] = set()
+_report_workers = ThreadPoolExecutor(max_workers=8, thread_name_prefix='completion-report')
+_report_inflight_lock = Lock()
+_report_inflight: set[int] = set()
 
 
-def _continuation_capacity() -> tuple[int, tuple[int, ...]]:
-    with _continuation_inflight_lock:
-        return max(0, 8 - len(_continuation_inflight)), tuple(_continuation_inflight)
+def _lane_capacity(lock, inflight):
+    with lock:
+        return max(0, 8 - len(inflight)), tuple(inflight)
 
 
-def _submit_continuation(user_id: int, plan_id: int) -> bool:
-    with _continuation_inflight_lock:
-        if plan_id in _continuation_inflight or len(_continuation_inflight) >= 8:
+def _submit_lane(executor, lock, inflight, key, work, *args):
+    with lock:
+        if key in inflight or len(inflight) >= 8:
             return False
-        _continuation_inflight.add(plan_id)
+        inflight.add(key)
     try:
-        future = _continuation_workers.submit(request_plan_completion, user_id, plan_id)
+        future = executor.submit(work, *args)
     except Exception:
-        with _continuation_inflight_lock:
-            _continuation_inflight.discard(plan_id)
+        with lock:
+            inflight.discard(key)
         raise
 
     def finished(result):
-        with _continuation_inflight_lock:
-            _continuation_inflight.discard(plan_id)
+        with lock:
+            inflight.discard(key)
         try:
             result.result()
         except Exception:
-            logger.exception('Continuation worker failed plan=%s', plan_id)
+            logger.exception('Completion recovery worker failed key=%s', key)
         try:
             enable_completion_recovery()
         except Exception:
-            logger.exception('Continuation recovery wake failed plan=%s', plan_id)
+            logger.exception('Completion recovery wake failed key=%s', key)
 
     future.add_done_callback(finished)
     return True
+
+
+def _continuation_capacity() -> tuple[int, tuple[int, ...]]:
+    return _lane_capacity(_continuation_inflight_lock, _continuation_inflight)
+
+
+def _submit_continuation(user_id: int, plan_id: int) -> bool:
+    return _submit_lane(_continuation_workers, _continuation_inflight_lock,
+                        _continuation_inflight, plan_id, request_plan_completion, user_id, plan_id)
+
+
+def _dispatch_completion_report(user_id, plan_id):
+    from app.orchestrator import send_plan_completion_message
+    coro = send_plan_completion_message(user_id, plan_id)
+    future = _submit_coroutine(coro)
+    if future is None:
+        coro.close()
+        return
+    try:
+        future.result(timeout=45)
+    except Exception:
+        logger.exception('Completion dispatch unconfirmed plan=%s', plan_id)
 
 
 def _terminal_completion_sources(db, *, now=None):
@@ -1320,12 +1348,16 @@ def _completion_recovery_time(now):
         accessible = and_(User.is_active.is_(True), access_predicate(AIPlan.user_id, delivery=True))
         obligations = db.query(PlanCompletion).join(AIPlan, AIPlan.id == PlanCompletion.plan_id).join(User, User.id == AIPlan.user_id)
         in_flight = PlanCompletion.state.in_(['in_flight', 'release_in_flight'])
-        wake = obligations.with_entities(func.min(PlanCompletion.wake_at)).filter(
+        report_capacity, reporting = _lane_capacity(_report_inflight_lock, _report_inflight)
+        schedule_capacity, scheduling = _lane_capacity(_schedule_inflight_lock, _schedule_inflight)
+        wake = (obligations.with_entities(func.min(PlanCompletion.wake_at)).filter(
             or_(in_flight, and_(accessible, PlanCompletion.state == 'pending')),
-        ).scalar()
-        schedule_wake = obligations.with_entities(
+            ~PlanCompletion.plan_id.in_(reporting),
+        ).scalar() if report_capacity else None)
+        schedule_wake = (obligations.with_entities(
             func.min(func.coalesce(PlanCompletion.schedule_wake_at, now)),
-        ).filter(accessible, PlanCompletion.schedule_pending.is_(True)).scalar()
+        ).filter(accessible, PlanCompletion.schedule_pending.is_(True),
+                 ~PlanCompletion.plan_id.in_(scheduling)).scalar() if schedule_capacity else None)
         sources = _terminal_completion_sources(db).subquery()
         continuation_wake = db.query(func.min(PlanContinuationAttempt.retry_at)).join(
             sources, sources.c.id == PlanContinuationAttempt.source_plan_id,
@@ -1402,7 +1434,6 @@ def reconcile_plan_completions():
     """Safety Car: unfinished sources/obligations only, no repaired user sessions."""
     global _completion_source_failure
     from app.db import PlanCompletion
-    from app.orchestrator import send_plan_completion_message
     now = datetime.now(timezone.utc)
     try:
         # Terminal source scan is narrow SQL and opens a session only per actual
@@ -1415,34 +1446,30 @@ def reconcile_plan_completions():
         for user_id, plan_id in sources:
             _submit_continuation(user_id, plan_id)
         now = datetime.now(timezone.utc)
+        report_capacity, reporting = _lane_capacity(_report_inflight_lock, _report_inflight)
+        schedule_capacity, scheduling = _lane_capacity(_schedule_inflight_lock, _schedule_inflight)
         with SessionLocal() as db:
-            due = db.query(PlanCompletion.plan_id, AIPlan.user_id).join(
+            due_query = db.query(PlanCompletion.plan_id, AIPlan.user_id).join(
                 AIPlan, AIPlan.id == PlanCompletion.plan_id).join(User, User.id == AIPlan.user_id).filter(
                     PlanCompletion.state.in_(['pending', 'in_flight', 'release_in_flight']),
-                    PlanCompletion.wake_at <= now, or_(and_(User.is_active.is_(True), access_predicate(AIPlan.user_id, delivery=True)), PlanCompletion.state.in_(['in_flight','release_in_flight']))).all()
-            schedules = db.query(PlanCompletion.plan_id, PlanCompletion.successor_plan_id).join(AIPlan, AIPlan.id == PlanCompletion.plan_id).join(User, User.id == AIPlan.user_id).filter(User.is_active.is_(True), access_predicate(AIPlan.user_id, delivery=True)).filter(
+                PlanCompletion.wake_at <= now, or_(and_(User.is_active.is_(True), access_predicate(AIPlan.user_id, delivery=True)), PlanCompletion.state.in_(['in_flight','release_in_flight'])),
+                ~PlanCompletion.plan_id.in_(reporting))
+            due = due_query.order_by(PlanCompletion.wake_at, PlanCompletion.plan_id).limit(report_capacity).all() if report_capacity else []
+            schedule_query = db.query(PlanCompletion.plan_id, PlanCompletion.successor_plan_id).join(AIPlan, AIPlan.id == PlanCompletion.plan_id).join(User, User.id == AIPlan.user_id).filter(User.is_active.is_(True), access_predicate(AIPlan.user_id, delivery=True)).filter(
                 PlanCompletion.schedule_pending.is_(True),
-                func.coalesce(PlanCompletion.schedule_wake_at, now) <= now).all()
-        def dispatch(pair):
-            user_id, plan_id = pair[1], pair[0]
-            coro = send_plan_completion_message(user_id, plan_id)
-            future = _submit_coroutine(coro)
-            if future is None:
-                coro.close()
-                return
-            try:
-                future.result(timeout=45)
-            except Exception:
-                logger.exception('Completion dispatch unconfirmed plan=%s', plan_id)
+                func.coalesce(PlanCompletion.schedule_wake_at, now) <= now,
+                ~PlanCompletion.plan_id.in_(scheduling))
+            schedules = schedule_query.order_by(PlanCompletion.plan_id).limit(schedule_capacity).all() if schedule_capacity else []
         for source_id, successor_id in schedules:
             try:
-                reconcile_plan_schedule(successor_id)
+                _submit_lane(_schedule_workers, _schedule_inflight_lock, _schedule_inflight,
+                             source_id, reconcile_plan_schedule, successor_id)
             except Exception:
                 logger.exception('Completion schedule interrupted source=%s', source_id)
                 _completion_source_failure = True
-        if due:
-            with ThreadPoolExecutor(max_workers=8, thread_name_prefix='completion') as workers:
-                list(workers.map(dispatch, due))
+        for plan_id, user_id in due:
+            _submit_lane(_report_workers, _report_inflight_lock, _report_inflight,
+                         plan_id, _dispatch_completion_report, user_id, plan_id)
     except Exception:
         logger.exception('Completion recovery interrupted')
         _completion_source_failure = True

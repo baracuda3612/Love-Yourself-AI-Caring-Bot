@@ -85,6 +85,35 @@ def test_slow_continuation_does_not_hold_another_owner(monkeypatch):
         release_slow.set()
 
 
+@pytest.mark.parametrize('lane', ['schedule', 'report'])
+def test_slow_completion_recovery_work_does_not_hold_another_owner(monkeypatch, lane):
+    from threading import Event
+
+    slow_started = Event()
+    release_slow = Event()
+    healthy_finished = Event()
+    monkeypatch.setattr(scheduler, 'enable_completion_recovery', lambda: None)
+    executor = getattr(scheduler, f'_{lane}_workers')
+    lock = getattr(scheduler, f'_{lane}_inflight_lock')
+    inflight = getattr(scheduler, f'_{lane}_inflight')
+
+    def work(plan_id):
+        if plan_id == 101:
+            slow_started.set()
+            assert release_slow.wait(5)
+        else:
+            healthy_finished.set()
+
+    try:
+        assert scheduler._submit_lane(executor, lock, inflight, 101, work, 101)
+        assert slow_started.wait(1)
+        assert scheduler._submit_lane(executor, lock, inflight, 202, work, 202)
+        assert healthy_finished.wait(1)
+        assert scheduler._submit_lane(executor, lock, inflight, 101, work, 101) is False
+    finally:
+        release_slow.set()
+
+
 @pytest.mark.parametrize('outcome',['sent','uncertain','retryable','failed'])
 async def test_transport_retains_telegram_outcome_without_implicit_resend(monkeypatch,outcome):
     from app import db, telegram
