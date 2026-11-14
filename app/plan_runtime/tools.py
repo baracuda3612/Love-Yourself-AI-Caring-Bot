@@ -834,6 +834,7 @@ def get_plan_status(user_id: int, *, authorize: AssistantAuthorization | None = 
     from app.lifecycle import (  # lazy
         LifecycleInvariantError,
         LifecycleTransitionError,
+        is_completion_ready,
         read_lifecycle_status,
     )
 
@@ -845,7 +846,18 @@ def get_plan_status(user_id: int, *, authorize: AssistantAuthorization | None = 
         except (LifecycleInvariantError, LifecycleTransitionError) as exc:
             raise ValueError(str(exc)) from exc
 
-    return status.to_runtime_payload()
+        result = status.to_runtime_payload()
+        if status.plan_id is not None and status.steps_remaining == 0:
+            from app.db import AIPlan
+            from app.plan_completion.continuation import read_continuation_status
+
+            plan = db.get(AIPlan, status.plan_id)
+            if plan is not None and is_completion_ready(db, plan):
+                result["cycle_ending"] = True
+                result["continuation_state"] = read_continuation_status(
+                    db, plan.id, datetime.now(timezone.utc),
+                )
+        return result
 
 
 def pause_plan(user_id: int, *, source_operation_id: str, authorize: AssistantAuthorization | None = None) -> dict:

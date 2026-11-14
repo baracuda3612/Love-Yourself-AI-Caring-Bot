@@ -484,6 +484,39 @@ def completion_jobs(db, monkeypatch):
     return scheduler, jobs
 
 
+def test_reenabled_delivery_arms_completion_recovery_before_first_successor_step(db, completion_jobs):
+    from app.db import Deployment, DeploymentEnrollment
+
+    scheduler, jobs = completion_jobs
+    user, plan = source_plan(db)
+    terminalize(db, user, plan)
+    close(db, user, plan)
+    claim = claim_report(db, user.id, plan.id)
+    finish_report(db, user.id, claim, outcome='sent', message_id=77)
+    row = db.get(PlanCompletion, plan.id)
+    first = first_step(db, row.successor_plan_id)
+    assert row.schedule_pending and utc(first.scheduled_for) > datetime.now(timezone.utc)
+
+    enrollment = db.query(DeploymentEnrollment).filter_by(user_id=user.id).one()
+    deployment = db.get(Deployment, enrollment.deployment_id)
+    deployment.delivery_enabled = False
+    db.flush()
+    scheduler.reconcile_plan_completions()
+    assert not jobs and row.schedule_pending
+
+    alarm = {}
+    scheduler.scheduler.add_job = lambda *args, **kwargs: alarm.update(next_run_time=kwargs['next_run_time'])
+    deployment.delivery_enabled = True
+    db.flush()
+    scheduler.enable_completion_recovery()
+    assert alarm['next_run_time'] < utc(first.scheduled_for)
+
+    scheduler.reconcile_plan_completions()
+    assert scheduler._generate_step_job_id(first) in jobs
+    assert utc(jobs[scheduler._generate_step_job_id(first)].next_run_time) == utc(first.scheduled_for)
+    assert not row.schedule_pending
+
+
 def test_legacy_held_schedule_recovers_automatically(db, completion_jobs):
     from importlib import import_module
     from alembic.migration import MigrationContext

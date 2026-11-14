@@ -165,11 +165,14 @@ def finish_current_exercises(db):
     db.commit()
 
 
-async def test_finished_cycle_with_recovery_failure_exposes_only_read_tools(chat, monkeypatch):
+@pytest.mark.parametrize('plan_status', ['active', 'paused'])
+async def test_finished_cycle_with_recovery_failure_exposes_only_read_tools(chat, monkeypatch, plan_status):
     from app import scheduler
 
     db, _ = chat
     finish_current_exercises(db)
+    db.get(models.AIPlan, 1).status = plan_status
+    db.commit()
     monkeypatch.setattr(orchestrator, '_auto_complete_plan_if_needed', Mock(side_effect=RuntimeError('builder failure')))
     wake = Mock(side_effect=RuntimeError('job store unavailable'))
     monkeypatch.setattr(scheduler, 'flag_completion_recovery', wake)
@@ -185,9 +188,71 @@ async def test_finished_cycle_with_recovery_failure_exposes_only_read_tools(chat
     create = provider(monkeypatch, answer)
     result = await orchestrator.handle_incoming_message(1, 'Щойно виконав останню вправу. Чому немає наступної?')
     assert result['reply_text'] == orchestrator._INVALID_ASSISTANT_ACTION_REPLY
-    assert db.get(models.AIPlan, 1).status == 'active'
+    assert db.get(models.AIPlan, 1).status == plan_status
     create.assert_awaited_once()
     wake.assert_called_once()
+
+
+async def test_status_tool_reports_transition_after_last_exercise(chat, monkeypatch):
+    from app import scheduler
+
+    db, _ = chat
+    finish_current_exercises(db)
+    monkeypatch.setattr(orchestrator, '_auto_complete_plan_if_needed', Mock(side_effect=RuntimeError('builder failure')))
+    monkeypatch.setattr(scheduler, 'flag_completion_recovery', Mock())
+
+    async def answer(**request):
+        assert {tool['name'] for tool in request['tools']} == {'get_plan_status'}
+        return tool_response('get_plan_status', '{}')
+
+    provider(monkeypatch, answer)
+    reply = await orchestrator.handle_incoming_message(1, 'Який зараз стан мого плану?')
+    assert 'система повторить її автоматично' in reply['reply_text']
+    assert 'доставка вправ активна' not in reply['reply_text']
+    assert 'залишилось 0' not in reply['reply_text']
+    assert 'Час наступної вправи поки не визначено' in reply['reply_text']
+
+
+async def test_paused_cycle_with_only_expired_final_step_is_not_ending(chat):
+    db, _ = chat
+    finish_current_exercises(db)
+    final_step = db.get(models.AIPlanStep, 2)
+    final_step.step_status = 'expired'
+    db.get(models.AIPlan, 1).status = 'paused'
+    db.commit()
+
+    facts = await orchestrator.build_user_context(1, 'Який стан плану?')
+    assert facts['cycle_ending'] is False
+    assert 'continuation_state' not in facts
+    assert 'resume_plan' in {tool['name'] for tool in assistant_agent.assistant_tools(facts)}
+
+
+async def test_abandoned_plan_exposes_saved_schedule_without_reminder(chat, monkeypatch):
+    db, _ = chat
+    plan = db.get(models.AIPlan, 1)
+    plan.status = 'abandoned'
+    plan.abandoned_at = datetime.now(timezone.utc)
+    profile = db.get(models.UserProfile, 1)
+    profile.daily_time_slots = {'DAY': '13:45', 'EVENING': '20:30'}
+    profile.active_days = ['FRI', 'TUE']
+    db.commit()
+
+    async def answer(**request):
+        facts = json.loads(request['input'][2]['content'].split('\n', 1)[1])
+        assert facts['current_mode'] == 'NO_ACTIVE_PLAN'
+        assert facts['schedule'] == {
+            'day_time': '13:45', 'active_days': ['TUE', 'FRI'],
+            'timezone': 'Europe/Kyiv', 'reminder_state': 'no_active_plan',
+            'next_reminder_at': None,
+        }
+        return SimpleNamespace(output=[SimpleNamespace(type='message', content=[SimpleNamespace(
+            type='output_text', text='Збережено 13:45 у вівторок і п’ятницю; активних нагадувань немає.',
+        )])], usage=None)
+
+    call = provider(monkeypatch, answer)
+    reply = await orchestrator.handle_incoming_message(1, 'Який час і дні були збережені?')
+    assert '13:45' in reply['reply_text']
+    call.assert_awaited_once()
 
 
 async def test_retry_tools_require_owned_current_receipts_and_bind_action(chat, monkeypatch):

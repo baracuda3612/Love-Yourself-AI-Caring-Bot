@@ -45,6 +45,7 @@ from app.lifecycle import (
     derive_current_mode,
     derive_current_mode_from_facts,
     has_pending_medium_intent,
+    is_completion_ready,
     read_lifecycle_status,
     get_current_plan as get_authoritative_current_plan,
     require_lifecycle_entitlement,
@@ -236,7 +237,6 @@ def _assistant_plan_facts(db: Session, user: User) -> dict:
 
 
 def _assistant_current_plan_actions(db: Session, plan: AIPlan) -> tuple[bool, bool, tuple[str, ...]]:
-    steps = db.query(AIPlanStep.id).join(AIPlanDay).filter(AIPlanDay.plan_id == plan.id)
     receipts = db.query(PlanLifecycleOperation).filter_by(user_id=plan.user_id, plan_id=plan.id)
     previous_status = (
         db.query(AIPlan.status)
@@ -249,9 +249,7 @@ def _assistant_current_plan_actions(db: Session, plan: AIPlan) -> tuple[bool, bo
         .order_by(PlanLifecycleOperation.id.desc()).limit(1).scalar_subquery()
     )
     switch_activation = PlanLifecycleOperation.source_operation_id.startswith("switch-activate:")
-    has_steps, has_open, has_switch, has_switch_activation, has_activation, previous, control = db.query(
-        steps.filter(AIPlanStep.step_status != "canceled").exists(),
-        steps.filter(AIPlanStep.step_status.in_(("pending", "delivered"))).exists(),
+    has_switch, has_switch_activation, has_activation, previous, control = db.query(
         receipts.filter_by(operation="switch_plan_format").exists(),
         receipts.filter_by(operation="activate").filter(switch_activation).exists(),
         receipts.filter_by(operation="activate").filter(~switch_activation).exists(),
@@ -264,7 +262,7 @@ def _assistant_current_plan_actions(db: Session, plan: AIPlan) -> tuple[bool, bo
     if has_activation and previous == "abandoned":
         retry_actions.append("followup")
     return (
-        plan.status == "active" and has_steps and not has_open,
+        is_completion_ready(db, plan),
         bool(has_switch or has_switch_activation),
         tuple(retry_actions),
     )
@@ -363,6 +361,16 @@ async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
                 ),
             )
         elif facts["current_mode"] == CurrentMode.NO_ACTIVE_PLAN.value:
+            if (facts["latest_plan_status"] == "abandoned" and profile is not None
+                    and isinstance(profile.daily_time_slots, dict)
+                    and profile.daily_time_slots.get("DAY") is not None):
+                context["schedule"] = {
+                    "day_time": resolve_daily_time_slots(profile)["DAY"],
+                    "active_days": resolve_active_days(profile),
+                    "timezone": timezone_name,
+                    "reminder_state": "no_active_plan",
+                    "next_reminder_at": None,
+                }
             context["completion_context"] = _build_idle_finished_context(db, user_id)
         from app.privacy_notice_cache import commit_read_check
         commit_read_check(db)
@@ -476,6 +484,18 @@ _TOOL_REPLY_TEMPLATES: Dict[str, str] = {
 def _format_plan_status(result: Dict[str, Any]) -> str:
     if not result.get("plan_active"):
         return "📋 Активних 7 або 14 днів зараз немає."
+
+    if result.get("cycle_ending"):
+        state = result.get("continuation_state")
+        if state == "retry_wait":
+            transition = "Підготовка наступного циклу не вдалася; система повторить її автоматично."
+        elif state == "started":
+            transition = "Підготовку наступного циклу розпочато; результат ще не підтверджено."
+        elif state == "attempt_unconfirmed":
+            transition = "Результат підготовки не підтверджено; система перевірить його й відновить спробу за потреби."
+        else:
+            transition = "Вправи цього циклу завершено; наступний цикл ще не підтверджено."
+        return f"📋 {transition} Час наступної вправи поки не визначено фактичним розкладом."
 
     status_label = (
         "доставка вправ призупинена"

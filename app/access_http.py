@@ -2,6 +2,7 @@
 import asyncio
 import hmac
 import html
+import logging
 import secrets
 import re
 from pathlib import Path
@@ -15,6 +16,7 @@ from app.config import settings
 from app.db import SessionLocal
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 NEUTRAL = 'Доступ зараз недоступний. Спробуй знову зі сторінки входу.'
 COOKIE = 'ly_enrollment_browser'
 
@@ -363,6 +365,13 @@ async def deployment_controls(request: Request):
         wake_delivery = access.set_deployment_controls(db, **body, operator=operator)
         db.commit()
     if wake_delivery:
-        from app.scheduler import wake_scheduled_delivery_recovery
-        await asyncio.to_thread(wake_scheduled_delivery_recovery)
+        from app.scheduler import enable_completion_recovery, wake_scheduled_delivery_recovery
+        outcomes = await asyncio.gather(
+            asyncio.to_thread(wake_scheduled_delivery_recovery),
+            asyncio.to_thread(enable_completion_recovery),
+            return_exceptions=True,
+        )
+        for label, outcome in zip(("exercise", "completion"), outcomes):
+            if isinstance(outcome, BaseException):
+                logger.error("Delivery re-enable %s recovery wake failed", label, exc_info=outcome)
     return {'accepted': True}

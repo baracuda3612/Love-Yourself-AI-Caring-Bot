@@ -1103,7 +1103,7 @@ def _assistant_tools_for_state(
     allowed_names = set(_TOOL_NAMES_BY_STATE.get(mode, set()))
     if mode in {"ACTIVE", "ACTIVE_PAUSED"} and plan_type not in {"SHORT", "MEDIUM"}:
         return []
-    if cycle_ending and mode == "ACTIVE":
+    if cycle_ending and mode in {"ACTIVE", "ACTIVE_PAUSED"}:
         return [tool for tool in ASSISTANT_TOOLS if tool["name"] == "get_plan_status"]
     if mode in {"ACTIVE", "ACTIVE_PAUSED"}:
         if can_retry_switch:

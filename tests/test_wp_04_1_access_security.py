@@ -87,11 +87,14 @@ def test_delivery_control_wakes_only_after_commit_and_retries_when_enabled(monke
     monkeypatch.setattr(access, 'set_deployment_controls',
         lambda db, **kwargs: calls.append('controls') or enabled)
     monkeypatch.setattr(scheduler, 'wake_scheduled_delivery_recovery',
-        lambda: calls.append('wake'))
+        lambda: calls.append('exercise_wake'))
+    monkeypatch.setattr(scheduler, 'enable_completion_recovery',
+        lambda: calls.append('completion_wake'))
     response = TestClient(api.app).post('/access/deployment/controls',
         json={'deployment_id': 17, 'enrollment_open': True, 'delivery_enabled': enabled})
     assert response.status_code == 200
-    assert calls == (['controls', 'commit', 'wake'] if enabled else ['controls', 'commit'])
+    assert calls[:2] == ['controls', 'commit']
+    assert set(calls[2:]) == ({'exercise_wake', 'completion_wake'} if enabled else set())
 
 
 def inventory(monkeypatch):
