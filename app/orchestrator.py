@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.access import AccessDenied
+from app.blocking_db import DBBusyError, run_db
 from app.active_days import resolve_active_days, resolve_timezone
 from app.config import settings
 from app.db import (
@@ -306,6 +307,12 @@ def _assistant_access(db: Session, user_id: int) -> tuple[tuple[int, int], bool]
 async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
     stm_history = await get_stm_history(user_id)
     pending_hint = await session_memory.get_pending_action(user_id)
+    return await run_db(
+        _build_user_context_db, user_id, message_text, stm_history, pending_hint,
+    )
+
+
+def _build_user_context_db(user_id, message_text, stm_history, pending_hint) -> Dict[str, Any]:
     with SessionLocal() as db:
         access, delivery_enabled = _assistant_access(db, user_id)
         user = db.get(User, user_id)
@@ -1077,16 +1084,22 @@ async def handle_incoming_message(
 
     from app.privacy import NoticeRequired, pinned_notice
     try:
-        with SessionLocal() as db:
-            pinned_notice(db, user_id, acknowledged=True)
-            from app.privacy_notice_cache import commit_read_check
-            if derive_current_mode(db, user_id) is CurrentMode.ONBOARDING:
-                return _finalize_reply(SETUP_FALLBACK)
-            commit_read_check(db)
+        def check_access_and_setup():
+            with SessionLocal() as db:
+                pinned_notice(db, user_id, acknowledged=True)
+                from app.privacy_notice_cache import commit_read_check
+                is_setup = derive_current_mode(db, user_id) is CurrentMode.ONBOARDING
+                commit_read_check(db)
+                return is_setup
+
+        if await run_db(check_access_and_setup):
+            return _finalize_reply(SETUP_FALLBACK)
     except NoticeRequired:
         return _finalize_reply(_NOTICE_REQUIRED_REPLY)
     except AccessDenied:
         return _finalize_reply(_ACCESS_DENIED_REPLY)
+    except DBBusyError:
+        return _finalize_reply("Зараз багато запитів. Спробуй ще раз за кілька секунд.")
     try:
         await _auto_complete_plan_if_needed_for_user_id(user_id)
     except (AccessDenied, LifecycleEntitlementError):
@@ -1099,6 +1112,8 @@ async def handle_incoming_message(
         return _finalize_reply(_NOTICE_REQUIRED_REPLY)
     except (AccessDenied, LifecycleEntitlementError):
         return _finalize_reply(_ACCESS_DENIED_REPLY)
+    except DBBusyError:
+        return _finalize_reply("Зараз багато запитів. Спробуй ще раз за кілька секунд.")
     if context_payload.get("current_mode") == CurrentMode.ONBOARDING.value:
         return _finalize_reply(SETUP_FALLBACK)
 

@@ -13,6 +13,7 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.config import settings
+from app.blocking_db import DBBusyError, run_db
 from app.db import AIPlan, AIPlanDay, AIPlanStep, ChatHistory, MenuInput, SessionLocal, User, UserEvent, UserProfile
 from app import menu_input, onboarding, user_menu
 from app.orchestrator import handle_incoming_message, session_memory
@@ -801,59 +802,71 @@ async def _reconcile_menu_schedule(result):
     return hint
 
 
-@router.message(F.text)
-async def on_text(message: Message, release_ingress=None):
+def _commit_text_ingress(message, text):
     from app.privacy import pinned_notice, NoticeRequired
-    from app.access import AccessDenied
     from app.plan_drafts.plan_builder_v5 import NoCandidatesError
     from app.plan_finalization import FinalizationError
 
-    text = message.text or ""
-    try:
-        with SessionLocal() as db:
-            user, _ = _ensure_user(db, message.from_user)
-            user_id = user.id
+    with SessionLocal() as db:
+        user, _ = _ensure_user(db, message.from_user)
+        user_id = user.id
+        try:
             _, notice = pinned_notice(db, user_id, acknowledged=True)
-            screen = None
-            setup_row = user.onboarding_progress
-            setup_duplicate = setup_row is not None and message.message_id <= setup_row.last_text_message_id
-            try:
-                with db.begin_nested():
-                    submitted = (
-                        menu_input.InputResult("setup", "") if setup_duplicate else menu_input.handle_text(
-                            db, user, notice.id, message.message_id, text, sent_at=getattr(message, "date", None),
-                        )
+        except NoticeRequired:
+            return user_id, None, None, True
+        screen = None
+        setup_row = user.onboarding_progress
+        setup_duplicate = setup_row is not None and message.message_id <= setup_row.last_text_message_id
+        try:
+            with db.begin_nested():
+                submitted = (
+                    menu_input.InputResult("setup", "") if setup_duplicate else menu_input.handle_text(
+                        db, user, notice.id, message.message_id, text, sent_at=getattr(message, "date", None),
                     )
-            except (LifecycleTransitionError, FinalizationError, NoCandidatesError):
-                submitted = menu_input.InputResult(
-                    user_menu.SCHEDULE, "Не вдалося змінити розклад. Спробуй ще раз.",
                 )
-            if submitted is None:
-                progress = onboarding.setup_progress(db, user)
-                if progress is not None:
-                    screen = onboarding.handle_text(user, progress, text)
-                    progress.last_text_message_id = message.message_id
-                else:
-                    db.add(ChatHistory(user_id=user_id, role="user", text=text))
-                    # Log user activity for silence detection.
-                    log_user_event(
-                        db,
-                        user_id=user_id,
-                        event_type="user_message",
-                        event_source="telegram",
-                        source_operation_id=(
-                            f"telegram:message:{message.chat.id}:{message.message_id}"
-                        ),
-                        context={"message_length": len(message.text or "")},
-                    )
-            db.commit()
-    except NoticeRequired:
-        # Release ingress access locks before the reminder opens its own
-        # session, and before awaiting any Telegram I/O.
-        await _show_privacy(message, user_id)
-        return
+        except (LifecycleTransitionError, FinalizationError, NoCandidatesError):
+            submitted = menu_input.InputResult(
+                user_menu.SCHEDULE, "Не вдалося змінити розклад. Спробуй ще раз.",
+            )
+        if submitted is None:
+            progress = onboarding.setup_progress(db, user)
+            if progress is not None:
+                screen = onboarding.handle_text(user, progress, text)
+                progress.last_text_message_id = message.message_id
+            else:
+                db.add(ChatHistory(user_id=user_id, role="user", text=text))
+                log_user_event(
+                    db,
+                    user_id=user_id,
+                    event_type="user_message",
+                    event_source="telegram",
+                    source_operation_id=(f"telegram:message:{message.chat.id}:{message.message_id}"),
+                    context={"message_length": len(text)},
+                )
+        db.commit()
+        return user_id, submitted, screen, False
+
+
+@router.message(F.text)
+async def on_text(message: Message, release_ingress=None):
+    from app.privacy import NoticeRequired
+    from app.access import AccessDenied
+
+    text = message.text or ""
+    user_id = None
+    try:
+        user_id, submitted, screen, notice_required = await run_db(_commit_text_ingress, message, text)
     except AccessDenied:
         await message.answer("Доступ зараз недоступний.")
+        return
+    except DBBusyError:
+        await message.answer("Зараз багато запитів. Спробуй ще раз за кілька секунд.")
+        return
+    if notice_required:
+        # Release ingress access locks before opening another DB session.
+        if release_ingress is not None:
+            release_ingress()
+        await _show_privacy(message, user_id)
         return
 
     if release_ingress is not None:

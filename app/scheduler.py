@@ -1254,6 +1254,42 @@ def send_plan_pulse_snapshots() -> None:
 # in PostgreSQL; the alarm parks at the earliest unfinished obligation deadline.
 _completion_recovery_lock = Lock()
 _completion_source_failure = False
+_continuation_workers = ThreadPoolExecutor(max_workers=8, thread_name_prefix='continuation')
+_continuation_inflight_lock = Lock()
+_continuation_inflight: set[int] = set()
+
+
+def _continuation_capacity() -> tuple[int, tuple[int, ...]]:
+    with _continuation_inflight_lock:
+        return max(0, 8 - len(_continuation_inflight)), tuple(_continuation_inflight)
+
+
+def _submit_continuation(user_id: int, plan_id: int) -> bool:
+    with _continuation_inflight_lock:
+        if plan_id in _continuation_inflight or len(_continuation_inflight) >= 8:
+            return False
+        _continuation_inflight.add(plan_id)
+    try:
+        future = _continuation_workers.submit(request_plan_completion, user_id, plan_id)
+    except Exception:
+        with _continuation_inflight_lock:
+            _continuation_inflight.discard(plan_id)
+        raise
+
+    def finished(result):
+        with _continuation_inflight_lock:
+            _continuation_inflight.discard(plan_id)
+        try:
+            result.result()
+        except Exception:
+            logger.exception('Continuation worker failed plan=%s', plan_id)
+        try:
+            enable_completion_recovery()
+        except Exception:
+            logger.exception('Continuation recovery wake failed plan=%s', plan_id)
+
+    future.add_done_callback(finished)
+    return True
 
 
 def _terminal_completion_sources(db, *, now=None):
@@ -1294,7 +1330,13 @@ def _completion_recovery_time(now):
         continuation_wake = db.query(func.min(PlanContinuationAttempt.retry_at)).join(
             sources, sources.c.id == PlanContinuationAttempt.source_plan_id,
         ).scalar()
+        capacity, inflight = _continuation_capacity()
+        ready_sources = capacity > 0 and _terminal_completion_sources(db, now=now).filter(
+            ~AIPlan.id.in_(inflight)
+        ).limit(1).first() is not None
         deadlines = [_to_utc(value) for value in (wake, schedule_wake, continuation_wake) if value is not None]
+        if ready_sources:
+            deadlines.append(now + timedelta(seconds=1))
         wake = min(deadlines, default=None)
     if _completion_source_failure:
         retry = now + timedelta(minutes=5)
@@ -1365,11 +1407,13 @@ def reconcile_plan_completions():
     try:
         # Terminal source scan is narrow SQL and opens a session only per actual
         # unfinished source, never per historical completed plan.
+        capacity, inflight = _continuation_capacity()
         with SessionLocal() as db:
-            sources = _terminal_completion_sources(db, now=now).all()
+            sources = (_terminal_completion_sources(db, now=now)
+                .filter(~AIPlan.id.in_(inflight)).limit(capacity).all()) if capacity else []
         _completion_source_failure = False
         for user_id, plan_id in sources:
-            request_plan_completion(user_id, plan_id)
+            _submit_continuation(user_id, plan_id)
         now = datetime.now(timezone.utc)
         with SessionLocal() as db:
             due = db.query(PlanCompletion.plan_id, AIPlan.user_id).join(

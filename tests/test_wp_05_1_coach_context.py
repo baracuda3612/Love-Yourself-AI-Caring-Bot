@@ -1,10 +1,12 @@
 """Regression coverage through the model request and the transactional dispatcher."""
 import json
+import asyncio
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from itertools import product
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
+from threading import Event
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -211,6 +213,26 @@ async def test_status_tool_reports_transition_after_last_exercise(chat, monkeypa
     assert 'доставка вправ активна' not in reply['reply_text']
     assert 'залишилось 0' not in reply['reply_text']
     assert 'Час наступної вправи поки не визначено' in reply['reply_text']
+
+
+async def test_slow_context_database_read_does_not_hold_event_loop(chat, monkeypatch):
+    started = Event()
+    release = Event()
+
+    def slow_read(*_args):
+        started.set()
+        assert release.wait(5)
+        return {'current_mode': 'NO_ACTIVE_PLAN'}
+
+    monkeypatch.setattr(orchestrator, '_build_user_context_db', slow_read)
+    task = asyncio.create_task(orchestrator.build_user_context(1, 'status'))
+    try:
+        assert await asyncio.to_thread(started.wait, 1)
+        await asyncio.wait_for(asyncio.sleep(0), timeout=0.2)
+        assert not task.done()
+    finally:
+        release.set()
+    assert (await task)['current_mode'] == 'NO_ACTIVE_PLAN'
 
 
 async def test_paused_cycle_with_only_expired_final_step_is_not_ending(chat):
