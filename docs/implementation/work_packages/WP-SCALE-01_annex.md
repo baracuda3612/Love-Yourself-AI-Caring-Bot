@@ -88,8 +88,14 @@ integration and make [WP-05.2](WP-05.2_start_message.md) the current package.
 
 **Local implementation handoff, observed 2026-11-18:** an existing
 `fix/runtime-isolation` worktree contains commit `5866b8f` for HTTP isolation
-and an uncommitted `app/access.py` roster change. At kickoff inspect and
-reconcile both against the merged integration head before reusing them; neither
-is accepted merely because it exists locally. Use that worktree or a fresh branch
-according to whether parallel edits still need isolation, and preserve the
-uncommitted change until its owner/disposition is recorded.
+and an uncommitted `app/access.py` roster change. A separate clean
+`docs/pilot-mobile-journey-gate` worktree holds an unrelated, unmerged
+WP-09.4 roadmap edit. At kickoff use **one active worktree** based on the
+post-PR #276 integration head. The merged documentation is already in that
+base; do not copy it from an old worktree. Treat both older branches and the
+roster diff as read-only candidates: compare each hunk with the current code,
+record `reuse`, `already superseded`, or `reject`, and port only accepted
+changes once. Do not merge, rebase or cherry-pick either old branch wholesale.
+Preserve the dirty roster diff until its disposition is recorded. Retire extra
+worktrees only after their unique work is preserved and no other task is using
+them. The pilot edit stays outside WP-SCALE-01 and has its own later decision.
