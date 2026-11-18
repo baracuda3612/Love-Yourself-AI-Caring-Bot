@@ -427,7 +427,8 @@ package does not become `READY` until every listed package/gate is satisfied.
 | `WP-04.2` | `WP-01.4`, `WP-04.1` for deployment-bound notice behavior |
 | `WP-04.3` | `WP-03.2`, `WP-03.4`, `WP-04.1`, `WP-04.2`, `DG-01` |
 | `WP-05.1` | `WP-02.3`, `WP-03.3`, `WP-04.3` |
-| `WP-05.2` | `WP-05.1`, `WP-02.2` |
+| `WP-SCALE-01` annex | Founder-merged `WP-05.1`/`WP-03.5` follow-up; inspect completed-package paths before `WP-05.2` |
+| `WP-05.2` | `WP-05.1`, `WP-02.2`, `WP-SCALE-01` annex closure |
 | `WP-05.3` | `WP-05.2`, `WP-04.2`, `DG-04` disposition |
 | `WP-05.4` | `WP-05.1…05.3` |
 | `WP-06.1` | `WP-01.4`, `WP-03.1`, `WP-03.3`, `WP-04.1` |
@@ -1015,9 +1016,11 @@ predecessor 88 and migration/concurrency evidence are recorded in the
 
 #### WP-03.5 follow-up — Continue the plan independently of its summary
 
-**Status:** Implemented locally and pending independent review. The founder
-decision on 2026-11-11 supersedes the summary-first delivery rule and manual
-recovery accepted for PR #267.
+**Status:** `VERIFIED` for integration in founder-merged
+[PR #275](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/275)
+(`5700e6d`, 2026-11-18). The [WP-05.1 closeout](work_packages/WP-05.1_integration_closeout.md)
+records the evidence and limits. The founder decision on 2026-11-11 supersedes
+the summary-first delivery rule and manual recovery accepted for PR #267.
 
 An internal failure in an auxiliary flow must never interrupt the user's
 normal product flow. Recovery and incident handling run independently of
@@ -1223,9 +1226,21 @@ privacy/reporting contract; WP-04.3 adds no analytics surface.
 
 ---
 
+## WP-SCALE-01 annex — Repair verified bottlenecks in completed packages
+
+**Status:** `READY` after this documentation closeout merges. This is one
+off-roadmap remediation PR, not a new B5 implementation package. Execute it
+before WP-05.2. The [annex contract](work_packages/WP-SCALE-01_annex.md)
+owns candidate inventory, original WP owners, proof standard, bounded repair
+and acceptance. Earlier static audits are leads, not proof of a live defect or
+measured capacity. Do not carry fixes for future WP mechanisms into this PR.
+
+---
+
 ## 11. Block 5 — AI assistant integration and bounded agency
 
-**Status:** `NOT STARTED`  
+**Status:** `IN PROGRESS` for integration: WP-05.1 is verified; WP-05.2…05.4 remain open.
+
 **Depends on:** canonical services from B2 and access/context from B4  
 **Objective:** make the AI assistant reactive, grounded, secure, and non-essential to core
 product operation.
@@ -1236,6 +1251,10 @@ internal documentation. Audit IDs and historical evidence retain their
 original references.
 
 ### WP-05.1 — Build canonical AI assistant context and plan-aware tool exposure
+
+**Status:** `VERIFIED` for integration in founder-merged
+[PR #275](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/275)
+(`5700e6d`, 2026-11-18). See the [closeout and evidence limits](work_packages/WP-05.1_integration_closeout.md).
 
 **Scope**
 
@@ -1249,7 +1268,8 @@ original references.
   state the limit and direct the user to «Підтримка» in the menu.
   Include the user's saved form of address when available.
   The WP-03.5 follow-up removes report-related reminder blockers. Use the
-  participant-facing reason from WP-08.2 when a deployment disables delivery.
+  participant-facing reason from WP-08.2 when its emergency-only incident
+  contract is implemented; this future requirement is not a WP-05.1 claim.
 * validate the pending first-evening-time action against the current plan and
   persisted MEDIUM intent before offering the tool and again before execution.
 * expose tools for the current authoritative mode, plan and action
@@ -1270,6 +1290,9 @@ original references.
 **Primary audit coverage:** `COACH-07…08`, `RT-03…04`, `SEC-05`.
 
 ### WP-05.2 — Implement the bounded tool-result loop
+
+**Status:** `NOT STARTED` until WP-SCALE-01 closes; then `READY`. Start from the
+[WP-05.2 handoff](work_packages/WP-05.2_start_message.md).
 
 **Scope**
 
@@ -1297,6 +1320,8 @@ remain in the backlog.
 **Primary audit coverage:** `COACH-09`, `RT-09`, `UX-11`.
 
 ### WP-05.3 — Add failure, privacy, concurrency, and cost boundaries
+
+**Status:** `NOT STARTED` — depends on WP-05.2 and the listed prerequisites.
 
 **Scope**
 
@@ -1334,6 +1359,8 @@ remain in the backlog.
 `FD-17`.
 
 ### WP-05.4 — AI assistant acceptance and regression suite
+
+**Status:** `NOT STARTED` — depends on WP-05.1…05.3.
 
 Verify resolved and preserved behavior as well as new work:
 
@@ -1546,9 +1573,10 @@ otherwise. Do not scatter new behavior around it.
 * deliberate base-image pin, non-root runtime, final image scan;
 * one typed configuration contract and fail-closed startup;
 * security event taxonomy and privacy-safe logging;
-* kill switches for AI assistant, scheduled delivery, and deployment;
-* require a participant-facing reason when an operator disables delivery
-  for a deployment. Enforce it in the operator panel and backend. Save the
+* emergency controls for AI assistant, scheduled delivery, and deployment;
+  these are exceptional incident safeguards, not a routine product flow;
+* require a participant-facing reason when an operator exceptionally disables
+  delivery for a deployment. Enforce it in the operator panel and backend. Save the
   reason and switch change together, audit the operator and time, and expose
   the reason to the AI assistant for that deployment. Use an explicit
   pre-launch reason when initializing a new disabled deployment. Use approved
@@ -1954,13 +1982,14 @@ block exit gate passes.
   - [x] WP-03.3 — Introduce canonical ExercisePresentation and media delivery
   - [x] WP-03.4 — Make scheduled delivery and callbacks reconcilable
   - [x] WP-03.5 — Implement durable completion and automatic continuation
-  - [ ] WP-03.5 follow-up — Continue the plan independently of its summary
+  - [x] WP-03.5 follow-up — Continue the plan independently of its summary
 - [x] B4 — Access, privacy minimum, onboarding, and deterministic controls
   - [x] WP-04.1 — Implement deployment, entitlement, and enrollment authority
   - [x] WP-04.2 — Implement the minimum privacy and data-rights lifecycle
   - [x] WP-04.3 — Implement deterministic onboarding and user menu
+- [ ] WP-SCALE-01 annex — Repair verified bottlenecks in completed packages
 - [ ] B5 — AI assistant integration and bounded agency
-  - [ ] WP-05.1 — Build canonical AI assistant context and plan-aware tool exposure
+  - [x] WP-05.1 — Build canonical AI assistant context and plan-aware tool exposure
   - [ ] WP-05.2 — Implement the bounded tool-result loop
   - [ ] WP-05.3 — Add failure, privacy, concurrency, and cost boundaries
   - [ ] WP-05.4 — AI assistant acceptance and regression suite
@@ -1992,9 +2021,9 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | [WP-05.1 — Build canonical AI assistant context and plan-aware tool exposure](#wp-051--build-canonical-ai-assistant-context-and-plan-aware-tool-exposure) |
-| Status | `READY` after this documentation closeout merges. B4 integration is complete through PR #273. |
-| Next action | Start WP-05.1 in its own session from the updated integration head. Read the WP-05.1 scope, its named audit rows, WP-02.3 and WP-03.3 contracts, and the WP-04.3 merged behavior before changing AI assistant. |
+| Current package | [WP-SCALE-01 annex — completed-package runtime isolation](work_packages/WP-SCALE-01_annex.md) |
+| Status | `READY` after this documentation handoff merges. WP-05.1 and the WP-03.5 follow-up were founder-merged in PR #275; B5 remains `IN PROGRESS`. |
+| Next action | In one separate remediation PR, verify and fix reachable shared-resource bottlenecks owned by completed WPs. Use the [annex](work_packages/WP-SCALE-01_annex.md), preserve the [WP-05.1 merged contract](work_packages/WP-05.1_integration_closeout.md), and keep unmeasured capacity `NOT_PROVEN`. After that PR merges, start [WP-05.2](work_packages/WP-05.2_start_message.md). |
 | Open release acceptance | Read [A43-01…06](work_packages/WP-04.3_acceptance_followups.md) when preparing WP-09.1, WP-09.3, WP-09.4, WP-10.1, WP-10.2 and WP-10.3. Carry each assigned scenario and its expected result and evidence into the owning WP plan. G1/G3/G4 and the applicable medical/device gates remain in force. |
 
 ### Private founder log

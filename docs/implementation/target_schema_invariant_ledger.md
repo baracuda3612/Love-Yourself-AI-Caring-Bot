@@ -4,11 +4,13 @@
 
 **Physical starting point:** Alembic revision `20260827_schema_baseline`
 
-**Current merged application/Alembic head:** `20261104_menu_input`, following
-`20261104_onboarding_controls`. The founder merged WP-04.3 in
-[PR #273](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/273)
-on 2026-11-05 as `88d39a4409d78cfba0bc7093cb3528fa5e6a5f5c`. B4 is complete
-for integration. The migration evidence comes from disposable databases.
+**Current merged application/Alembic head:** `20261111_continuation_attempt`,
+following `20261111_plan_continuation`. The founder merged WP-05.1 and the
+WP-03.5 follow-up in
+[PR #275](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/275)
+on 2026-11-18 as `5700e6deda9ede6fbc68e9552d6af846c0c17072`. B4 is
+complete and B5 is in progress for integration. Migration evidence comes from
+disposable databases.
 Deployment migration and cutover require their own approval and evidence.
 See [the remaining acceptance checks](work_packages/WP-04.3_acceptance_followups.md).
 
@@ -84,7 +86,8 @@ forward migration and compatibility tests.
 | `ai_plan_days` | `RESHAPE`: `id`, `plan_id`, `day_number`, optional immutable generation snapshot. Completion is calculated from child steps. | `plan_id -> ai_plans.id ON DELETE CASCADE`; unique `(plan_id, day_number)`. |
 | `ai_plan_steps` | `RESHAPE`: `id`, `day_id`, `exercise_id`, `content_version`, immutable content/mechanic snapshot, `order_in_day`, `time_slot`, `scheduled_for`, `expires_at`, `step_status`, terminal timestamp, and version for conditional updates. | `day_id -> ai_plan_days.id ON DELETE CASCADE`; `(exercise_id, content_version) -> content_library` with `ON DELETE RESTRICT`. |
 | `exercise_deliveries` | `ADD` (WP-03.4 scheduled): required `plan_step_id`, stable source operation, numbered attempt (1–3), `in_flight` / `uncertain` / `delivered` / `retryable` / `terminal_failure`, Telegram chat/message identity, immutable presentation snapshot and confirmed variant/payload. Separate mutable status/feedback projection markers and terminal `projection_failure_code` own only Telegram edit reconciliation; a permanent edit rejection never falsifies visible success or confirmed send facts. | Added by WP-03.4 for scheduled delivery; occurrence FK is added by WP-06.1. No delivery row owns step/request lifecycle. |
-| `plan_completions` | `ADD` (WP-03.5): one source-plan obligation with immutable source/successor identity, report/wakeup chronology, bounded claim attempts, send uncertainty and confirmed Telegram receipt. The explicit TTL recovery confirmation has its own payload/receipt; neither send path reopens the source or creates another successor. | `plan_id -> ai_plans.id ON DELETE CASCADE` is the primary key; unique `successor_plan_id -> ai_plans.id ON DELETE CASCADE`; a trigger requires an owned completed source. Confirmed receipts require non-null positive message identities and are immutable. |
+| `plan_completions` | `ADD` (WP-03.5; independent-schedule follow-up in PR #275): one source-plan obligation with immutable source/successor identity, report/wakeup chronology, bounded claim attempts, send uncertainty and confirmed Telegram receipt. `schedule_pending`/`schedule_wake_at` independently reconcile successor jobs; summary outcome cannot gate the successor. Historical manual-release columns may remain but are not a current user recovery path. | `plan_id -> ai_plans.id ON DELETE CASCADE` is the primary key; unique `successor_plan_id -> ai_plans.id ON DELETE CASCADE`; a trigger requires an owned completed source. Confirmed receipts require non-null positive message identities and are immutable. |
+| `plan_continuation_attempts` | `ADD` (WP-03.5 follow-up in PR #275): one latest durable preparation attempt per source plan; attempt number, start, retry deadline, state and failure code support bounded automatic recovery. The committed successor remains plan authority. | `source_plan_id -> ai_plans.id ON DELETE CASCADE` is the primary key; positive attempt and state/retry consistency checks; retry index. |
 
 ### Deployment, identity, entitlement, and enrolment
 
@@ -177,7 +180,8 @@ change.
 | `ux_exercise_deliveries_one_sent` | Unique source occurrence where delivery state is successful; retries remain separate attempts. | WP-03.4/WP-06.2 |
 | `ux_exercise_deliveries_one_open` | One in-flight, uncertain or successful attempt per scheduled step; an unknown send blocks further sends. | WP-03.4 |
 | `uq_plan_completion_successor` | One automatic successor identity per completion obligation; source plan is the primary key. | WP-03.5 |
-| `ix_plan_completions_work` | Partial index on state/wakeup for pending/in-flight summary or explicit-release work, plus outstanding schedule reconciliation. Quarantined/repaired history does not wake recovery. | WP-03.5 |
+| `ix_plan_completions_work` | Partial index on state/wakeup for pending/in-flight summary and outstanding independent schedule reconciliation. Quarantined/repaired history does not wake recovery. | WP-03.5 follow-up |
+| `ix_continuation_attempt_retry` | Retry deadline for unfinished successor preparation attempts; lost workers become eligible after their lease. | WP-03.5 follow-up |
 | `uq_exercise_delivery_attempt` | Unique `(source_operation_id, attempt)`; scheduled source is `scheduler:delivery:<step_id>`. | WP-03.4 |
 | `uq_user_events_source_operation` | Unique `(event_source, source_operation_id, event_name)`. | WP-01.4 |
 | `uq_feedback_events_source_operation` | Unique `(source, source_operation_id)`. | WP-01.4 |
@@ -368,6 +372,14 @@ documentation handoff. Preserve the scheduled-only denominator and authoritative
 
 
 ## Implemented completion — founder-merged 2026-10-15
+
+**Current continuation amendment (2026-11-18):** founder-merged
+[PR #275](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/275)
+supersedes the report-first/manual-release chronology in this historical
+section. Successor preparation and scheduling recover independently of summary
+delivery; pending, failed or late summary does not block its exercises. Genuine
+user pause and access authority still apply. See the
+[WP-03.5 follow-up closeout](work_packages/WP-03.5_durable_completion.md).
 
 WP-03.5 adds `plan_completions` at application revision
 `20261014_plan_completion`. The source closes and the target builder creates
