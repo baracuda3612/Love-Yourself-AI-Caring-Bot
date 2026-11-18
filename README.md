@@ -5,12 +5,15 @@ The current implementation combines an aiogram polling bot, FastAPI report
 pages, APScheduler delivery, deterministic plan generation and an OpenAI-backed AI assistant,
 PostgreSQL, and optional local Redis-backed state.
 
-Implementation progress: B3, WP-04.1 and WP-04.2 are verified. The founder merged
-WP-04.2 in [PR #271](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/271)
-on 2026-10-24 (`55645ec`); final automatic review of `9af0ce2` had no findings.
-The next package is WP-04.3, deterministic onboarding and user menu.
+Implementation progress: B3 and B4 are complete for integration. The founder
+merged WP-05.1 and the WP-03.5 continuation follow-up in
+[PR #275](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/275)
+on 2026-11-18 (`5700e6d`). B5 is in progress. The next bounded effort is
+[WP-SCALE-01](docs/implementation/work_packages/WP-SCALE-01_annex.md), an
+off-roadmap annex to verify and repair bottlenecks in completed packages;
+WP-05.2 follows it.
 See the [roadmap](docs/implementation/pre_mvp_implementation_roadmap.md) and
-[next-session handoff](docs/implementation/work_packages/WP-04.3_start_message.md).
+[next-session handoff](docs/implementation/work_packages/WP-SCALE-01_annex.md).
 This is implementation status, not a production release claim.
 
 Copy `.env.example` to an untracked `.env` for local development and replace
