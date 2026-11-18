@@ -45,7 +45,7 @@ approved audit
 → authoritative data and migration model
 → target lifecycle and removal of rejected legacy behavior
 → canonical content, presentation, and scheduled delivery
-→ deterministic access, onboarding, controls, and Coach
+→ deterministic access, onboarding, controls, and the AI assistant
 → independent exercise-on-demand channel
 → truthful telemetry, privacy, and reporting
 → hardening and full-system verification
@@ -138,7 +138,7 @@ new UI. Later WPs remain at roadmap level until their execution planning.
 | Privacy, support and data-rights instructions, requests and confirmations | WP-04.2; integration with the bot menu in WP-04.3 |
 | Telegram onboarding, returning entry, menu, settings and lifecycle controls | WP-04.3 |
 | Exercise messages, buttons and terminal feedback states | Existing B3 owners; preserve their contracts and verify consistency in WP-09.4 |
-| Coach replies, tool-action confirmations and degraded-mode messages | WP-05.1…03 |
+| AI assistant replies, tool-action confirmations and degraded-mode messages | WP-05.1…03 |
 | On-demand exercise entry, results and unavailable states | WP-06 packages |
 | Personal summaries/reports/continuation and permitted company-facing output | WP-07 packages; report-access/privacy authority remains WP-04.2 |
 | Existing public website and approved buyer-facing product/contact/next-step presentation | WP-08.3 |
@@ -305,7 +305,7 @@ non-disposable data:
 
 ### Gate G2 — feature integration may start
 
-Required before onboarding, Coach, and on-demand are integrated:
+Required before onboarding, the AI assistant, and on-demand exercises are integrated:
 
 * plan-centric lifecycle authority is verified;
 * one-current-plan and operation-idempotency boundaries exist;
@@ -322,7 +322,7 @@ Required before inviting any external beta user:
 * privacy notice and rights path are live;
 * complete canonical test suite passes;
 * real-device user journey passes on iOS and Android;
-* monitoring, kill switches, Coach limits, backup/restore, and incident runbook
+* monitoring, kill switches, AI assistant limits, backup/restore, and incident runbook
   are exercised;
 * no unresolved audit `BLOCKER` applies to testnet beta.
 
@@ -382,7 +382,7 @@ B3 Content, plan generation, presentation, and scheduled delivery
    ↓
 B4 Deployment access, privacy minimum, onboarding, and deterministic controls
    ↓
-B5 Coach integration and bounded agency
+B5 AI assistant integration and bounded agency
    ↓
 B6 Exercise on demand
    ↓
@@ -897,7 +897,7 @@ provenance, exact content snapshots, and failure-path response checks are comple
 ### WP-03.3 — Introduce canonical `ExercisePresentation` and media delivery
 
 **Status:** `VERIFIED` — founder merged [PR #263](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/263)
-on 2026-10-08 as `ac3abd3bade3521e0d4328ab1d9555468ae53286`. The Coach
+on 2026-10-08 as `ac3abd3bade3521e0d4328ab1d9555468ae53286`. The AI assistant
 context P2 was repaired and independently re-reviewed; all 23 disposable
 PostgreSQL acceptance cases passed. The configured GitHub review's sole P2
 suggestion to suppress actions on pause was rejected by the founder: WP-03.4
@@ -908,7 +908,7 @@ for evidence and the [WP-03.4 handoff](work_packages/WP-03.4_start_message.md).
 
 **Scope**
 
-* one structured presentation object shared by scheduled, on-demand, and Coach
+* one structured presentation object shared by scheduled, on-demand, and AI assistant
   context;
 * neutral notification preview and in-chat title, duration, exact steps,
   actions, deadline, status, and media metadata;
@@ -990,10 +990,11 @@ predecessor 88 and migration/concurrency evidence are recorded in the
 * finalize the explicit plan before creating the summary obligation;
 * create exactly one same-format successor through the target plan builder for
   the next active day at DAY time;
-* guarantee no same-day successor collision: day 1 is the next active day
-  strictly after the completion/report day; the report precedes the first task
-  and states its real scheduled datetime;
-* make summary delivery obligation durable and retryable;
+* schedule the first successor exercise from the completed cycle and the
+  user's current working days, timezone and DAY time. Keep continuation
+  independent of the summary's scheduled time, delivery and receipt.
+* keep summary delivery durable and independently retryable. A late summary
+  may show a confirmed future reminder from the current schedule.
 * remove dead legacy CTA/copy;
 * preserve scheduled-only plan denominator and correct 14-day facts;
 * test active completion, no-action expiry, timezone/work-days, duplicates,
@@ -1008,9 +1009,45 @@ predecessor 88 and migration/concurrency evidence are recorded in the
 * old plan closes once, summary obligation exists once, successor exists once;
 * successor uses the verified target builder/content identity rather than the
   soon-to-be-replaced legacy generator;
-* first successor task is scheduled for the exact promised future moment;
+* the successor can deliver on its own schedule even if the summary fails.
 * delivery failure never reopens or duplicates lifecycle finalization;
 * completion tests express target rather than deprecated behavior.
+
+#### WP-03.5 follow-up — Continue the plan independently of its summary
+
+**Status:** Implemented locally and pending independent review. The founder
+decision on 2026-11-11 supersedes the summary-first delivery rule and manual
+recovery accepted for PR #267.
+
+An internal failure in an auxiliary flow must never interrupt the user's
+normal product flow. Recovery and incident handling run independently of
+user actions and operator acknowledgement.
+
+* Persist the latest successor preparation attempt before generation. Record
+  its failure and retry deadline independently of report delivery. A lost
+  worker's lease expires and the normal recovery worker retries. The source
+  cycle's terminal state and the successor receipt remain authoritative.
+* Create and reconcile the successor schedule independently of the summary.
+  Remove report-dependent checks from job registration, due scans, send
+  claims, expiry and the AI assistant's reminder context. Report retries and
+  late receipts must never move the successor schedule or set its pause state.
+* Keep the report's retry budget and failure records separate from the
+  successor's scheduling work. Retry confirmed transient failures within the
+  retry budget. Park exhausted or ambiguous sends as durable report failures
+  for operations. Keep confirmed receipts and avoid duplicate sends.
+* Retire the user-facing «Продовжити нагадування» recovery and
+  `/continue_plan` for this purpose. Reconcile existing active successors
+  held by an old report. If their start date has passed, use the next eligible
+  delivery window without replaying old reminders. Preserve genuine user
+  pauses, abandoned plans, delivered exercises and past delivery receipts.
+* Prove a new cycle delivers on time with the previous summary pending,
+  retrying, permanently failed, unconfirmed, or confirmed late. Cover a
+  restart, an existing held successor, and a genuine user pause. Check the
+  actual scheduled job, delivery receipt and the absence of a required
+  user action.
+* Use WP-08.2 for the exhausted-recovery incident contract and WP-09.2 for
+  report-failure queue visibility and alerts. Opening or closing an incident
+  has no effect on the successor's delivery.
 
 ---
 
@@ -1022,7 +1059,7 @@ WP-04.1 through WP-04.3 are integrated. The remaining release acceptance
 checks retain their owners and gates in [A43-01…06](work_packages/WP-04.3_acceptance_followups.md).
 **Depends on:** B2–B3  
 **Objective:** create a trustworthy entry path that remains usable without the
-Coach model.
+AI assistant model.
 
 ### WP-04.1 — Implement deployment, entitlement, and enrollment authority
 
@@ -1092,7 +1129,7 @@ log/backup evidence and G1/G3/G4 remain launch gates.
 
 * accurate notice and recorded notice version, bound to deployment;
 * support/manual access, export, correction, and deletion request path;
-* 90-day Coach/conversation retention across PostgreSQL, Redis, and logs;
+* 90-day retention of AI assistant conversations across PostgreSQL, Redis, and logs;
 * account deletion across database, Redis, scheduler, open occurrences,
   personal events, and report grants;
 * revocable/expiring bearer grants or retirement of obsolete report routes;
@@ -1186,24 +1223,48 @@ privacy/reporting contract; WP-04.3 adds no analytics surface.
 
 ---
 
-## 11. Block 5 — Coach integration and bounded agency
+## 11. Block 5 — AI assistant integration and bounded agency
 
 **Status:** `NOT STARTED`  
 **Depends on:** canonical services from B2 and access/context from B4  
-**Objective:** make Coach reactive, grounded, secure, and non-essential to core
+**Objective:** make the AI assistant reactive, grounded, secure, and non-essential to core
 product operation.
 
-### WP-05.1 — Build canonical Coach context and plan-aware tool exposure
+Use **ШІ-асистент LY Workday** in Ukrainian and **LY Workday AI assistant**
+in English. Use this role name in product copy, prompts, and current
+internal documentation. Audit IDs and historical evidence retain their
+original references.
+
+### WP-05.1 — Build canonical AI assistant context and plan-aware tool exposure
 
 **Scope**
 
-* provide current mode, plan type, days, evening configuration, current
-  exercise presentation, entitlement, and pending action;
-* expose only tools meaningful for the current authoritative context;
-* fix delivered-exercise explanation context;
+* provide current mode, plan type, cycle day, remaining delivery days,
+  completed and total exercise counts for the current cycle, and entitlement.
+* include the current daytime setting, configured MEDIUM evening time,
+  selected weekdays, timezone, and the next scheduled reminder in local time
+  or its availability state. Share the next-reminder lookup with the menu.
+  Explain known reminder blockers and guide users to available menu actions.
+  Keep past delivery diagnosis separate. For missing product information,
+  state the limit and direct the user to «Підтримка» in the menu.
+  Include the user's saved form of address when available.
+  The WP-03.5 follow-up removes report-related reminder blockers. Use the
+  participant-facing reason from WP-08.2 when a deployment disables delivery.
+* validate the pending first-evening-time action against the current plan and
+  persisted MEDIUM intent before offering the tool and again before execution.
+* expose tools for the current authoritative mode, plan and action
+  prerequisites. Retry tools require eligible receipts and current action
+  types. While a finished active cycle is awaiting automatic continuation,
+  expose read-only plan status. A question about the next exercise leaves the
+  plan untouched.
+* include the WP-03.5 continuation changes in independent review. Trace the
+  last terminal action through normal delivery, report failure, scheduler
+  recovery and the next user turn. Verify failure isolation across users.
+* ground exercise explanations in the canonical ExercisePresentation for the
+  latest confirmed delivery on the user's local day.
 * re-authorize tool and arguments at execution time;
 * keep unsupported states and retired tools out of the registry;
-* reconcile the existing Coach prompt/PR work against current FD authority
+* reconcile the existing AI assistant prompt/PR work against current FD authority
   before merging anything.
 
 **Primary audit coverage:** `COACH-07…08`, `RT-03…04`, `SEC-05`.
@@ -1219,6 +1280,19 @@ product operation.
 * deterministic fallback on malformed tool call, execution failure, or second
   model failure;
 * user-language outcome tests and no recursive tool chain.
+* add bounded, user-scoped PostgreSQL reads for confirmed exercise deliveries
+  and outcomes by local day or limited period, canonical instructions for a
+  selected exercise, exercise feedback by exercise and date or period, and
+  factual counts for the previous cycle. When summarizing exercise feedback,
+  count missing feedback separately. The completion report format remains
+  in WP-07.4.
+* resolve an explicit Telegram Reply to the referenced message in the current
+  user's chat and pass verified context with the initial model request. Cover
+  user and AI assistant messages, delivered exercises, and completion summaries.
+  Mark missing or unverified references as unavailable.
+
+Semantic search of old chat and automatic recovery of expired action intent
+remain in the backlog.
 
 **Primary audit coverage:** `COACH-09`, `RT-09`, `UX-11`.
 
@@ -1228,19 +1302,38 @@ product operation.
 
 * deterministic unsupported-input and OpenAI-outage responses;
 * `store=False` and minimized request payload;
+* migrate remaining technical identifiers for the AI assistant before beta.
+  Cover the model setting (`COACH_MODEL`), persisted identifiers such as
+  `coach_persona`, `coach_message_id`, and `coach_quality`, telemetry labels,
+  tooling, and references in active documentation. Verify release
+  compatibility and preserve existing records and audit references.
 * privacy-safe token/model/latency/outcome/cost telemetry;
-* one in-flight Coach worker per user and bounded FIFO;
+* founder-only view by user and period with AI assistant message count, model-call
+  count, and estimated total cost. Show each message's total and constituent
+  calls with model, uncached input, cache reads and writes where applicable,
+  output tokens, latency, and outcome. Record the rate used for the estimate.
+  Mark missing usage or cost as unknown. Exclude message content;
+* before beta, measure 20–30 synthetic AI assistant messages with the configured
+  beta model and prompt. Cover short and long chat history, stable repeated
+  prefixes, changed tool sets, and turns with a second model call. Report
+  observed cache reads and writes, cost per call and per message, and the
+  total. Verify that the founder view reconciles to recorded provider usage;
+* use the cost and latency rehearsal to compare the current model with the
+  first candidate, Sol 6. Keep the model and its supported settings in
+  configuration. Use the WP-05.4 regression suite for behavior comparison
+  and WP-09.3 for the release decision and rollback procedure.
+* one in-flight AI assistant worker per user and bounded FIFO;
 * FD-17 flood limits, timeout, retry, global cost circuit breaker, and neutral
   refusal;
 * no visible user quota;
 * security-safe logs and prompt/tool adversarial tests;
 * product-question escalation is either implemented with a real destination or
-  removed from Coach promises before beta.
+  removed from AI assistant promises before beta.
 
 **Primary audit coverage:** `COACH-10`, `PRIV-03`, `SEC-04…06`, `UX-08`,
 `FD-17`.
 
-### WP-05.4 — Coach acceptance and regression suite
+### WP-05.4 — AI assistant acceptance and regression suite
 
 Verify resolved and preserved behavior as well as new work:
 
@@ -1248,7 +1341,7 @@ Verify resolved and preserved behavior as well as new work:
 * runtime validations and structured soft failures;
 * wrong-state, cross-user, malformed-time, fabricated-tool, cancellation-
   consent, tool-result, outage, overflow, timeout, and cost-breaker cases;
-* Coach does not browse, access files, execute arbitrary code, or become the
+* AI assistant does not browse, access files, execute arbitrary code, or become the
   authority for lifecycle success.
 
 **Primary audit coverage:** `COACH-01…12` including resolved `COACH-02` and
@@ -1257,7 +1350,7 @@ Verify resolved and preserved behavior as well as new work:
 **Block exit criteria**
 
 * deterministic menu/product delivery work without OpenAI;
-* Coach can only request authorized bounded operations;
+* AI assistant can only request authorized bounded operations;
 * no failed backend action is voiced as success;
 * usage/cost is observable without storing conversation content.
 
@@ -1292,7 +1385,7 @@ not started; this is a release integration requirement, not completed behavior.
 * fail closed with fewer than two eligible records;
 * no plan, FSM, scheduler-plan, or Redis business mutation.
 
-### WP-06.2 — Add command and Coach entry, delivery, callback, and expiry
+### WP-06.2 — Add command and AI assistant entry, delivery, callback, and expiry
 
 **Scope**
 
@@ -1300,7 +1393,7 @@ not started; this is a release integration requirement, not completed behavior.
 * `Вправа зараз` button on successful onboarding completion over that same
   service, with truthful source attribution and no fake/live dead-end button
   before its backend is available;
-* explicit-intent Coach tool over the same service;
+* explicit-intent AI assistant tool over the same service;
 * availability after onboarding in active, paused, and no-plan modes and
   outside work schedule;
 * canonical media/text delivery;
@@ -1327,7 +1420,7 @@ not started; this is a release integration requirement, not completed behavior.
 
 **Exit criteria**
 
-* command and Coach use one service and differ only by entry surface;
+* command and AI assistant use one service and differ only by entry surface;
 * duplicate requests/taps create one occurrence and one behavioral outcome;
 * plan and on-demand persistence remain independent;
 * delivery failure is not counted as user inactivity;
@@ -1352,7 +1445,7 @@ not started; this is a release integration requirement, not completed behavior.
   linkage;
 * instrument deployment and onboarding funnel;
 * authoritative delivery, expiry, callback, runtime-action, continuation,
-  Coach-turn, and on-demand events;
+  AI assistant-turn, and on-demand events;
 * separate operational failures from user behavior;
 * remove legacy streak, compensation, engagement, inferred-failure, and
   adaptation event consumers;
@@ -1386,7 +1479,7 @@ not started; this is a release integration requirement, not completed behavior.
 * account deletion removes personal data but not an already sealed aggregate
   contribution;
 * 100-eligible / 50-contributor centralized company gate;
-* no team, office, channel, exercise, feedback, Coach, or small-group slices;
+* no team, office, channel, exercise, feedback, AI assistant, or small-group slices;
 * aggregation and deletion race tests.
 
 **Primary audit coverage:** `PRIV-06…07`, `TEL-12`, `FD-09`, relevant
@@ -1453,7 +1546,15 @@ otherwise. Do not scatter new behavior around it.
 * deliberate base-image pin, non-root runtime, final image scan;
 * one typed configuration contract and fail-closed startup;
 * security event taxonomy and privacy-safe logging;
-* kill switches for Coach, scheduled delivery, and deployment;
+* kill switches for AI assistant, scheduled delivery, and deployment;
+* require a participant-facing reason when an operator disables delivery
+  for a deployment. Enforce it in the operator panel and backend. Save the
+  reason and switch change together, audit the operator and time, and expose
+  the reason to the AI assistant for that deployment. Use an explicit
+  pre-launch reason when initializing a new disabled deployment. Use approved
+  participant-facing wording and keep internal incident details out of the
+  model context. Before rollout, require operators to confirm and record a
+  reason for each existing disabled deployment.
 * alert destinations and credential-rotation paths;
 * common exhausted-recovery incident contract: durable unresolved work,
   per-mechanism retry window, parking reason, explicit operational restart,
@@ -1533,6 +1634,15 @@ Record executable test references for WP-09.4's exact-artifact rerun.
 * connect exhausted recovery windows to the WP-08.2 incident contract, including
   notification delivery/retry, external failure detection and environment
   isolation; ordinary cache TTL or product expiry is not itself an incident.
+* surface exhausted and unconfirmed completion reports in the operational
+  failure queue. Give operations the report state and failure reason.
+  Successor exercise delivery continues independently.
+* expose overdue automatic continuation by source cycle and distinguish an
+  unattempted continuation, an observed attempt, and an actionable failure.
+  Durable evidence is required before telling the user that preparation is
+  in progress. Keep observability and alerts independent of automatic recovery.
+* flag provider model deprecations, pricing changes and regressions as
+  triggers for the WP-09.3 model review.
 
 **Primary audit coverage:** `OPS-03…04`, `OPS-09`, `DB-20`, `COMP-09`.
 
@@ -1546,6 +1656,10 @@ Record executable test references for WP-09.4's exact-artifact rerun.
 * current backup and manual pre-change backup;
 * compatible code rollback vs forward fix vs destructive restore decision tree;
 * scheduler reconstruction after restore;
+* run model promotion and rollback as specified by the standing
+  [AI assistant model maintenance procedure](../deployment/ai_assistant_model_maintenance.md).
+  This package verifies release mechanics. The operations owner keeps the
+  calendar and decision log after the package closes.
 * testnet and production built from the same release behavior with disjoint
   stores and credentials.
 
@@ -1561,12 +1675,15 @@ See [the acceptance scenarios](work_packages/WP-04.3_acceptance_followups.md).
 
 **Scope**
 
+* complete the first [AI assistant model review](../deployment/ai_assistant_model_maintenance.md)
+  before the testnet release if it precedes the scheduled review. Retain the
+  decision and the tested model configuration in the release evidence.
 * real iOS and Android notification preview and Telegram journey;
 * reconcile the section 2.2.1 touchpoint inventory and rendered evidence across
   packages; exercise browser/email/Telegram transitions and representative
   buyer/champion paths, including failure, return and recovery states;
 * enrollment → onboarding → delivery → complete/skip/feedback → expiry → time
-  change → pause/resume/cancel → Coach/tool → summary → continuation → on-demand;
+  change → pause/resume/cancel → AI assistant/tool → summary → continuation → on-demand;
 * duplicate tap/update and stale callback;
 * Telegram timeout, GIF failure, OpenAI outage, Redis outage, database outage,
   SIGTERM during delivery, restart between side effects, and restored database;
@@ -1661,7 +1778,10 @@ including:
 * company-specific buyer/HR/champion instructions, invitation links and
   employee entry/return/support transitions meet section 2.2.1; no technical
   placeholder, unavailable provider button or unowned next step remains;
-* deployment-scoped pause and incident owner;
+* deployment-scoped pause and incident owner. Rehearse the operator SOP.
+  Require a participant-facing reason before disabling delivery, verify
+  the AI assistant can explain it, and verify resumption in the same
+  deployment. Share a resumption date only when one is confirmed.
 * production/testnet separation;
 * champion announcement and support path.
 
@@ -1767,7 +1887,7 @@ Cross-package dependencies remain in the package descriptions above.
 | Scheduler `SCH-01…06` | WP-02.1: `SCH-02`; WP-03.5: `SCH-03`; WP-08.1: `SCH-01`, `SCH-04…06` |
 | Lifecycle `LIF-01…19` | WP-02.2: `LIF-01`, `LIF-09`, `LIF-16…18`; WP-03.5: `LIF-02…08`, `LIF-10…13`, `LIF-15`, `LIF-19`; WP-07.4: `LIF-14` |
 | Onboarding `ONB-01…08` | WP-04.3: `ONB-01…08` |
-| Coach `COACH-01…12` | WP-02.3: `COACH-01`, `COACH-03…05`, `COACH-11…12`; WP-05.1: `COACH-07…08`; WP-05.2: `COACH-09`; WP-05.3: `COACH-10`; WP-05.4: resolved/preserved `COACH-02`, `COACH-06` |
+| AI assistant `COACH-01…12` | WP-02.3: `COACH-01`, `COACH-03…05`, `COACH-11…12`; WP-05.1: `COACH-07…08`; WP-05.2: `COACH-09`; WP-05.3: `COACH-10`; WP-05.4: resolved/preserved `COACH-02`, `COACH-06` |
 | Plan generation `PLAN-01…09` | WP-03.2: `PLAN-01…09` |
 | Delivery `DEL-01…08` | WP-03.3: `DEL-01…02`, `DEL-07…08`; WP-03.4: `DEL-03…06` |
 | Runtime tools `RT-01…15` | WP-02.1: `RT-05`; WP-02.3: `RT-01…04`, `RT-06…08`, `RT-10…15`; WP-05.2: `RT-09` |
@@ -1800,7 +1920,7 @@ Cross-package dependencies remain in the package descriptions above.
 | `FD-13…14` | WP-03.3 and WP-04.3 user-facing product identity/preview |
 | `FD-15` | WP-07.4 deterministic cycle summary |
 | `FD-16` | WP-03.1/03.3 instructional GIF boundary; 2026-10-01 founder override requires only three instructional GIFs; six text-only records are valid |
-| `FD-17` | WP-05.3 Coach admission and cost controls |
+| `FD-17` | WP-05.3 AI assistant admission and cost controls |
 | `FD-18` | WP-04.1 access and WP-10.2 production deployment |
 | `FD-19` | B6 independent on-demand channel |
 
@@ -1834,18 +1954,19 @@ block exit gate passes.
   - [x] WP-03.3 — Introduce canonical ExercisePresentation and media delivery
   - [x] WP-03.4 — Make scheduled delivery and callbacks reconcilable
   - [x] WP-03.5 — Implement durable completion and automatic continuation
+  - [ ] WP-03.5 follow-up — Continue the plan independently of its summary
 - [x] B4 — Access, privacy minimum, onboarding, and deterministic controls
   - [x] WP-04.1 — Implement deployment, entitlement, and enrollment authority
   - [x] WP-04.2 — Implement the minimum privacy and data-rights lifecycle
   - [x] WP-04.3 — Implement deterministic onboarding and user menu
-- [ ] B5 — Coach integration and bounded agency
-  - [ ] WP-05.1 — Build canonical Coach context and plan-aware tool exposure
+- [ ] B5 — AI assistant integration and bounded agency
+  - [ ] WP-05.1 — Build canonical AI assistant context and plan-aware tool exposure
   - [ ] WP-05.2 — Implement the bounded tool-result loop
   - [ ] WP-05.3 — Add failure, privacy, concurrency, and cost boundaries
-  - [ ] WP-05.4 — Coach acceptance and regression suite
+  - [ ] WP-05.4 — AI assistant acceptance and regression suite
 - [ ] B6 — Independent exercise-on-demand channel
   - [ ] WP-06.1 — Add the occurrence aggregate, service, and selector
-  - [ ] WP-06.2 — Add command and Coach entry, delivery, callback, and expiry
+  - [ ] WP-06.2 — Add command and AI assistant entry, delivery, callback, and expiry
   - [ ] WP-06.3 — Add on-demand events, privacy hooks, and reconciliation
 - [ ] B7 — Telemetry, aggregation, cycle summary, and founder reporting
   - [ ] WP-07.1 — Complete feature instrumentation and event reconciliation
@@ -1871,9 +1992,9 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | [WP-05.1 — Build canonical Coach context and plan-aware tool exposure](#wp-051--build-canonical-coach-context-and-plan-aware-tool-exposure) |
+| Current package | [WP-05.1 — Build canonical AI assistant context and plan-aware tool exposure](#wp-051--build-canonical-ai-assistant-context-and-plan-aware-tool-exposure) |
 | Status | `READY` after this documentation closeout merges. B4 integration is complete through PR #273. |
-| Next action | Start WP-05.1 in its own session from the updated integration head. Read the WP-05.1 scope, its named audit rows, WP-02.3 and WP-03.3 contracts, and the WP-04.3 merged behavior before changing Coach. |
+| Next action | Start WP-05.1 in its own session from the updated integration head. Read the WP-05.1 scope, its named audit rows, WP-02.3 and WP-03.3 contracts, and the WP-04.3 merged behavior before changing AI assistant. |
 | Open release acceptance | Read [A43-01…06](work_packages/WP-04.3_acceptance_followups.md) when preparing WP-09.1, WP-09.3, WP-09.4, WP-10.1, WP-10.2 and WP-10.3. Carry each assigned scenario and its expected result and evidence into the owning WP plan. G1/G3/G4 and the applicable medical/device gates remain in force. |
 
 ### Private founder log

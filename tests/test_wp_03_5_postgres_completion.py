@@ -17,8 +17,8 @@ from app.db import AIPlan, AIPlanDay, AIPlanStep, PlanCompletion, User, UserProf
 from app.lifecycle import (complete_current_plan_if_ready, transition_plan_step,
     abandon_current_plan, transition_current_plan, change_delivery_time, switch_plan_format)
 from app.plan_drafts.service import create_plan_for_lifecycle
-from app.plan_completion.workflow import (claim_report, finish_report, blocked_successor,
-    refresh_report_time, UNCERTAIN_TTL, SEND_TIMEOUT)
+from app.plan_completion.workflow import (claim_report, finish_report,
+    refresh_report_time, SEND_TIMEOUT)
 from app.plan_completion.chronology import utc
 from scripts.test_migrations import _run_alembic
 
@@ -93,8 +93,45 @@ def close(db, user, plan, *, now=None):
     return complete_current_plan_if_ready(db,user_id=user.id,plan_id=plan.id,source_operation_id=f'runtime:complete:{plan.id}',now=now)
 
 
+def freeze_activation(monkeypatch, instant):
+    from app.plan_drafts import service
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return instant if tz is None else instant.astimezone(tz)
+
+    monkeypatch.setattr(service, 'datetime', Clock)
+
+
 def first_step(db, plan_id):
     return db.query(AIPlanStep).join(AIPlanDay).filter(AIPlanDay.plan_id == plan_id).order_by(AIPlanStep.scheduled_for, AIPlanStep.id).first()
+
+
+def test_status_tool_uses_operator_delivery_control(db, monkeypatch):
+    from app import db as database, orchestrator, privacy
+    from app.db import Deployment, DeploymentEnrollment
+    from app.plan_runtime import tools
+
+    user, _plan = source_plan(db)
+    enrollment = db.query(DeploymentEnrollment).filter_by(user_id=user.id).one()
+    deployment = db.get(Deployment, enrollment.deployment_id)
+    notice = privacy.register_notice(
+        db, version=uuid4().hex, notice_text='Disposable exact notice', location='fixture',
+    )
+    deployment.notice_version_id = notice.id
+    db.flush()
+    privacy.acknowledge_notice(db, user.id, notice.id, 'status:notice:ack')
+    deployment.delivery_enabled = False
+    db.flush()
+
+    @contextmanager
+    def retained():
+        yield db
+    monkeypatch.setattr(database, 'SessionLocal', retained)
+    result = tools.get_plan_status(user.id, authorize=lambda _db: None)
+    assert result['delivery_enabled'] is False
+    assert 'доставка вправ вимкнена оператором' in orchestrator._format_plan_status(result)
 
 
 @pytest.mark.parametrize('slots,expected_time', [
@@ -102,7 +139,7 @@ def first_step(db, plan_id):
     ({'DAY': '16:45'}, '16:45'),
 ])
 @pytest.mark.parametrize('action', ['completed', 'skipped', 'expired'])
-def test_nullable_saved_slots_completion_and_report(db, slots, expected_time, action):
+def test_nullable_saved_slots_completion_and_report(db, slots, expected_time, action, monkeypatch):
     user, plan = source_plan(db, work_days=['MON', 'FRI'])
     now = datetime(2026, 11, 6, 23, 59, 59, tzinfo=timezone.utc)
     terminalize(db, user, plan, status=action, at=now)
@@ -112,6 +149,7 @@ def test_nullable_saved_slots_completion_and_report(db, slots, expected_time, ac
         # SQL NULL is distinct from a JSON null in this JSON column.
         db.execute(text('UPDATE user_profiles SET daily_time_slots = NULL WHERE user_id = :id'), {'id': user.id})
         db.refresh(user.profile)
+    freeze_activation(monkeypatch, now + timedelta(seconds=1))
     close(db, user, plan, now=now + timedelta(seconds=1))
     row = db.get(PlanCompletion, plan.id)
     first = first_step(db, row.successor_plan_id)
@@ -119,46 +157,11 @@ def test_nullable_saved_slots_completion_and_report(db, slots, expected_time, ac
     assert first.scheduled_for.strftime('%H:%M') == expected_time
     if action == 'expired':
         assert row.report_at.strftime('%Y-%m-%d %H:%M') == f'2026-11-09 {expected_time}'
-        assert first.scheduled_for.date().isoformat() == '2026-11-13'
-    assert first.scheduled_for.date() > row.report_at.date()
+    assert first.scheduled_for.date().isoformat() == '2026-11-09'
     claim = claim_report(db, user.id, plan.id, now=row.report_at)
-    assert first.scheduled_for.strftime('%d.%m.%Y') in claim.payload
-    assert f'о {expected_time}' in claim.payload
+    assert (first.scheduled_for.strftime('%d.%m.%Y') in claim.payload) is (action != 'expired')
     assert close(db, user, plan, now=row.report_at).duplicate
     assert db.query(PlanCompletion).filter_by(plan_id=plan.id).count() == 1
-    assert user.profile.daily_time_slots == slots
-
-
-@pytest.mark.parametrize('slots', [None, {}, {'EVENING': '20:30'}])
-@pytest.mark.parametrize('release', [False, True])
-def test_nullable_saved_slots_late_report_recovery(db, slots, release):
-    user, plan = source_plan(db)
-    now = datetime.now(timezone.utc)
-    terminalize(db, user, plan, at=now)
-    close(db, user, plan, now=now)
-    claim = claim_report(db, user.id, plan.id, now=now)
-    if release:
-        claim_report(db, user.id, plan.id, now=now + SEND_TIMEOUT)
-    else:
-        finish_report(db, user.id, claim, outcome='retryable', retry_after=60, now=now)
-    user.profile.daily_time_slots = slots
-    db.flush()
-    if slots is None:
-        db.execute(text('UPDATE user_profiles SET daily_time_slots = NULL WHERE user_id = :id'), {'id': user.id})
-        db.refresh(user.profile)
-    late = now + timedelta(days=7)
-    recovered = claim_report(db, user.id, plan.id, now=late,
-        release_operation_id='nullable:continue' if release else None)
-    row = db.get(PlanCompletion, plan.id)
-    first = first_step(db, row.successor_plan_id)
-    assert recovered.release == release
-    assert first.scheduled_for.date() > late.date()
-    assert first.scheduled_for.strftime('%H:%M') == '14:00'
-    assert first.scheduled_for.strftime('%d.%m.%Y') in recovered.payload
-    assert 'о 14:00' in recovered.payload
-    assert db.query(blocked_successor(row.successor_plan_id)).scalar()
-    finish_report(db, user.id, recovered, outcome='sent', message_id=778, now=late)
-    assert not db.query(blocked_successor(row.successor_plan_id)).scalar()
     assert user.profile.daily_time_slots == slots
 
 
@@ -198,10 +201,9 @@ def test_nullable_saved_day_preserves_collected_medium_evening_in_recovery(db):
     for day in successor.days:
         assert {s.time_slot: s.scheduled_for.strftime('%H:%M') for s in day.steps} == {
             'DAY': '14:00', 'EVENING': '20:30'}
-        assert all(s.scheduled_for.date() > late.date() for s in day.steps)
     first = first_step(db, successor.id)
-    assert first.scheduled_for.strftime('%d.%m.%Y') in claim.payload
-    assert 'о 14:00' in claim.payload
+    assert first.scheduled_for < late
+    assert first.scheduled_for.strftime('%d.%m.%Y') not in claim.payload
 
 
 @pytest.mark.parametrize('medium', [False, True])
@@ -242,22 +244,23 @@ def test_builder_error_rolls_back_completion_but_not_action(db,monkeypatch):
 
 
 @pytest.mark.parametrize('zone', ['Europe/Kyiv','America/New_York','Asia/Kolkata'])
-def test_expiry_report_saved_day_then_distinct_next_workday(db,zone):
+def test_expiry_report_saved_day_independent_of_next_workday(db,zone,monkeypatch):
     import pytz
     user,plan = source_plan(db,zone=zone,work_days=['MON','FRI'])
     # Future Friday expiry, after the real builder activation date.
     tz = pytz.timezone(zone)
     expiry = tz.localize(datetime(2026,11,6,23,59,59)).astimezone(timezone.utc)
     terminalize(db,user,plan,status='expired',at=expiry)
+    freeze_activation(monkeypatch, expiry + timedelta(seconds=1))
     close(db,user,plan,now=expiry+timedelta(seconds=1))
     row=db.get(PlanCompletion,plan.id)
     assert utc(row.report_at).astimezone(tz).strftime('%Y-%m-%d %H:%M') == '2026-11-09 14:00'
     first=first_step(db,row.successor_plan_id)
-    assert utc(first.scheduled_for).astimezone(tz).strftime('%Y-%m-%d %H:%M') == '2026-11-13 14:00'
+    assert utc(first.scheduled_for).astimezone(tz).strftime('%Y-%m-%d %H:%M') == '2026-11-09 14:00'
     assert claim_report(db,user.id,plan.id,now=expiry+timedelta(minutes=1)) is None
 
 
-def test_claim_is_durable_unknown_never_resends_and_ttl_user_release(db):
+def test_unknown_report_does_not_resend_or_block_due_exercises(db):
     user,plan=source_plan(db); now=datetime.now(timezone.utc)
     terminalize(db,user,plan,at=now); close(db,user,plan,now=now)
     claim=claim_report(db,user.id,plan.id,now=now)
@@ -266,18 +269,44 @@ def test_claim_is_durable_unknown_never_resends_and_ttl_user_release(db):
     row=db.get(PlanCompletion,plan.id)
     assert row.state=='uncertain'
     assert claim_report(db,user.id,plan.id,now=now+timedelta(days=2)) is None
-    assert db.query(blocked_successor(row.successor_plan_id)).scalar()
-    assert claim_report(db,user.id,plan.id,now=now+timedelta(minutes=9),release_operation_id='release:1') is None
-    release=claim_report(db,user.id,plan.id,now=now+UNCERTAIN_TTL,release_operation_id='release:1')
-    assert release.release and release.payload != claim.payload
-    assert 'Повторно його не надсилаємо' in release.payload
-    finish_report(db,user.id,release,outcome='sent',message_id=998,now=now+UNCERTAIN_TTL)
-    assert row.state=='released' and row.release_message_id==998
-    assert not db.query(blocked_successor(row.successor_plan_id)).scalar()
-    assert claim_report(db,user.id,plan.id,now=now+timedelta(days=2),release_operation_id='release:1') is None
+    assert row.schedule_pending
+    first = first_step(db, row.successor_plan_id)
+    from app.scheduler import _due_delivery_steps
+    assert (first.id,) in _due_delivery_steps(db, first.scheduled_for).all()
 
 
-def test_known_failure_retry_reanchors_after_late_report(db):
+@pytest.mark.parametrize('report_state', ['pending', 'in_flight', 'failed', 'uncertain'])
+def test_successor_exercise_receipt_is_independent_of_summary(db, report_state, monkeypatch):
+    from app import telemetry
+    from app.exercise_delivery import ExerciseSendResult
+    from app.scheduled_delivery import claim_send, finish_send
+    from app.scheduler import _due_delivery_steps
+
+    user, plan = source_plan(db)
+    now = datetime.now(timezone.utc)
+    terminalize(db, user, plan, at=now)
+    close(db, user, plan, now=now)
+    row = db.get(PlanCompletion, plan.id)
+    if report_state != 'pending':
+        report = claim_report(db, user.id, plan.id, now=now)
+        if report_state != 'in_flight':
+            finish_report(db, user.id, report, outcome=report_state, now=now)
+    assert row.state == report_state
+    first = first_step(db, row.successor_plan_id)
+    scheduled = first.scheduled_for
+    assert (first.id,) in _due_delivery_steps(db, scheduled).all()
+    delivery = claim_send(db, first.id, now=scheduled)
+    assert delivery is not None
+    monkeypatch.setattr(telemetry, '_utc_now', lambda: scheduled)
+    finish_send(db, delivery.attempt_id, ExerciseSendResult(
+        'delivered', 'text', delivery.presentation, 'fixture exercise', user.tg_id, 779,
+    ), now=scheduled)
+    assert first.step_status == 'delivered'
+    assert first.scheduled_for == scheduled
+    assert row.state == report_state
+
+
+def test_known_failure_retry_leaves_successor_schedule_unchanged(db):
     user,plan=source_plan(db); now=datetime.now(timezone.utc)
     terminalize(db,user,plan,at=now); close(db,user,plan,now=now)
     claim=claim_report(db,user.id,plan.id,now=now)
@@ -287,8 +316,8 @@ def test_known_failure_retry_reanchors_after_late_report(db):
     late=now+timedelta(days=7)
     again=claim_report(db,user.id,plan.id,now=late)
     first=first_step(db,row.successor_plan_id)
-    assert first.scheduled_for.date()>late.date()
-    assert first.scheduled_for.strftime('%d.%m.%Y') in again.payload
+    assert first.scheduled_for < late
+    assert first.scheduled_for.strftime('%d.%m.%Y') not in again.payload
     finish_report(db,user.id,again,outcome='sent',message_id=77,now=late)
     assert row.state=='sent' and row.schedule_pending
     assert claim_report(db,user.id,plan.id,now=late) is None
@@ -309,8 +338,8 @@ def test_controls_survive_completion_replay_without_false_promise(db,control):
         switch_plan_format(db,user_id=user.id,target_plan_type='MEDIUM',source_operation_id='control')
     assert close(db,user,plan).duplicate
     claim=claim_report(db,user.id,plan.id,now=now)
-    if control=='pause': assert 'на паузі' in claim.payload and 'Перша вправа прийде' not in claim.payload
-    elif control in ('cancel','switch'): assert 'замінено' in claim.payload and 'Перша вправа прийде' not in claim.payload
+    if control=='pause': assert 'на паузі' in claim.payload and 'Наступну вправу заплановано' not in claim.payload
+    elif control in ('cancel','switch'): assert 'замінено' in claim.payload and 'Наступну вправу заплановано' not in claim.payload
     else: assert '16:30' in claim.payload
     assert successor.status == ('paused' if control=='pause' else 'abandoned' if control in ('cancel','switch') else 'active')
 
@@ -339,6 +368,9 @@ def test_recovery_only_selects_unfinished_sources_and_parks(db,monkeypatch):
     assert scheduler._completion_recovery_time(datetime.now(timezone.utc)) is not None
     claim=claim_report(db,user.id,plan.id)
     finish_report(db,user.id,claim,outcome='uncertain')
+    assert scheduler._completion_recovery_time(datetime.now(timezone.utc)) is not None
+    row = db.get(PlanCompletion, plan.id)
+    row.schedule_pending = False
     assert scheduler._completion_recovery_time(datetime.now(timezone.utc)) is None
 
 
@@ -386,20 +418,16 @@ def test_inactive_completion_parks_but_quarantines_inflight_and_recovers_when_ac
             assert len(activation_facts(db,row.successor_plan_id))==1
 
 
-def test_late_confirmation_preserves_receipt_but_requires_future_reconfirmation(db):
+def test_late_report_confirmation_preserves_receipt_and_schedule(db):
     user,plan=source_plan(db); now=datetime.now(timezone.utc)
     terminalize(db,user,plan,at=now); close(db,user,plan,now=now)
     claim=claim_report(db,user.id,plan.id,now=now)
     row=db.get(PlanCompletion,plan.id)
     late=utc(first_step(db,row.successor_plan_id).scheduled_for)+timedelta(minutes=1)
     finish_report(db,user.id,claim,outcome='sent',message_id=77,now=late)
-    assert row.state=='sent_held' and row.sent_at==late and row.message_id==77
-    assert db.query(blocked_successor(row.successor_plan_id)).scalar()
-    release=claim_report(db,user.id,plan.id,now=late,release_operation_id='late:release')
-    assert 'доставлено із затримкою' in release.payload
-    assert first_step(db,row.successor_plan_id).scheduled_for.date()>late.date()
-    finish_report(db,user.id,release,outcome='sent',message_id=78,now=late)
-    assert row.state=='released' and row.payload==claim.payload and row.message_id==77
+    assert row.state == 'sent' and row.sent_at == late and row.message_id == 77
+    assert row.schedule_pending
+    assert first_step(db, row.successor_plan_id).scheduled_for == late - timedelta(minutes=1)
 
 
 def test_two_database_workers_finalize_and_claim_once(pg_engine):
@@ -430,10 +458,12 @@ def test_two_database_workers_finalize_and_claim_once(pg_engine):
         assert row.state=='in_flight' and row.attempts==1
         assert db.query(AIPlan).filter(AIPlan.user_id==user_id).count()==2
         claim_report(db,user_id,plan_id,now=datetime.now(timezone.utc)+SEND_TIMEOUT)
+        row.schedule_pending = False
+        row.schedule_wake_at = None
         db.commit()  # leave no automatic work from this standalone race fixture
 
 
-def test_confirmed_summary_releases_exact_successor_jobs_and_parks_recovery(db,monkeypatch):
+def test_successor_jobs_are_exact_and_recovery_parks_when_work_finishes(db,monkeypatch,completion_workers_inline):
     from app import scheduler
     user,plan=source_plan(db); terminalize(db,user,plan); close(db,user,plan)
     claim=claim_report(db,user.id,plan.id)
@@ -461,7 +491,25 @@ def test_confirmed_summary_releases_exact_successor_jobs_and_parks_recovery(db,m
 
 
 @pytest.fixture
-def completion_jobs(db, monkeypatch):
+def completion_workers_inline(monkeypatch):
+    from app import scheduler
+    from concurrent.futures import Future
+
+    class ImmediateExecutor:
+        def submit(self, work, *args):
+            result = Future()
+            try:
+                result.set_result(work(*args))
+            except BaseException as exc:
+                result.set_exception(exc)
+            return result
+
+    for name in ('_continuation_workers', '_schedule_workers', '_report_workers'):
+        monkeypatch.setattr(scheduler, name, ImmediateExecutor())
+
+
+@pytest.fixture
+def completion_jobs(db, monkeypatch, completion_workers_inline):
     from app import db as database, scheduler
     @contextmanager
     def retained(): yield db
@@ -478,6 +526,75 @@ def completion_jobs(db, monkeypatch):
     monkeypatch.setattr(scheduler, 'schedule_plan_step', schedule)
     monkeypatch.setattr(scheduler, '_completion_source_failure', False)
     return scheduler, jobs
+
+
+def test_reenabled_delivery_arms_completion_recovery_before_first_successor_step(db, completion_jobs):
+    from app.db import Deployment, DeploymentEnrollment
+
+    scheduler, jobs = completion_jobs
+    user, plan = source_plan(db)
+    terminalize(db, user, plan)
+    close(db, user, plan)
+    claim = claim_report(db, user.id, plan.id)
+    finish_report(db, user.id, claim, outcome='sent', message_id=77)
+    row = db.get(PlanCompletion, plan.id)
+    first = first_step(db, row.successor_plan_id)
+    assert row.schedule_pending and utc(first.scheduled_for) > datetime.now(timezone.utc)
+
+    enrollment = db.query(DeploymentEnrollment).filter_by(user_id=user.id).one()
+    deployment = db.get(Deployment, enrollment.deployment_id)
+    deployment.delivery_enabled = False
+    db.flush()
+    scheduler.reconcile_plan_completions()
+    assert not jobs and row.schedule_pending
+
+    alarm = {}
+    scheduler.scheduler.add_job = lambda *args, **kwargs: alarm.update(next_run_time=kwargs['next_run_time'])
+    deployment.delivery_enabled = True
+    db.flush()
+    scheduler.enable_completion_recovery()
+    assert alarm['next_run_time'] < utc(first.scheduled_for)
+
+    scheduler.reconcile_plan_completions()
+    assert scheduler._generate_step_job_id(first) in jobs
+    assert utc(jobs[scheduler._generate_step_job_id(first)].next_run_time) == utc(first.scheduled_for)
+    assert not row.schedule_pending
+
+
+def test_legacy_held_schedule_recovers_automatically(db, completion_jobs):
+    from importlib import import_module
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    scheduler, jobs = completion_jobs
+    user, plan = source_plan(db)
+    now = datetime.now(timezone.utc)
+    terminalize(db, user, plan, at=now)
+    close(db, user, plan, now=now)
+    row = db.get(PlanCompletion, plan.id)
+    claim = claim_report(db, user.id, plan.id, now=now)
+    finish_report(db, user.id, claim, outcome='failed', now=now)
+    first = first_step(db, row.successor_plan_id)
+    first.scheduled_for = now - timedelta(days=2)
+    first.expires_at = now - timedelta(days=1)
+    row.schedule_pending = False
+    row.schedule_wake_at = None
+    db.flush()
+    migration = import_module('migrations.alembic.versions.20261111_independent_continuation')
+    with Operations.context(MigrationContext.configure(db.connection())):
+        migration.downgrade()
+        migration.upgrade()
+    db.refresh(row)
+    assert row.legacy_schedule_repair and row.schedule_pending
+
+    scheduler.expire_overdue_steps()
+    assert first.step_status == 'pending'
+    scheduler.reconcile_plan_completions()
+
+    assert row.state == 'failed'
+    assert not row.legacy_schedule_repair and not row.schedule_pending
+    assert first.scheduled_for > now
+    assert jobs[scheduler._generate_step_job_id(first)].next_run_time == first.scheduled_for
 
 
 def activation_facts(db, plan_id):
@@ -523,7 +640,7 @@ def test_completion_activation_excludes_unstarted_successors(db, completion_jobs
 
 
 @pytest.mark.parametrize('report_before_resume', [False, True])
-def test_completion_activation_on_first_resume_is_once_and_after_report(db, completion_jobs, report_before_resume):
+def test_completion_activation_on_first_resume_is_once_independent_of_report(db, completion_jobs, report_before_resume):
     from app.lifecycle_reconciliation import reconcile_scheduler_effects
     scheduler, jobs = completion_jobs
     user, plan = source_plan(db)
@@ -540,7 +657,7 @@ def test_completion_activation_on_first_resume_is_once_and_after_report(db, comp
     result = transition_current_plan(db, user_id=user.id, operation='resume', source_operation_id='event:first-resume')
     assert reconcile_scheduler_effects(result).external_effects_succeeded
     if not report_before_resume:
-        assert not jobs and activation_facts(db, row.successor_plan_id) == []
+        assert len(jobs) == 7 and len(activation_facts(db, row.successor_plan_id)) == 1
         claim = claim_report(db, user.id, plan.id)
         finish_report(db, user.id, claim, outcome='sent', message_id=77)
         scheduler.reconcile_plan_completions()
@@ -582,7 +699,7 @@ def test_completion_activation_resume_failure_replays_without_false_fact(db, com
     if automatic_recovery:
         # No user action: the persisted resume obligation survives loss of the
         # caller/result and is sufficient for the ordinary recovery scanner.
-        retry_at = utc(row.wake_at) + timedelta(seconds=1)
+        retry_at = utc(row.schedule_wake_at) + timedelta(seconds=1)
         class Clock(datetime):
             @classmethod
             def now(cls, tz=None): return retry_at
@@ -624,11 +741,11 @@ def test_completion_activation_persistent_failure_backs_off_and_isolates(db, com
     for attempt in range(2):
         scheduler.reconcile_plan_completions()
         assert len(calls) == attempt + 1 and broken.schedule_pending
-        assert utc(broken.wake_at) >= moment.at + timedelta(seconds=30)
+        assert utc(broken.schedule_wake_at) >= moment.at + timedelta(seconds=30)
         assert scheduler._completion_recovery_time(moment.at) >= moment.at + timedelta(seconds=30)
         scheduler.reconcile_plan_completions()  # no due retry at the same instant
         assert len(calls) == attempt + 1
-        moment.at = utc(broken.wake_at) + timedelta(seconds=1)
+        moment.at = utc(broken.schedule_wake_at) + timedelta(seconds=1)
     assert activation_facts(db, broken.successor_plan_id) == []
     assert len(activation_facts(db, healthy.successor_plan_id)) == 1 and not healthy.schedule_pending
     monkeypatch.setattr(telemetry, 'write_event_operation', original)
@@ -656,7 +773,7 @@ def test_final_delivered_action_while_paused_closes_and_carries_pause(db,target)
     claim=claim_report(db,user.id,plan.id,now=now)
     assert 'більше немає незавершених вправ' in claim.payload
     assert 'на паузі' in claim.payload and 'зніми паузу' in claim.payload
-    assert 'Перша вправа прийде' not in claim.payload
+    assert 'Наступну вправу заплановано' not in claim.payload
     finish_report(db,user.id,claim,outcome='sent',message_id=77,now=now)
     assert not scheduler.can_deliver_tasks(user,successor)
     assert close(db,user,plan,now=now).duplicate
@@ -727,9 +844,9 @@ def test_retiming_unattempted_no_action_report_into_past_uses_next_day_and_moves
     refresh_report_time(db,user,row.successor_plan_id)
     assert row.report_at==datetime(2026,11,10,7,tzinfo=timezone.utc)
     assert claim_report(db,user.id,plan.id,now=Clock.now()) is None
-    claim=claim_report(db,user.id,plan.id,now=row.report_at)
-    assert first_step(db,row.successor_plan_id).scheduled_for==datetime(2026,11,11,7,tzinfo=timezone.utc)
-    assert '11.11.2026 о 07:00' in claim.payload
+    before = first_step(db, row.successor_plan_id).scheduled_for
+    assert claim_report(db,user.id,plan.id,now=row.report_at)
+    assert first_step(db,row.successor_plan_id).scheduled_for == before
 
 
 @pytest.mark.parametrize('paused',[False,True])
@@ -746,7 +863,7 @@ def test_saved_day_atomically_retimes_report_despite_legacy_null_and_paused_effe
     if paused: transition_current_plan(db,user_id=user.id,operation='pause',source_operation_id='pause:before-time')
     result=change_delivery_time(db,user_id=user.id,slot='DAY',hhmm='09:15',source_operation_id='time:summary')
     assert row.report_at==datetime(2026,11,9,9,15,tzinfo=timezone.utc)
-    assert row.wake_at==row.report_at
+    assert row.wake_at >= row.report_at
     completion=[effect for effect in result.effects if effect.kind=='reconcile_completion_schedule']
     assert len(completion)==1 and completion[0].state is ExternalEffectState.PENDING
     if paused:
@@ -778,3 +895,105 @@ def test_saved_day_and_report_retime_rollback_together(db,monkeypatch):
     db.refresh(row); db.refresh(user.profile)
     assert row.report_at==datetime(2026,11,9,14,tzinfo=timezone.utc)
     assert user.profile.daily_time_slots['DAY']=='14:00'
+
+
+def test_continuation_claim_and_failure_survive_session_and_retry_automatically(db, completion_jobs, monkeypatch):
+    from app import orchestrator
+    from app.db import PlanContinuationAttempt
+    from app.plan_completion.continuation import prepare_automatic_continuation, read_continuation_status
+
+    scheduler, jobs = completion_jobs
+    user, plan = source_plan(db)
+    user_id, plan_id = user.id, plan.id
+    terminalize(db, user, plan)
+
+    def fail(session, actor, *, expected_plan_id):
+        assert expected_plan_id == plan_id
+        assert read_continuation_status(session, plan_id, datetime.now(timezone.utc)) == 'started'
+        raise RuntimeError('synthetic builder failure')
+
+    with pytest.raises(RuntimeError, match='synthetic builder failure'):
+        prepare_automatic_continuation(scheduler.SessionLocal, user_id, fail, expected_plan_id=plan_id)
+    row = db.get(PlanContinuationAttempt, plan_id)
+    retry_at = row.retry_at
+    assert (row.state, row.failure_code, row.attempt) == ('retry_wait', 'preparation_failed', 1)
+    assert plan.status == 'active' and db.get(PlanCompletion, plan_id) is None
+    assert scheduler._terminal_completion_sources(db, now=retry_at - timedelta(seconds=1)).all() == []
+    assert scheduler._completion_recovery_time(datetime.now(timezone.utc)) == retry_at
+
+    row.retry_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    db.flush()
+    monkeypatch.setattr(scheduler, '_submit_coroutine', lambda _: None)
+    scheduler.reconcile_plan_completions()
+
+    receipt = db.get(PlanCompletion, plan_id)
+    assert receipt is not None and receipt.state == 'pending'
+    assert (row.state, row.failure_code, row.attempt, row.retry_at) == ('created', None, 2, None)
+    assert len(jobs) == 7
+    scheduler.reconcile_plan_completions()
+    assert row.attempt == 2 and db.query(AIPlan).filter_by(user_id=user_id).count() == 2
+
+
+def test_expired_continuation_claim_is_recovered_without_operator(db, completion_jobs, monkeypatch):
+    from app.db import PlanContinuationAttempt
+    from app.plan_completion.continuation import read_continuation_status
+
+    scheduler, jobs = completion_jobs
+    user, plan = source_plan(db)
+    now = datetime.now(timezone.utc)
+    terminalize(db, user, plan, at=now)
+    row = PlanContinuationAttempt(
+        source_plan_id=plan.id, attempt=1, state='started',
+        started_at=now - timedelta(minutes=3), retry_at=now - timedelta(minutes=1),
+    )
+    db.add(row)
+    db.flush()
+    assert read_continuation_status(db, plan.id, now) == 'attempt_unconfirmed'
+
+    monkeypatch.setattr(scheduler, '_submit_coroutine', lambda _: None)
+    scheduler.reconcile_plan_completions()
+
+    assert row.state == 'created' and row.attempt == 2
+    assert db.get(PlanCompletion, plan.id) is not None
+    assert len(jobs) == 7
+
+
+def test_continuation_start_is_committed_before_generation(pg_engine):
+    from app.db import PlanContinuationAttempt
+    from app.plan_completion.continuation import CLAIM_TTL, prepare_automatic_continuation
+
+    class InterruptedWorker(BaseException):
+        pass
+
+    with Session(pg_engine) as session:
+        user, plan = source_plan(session)
+        terminalize(session, user, plan)
+        user_id, plan_id = user.id, plan.id
+        session.commit()
+    now = datetime.now(timezone.utc)
+
+    def crash_before_commit(session, actor, *, expected_plan_id):
+        with Session(pg_engine) as observer:
+            attempt = observer.get(PlanContinuationAttempt, expected_plan_id)
+            assert attempt.state == 'started' and attempt.attempt == 1
+            assert observer.get(PlanCompletion, expected_plan_id) is None
+        raise InterruptedWorker()
+
+    def factory():
+        return Session(pg_engine)
+
+    with pytest.raises(InterruptedWorker):
+        prepare_automatic_continuation(factory, user_id, crash_before_commit, now=now)
+    assert prepare_automatic_continuation(factory, user_id, crash_before_commit, now=now) is None
+
+    def build(session, actor, *, expected_plan_id):
+        return complete_current_plan_if_ready(
+            session, user_id=actor.id, plan_id=expected_plan_id,
+            source_operation_id=f'runtime:complete:{expected_plan_id}',
+        )
+
+    assert prepare_automatic_continuation(factory, user_id, build, now=now + CLAIM_TTL) is not None
+    with Session(pg_engine) as observer:
+        attempt = observer.get(PlanContinuationAttempt, plan_id)
+        assert (attempt.state, attempt.attempt, attempt.retry_at) == ('created', 2, None)
+        assert observer.get(PlanCompletion, plan_id) is not None

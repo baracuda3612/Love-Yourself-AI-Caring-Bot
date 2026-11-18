@@ -1,5 +1,5 @@
 """
-Plan runtime tools — callable by Coach agent.
+Plan runtime tools callable by the AI assistant.
 
 Each function opens its own DB session, delegates persisted decisions to the
 authoritative lifecycle service, commits, and then reconciles explicit external
@@ -8,14 +8,20 @@ effects when the WP-02.2 contract owns them. Returns a plain dict result.
 All DB / external imports are lazy (inside function bodies) so tests can stub
 the authoritative lifecycle and reconciliation boundaries.
 
-Tool registration in Coach prompt is T5.7.
+Tool registration in the AI assistant prompt is T5.7.
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import TYPE_CHECKING, Callable, Optional
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+AssistantAuthorization = Callable[["Session"], None]
+
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +59,7 @@ def create_followup_plan(
     plan_type: str,
     *,
     source_operation_id: str,
+    authorize: AssistantAuthorization | None = None,
 ) -> dict:
     """Create a follow-up plan after a plan has ended.
 
@@ -75,6 +82,8 @@ def create_followup_plan(
     from app.lifecycle_reconciliation import reconcile_scheduler_effects  # lazy
 
     with SessionLocal() as db:
+        if authorize is not None:
+            authorize(db)
         _, profile = _load_user_and_profile(db, user_id, lock=True)
 
         time_slots: dict = (profile.daily_time_slots or {}) if profile else {}
@@ -334,6 +343,7 @@ def switch_plan_format(
     plan_type: str,
     *,
     source_operation_id: str,
+    authorize: AssistantAuthorization | None = None,
 ) -> dict:
     """Atomically replace the current 7/14-day sequence with the other format."""
     normalized = str(plan_type).strip().upper()
@@ -344,6 +354,8 @@ def switch_plan_format(
     from app.lifecycle import LifecycleTransitionError, switch_plan_format as decide
 
     with SessionLocal() as db:
+        if authorize is not None:
+            authorize(db)
         try:
             result = decide(
                 db,
@@ -364,6 +376,7 @@ def recover_plan_format_switch(
     hhmm: str,
     *,
     source_operation_id: str,
+    authorize: AssistantAuthorization | None = None,
 ) -> dict:
     """Resume only a durable switch intent or committed switch receipt."""
     normalized = str(plan_type).strip().upper()
@@ -378,6 +391,8 @@ def recover_plan_format_switch(
     )
 
     with SessionLocal() as db:
+        if authorize is not None:
+            authorize(db)
         try:
             result = decide(
                 db,
@@ -394,13 +409,16 @@ def recover_plan_format_switch(
 
 
 def retry_switch_plan_format(
-    user_id: int, *, switch_source_operation_id: str | None = None
+    user_id: int, *, switch_source_operation_id: str | None = None,
+    authorize: AssistantAuthorization | None = None,
 ) -> dict:
     """Retry only the switch receipt attached to the current plan."""
     from app.db import SessionLocal
     from app.lifecycle import LifecycleTransitionError, recover_switch_plan_format
 
     with SessionLocal() as db:
+        if authorize is not None:
+            authorize(db)
         try:
             result = recover_switch_plan_format(
                 db,
@@ -424,6 +442,8 @@ def retry_plan_action(
     user_id: int,
     action: str,
     original_source_operation_id: str,
+    *,
+    authorize: AssistantAuthorization | None = None,
 ) -> dict:
     """Retry one exact accepted pause/resume/cancel/follow-up receipt."""
     from app.db import SessionLocal
@@ -431,6 +451,8 @@ def retry_plan_action(
     from app.lifecycle_reconciliation import reconcile_scheduler_effects
 
     with SessionLocal() as db:
+        if authorize is not None:
+            authorize(db)
         try:
             result = recover_plan_action(
                 db,
@@ -507,6 +529,7 @@ def record_evening_time(
     context: str,
     pending_source_operation_id: str,
     source_operation_id: str,
+    authorize: AssistantAuthorization | None = None,
 ) -> dict:
     """Persist the user's chosen evening delivery time and mark slot as collected.
 
@@ -521,6 +544,8 @@ def record_evening_time(
     )
 
     with SessionLocal() as db:
+        if authorize is not None:
+            authorize(db)
         try:
             result = record_evening_time_preference(
                 db,
@@ -563,6 +588,7 @@ def change_day_time(
     hhmm: str,
     *,
     source_operation_id: str,
+    authorize: AssistantAuthorization | None = None,
 ) -> dict:
     """Change the DAY slot delivery time and reschedule pending/delivered steps.
 
@@ -576,6 +602,8 @@ def change_day_time(
     from app.lifecycle_reconciliation import reconcile_scheduler_effects  # lazy
 
     with SessionLocal() as db:
+        if authorize is not None:
+            authorize(db)
         try:
             result = change_delivery_time(
                 db,
@@ -652,6 +680,7 @@ def change_evening_time(
     hhmm: str,
     *,
     source_operation_id: str,
+    authorize: AssistantAuthorization | None = None,
 ) -> dict:
     """Change the EVENING slot delivery time and reschedule pending/delivered steps.
 
@@ -665,6 +694,8 @@ def change_evening_time(
     from app.lifecycle_reconciliation import reconcile_scheduler_effects  # lazy
 
     with SessionLocal() as db:
+        if authorize is not None:
+            authorize(db)
         try:
             result = change_delivery_time(
                 db,
@@ -797,25 +828,43 @@ def cancel_plan(user_id: int, *, source_operation_id: str) -> dict:
     }
 
 
-def get_plan_status(user_id: int) -> dict:
+def get_plan_status(user_id: int, *, authorize: AssistantAuthorization | None = None) -> dict:
     """Return the one derived current mode and current-plan summary."""
     from app.db import SessionLocal  # lazy
     from app.lifecycle import (  # lazy
         LifecycleInvariantError,
         LifecycleTransitionError,
+        is_completion_ready,
         read_lifecycle_status,
     )
 
     with SessionLocal() as db:
+        if authorize is not None:
+            authorize(db)
         try:
             status = read_lifecycle_status(db, user_id)
         except (LifecycleInvariantError, LifecycleTransitionError) as exc:
             raise ValueError(str(exc)) from exc
 
-    return status.to_runtime_payload()
+        result = status.to_runtime_payload()
+        if authorize is not None:
+            from app.privacy import read_pinned_notice
+            _, delivery_enabled = read_pinned_notice(db, user_id)
+            result["delivery_enabled"] = delivery_enabled
+        if status.plan_id is not None and status.steps_remaining == 0:
+            from app.db import AIPlan
+            from app.plan_completion.continuation import read_continuation_status
+
+            plan = db.get(AIPlan, status.plan_id)
+            if plan is not None and is_completion_ready(db, plan):
+                result["cycle_ending"] = True
+                result["continuation_state"] = read_continuation_status(
+                    db, plan.id, datetime.now(timezone.utc),
+                )
+        return result
 
 
-def pause_plan(user_id: int, *, source_operation_id: str) -> dict:
+def pause_plan(user_id: int, *, source_operation_id: str, authorize: AssistantAuthorization | None = None) -> dict:
     """Pause an active plan.
 
     Delegates to the plan-centric aggregate operation.
@@ -825,6 +874,8 @@ def pause_plan(user_id: int, *, source_operation_id: str) -> dict:
     from app.lifecycle_reconciliation import reconcile_scheduler_effects  # lazy
 
     with SessionLocal() as db:
+        if authorize is not None:
+            authorize(db)
         try:
             result = transition_current_plan(
                 db,
@@ -881,7 +932,7 @@ def pause_plan(user_id: int, *, source_operation_id: str) -> dict:
     }
 
 
-def resume_plan(user_id: int, *, source_operation_id: str) -> dict:
+def resume_plan(user_id: int, *, source_operation_id: str, authorize: AssistantAuthorization | None = None) -> dict:
     """Resume a paused plan.
 
     Delegates to the plan-centric aggregate operation.
@@ -891,6 +942,8 @@ def resume_plan(user_id: int, *, source_operation_id: str) -> dict:
     from app.lifecycle_reconciliation import reconcile_scheduler_effects  # lazy
 
     with SessionLocal() as db:
+        if authorize is not None:
+            authorize(db)
         try:
             result = transition_current_plan(
                 db,

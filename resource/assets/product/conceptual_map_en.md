@@ -105,9 +105,9 @@ This is a core system principle, not an optional setting.
 
 ---
 
-## 7. What the Coach takes into account
+## 7. What the AI assistant takes into account
 
-The Coach receives the current conversation and the available system context
+The AI assistant receives the current conversation and the available system context
 about the current 7 or 14 days so it can respond consistently without starting
 every conversation from zero.
 
@@ -227,7 +227,7 @@ and feel less depleted by the end of the day.
 
 ## 15. Conversation outside the schedule
 
-The user can write to the Coach at any time.
+The user can write to the AI assistant at any time.
 
 While the current 7 or 14 days are active, the bot initiates only scheduled
 exercises: one on each selected working day in the 7-day format or two in the

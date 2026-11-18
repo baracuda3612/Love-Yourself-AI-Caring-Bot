@@ -82,7 +82,7 @@ def get_unused_quote(persona: str, used_indices: list[int]) -> tuple[str, str, s
     return item["text"], item["author"], item.get("why", ""), idx
 
 
-def get_coach_voice(persona: str) -> str | None:
+def get_assistant_voice(persona: str) -> str | None:
     catalog = get_pulse_catalog()
-    phrases = catalog.get("coach_voice", {}).get(persona, [])
+    phrases = catalog.get("assistant_voice", {}).get(persona, [])
     return random.choice(phrases) if phrases else None

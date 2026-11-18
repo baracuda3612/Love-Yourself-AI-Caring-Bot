@@ -2,7 +2,7 @@
 # Love Yourself — Wellness Bot pre-MVP
 
 The current implementation combines an aiogram polling bot, FastAPI report
-pages, APScheduler delivery, deterministic plan generation and OpenAI-backed Coach behavior,
+pages, APScheduler delivery, deterministic plan generation and an OpenAI-backed AI assistant,
 PostgreSQL, and optional local Redis-backed state.
 
 Implementation progress: B3, WP-04.1 and WP-04.2 are verified. The founder merged

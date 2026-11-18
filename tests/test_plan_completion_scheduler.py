@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from pathlib import Path
+from threading import Event
 from unittest.mock import AsyncMock
 
 import pytest
@@ -58,6 +59,59 @@ def test_database_outage_keeps_an_isolated_short_alarm(monkeypatch):
     scheduler.enable_completion_recovery()
     assert calls[0]['jobstore']=='completion_recovery'
     assert before+timedelta(seconds=29)<calls[0]['next_run_time']<before+timedelta(seconds=32)
+
+
+def test_slow_continuation_does_not_hold_another_owner(monkeypatch):
+    slow_started = Event()
+    release_slow = Event()
+    healthy_finished = Event()
+
+    def complete(user_id, plan_id):
+        if plan_id == 101:
+            slow_started.set()
+            assert release_slow.wait(5)
+        else:
+            healthy_finished.set()
+
+    monkeypatch.setattr(scheduler, 'request_plan_completion', complete)
+    monkeypatch.setattr(scheduler, 'enable_completion_recovery', lambda: None)
+    try:
+        assert scheduler._submit_continuation(1, 101)
+        assert slow_started.wait(1)
+        assert scheduler._submit_continuation(2, 202)
+        assert healthy_finished.wait(1)
+        assert scheduler._submit_continuation(1, 101) is False
+    finally:
+        release_slow.set()
+
+
+@pytest.mark.parametrize('lane', ['schedule', 'report'])
+def test_slow_completion_recovery_work_does_not_hold_another_owner(monkeypatch, lane):
+    from threading import Event
+
+    slow_started = Event()
+    release_slow = Event()
+    healthy_finished = Event()
+    monkeypatch.setattr(scheduler, 'enable_completion_recovery', lambda: None)
+    executor = getattr(scheduler, f'_{lane}_workers')
+    lock = getattr(scheduler, f'_{lane}_inflight_lock')
+    inflight = getattr(scheduler, f'_{lane}_inflight')
+
+    def work(plan_id):
+        if plan_id == 101:
+            slow_started.set()
+            assert release_slow.wait(5)
+        else:
+            healthy_finished.set()
+
+    try:
+        assert scheduler._submit_lane(executor, lock, inflight, 101, work, 101)
+        assert slow_started.wait(1)
+        assert scheduler._submit_lane(executor, lock, inflight, 202, work, 202)
+        assert healthy_finished.wait(1)
+        assert scheduler._submit_lane(executor, lock, inflight, 101, work, 101) is False
+    finally:
+        release_slow.set()
 
 
 @pytest.mark.parametrize('outcome',['sent','uncertain','retryable','failed'])

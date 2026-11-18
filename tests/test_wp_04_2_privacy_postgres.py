@@ -77,6 +77,27 @@ def subject(db):
     return user, dep, notice
 
 
+def test_coach_notice_snapshot_does_not_wait_for_another_users_deployment_lock(engine):
+    from uuid import uuid4
+
+    with Session(engine) as setup:
+        first, dep, notice = subject(setup)
+        second = m.User(tg_id=uuid4().int % 10**12, is_active=True)
+        setup.add(second)
+        setup.flush()
+        enroll(setup, second, target=dep)
+        privacy.acknowledge_notice(setup, first.id, notice.id, 'coach:first:ack')
+        privacy.acknowledge_notice(setup, second.id, notice.id, 'coach:second:ack')
+        first_id, second_id, deployment_id, notice_id = first.id, second.id, dep.id, notice.id
+        setup.commit()
+
+    with Session(engine) as locked, Session(engine) as reader:
+        privacy.pinned_notice(locked, first_id, acknowledged=True)
+        reader.execute(text("SET LOCAL statement_timeout = '1000ms'"))
+        access_key, enabled = privacy.read_pinned_notice(reader, second_id)
+        assert access_key == (deployment_id, notice_id) and enabled is True
+
+
 def test_exact_notice_receipt_pin_change_and_immutable_content(db):
     user, dep, notice = subject(db)
     with pytest.raises(privacy.NoticeRequired): privacy.pinned_notice(db,user.id,acknowledged=True)

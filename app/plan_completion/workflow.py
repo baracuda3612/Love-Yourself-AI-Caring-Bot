@@ -2,28 +2,13 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import exists, func
+from sqlalchemy import func
 
 from app.active_days import resolve_timezone
 from app.db import AIPlan, AIPlanDay, AIPlanStep, PlanCompletion, User
 from app.plan_completion.chronology import utc
 
 SEND_TIMEOUT = timedelta(minutes=2)
-UNCERTAIN_TTL = timedelta(minutes=10)
-
-
-def blocked_successor(plan_id):
-    """SQL predicate shared by schedule, send, due scan, and product expiry."""
-    return exists().where(
-        PlanCompletion.successor_plan_id == plan_id,
-        PlanCompletion.state.notin_(['sent', 'released']),
-    )
-
-
-def successor_delivery_blocked(db, plan_id):
-    return bool(db.query(blocked_successor(plan_id)).scalar())
-
-
 def lock_obligation(db, user_id, plan_id):
     from app.lifecycle import _lock_user
     _lock_user(db, user_id, require_entitlement=False)
@@ -57,7 +42,6 @@ def refresh_report_time(db, user, successor_id, *, calendar_changed=False):
 
 
 def continuation_text(db, row, user, now):
-    from app.lifecycle import refresh_completion_successor
     successor = db.get(AIPlan, row.successor_plan_id)
     if successor.status == 'abandoned':
         return 'Автоматичне продовження скасовано або замінено за твоїм запитом.'
@@ -67,11 +51,17 @@ def continuation_text(db, row, user, now):
             'Щоб отримувати нові вправи, зніми паузу.')
     if successor.status != 'active':
         return 'Налаштування наступного плану вже змінено.'
-    first = refresh_completion_successor(db, user=user, plan=successor, report_at=now)
+    first = db.query(func.min(AIPlanStep.scheduled_for)).join(AIPlanDay).filter(
+        AIPlanDay.plan_id == successor.id,
+        AIPlanStep.step_status == 'pending',
+        AIPlanStep.scheduled_for > now,
+    ).scalar()
+    if first is None:
+        return 'Актуальний час нагадувань можна перевірити в розділі «Мій розклад».'
     local_first = utc(first).astimezone(resolve_timezone(user.timezone))
     return (
-        f'Наступні {successor.total_days} робочих днів уже готові в тому самому ритмі.\n'
-        f'Перша вправа прийде {local_first:%d.%m.%Y} о {local_first:%H:%M} ({local_first:%Z}).\n'
+        f'Твій план продовжується у форматі на {successor.total_days} робочих днів.\n'
+        f'Наступну вправу заплановано {local_first:%d.%m.%Y} о {local_first:%H:%M} ({local_first:%Z}).\n'
         'Щоб змінити формат, час, призупинити чи скасувати план — просто скажи.'
     )
 
@@ -81,33 +71,21 @@ class ReportClaim:
     plan_id: int
     chat_id: int
     payload: str
-    release: bool = False
 
 
-def claim_report(db, user_id, plan_id, *, now=None, release_operation_id=None):
+def claim_report(db, user_id, plan_id, *, now=None):
     now = now or datetime.now(timezone.utc)
     row = lock_obligation(db, user_id, plan_id)
     if row is None:
         return None
-    release = release_operation_id is not None
-    if release:
-        from app.lifecycle import find_lifecycle_operation, record_lifecycle_operation
-        if find_lifecycle_operation(db, user_id, release_operation_id):
-            return None
-        if row.state not in ('uncertain', 'release_uncertain', 'failed', 'sent_held'):
-            return None
-        last_start = row.release_started_at or row.started_at
-        if last_start and now < utc(last_start) + UNCERTAIN_TTL:
-            return None
-    else:
-        if row.state in ('in_flight', 'release_in_flight'):
-            started = row.release_started_at if row.state == 'release_in_flight' else row.started_at
-            if now >= utc(started) + SEND_TIMEOUT:
-                row.state = 'release_uncertain' if row.state == 'release_in_flight' else 'uncertain'
-                row.failure_code = 'interrupted_send'
-            return None
-        if row.state != 'pending' or now < utc(row.wake_at):
-            return None
+    if row.state in ('in_flight', 'release_in_flight'):
+        started = row.release_started_at if row.state == 'release_in_flight' else row.started_at
+        if now >= utc(started) + SEND_TIMEOUT:
+            row.state = 'release_uncertain' if row.state == 'release_in_flight' else 'uncertain'
+            row.failure_code = 'interrupted_send'
+        return None
+    if row.state != 'pending' or now < utc(row.wake_at):
+        return None
     user = db.get(User, user_id)
     from app.access import may_access
     if not may_access(db, user_id, delivery=True) or not user.tg_id:
@@ -117,35 +95,26 @@ def claim_report(db, user_id, plan_id, *, now=None, release_operation_id=None):
     # Every attempted send first resolves current controls and future chronology.
     # No network call or receipt exists if generation fails: pending remains safe.
     continuation = continuation_text(db, row, user, now)
-    if release:
-        prefix = 'Підсумок доставлено із затримкою. Оновлюємо початок плану.' if row.sent_at else 'Доставку підсумку не підтверджено. Повторно його не надсилаємо.'
-        payload = prefix + '\n\n' + continuation
-        record_lifecycle_operation(db, user_id=user_id, plan_id=plan_id,
-            source_operation_id=release_operation_id, operation='release_continuation', result_status='claimed')
-        row.release_started_at = now
-        row.release_payload = payload
-        row.state = 'release_in_flight'
-    else:
-        from app.plan_completion.metrics import build_completion_metrics
-        from app.plan_completion.report import build_completion_report
-        from app.plan_completion.tokens import issue_report_grant
-        from app.config import settings
-        metrics = build_completion_metrics(db, user_id, plan_id)
-        payload = build_completion_report(metrics, continuation=continuation)
-        token = issue_report_grant(db, user_id, plan_id, 'completion_report')
-        url = f'{settings.APP_BASE_URL}/report/{token}'
-        payload += f'\n\n🔗 <a href="{url}">Детальний звіт →</a> (посилання діє 7 днів)'
-        row.payload = payload
-        row.started_at = now
-        row.attempts += 1
-        row.state = 'in_flight'
+    from app.plan_completion.metrics import build_completion_metrics
+    from app.plan_completion.report import build_completion_report
+    from app.plan_completion.tokens import issue_report_grant
+    from app.config import settings
+    metrics = build_completion_metrics(db, user_id, plan_id)
+    payload = build_completion_report(metrics, continuation=continuation)
+    token = issue_report_grant(db, user_id, plan_id, 'completion_report')
+    url = f'{settings.APP_BASE_URL}/report/{token}'
+    payload += f'\n\n🔗 <a href="{url}">Детальний звіт →</a> (посилання діє 7 днів)'
+    row.payload = payload
+    row.started_at = now
+    row.attempts += 1
+    row.state = 'in_flight'
     if row.chat_id is None:
         row.chat_id = user.tg_id
     elif row.chat_id != user.tg_id:
         raise ValueError('completion_chat_changed')
     row.wake_at = now + SEND_TIMEOUT
     db.flush()
-    return ReportClaim(plan_id, user.tg_id, payload, release)
+    return ReportClaim(plan_id, user.tg_id, payload)
 
 
 def finish_report(db, user_id, claim, *, outcome, message_id=None, retry_after=None, now=None):
@@ -153,42 +122,13 @@ def finish_report(db, user_id, claim, *, outcome, message_id=None, retry_after=N
     row = lock_obligation(db, user_id, claim.plan_id)
     if row is None:
         return
-    expected_payload = row.release_payload if claim.release else row.payload
-    if expected_payload != claim.payload:
-        return
-    if row.state in ('sent', 'sent_held', 'released'):
-        return
-    if not claim.release and row.release_started_at is not None:
-        if outcome == 'sent' and row.sent_at is None:
-            row.sent_at, row.message_id = now, message_id
-            db.flush()
+    if row.payload != claim.payload or row.state not in ('in_flight', 'uncertain'):
         return
     if outcome == 'sent':
-        if claim.release:
-            row.state = 'released'
-            row.released_at = now
-            row.release_message_id = message_id
-        else:
-            row.state = 'sent'
-            row.sent_at = now
-            row.message_id = message_id
-        # A response crossing local midnight can invalidate the promised seam.
-        # Preserve the actual receipt, but require the same explicit recovery
-        # confirmation instead of releasing work against an obsolete promise.
-        successor = db.get(AIPlan, row.successor_plan_id)
-        first = db.query(func.min(AIPlanStep.scheduled_for)).join(AIPlanDay).filter(
-            AIPlanDay.plan_id == successor.id, AIPlanStep.step_status == 'pending').scalar()
-        user = db.get(User, user_id)
-        tz = resolve_timezone(user.timezone)
-        late = successor.status == 'active' and first is not None and utc(first).astimezone(tz).date() <= now.astimezone(tz).date()
-        if late:
-            row.state = 'release_uncertain' if claim.release else 'sent_held'
-        row.schedule_pending = not late
-        row.wake_at = now
-        row.failure_code = 'late_confirmation' if late else None
-    elif claim.release:
-        row.state = 'release_uncertain'
-        row.failure_code = 'release_unconfirmed'
+        row.state = 'sent'
+        row.sent_at = now
+        row.message_id = message_id
+        row.failure_code = None
     elif outcome == 'retryable' and row.attempts < 3:
         row.state = 'pending'
         row.wake_at = now + timedelta(seconds=max(30, retry_after or 30))
@@ -197,7 +137,7 @@ def finish_report(db, user_id, claim, *, outcome, message_id=None, retry_after=N
         row.state = 'uncertain' if outcome == 'uncertain' else 'failed'
         row.failure_code = outcome
     db.flush()
-    if outcome == 'sent' and not claim.release:
+    if outcome == 'sent':
         # Receipt durability does not depend on secondary telemetry availability.
         try:
             with db.begin_nested():
@@ -213,7 +153,7 @@ def finish_report(db, user_id, claim, *, outcome, message_id=None, retry_after=N
             logging.getLogger(__name__).exception('Completion receipt saved; telemetry unavailable plan=%s',claim.plan_id)
 
 
-async def deliver_report(user_id, plan_id, *, release_operation_id=None):
+async def deliver_report(user_id, plan_id):
     """Claim/receipt work is off the polling loop; an ambiguous call never resends."""
     import asyncio
     from app.db import SessionLocal
@@ -225,7 +165,7 @@ async def deliver_report(user_id, plan_id, *, release_operation_id=None):
 
     def claim_transaction():
         with SessionLocal() as db:
-            claim = claim_report(db, user_id, plan_id, release_operation_id=release_operation_id)
+            claim = claim_report(db, user_id, plan_id)
             db.commit()
             return claim
     try:

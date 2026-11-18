@@ -307,7 +307,7 @@ def derive_current_mode_from_facts(
     onboarding_completed_at: datetime | None,
     current_plan_status: str | None,
 ) -> CurrentMode:
-    """Pure mode derivation used by every UI, Coach, and scheduler reader."""
+    """Pure mode derivation used by every UI, the AI assistant, and scheduler reader."""
     if current_plan_status == "active":
         return CurrentMode.ACTIVE
     if current_plan_status == "paused":
@@ -777,7 +777,7 @@ def recover_current_plan_activation(
     plan_type: str,
     required_previous_status: str | None = None,
 ) -> LifecycleResult:
-    """Recover the recorded current activation independently of a Coach call id."""
+    """Recover the recorded current activation independently of the AI assistant call ID."""
     _lock_user(db, user_id)
     plan = get_current_plan(db, user_id, lock=True)
     if plan is None or _plan_type(plan) != plan_type:
@@ -840,7 +840,7 @@ def _resume_completion_effects(db: Session, plan: AIPlan, *, arm: bool) -> tuple
         return ()
     if arm:
         row.schedule_pending = True
-        row.wake_at = datetime.now(timezone.utc)
+        row.schedule_wake_at = datetime.now(timezone.utc)
     if not row.schedule_pending:
         return ()
     return (ExternalEffect(kind="reconcile_completion_schedule", target_ids=(int(plan.id),)),)
@@ -1381,6 +1381,23 @@ def expire_plan_step(
     return result
 
 
+def is_completion_ready(db: Session, plan: AIPlan) -> bool:
+    """Check the same terminal facts before claiming and finalizing a cycle."""
+    from app.plan_completion.chronology import last_terminal_step
+
+    steps = db.query(AIPlanStep.id).join(AIPlanDay).filter(AIPlanDay.plan_id == plan.id)
+    has_steps, has_open, has_unproven_terminal = db.query(
+        steps.exists(),
+        steps.filter(AIPlanStep.step_status.notin_(TERMINAL_STEP_STATUSES)).exists(),
+        steps.filter(AIPlanStep.terminal_at.is_(None), AIPlanStep.version != 0).exists(),
+    ).one()
+    if not has_steps or has_open or has_unproven_terminal:
+        return False
+    if plan.status == "paused":
+        return last_terminal_step(db, plan.id).step_status in {"completed", "skipped"}
+    return plan.status == "active"
+
+
 def complete_current_plan_if_ready(
     db: Session,
     *,
@@ -1419,40 +1436,9 @@ def complete_current_plan_if_ready(
         )
 
     plan = get_current_plan(db, user_id, lock=True)
-    if plan is None or plan.id != plan_id:
+    if plan is None or plan.id != plan_id or not is_completion_ready(db, plan):
         return None
-    if str(plan.status) not in {"active", "paused"}:
-        return None
-    carry_pause = str(plan.status) == "paused"
-
-    total_steps = (
-        db.query(func.count(AIPlanStep.id))
-        .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
-        .filter(AIPlanDay.plan_id == plan.id)
-        .scalar()
-    )
-    open_steps = (
-        db.query(func.count(AIPlanStep.id))
-        .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
-        .filter(
-            AIPlanDay.plan_id == plan.id,
-            AIPlanStep.step_status.notin_(TERMINAL_STEP_STATUSES),
-        )
-        .scalar()
-    )
-    unproven_terminal = (
-        db.query(func.count(AIPlanStep.id))
-        .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
-        .filter(
-            AIPlanDay.plan_id == plan.id,
-            AIPlanStep.step_status.in_(TERMINAL_STEP_STATUSES),
-            AIPlanStep.terminal_at.is_(None),
-            AIPlanStep.version != 0,
-        )
-        .scalar()
-    )
-    if not total_steps or open_steps or unproven_terminal:
-        return None
+    carry_pause = plan.status == "paused"
 
     from app.db import PlanCompletion
     from app.plan_completion.chronology import report_due_at, last_terminal_step
@@ -1461,8 +1447,6 @@ def complete_current_plan_if_ready(
 
     now = now or datetime.now(timezone.utc)
     last_terminal = last_terminal_step(db, plan.id)
-    if carry_pause and last_terminal.step_status not in {"completed", "skipped"}:
-        return None
     user = db.get(User, user_id)
     report_at = report_due_at(user, last_terminal, now=now)
     slots = _completion_time_slots(user, plan)
@@ -1475,7 +1459,7 @@ def complete_current_plan_if_ready(
         db, user_id, plan_type, day_time=slots["DAY"], evening_time=slots.get("EVENING"),
         source_operation_id=f"continuation:{plan.id}",
         activation_receipt_status="active",
-        start_after_local_date=max(now, report_at).astimezone(resolve_timezone(user.timezone)).date(),
+        start_after_local_date=now.astimezone(resolve_timezone(user.timezone)).date(),
     ).plan
     if carry_pause:
         successor.status = "paused"
@@ -1486,7 +1470,7 @@ def complete_current_plan_if_ready(
     db.add(PlanCompletion(
         plan_id=plan.id, successor_plan_id=successor.id,
         report_at=report_at, wake_at=max(now, report_at), state="pending", attempts=0,
-        schedule_pending=False,
+        schedule_pending=not carry_pause, schedule_wake_at=now if not carry_pause else None,
     ))
     record_lifecycle_operation(
         db,
@@ -1537,6 +1521,30 @@ def _followup_evening_source_id(source_operation_id: str) -> str:
         raise LifecycleTransitionError("invalid_source_operation_id")
     digest = hashlib.sha256(source_operation_id.encode()).hexdigest()[:32]
     return f"followup-evening:{digest}"
+
+
+def has_pending_medium_intent(
+    db: Session, *, user_id: int, plan_id: int, context: str, source_operation_id: str,
+) -> bool:
+    """Bind the transient the AI assistant wait to the latest persisted MEDIUM intent."""
+    if context == "followup":
+        operation = "prepare_followup_evening"
+        source_operation_id = _followup_evening_source_id(source_operation_id)
+    elif context == "switch":
+        operation = "switch_plan_format"
+    else:
+        return False
+    receipt = (
+        db.query(PlanLifecycleOperation)
+        .filter_by(user_id=user_id, plan_id=plan_id, operation=operation)
+        .order_by(PlanLifecycleOperation.id.desc())
+        .first()
+    )
+    return (
+        receipt is not None
+        and receipt.source_operation_id == source_operation_id
+        and receipt.result_status == "MEDIUM"
+    )
 
 
 def prepare_followup_evening_collection(
@@ -2700,28 +2708,6 @@ def _completion_time_slots(user: User, plan: AIPlan) -> dict[str, str]:
             raise LifecycleTransitionError("saved_evening_time_missing")
         slots["EVENING"] = canonicalize_hhmm(raw.get("EVENING") if isinstance(raw, dict) else None)
     return slots
-
-
-def refresh_completion_successor(db: Session, *, user: User, plan: AIPlan, report_at: datetime) -> datetime:
-    """Re-anchor only unstarted automatic work before a fresh report promise.
-
-    Caller holds the user lock. User controls remain the schedule authority.
-    """
-    from app.active_days import resolve_timezone
-    from app.time_slots import reanchor_pending_plan_steps
-    first = (db.query(func.min(AIPlanStep.scheduled_for)).join(AIPlanDay)
-             .filter(AIPlanDay.plan_id == plan.id, AIPlanStep.step_status == "pending").scalar())
-    if first is None:
-        raise LifecycleInvariantError("continuation_has_no_pending_steps")
-    tz = resolve_timezone(user.timezone)
-    if first.astimezone(tz).date() <= report_at.astimezone(tz).date():
-        reanchor_pending_plan_steps(user, plan, resumed_at=report_at,
-            daily_time_slots=_completion_time_slots(user, plan))
-        plan.version = int(plan.version or 0) + 1
-        db.flush()
-        first = (db.query(func.min(AIPlanStep.scheduled_for)).join(AIPlanDay)
-                 .filter(AIPlanDay.plan_id == plan.id, AIPlanStep.step_status == "pending").scalar())
-    return first
 
 
 def plan_completion_at(db: Session, plan_id: int) -> datetime | None:

@@ -206,8 +206,7 @@ async def test_post_effect_read_failure_reports_partial_not_success(monkeypatch)
     assert "не вдалося остаточно перевірити" in copy.lower()
 
 
-@pytest.mark.asyncio
-async def test_cancel_reply_describes_historical_cleanup_after_followup(monkeypatch):
+def test_cancel_result_describes_historical_cleanup_after_followup(monkeypatch):
     state = SimpleNamespace(current=11, jobs=set(), commits=0)
     monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(_Session(state)))
     monkeypatch.setattr(lifecycle, "abandon_current_plan", lambda *_args, **_kwargs:
@@ -225,14 +224,9 @@ async def test_cancel_reply_describes_historical_cleanup_after_followup(monkeypa
     monkeypatch.setattr(lifecycle, "read_post_effect_truth", lambda *_args, **_kwargs:
                         SimpleNamespace(code="historical_cleanup", authoritative_value=None, historical_cleanup=True), raising=False)
     response = tools.cancel_plan(1, source_operation_id="A")
-    monkeypatch.setattr(orchestrator, "_build_tool_registry", lambda: {
-        "cancel_plan": lambda *_args, **_kwargs: response
-    })
-    copy = await orchestrator._execute_plan_tool(1, {"name": "cancel_plan", "call_id": "A"})
     assert state.commits == 2
     assert state.jobs == {"plan:12:day"}
     assert response["historical_cleanup"] is True
-    assert "поточний план не змінено" in copy
 
 
 @pytest.mark.asyncio

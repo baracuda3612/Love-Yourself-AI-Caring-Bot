@@ -4,15 +4,13 @@ import json
 import re
 from pathlib import Path
 
-from datetime import datetime, timezone
 from html import escape
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
 from app.active_days import resolve_active_days
-from app.db import AIPlanDay, AIPlanStep
 from app.onboarding import DAYS, SetupScreen, zone_label
+from app.plan_schedule import read_next_reminder
 from app.time_slots import resolve_daily_time_slots
 
 DATA = "Мої дані"
@@ -111,29 +109,9 @@ def schedule_text(db, user, plan, *, delivery):
         f"<b>Мій розклад</b>\n\nСтан: {status}\nДні: {days}\n"
         f"Час: {times}\nЧасовий пояс: {escape(zone_label(user.timezone))}"
     )
-    from app.plan_completion.workflow import successor_delivery_blocked
-
-    if (
-        plan.status == "paused" or not user.timezone or not delivery
-        or successor_delivery_blocked(db, plan.id)
-    ):
-        return body
-    try:
-        zone = ZoneInfo(user.timezone)
-    except (ValueError, ZoneInfoNotFoundError):
-        return body
-    next_step = (
-        db.query(AIPlanStep.scheduled_for)
-        .join(AIPlanDay)
-        .filter(
-            AIPlanDay.plan_id == plan.id,
-            AIPlanStep.step_status == "pending",
-            AIPlanStep.scheduled_for > datetime.now(timezone.utc),
-        )
-        .order_by(AIPlanStep.scheduled_for)
-        .first()
+    _, local = read_next_reminder(
+        db, plan.id, paused=plan.status == "paused", timezone_name=user.timezone, delivery=delivery,
     )
-    if next_step is None:
+    if local is None:
         return body
-    local = next_step.scheduled_for.astimezone(zone)
     return f"{body}\nНаступне заплановане нагадування: {local:%d.%m.%Y о %H:%M}"

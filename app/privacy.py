@@ -1,4 +1,4 @@
-"""Minimum privacy authority. Local operators own manual fulfillment, never Coach.
+"""Minimum privacy authority. Local operators own manual fulfillment, never the AI assistant.
 
 Lock order is user -> deployments -> request. Callers commit notice/request
 operations; delete_account owns its explicit recovery transactions.
@@ -44,6 +44,44 @@ def pinned_notice(db, user_id, *, acknowledged=False):
             raise NoticeRequired()
         notice_cache.stage_committed_ack(db, user_id, deployment.id, notice.id)
     return deployment, notice
+
+
+def read_pinned_notice(db, user_id):
+    """One unlocked read snapshot for Coach context; actions still reauthorize."""
+    now = utcnow()
+    user = models.User
+    enrollment = models.DeploymentEnrollment
+    entitlement = models.AccessEntitlement
+    deployment = models.Deployment
+    notice = models.PrivacyNoticeVersion
+    acknowledgement = models.NoticeAcknowledgement
+    row = (db.query(deployment.id, deployment.delivery_enabled, notice.id,
+                    notice.notice_text, notice.content_digest, notice.published_at,
+                    notice.retired_at, acknowledgement.id)
+        .join(enrollment, enrollment.deployment_id == deployment.id)
+        .join(user, user.id == enrollment.user_id)
+        .join(entitlement, entitlement.id == enrollment.entitlement_id)
+        .join(notice, notice.id == deployment.notice_version_id)
+        .outerjoin(acknowledgement, and_(
+            acknowledgement.user_id == user_id,
+            acknowledgement.deployment_id == deployment.id,
+            acknowledgement.notice_version_id == notice.id))
+        .filter(user.id == user_id, user.is_active.is_(True),
+                enrollment.ended_at.is_(None), enrollment.enrolled_at <= now,
+                entitlement.deployment_id == deployment.id,
+                entitlement.granted_at <= now,
+                or_(entitlement.revoked_at.is_(None), entitlement.revoked_at > now),
+                deployment.environment == environment(),
+                or_(deployment.starts_at.is_(None), deployment.starts_at <= now),
+                or_(deployment.ends_at.is_(None), deployment.ends_at > now))
+        .one_or_none())
+    if row is None:
+        raise AccessDenied()
+    deployment_id, delivery_enabled, notice_id, text, digest, published_at, retired_at, ack_id = row
+    if (not text or retired_at is not None or published_at > now
+            or sha256(text.encode()).hexdigest() != digest or ack_id is None):
+        raise NoticeRequired()
+    return (deployment_id, notice_id), delivery_enabled
 
 
 def acknowledge_notice(db, user_id, notice_id, source_operation_id):

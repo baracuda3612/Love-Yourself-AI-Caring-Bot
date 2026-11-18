@@ -29,7 +29,7 @@ def extract_output_text(response: Any) -> str:
     The Responses API may expose the generated text via ``output_text``
     (newer SDKs) or nested under ``output[0].content[0].text``. Using this
     helper prevents AttributeErrors that would otherwise force the
-    orchestrator to fall back to the default coach agent.
+    orchestrator to fall back to the default AI assistant.
     """
 
     text = getattr(response, "output_text", None)
@@ -68,11 +68,11 @@ def extract_tool_call(response: Any) -> dict | None:
         for item in output:
             if getattr(item, "type", None) == "function_call":
                 name = getattr(item, "name", None)
-                raw_args = getattr(item, "arguments", None) or "{}"
+                raw_args = getattr(item, "arguments", None)
                 try:
                     arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
                 except (ValueError, TypeError):
-                    arguments = {}
+                    arguments = None
                 if name:
                     return {
                         "name": name,

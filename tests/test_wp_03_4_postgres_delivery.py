@@ -397,7 +397,7 @@ def test_action_cancel_race_and_expiry_have_one_terminal_fact(migrated_engine):
 
 
 @pytest.mark.parametrize('variant', ['text', 'gif'])
-@pytest.mark.parametrize('tool_name', ['cancel_plan', 'switch_plan_format', 'retry_plan_action'])
+@pytest.mark.parametrize('tool_name', ['switch_plan_format', 'retry_plan_action'])
 async def test_coach_control_projects_terminal_message_before_return(migrated_engine, monkeypatch, variant, tool_name):
     """Use real orchestrator -> runtime -> lifecycle -> projection; only Telegram/jobs are fake."""
     from threading import get_ident

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Literal
 
 from aiogram.exceptions import (
@@ -37,6 +38,7 @@ class ExerciseSendResult:
     message_id: int | None = None
     failure_code: str | None = None
     retry_after: int | None = None
+    sent_at: datetime | None = None
 
     @property
     def delivered(self) -> bool:
@@ -55,7 +57,11 @@ def _confirmed_result(message, chat_id: int, variant, presentation, payload) -> 
     returned_chat = getattr(getattr(message, 'chat', None), 'id', None)
     if type(message_id) is not int or message_id <= 0 or returned_chat != chat_id:
         return ExerciseSendResult('uncertain', variant, presentation, payload, failure_code='missing_message_identity')
-    return ExerciseSendResult('delivered', variant, presentation, payload, returned_chat, message_id)
+    sent_at = getattr(message, 'date', None)
+    return ExerciseSendResult(
+        'delivered', variant, presentation, payload, returned_chat, message_id,
+        sent_at=sent_at if isinstance(sent_at, datetime) else None,
+    )
 
 
 async def send_exercise(

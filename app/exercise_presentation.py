@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, func, or_
+from sqlalchemy.orm import Session, aliased
 
 from app.content_library import ContentValidationError, selected_content
 
@@ -94,33 +95,65 @@ def step_presentation(db: Session, step, *, user_timezone=None) -> ExercisePrese
     )
 
 
-def current_exercise_context(db: Session, user_id: int, plan_id: int, *, user_timezone=None) -> dict | None:
-    """Only a receipt-proven delivery on the user's named current plan.
+def current_exercise_context(
+    db: Session, user_id: int, plan_id: int, *, user_timezone=None, now=None,
+) -> dict | None:
+    """Read today's last confirmed delivery across an automatic cycle handoff."""
+    from app.db import AIPlan, AIPlanDay, AIPlanStep, ExerciseDelivery, PlanCompletion, PlanLifecycleOperation
 
-    ``tg_message_id`` is cleared after terminal keyboard cleanup, so it is
-    not a durable marker that an exercise was shown.
-    """
-    from app.db import AIPlan, AIPlanDay, AIPlanStep, PlanLifecycleOperation
-
-    step = (
-        db.query(AIPlanStep)
+    tz = user_timezone or timezone.utc
+    now = now or datetime.now(timezone.utc)
+    local_day = now.astimezone(tz).date()
+    # For legacy sends, the immutable lifecycle receipt is the delivery clock.
+    # The newer attempt stores the actual confirmation time, including recovery.
+    delivered_at = func.coalesce(ExerciseDelivery.confirmed_at, PlanLifecycleOperation.created_at)
+    successor = aliased(AIPlan)
+    completed_source_id = (
+        db.query(PlanCompletion.plan_id)
+        .join(successor, successor.id == PlanCompletion.successor_plan_id)
+        .filter(
+            successor.id == plan_id, successor.user_id == user_id,
+            successor.status.in_(('active', 'paused')),
+        )
+        .scalar_subquery()
+    )
+    deliveries = (
+        db.query(AIPlanStep, delivered_at, AIPlan.id)
         .join(AIPlanDay, AIPlanStep.day_id == AIPlanDay.id)
         .join(AIPlan, AIPlanDay.plan_id == AIPlan.id)
         .join(PlanLifecycleOperation, PlanLifecycleOperation.plan_step_id == AIPlanStep.id)
+        .outerjoin(ExerciseDelivery, (ExerciseDelivery.plan_step_id == AIPlanStep.id)
+                   & (ExerciseDelivery.state == 'delivered'))
         .filter(
-            AIPlan.user_id == user_id, AIPlan.id == plan_id,
+            AIPlan.user_id == user_id,
+            or_(
+                and_(AIPlan.id == plan_id, AIPlan.status.in_(('active', 'paused'))),
+                and_(AIPlan.id == completed_source_id, AIPlan.status == 'completed'),
+            ),
             PlanLifecycleOperation.user_id == user_id,
-            PlanLifecycleOperation.plan_id == plan_id,
+            PlanLifecycleOperation.plan_id == AIPlan.id,
             PlanLifecycleOperation.operation == 'step_delivered',
             PlanLifecycleOperation.result_status == 'delivered',
+            # Bound the scan in UTC and check the calendar date in the user's zone.
+            delivered_at >= now - timedelta(days=2),
+            delivered_at <= now,
         )
-        .order_by(PlanLifecycleOperation.created_at.desc(), AIPlanStep.id.desc())
-        .first()
+        .order_by(
+            delivered_at.desc(),
+            ExerciseDelivery.message_id.desc().nulls_last(),
+            PlanLifecycleOperation.id.desc(),
+        )
     )
-    if step is None:
-        return None
-    try:
-        return step_presentation(db, step, user_timezone=user_timezone).to_payload()
-    except ContentValidationError:
-        # A gated record must not become Coach instructions through history.
-        return None
+    for step, confirmed_at, delivery_plan_id in deliveries:
+        if confirmed_at.tzinfo is None:
+            confirmed_at = confirmed_at.replace(tzinfo=timezone.utc)
+        if confirmed_at.astimezone(tz).date() == local_day:
+            try:
+                context = step_presentation(db, step, user_timezone=tz).to_payload()
+            except ContentValidationError:
+                # An ineligible version must not enter the AI assistant context.
+                return None
+            if delivery_plan_id != plan_id:
+                context["from_completed_cycle"] = True
+            return context
+    return None

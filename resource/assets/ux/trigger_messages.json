@@ -13,7 +13,7 @@
     ],
     "tone_rules": [
       "max 2 sentences",
-      "buddy tone — not coach, not doctor",
+      "warm, informal tone within the AI assistant role",
       "no exclamation after every sentence",
       "forbidden words: валідно, простір, ресурс, практика, інсайт, трансформація",
       "forbidden openers: Ти молодець, Чудово, Відмінно, Вітаю"

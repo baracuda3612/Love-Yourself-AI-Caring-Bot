@@ -87,11 +87,14 @@ def test_delivery_control_wakes_only_after_commit_and_retries_when_enabled(monke
     monkeypatch.setattr(access, 'set_deployment_controls',
         lambda db, **kwargs: calls.append('controls') or enabled)
     monkeypatch.setattr(scheduler, 'wake_scheduled_delivery_recovery',
-        lambda: calls.append('wake'))
+        lambda: calls.append('exercise_wake'))
+    monkeypatch.setattr(scheduler, 'enable_completion_recovery',
+        lambda: calls.append('completion_wake'))
     response = TestClient(api.app).post('/access/deployment/controls',
         json={'deployment_id': 17, 'enrollment_open': True, 'delivery_enabled': enabled})
     assert response.status_code == 200
-    assert calls == (['controls', 'commit', 'wake'] if enabled else ['controls', 'commit'])
+    assert calls[:2] == ['controls', 'commit']
+    assert set(calls[2:]) == ({'exercise_wake', 'completion_wake'} if enabled else set())
 
 
 def inventory(monkeypatch):
@@ -414,7 +417,7 @@ async def test_revocation_during_coach_generation_denies_reply_and_history(monke
     monkeypatch.setattr(orchestrator, '_auto_complete_plan_if_needed_for_user_id', no_completion)
     monkeypatch.setattr(orchestrator, 'derive_current_mode', lambda *_: CurrentMode.ACTIVE)
     monkeypatch.setattr(orchestrator, 'build_user_context', AsyncMock(return_value={'current_mode': CurrentMode.ACTIVE.value}))
-    monkeypatch.setattr(orchestrator, 'coach_agent', AsyncMock(return_value={'reply_text': 'private generated reply'}))
+    monkeypatch.setattr(orchestrator, 'assistant_agent', AsyncMock(return_value={'reply_text': 'private generated reply'}))
     from app import privacy
     monkeypatch.setattr(privacy,'pinned_notice',lambda *a,**k:None)
     response = await orchestrator.handle_incoming_message(77, 'hello')
