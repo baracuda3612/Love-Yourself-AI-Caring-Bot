@@ -35,6 +35,16 @@ disabled or already bounded path gets an explicit evidence-backed disposition.
 For confirmed defects, prefer the smallest coherent bound or retirement;
 avoid simply adding threads to an unbounded scan.
 
+**Cross-package resource owner:** the WP-SCALE-01 implementer owns one
+end-to-end budget for database connections, worker threads, in-flight jobs
+and admitted backlog across HTTP, Telegram polling/callbacks, scheduled
+delivery, receipts, completion recovery and privacy work. Account for both
+existing database pools together without assuming they must be unified.
+Define measurable limits and fair admission so bulk recovery or one slow
+participant leaves capacity for buttons and durable delivery receipts.
+Confirm the limits under concurrent representative workloads; a per-worker
+limit alone does not establish a safe combined budget.
+
 ## Acceptance for the remediation PR
 
 * Every active candidate has a bounded row/call budget, concurrency limit,
@@ -45,6 +55,13 @@ avoid simply adding threads to an unbounded scan.
   and disposable PostgreSQL for durable claims. They show an unrelated owner
   progresses, with exact DB/job/receipt effects and no duplicate sends or
   skipped due work. Report what was mocked or controlled.
+* Cover first-plan creation while operator delivery is disabled, followed by
+  re-enabling delivery **before** its first future exercise is due. Verify the
+  committed plan survives, the exact first scheduled job is registered before
+  its due time, and the exercise receives one confirmed delivery on schedule.
+  Distinguish this from the existing successor-cycle re-enable test. Treat
+  any failure as a finding only after proving the supported sequence on the
+  post-PR #275 baseline.
 * Measure local per-pass work, queue/recovery lag, DB pool and lock waits and
   event-loop lag where the implementation provides instrumentation. Preserve
   the measured setup and limits. Do not label a mock or static trace as
@@ -68,3 +85,11 @@ scale and release readiness remain `NOT_PROVEN`.
 
 After this annex PR merges, update the roadmap to mark it `VERIFIED` for
 integration and make [WP-05.2](WP-05.2_start_message.md) the current package.
+
+**Local implementation handoff, observed 2026-11-18:** an existing
+`fix/runtime-isolation` worktree contains commit `5866b8f` for HTTP isolation
+and an uncommitted `app/access.py` roster change. At kickoff inspect and
+reconcile both against the merged integration head before reusing them; neither
+is accepted merely because it exists locally. Use that worktree or a fresh branch
+according to whether parallel edits still need isolation, and preserve the
+uncommitted change until its owner/disposition is recorded.
