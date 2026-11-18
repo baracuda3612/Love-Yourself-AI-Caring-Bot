@@ -298,10 +298,9 @@ def _pending_medium_action(db: Session, user_id: int, facts: dict, pending: str 
 
 
 def _assistant_access(db: Session, user_id: int) -> tuple[tuple[int, int], bool]:
-    from app.privacy import pinned_notice
+    from app.privacy import read_pinned_notice
 
-    deployment, notice = pinned_notice(db, user_id, acknowledged=True)
-    return (deployment.id, notice.id), deployment.delivery_enabled
+    return read_pinned_notice(db, user_id)
 
 
 async def build_user_context(user_id: int, message_text: str) -> Dict[str, Any]:
@@ -507,6 +506,8 @@ def _format_plan_status(result: Dict[str, Any]) -> str:
     status_label = (
         "доставка вправ призупинена"
         if result.get("state") == "ACTIVE_PAUSED"
+        else "доставка вправ вимкнена оператором"
+        if result.get("delivery_enabled") is False
         else "доставка вправ активна"
     )
     return (
@@ -630,9 +631,13 @@ async def _execute_assistant_tool(user_id: int, tool_call: dict, context: dict, 
         return _INVALID_ASSISTANT_ACTION_REPLY
 
     def recheck(db: Session, *, after_evening_save: bool = False) -> None:
-        # pinned_notice locks the actor and enrollment deployment. Keep these
-        # locks through the lifecycle decision and commit in the tool's session.
-        access, _ = _assistant_access(db, user_id)
+        if name == "get_plan_status":
+            access, _ = _assistant_access(db, user_id)
+        else:
+            # Mutations keep the actor and deployment locks through commit.
+            from app.privacy import pinned_notice
+            deployment, notice = pinned_notice(db, user_id, acknowledged=True)
+            access = (deployment.id, notice.id)
         live = _assistant_plan_facts(db, db.get(User, user_id))
         identity = ("current_mode", "runtime_plan_id", "runtime_plan_version", "runtime_plan_type")
         if access != context["access"] or any(live[key] != context[key] for key in identity):

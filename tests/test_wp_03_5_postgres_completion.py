@@ -108,6 +108,32 @@ def first_step(db, plan_id):
     return db.query(AIPlanStep).join(AIPlanDay).filter(AIPlanDay.plan_id == plan_id).order_by(AIPlanStep.scheduled_for, AIPlanStep.id).first()
 
 
+def test_status_tool_uses_operator_delivery_control(db, monkeypatch):
+    from app import db as database, orchestrator, privacy
+    from app.db import Deployment, DeploymentEnrollment
+    from app.plan_runtime import tools
+
+    user, _plan = source_plan(db)
+    enrollment = db.query(DeploymentEnrollment).filter_by(user_id=user.id).one()
+    deployment = db.get(Deployment, enrollment.deployment_id)
+    notice = privacy.register_notice(
+        db, version=uuid4().hex, notice_text='Disposable exact notice', location='fixture',
+    )
+    deployment.notice_version_id = notice.id
+    db.flush()
+    privacy.acknowledge_notice(db, user.id, notice.id, 'status:notice:ack')
+    deployment.delivery_enabled = False
+    db.flush()
+
+    @contextmanager
+    def retained():
+        yield db
+    monkeypatch.setattr(database, 'SessionLocal', retained)
+    result = tools.get_plan_status(user.id, authorize=lambda _db: None)
+    assert result['delivery_enabled'] is False
+    assert 'доставка вправ вимкнена оператором' in orchestrator._format_plan_status(result)
+
+
 @pytest.mark.parametrize('slots,expected_time', [
     (None, '14:00'), ({}, '14:00'), ({'EVENING': '20:30'}, '14:00'),
     ({'DAY': '16:45'}, '16:45'),

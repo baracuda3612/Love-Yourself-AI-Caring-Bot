@@ -57,6 +57,10 @@ def chat(monkeypatch, coach_db):
         return SimpleNamespace(id=12, delivery_enabled=live.delivery_enabled), SimpleNamespace(id=live.notice)
 
     monkeypatch.setattr(privacy, 'pinned_notice', pinned_notice)
+    def read_pinned_notice(session, user_id):
+        deployment, notice = pinned_notice(session, user_id, acknowledged=True)
+        return (deployment.id, notice.id), deployment.delivery_enabled
+    monkeypatch.setattr(privacy, 'read_pinned_notice', read_pinned_notice)
     monkeypatch.setattr(access, 'require_access', Mock())
     monkeypatch.setattr(orchestrator, 'SessionLocal', lambda: nullcontext(db))
     monkeypatch.setattr(models, 'SessionLocal', lambda: nullcontext(db))
@@ -213,6 +217,54 @@ async def test_status_tool_reports_transition_after_last_exercise(chat, monkeypa
     assert 'доставка вправ активна' not in reply['reply_text']
     assert 'залишилось 0' not in reply['reply_text']
     assert 'Час наступної вправи поки не визначено' in reply['reply_text']
+
+
+async def test_status_tool_reports_operator_disabled_delivery(chat, monkeypatch):
+    _, live = chat
+    live.delivery_enabled = False
+
+    async def answer(**request):
+        assert 'get_plan_status' in {tool['name'] for tool in request['tools']}
+        return tool_response('get_plan_status', '{}')
+
+    provider(monkeypatch, answer)
+    reply = await orchestrator.handle_incoming_message(1, 'Чи працює доставка вправ?')
+    assert 'доставка вправ вимкнена оператором' in reply['reply_text']
+    assert 'доставка вправ активна' not in reply['reply_text']
+
+
+async def test_enrollment_middleware_slow_owner_does_not_hold_event_loop(monkeypatch):
+    from app import telegram
+
+    started = Event()
+    release = Event()
+
+    class Message:
+        def __init__(self, actor_id):
+            self.from_user = SimpleNamespace(id=actor_id)
+            self.chat = SimpleNamespace(id=actor_id, type='private')
+            self.text = 'Який стан плану?'
+            self.answer = AsyncMock()
+
+    def check(actor_id):
+        if actor_id == 1:
+            started.set()
+            assert release.wait(5)
+
+    monkeypatch.setattr(telegram, 'Message', Message)
+    monkeypatch.setattr(telegram, '_require_enrollment', check)
+    middleware = telegram.EnrollmentMiddleware()
+
+    async def handler(event, _data):
+        return event.from_user.id
+
+    slow = asyncio.create_task(middleware(handler, Message(1), {}))
+    try:
+        assert await asyncio.to_thread(started.wait, 1)
+        assert await asyncio.wait_for(middleware(handler, Message(2), {}), 1) == 2
+    finally:
+        release.set()
+    assert await slow == 1
 
 
 async def test_slow_context_database_read_does_not_hold_event_loop(chat, monkeypatch):

@@ -242,7 +242,7 @@ class ActorIngressMiddleware(BaseMiddleware):
 
 class EnrollmentMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
-        from app.access import AccessDenied, require_access
+        from app.access import AccessDenied
         message = event if isinstance(event, Message) else getattr(event, 'message', None)
         actor = getattr(event, 'from_user', None)
         if not actor or not message or message.chat.type != 'private' or message.chat.id != actor.id:
@@ -254,15 +254,23 @@ class EnrollmentMiddleware(BaseMiddleware):
         if isinstance(event, Message) and (event.text or ' ').split(' ', 1)[0].split('@')[0] in {'/start','/privacy','/data_request','/request_status'}:
             return await handler(event, data)
         try:
-            with SessionLocal() as db:
-                user = db.query(User).filter(User.tg_id == actor.id).first()
-                if user is None:
-                    raise AccessDenied()
-                require_access(db, user.id)
+            await run_db(_require_enrollment, actor.id)
         except AccessDenied:
             await event.answer("Доступ зараз недоступний.")
             return
+        except DBBusyError:
+            await event.answer("Зараз багато запитів. Спробуй ще раз за кілька секунд.")
+            return
         return await handler(event, data)
+
+
+def _require_enrollment(tg_id):
+    from app.access import AccessDenied, require_access
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.tg_id == tg_id).first()
+        if user is None:
+            raise AccessDenied()
+        require_access(db, user.id)
 
 
 _actor_ingress = ActorIngressMiddleware()

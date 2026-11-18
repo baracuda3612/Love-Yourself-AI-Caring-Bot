@@ -847,6 +847,10 @@ def get_plan_status(user_id: int, *, authorize: AssistantAuthorization | None = 
             raise ValueError(str(exc)) from exc
 
         result = status.to_runtime_payload()
+        if authorize is not None:
+            from app.privacy import read_pinned_notice
+            _, delivery_enabled = read_pinned_notice(db, user_id)
+            result["delivery_enabled"] = delivery_enabled
         if status.plan_id is not None and status.steps_remaining == 0:
             from app.db import AIPlan
             from app.plan_completion.continuation import read_continuation_status
