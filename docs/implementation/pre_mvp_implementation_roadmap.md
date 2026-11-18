@@ -1296,7 +1296,8 @@ original references.
 
 **Scope**
 
-* exactly one allowlisted tool call;
+* at most one allowlisted tool call per user turn; a factual answer may need
+  no tool call, and the second model pass applies only after an executed call;
 * strict structured backend result;
 * one second model pass with tools disabled;
 * reply grounded only in safe factual result;

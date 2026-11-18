@@ -180,7 +180,7 @@ change.
 | `ux_exercise_deliveries_one_sent` | Unique source occurrence where delivery state is successful; retries remain separate attempts. | WP-03.4/WP-06.2 |
 | `ux_exercise_deliveries_one_open` | One in-flight, uncertain or successful attempt per scheduled step; an unknown send blocks further sends. | WP-03.4 |
 | `uq_plan_completion_successor` | One automatic successor identity per completion obligation; source plan is the primary key. | WP-03.5 |
-| `ix_plan_completions_work` | Partial index on state/wakeup for pending/in-flight summary and outstanding independent schedule reconciliation. Quarantined/repaired history does not wake recovery. | WP-03.5 follow-up |
+| `ix_plan_completions_work` | Physical `(state, wake_at)` partial index with predicate `state IN ('pending','in_flight','release_in_flight') OR schedule_pending`. The report recovery query still visits legacy `release_in_flight` for quarantine; the independent schedule query filters `schedule_pending` and its `schedule_wake_at` separately. Index membership is not itself a claim that every indexed row wakes or is processed. | WP-03.5; independent scheduling in its follow-up |
 | `ix_continuation_attempt_retry` | Retry deadline for unfinished successor preparation attempts; lost workers become eligible after their lease. | WP-03.5 follow-up |
 | `uq_exercise_delivery_attempt` | Unique `(source_operation_id, attempt)`; scheduled source is `scheduler:delivery:<step_id>`. | WP-03.4 |
 | `uq_user_events_source_operation` | Unique `(event_source, source_operation_id, event_name)`. | WP-01.4 |
