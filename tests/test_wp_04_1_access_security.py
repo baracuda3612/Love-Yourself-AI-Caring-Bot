@@ -68,6 +68,65 @@ def test_enrollment_page_csrf_headers_and_no_raw_credentials():
     assert result.status_code==403 and 'secret' not in result.text
 
 
+@pytest.mark.anyio
+async def test_email_transport_does_not_block_other_http_requests(monkeypatch):
+    import re
+    import threading
+
+    import httpx
+
+    from app import access_http
+
+    loop = asyncio.get_running_loop()
+    sending = asyncio.Event()
+    release = threading.Event()
+    calls = []
+
+    class DB:
+        def __enter__(self):
+            return self
+
+        def commit(self):
+            calls.append("commit")
+
+        def __exit__(self, *_):
+            calls.append("closed")
+
+    def send(email, proof):
+        assert calls == ["commit", "closed"]
+        loop.call_soon_threadsafe(sending.set)
+        release.wait(1)
+
+    for name in ("SMTP_HOST", "SMTP_FROM", "SMTP_USERNAME", "SMTP_PASSWORD"):
+        monkeypatch.setattr(access.settings, name, "configured")
+    monkeypatch.setattr(access.settings, "APP_BASE_URL", "http://testserver")
+    monkeypatch.setattr(access_proof, "rate_limit", lambda *_, **__: None)
+    monkeypatch.setattr(access_http, "SessionLocal", DB)
+    monkeypatch.setattr(access_proof, "begin_email", lambda *_, **__: "proof")
+    monkeypatch.setattr(access_proof, "send_email", send)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=api.app), base_url="http://testserver",
+    ) as client:
+        page = await client.get("/enroll/1")
+        csrf = re.search(r'name="csrf" value="([^"]+)"', page.text).group(1)
+        delivery = asyncio.create_task(client.post("/enroll/1/email",
+            data={"csrf": csrf, "email": "member@client.org"},
+            headers={"origin": access.settings.APP_BASE_URL}))
+        try:
+            started = asyncio.create_task(sending.wait())
+            done, _ = await asyncio.wait((started, delivery), timeout=2, return_when=asyncio.FIRST_COMPLETED)
+            assert started in done, "Enrollment did not reach the mail transport"
+            other = await asyncio.wait_for(client.get("/enroll/2"), 2)
+            assert other.status_code == 200
+            assert not delivery.done()
+        finally:
+            release.set()
+            started.cancel()
+            response = await delivery
+        assert response.status_code == 200
+        assert "Код із листа" in response.text
+
+
 def test_operator_routes_reject_unauthenticated_request_before_db(monkeypatch):
     monkeypatch.setattr(api,'SessionLocal',lambda:pytest.fail('no anonymous admin DB'))
     client=TestClient(api.app)

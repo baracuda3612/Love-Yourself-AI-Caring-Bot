@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from app import access, access_proof
+from app.blocking_db import BlockingLane, DBBusyError
 from app.config import settings
 from app.db import SessionLocal
 
@@ -19,6 +20,18 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 NEUTRAL = 'Доступ зараз недоступний. Спробуй знову зі сторінки входу.'
 COOKIE = 'ly_enrollment_browser'
+
+_enrollment = BlockingLane(3, "http-enrollment")
+_operator_db = BlockingLane(1, "http-operator")
+_providers = BlockingLane(4, "http-enrollment-provider")
+
+
+def _commit(operation, **kwargs):
+    with SessionLocal() as db:
+        result = operation(db, **kwargs)
+        db.commit()
+        return result
+
 
 
 def _operator(request):
@@ -232,14 +245,19 @@ def enrollment_page(deployment_id: int):
 @router.post('/enroll/{deployment_id}/email')
 async def email_start(deployment_id: int, request: Request):
     form, browser = await _form(request, deployment_id)
-    access_proof.rate_limit('email-ip:' + (request.client.host if request.client else 'unknown'), limit=5, window=600)
+    await _enrollment.run(access_proof.rate_limit,
+        'email-ip:' + (request.client.host if request.client else 'unknown'), limit=5, window=600)
     email = access.normalize_email(form.get('email'))
-    try:
-        with SessionLocal() as db:
-            raw = access_proof.begin_email(db, deployment_id=deployment_id, email=email, browser=browser)
-            db.commit()
+    def send_challenge():
+        raw = _enrollment.submit(_commit, access_proof.begin_email,
+            deployment_id=deployment_id, email=email, browser=browser).result()
         # Both roster and non-roster addresses receive the same challenge.
         access_proof.send_email(email, raw)
+
+    try:
+        await _providers.run(send_challenge)
+    except DBBusyError:
+        raise
     except Exception:
         # No secret/SMTP/provider exception logging or response detail.
         pass
@@ -249,121 +267,116 @@ async def email_start(deployment_id: int, request: Request):
 @router.post('/enroll/{deployment_id}/verify')
 async def email_verify(deployment_id: int, request: Request):
     form, browser = await _form(request, deployment_id)
-    access_proof.rate_limit('verify:' + browser, limit=10, window=600)
-    with SessionLocal() as db:
-        raw = access_proof.finish_email(db, deployment_id=deployment_id, raw=form.get('code', ''), browser=browser)
-        db.commit()
+    await _enrollment.run(access_proof.rate_limit, 'verify:' + browser, limit=10, window=600)
+    raw = await _enrollment.run(_commit, access_proof.finish_email,
+        deployment_id=deployment_id, raw=form.get('code', ''), browser=browser)
     return _handoff(deployment_id, raw)
 
 
 @router.post('/enroll/{deployment_id}/oidc/{provider}')
 async def oidc_start(deployment_id: int, provider: str, request: Request):
     _, browser = await _form(request, deployment_id)
-    access_proof.rate_limit('oidc-start:' + browser, limit=10, window=600)
-    access_proof.rate_limit('oidc-ip:' + (request.client.host if request.client else 'unknown'), limit=10, window=600)
-    with SessionLocal() as db:
-        url = access_proof.begin_oidc(db, deployment_id=deployment_id, provider=provider, browser=browser)
-        db.commit()
+    await _enrollment.run(access_proof.rate_limit, 'oidc-start:' + browser, limit=10, window=600)
+    await _enrollment.run(access_proof.rate_limit,
+        'oidc-ip:' + (request.client.host if request.client else 'unknown'), limit=10, window=600)
+    url = await _enrollment.run(_commit, access_proof.begin_oidc,
+        deployment_id=deployment_id, provider=provider, browser=browser)
     return RedirectResponse(url, status_code=303)
 
 
 @router.get('/enroll/{deployment_id}/oidc/{provider}/callback')
-def oidc_callback(deployment_id: int, provider: str, request: Request):
+async def oidc_callback(deployment_id: int, provider: str, request: Request):
     browser = _browser(request)
-    access_proof.rate_limit('oidc-callback:' + browser, limit=10, window=600)
+    await _enrollment.run(access_proof.rate_limit, 'oidc-callback:' + browser, limit=10, window=600)
     params = request.query_params
     if len(params.multi_items()) != len(params) or not 1 <= len(params.get('code', '')) <= 4096:
         raise access.AccessDenied()
-    with SessionLocal() as db:
-        prepared = access_proof.prepare_oidc(db, deployment_id=deployment_id, provider=provider,
-            state=params.get('state', ''), browser=browser)
-        db.commit()
-    claims = access_proof.verify_oidc(prepared, state=params.get('state', ''), code=params['code'])
-    with SessionLocal() as db:
-        result = access_proof.finish_oidc(db, prepared=prepared, claims=claims, browser=browser)
-        db.commit()
+    state, code = params.get('state', ''), params['code']
+    def finish_provider_flow():
+        # Reserve a provider worker before consuming one-use state. Each DB
+        # phase closes its session before the provider phase starts.
+        prepared = _enrollment.submit(_commit, access_proof.prepare_oidc,
+            deployment_id=deployment_id, provider=provider, state=state, browser=browser).result()
+        claims = access_proof.verify_oidc(prepared, state=state, code=code)
+        result = _enrollment.submit(_commit, access_proof.finish_oidc,
+            prepared=prepared, claims=claims, browser=browser).result()
+        if 'challenge' in result:
+            try:
+                access_proof.send_email(result['email'], result['challenge'])
+            except Exception:
+                pass
+        return result
+
+    result = await _providers.run(finish_provider_flow)
     if 'handoff' in result:
         return _handoff(deployment_id, result['handoff'])
     if result.get('email_required'):
         return HTMLResponse(_page(deployment_id, browser,
             note='Microsoft підтвердив вхід. Вкажи адресу для доступу й підтвердь її кодом із листа.'))
-    try:
-        access_proof.send_email(result['email'], result['challenge'])
-    except Exception:
-        pass
     return HTMLResponse(_page(deployment_id, browser, note='Введи код підтвердження адреси з листа.', email_step='code'))
 
 
 @router.post('/access/roster/preview')
 async def roster_preview(request: Request):
-    operator = _operator(request)
+    operator = await _operator_db.run(_operator, request)
     body = await request.json()
     if set(body) != {'deployment_id', 'mode', 'rows', 'expected_total', 'source_ref'}:
         raise access.AccessDenied()
-    with SessionLocal() as db:
-        preview = access.preview_roster(db, **body, operator=operator)
-        db.commit()
+    preview = await _operator_db.run(_commit, access.preview_roster, **body, operator=operator)
     return {'version_id': preview.version_id, 'counts': preview.counts, 'confirmation': preview.confirmation}
 
 
 @router.post('/access/roster/apply')
 async def roster_apply(request: Request):
-    operator = _operator(request)
+    operator = await _operator_db.run(_operator, request)
     body = await request.json()
     if set(body) != {'deployment_id', 'version_id', 'confirmation', 'counts'}:
         raise access.AccessDenied()
-    with SessionLocal() as db:
-        version = access.apply_roster(db, **body, operator=operator)
-        db.commit()
+    version = await _operator_db.run(_commit, access.apply_roster, **body, operator=operator)
     return {'accepted_count': version.eligible_count}
 
 
 @router.post('/access/testnet/handoff')
 async def founder_handoff(request: Request):
-    operator = _operator(request)
+    operator = await _operator_db.run(_operator, request)
     body = await request.json()
     if set(body) != {'deployment_id', 'label'}:
         raise access.AccessDenied()
-    with SessionLocal() as db:
+    def issue(db):
         entitlement = access.founder_grant(db, **body, operator=operator)
-        raw = access.issue_handoff(db, entitlement.id)
-        db.commit()
+        return access.issue_handoff(db, entitlement.id)
+
+    raw = await _operator_db.run(_commit, issue)
     return {'telegram_url': f'https://t.me/{settings.BOT_USERNAME}?start={raw}'}
 
 
 @router.post('/access/revoke')
 async def revoke(request: Request):
-    operator = _operator(request)
+    operator = await _operator_db.run(_operator, request)
     body = await request.json()
     if set(body) != {'entitlement_id'}:
         raise access.AccessDenied()
-    with SessionLocal() as db:
-        access.revoke_entitlement(db, **body, operator=operator)
-        db.commit()
+    await _operator_db.run(_commit, access.revoke_entitlement, **body, operator=operator)
     return JSONResponse({'accepted': True})
 
 
 @router.post('/access/enrollment/replace')
 async def replace_enrollment(request: Request):
-    operator = _operator(request)
+    operator = await _operator_db.run(_operator, request)
     body = await request.json()
     if set(body) != {'user_id', 'expected_enrollment_id', 'handoff', 'replacement_mode'}:
         raise access.AccessDenied()
-    with SessionLocal() as db:
-        access.end_enrollment_for_replacement(db, **body, operator=operator)
-        db.commit()
+    await _operator_db.run(_commit, access.end_enrollment_for_replacement, **body, operator=operator)
     return {'accepted': True}
 
 
 @router.post('/access/deployment/controls')
 async def deployment_controls(request: Request):
-    operator = _operator(request)
+    operator = await _operator_db.run(_operator, request)
     body = await request.json()
     if set(body) != {'deployment_id', 'enrollment_open', 'delivery_enabled'}:
         raise access.AccessDenied()
-    with SessionLocal() as db:
-        wake_delivery = access.set_deployment_controls(db, **body, operator=operator)
-        db.commit()
+    wake_delivery = await _operator_db.run(_commit, access.set_deployment_controls, **body, operator=operator)
     if wake_delivery:
         from app.scheduler import enable_completion_recovery, wake_scheduled_delivery_recovery
         outcomes = await asyncio.gather(
