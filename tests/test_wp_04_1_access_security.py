@@ -28,9 +28,24 @@ def test_webapp_valid_owner_identity():
     assert access_proof.verify_webapp(webapp(123))==123
 
 
-@pytest.mark.parametrize('raw', ['', 'forged', webapp(seconds_ago=301), webapp(seconds_ago=-60),webapp(token='another-bot'),webapp(actor='123'),webapp(actor=-1),webapp(actor=True), webapp()+'&auth_date=1'])
-def test_webapp_forged_expired_duplicate_or_cross_bot_rejected(raw):
-    with pytest.raises(access.AccessDenied,match='^access_unavailable$'):access_proof.verify_webapp(raw)
+@pytest.mark.parametrize("case", [
+    "empty", "forged", "expired", "future", "cross_bot",
+    "string_actor", "negative_actor", "boolean_actor", "duplicate",
+])
+def test_webapp_forged_expired_duplicate_or_cross_bot_rejected(case):
+    raw = {
+        "empty": "",
+        "forged": "forged",
+        "expired": webapp(seconds_ago=301),
+        "future": webapp(seconds_ago=-60),
+        "cross_bot": webapp(token="another-bot"),
+        "string_actor": webapp(actor="123"),
+        "negative_actor": webapp(actor=-1),
+        "boolean_actor": webapp(actor=True),
+        "duplicate": webapp() + "&auth_date=1",
+    }[case]
+    with pytest.raises(access.AccessDenied, match="^access_unavailable$"):
+        access_proof.verify_webapp(raw)
 
 
 @pytest.mark.parametrize('proof',['','forged',webapp(seconds_ago=600),webapp(token='wrong-environment-bot')])
