@@ -599,7 +599,7 @@ def test_recovery_is_dormant_for_success_and_wakes_for_definite_retry(db, monkey
     assert 'scheduled_delivery_recovery' not in jobs
 
 
-def test_startup_retires_permanent_recovery_interval(monkeypatch):
+def test_startup_retires_permanent_recovery_and_legacy_notification_crons(monkeypatch):
     from app import scheduler
     added = {}; removed = []
     class FakeScheduler:
@@ -610,8 +610,9 @@ def test_startup_retires_permanent_recovery_interval(monkeypatch):
         def add_job(self, func, trigger, **kwargs): added[kwargs['id']] = trigger
     monkeypatch.setattr(scheduler, 'scheduler', FakeScheduler())
     scheduler.init_scheduler()
-    assert 'scheduled_delivery_recovery' in removed
-    assert 'scheduled_delivery_recovery' not in added
+    for retired in ('scheduled_delivery_recovery', 'daily_pulse', 'silent_check', 'pulse_snapshot_check'):
+        assert retired in removed
+        assert retired not in added
     assert all(x in removed for x in ['completion_1','completion_retry_1','completion_receipt_retry_1'])
     assert 'plan_1_day_1_step_1' not in removed
 

@@ -67,12 +67,12 @@ def _generate_step_job_id(step: AIPlanStep) -> str:
 def init_scheduler():
     if not scheduler.running:
         scheduler.start(paused=True)
-    # P1 frozen: keep send_daily_pulse() available, but disable its cron trigger.
-    # scheduler.add_job("app.scheduler:send_daily_pulse", "cron", hour=9, minute=0, id="daily_pulse", replace_existing=True, max_instances=1)
     # Remove persisted jobs for retired runtime entrances. APScheduler owns its
     # job table, so cleanup stays at the scheduler boundary rather than Alembic.
     for retired_job_id in (
         "daily_pulse",
+        "silent_check",
+        "pulse_snapshot_check",
         "stuck_schedule_adj_check",
         "ignored_check",
         "scheduled_delivery_recovery",
@@ -85,9 +85,7 @@ def init_scheduler():
         if job.id.startswith(("completion_", "completion_retry_", "completion_receipt_retry_")):
             remove_job(job.id)
     scheduler.add_job("app.scheduler:expire_overdue_steps", "interval", seconds=30, id="expire_steps", replace_existing=True, max_instances=1)
-    scheduler.add_job("app.scheduler:check_silent_users", "cron", hour=12, minute=0, id="silent_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:check_plan_completions", "cron", hour=10, minute=30, id="plan_completion_check", replace_existing=True, max_instances=1)
-    scheduler.add_job("app.scheduler:send_plan_pulse_snapshots", "cron", hour=10, minute=0, id="pulse_snapshot_check", replace_existing=True, max_instances=1)
     scheduler.add_job("app.scheduler:run_privacy_maintenance", "interval", minutes=5, id="privacy_maintenance", replace_existing=True, max_instances=1)
     scheduler.resume()
 
