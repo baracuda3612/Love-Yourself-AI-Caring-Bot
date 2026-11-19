@@ -1606,12 +1606,56 @@ def cancel_privacy_jobs(user_id, plan_ids):
         raise RuntimeError('personal_jobs_remain')
 
 
-async def privacy_maintenance():
-    """Bounded indexed retention and pending erasure recovery; no full DB scan."""
+def _cancel_privacy_job_page(user_id, _plan_ids, after):
+    """Scan one bounded page, including historical jobs with arbitrary IDs."""
+    import re
+
+    from apscheduler.jobstores.base import JobLookupError
+
+    if scheduler is not _application_scheduler:
+        cancel_privacy_jobs(user_id, _plan_ids)
+        return None
+
+    size = 128
+    jobs = jobstores["default"].page(after, size)
+    plan_by_job = {}
+    step_by_job = {}
+    for job in jobs:
+        match = re.fullmatch(r"plan_([0-9]+)_.*|completion_(?:receipt_retry_|retry_)?([0-9]+)", job.id)
+        if match:
+            # Persisted plans/steps are positive PostgreSQL INTEGER keys.
+            plan_id = int(match[1] or match[2])
+            if 0 < plan_id < 2**31:
+                plan_by_job[job.id] = plan_id
+        if job.func_ref == "app.scheduler:send_scheduled_message" and len(job.args) == 3:
+            step_id = job.args[2]
+            if type(step_id) is int and 0 < step_id < 2**31:
+                step_by_job[job.id] = step_id
+
+    with SessionLocal() as db:
+        plans = {plan_id for plan_id, in db.query(AIPlan.id).filter(
+            AIPlan.user_id == user_id, AIPlan.id.in_(plan_by_job.values()))}
+        steps = {step_id for step_id, in db.query(AIPlanStep.id).join(AIPlanDay).join(AIPlan).filter(
+            AIPlan.user_id == user_id, AIPlanStep.id.in_(step_by_job.values()))}
+    for job in jobs:
+        if plan_by_job.get(job.id) in plans or step_by_job.get(job.id) in steps:
+            try:
+                scheduler.remove_job(job.id, jobstore="default")
+            except JobLookupError:
+                pass
+
+    return jobs[-1].id if len(jobs) == size else None
+
+
+_privacy_db = BlockingLane(2, "privacy-db")
+_privacy_maintenance_running = asyncio.Lock()
+
+
+def _privacy_maintenance_batch():
     from app.access_proof import purge_expired_proofs
-    from app.privacy import purge_retained_data, delete_account
+    from app.privacy import purge_retained_data
     from app.db import PrivacyRequest
-    from app.session_memory import SessionMemory
+
     with SessionLocal() as db:
         purge_expired_proofs(db)
         db.commit()
@@ -1623,16 +1667,33 @@ async def privacy_maintenance():
         total += count
         if count < 500:
             break
-    logger.info('privacy_retention_removed=%d', total)
+    logger.info("privacy_retention_removed=%d", total)
     with SessionLocal() as db:
-        pending = [r[0] for r in db.query(PrivacyRequest.id).filter_by(state='deleting').order_by(
+        return [r[0] for r in db.query(PrivacyRequest.id).filter_by(state="deleting").order_by(
             PrivacyRequest.last_attempted_at.asc().nullsfirst(),
             PrivacyRequest.received_at, PrivacyRequest.id).limit(10)]
-    for request_id in pending:
-        try:
-            await delete_account(request_id, memory=SessionMemory(), cancel_jobs=cancel_privacy_jobs)
-        except Exception:
-            logger.error('privacy_erasure_pending')
+
+
+async def privacy_maintenance():
+    """Independent erasure cases, bounded retention, and one active scan."""
+    from app.privacy import delete_account
+    from app.session_memory import SessionMemory
+
+    if _privacy_maintenance_running.locked():
+        return
+    async with _privacy_maintenance_running:
+        pending = await _privacy_db.run(_privacy_maintenance_batch)
+        cases = asyncio.Semaphore(2)
+
+        async def erase(request_id):
+            async with cases:
+                try:
+                    await delete_account(request_id, memory=SessionMemory(), cancel_jobs=cancel_privacy_jobs,
+                                         run_blocking=_privacy_db.run, cancel_job_page=_cancel_privacy_job_page)
+                except Exception as exc:
+                    logger.error("privacy_erasure_pending error_type=%s", type(exc).__name__)
+
+        await asyncio.gather(*(erase(request_id) for request_id in pending))
 
 
 def run_privacy_maintenance():

@@ -21,6 +21,7 @@ async def test_first_plan_is_scheduled_before_due_after_delivery_reenable(engine
     factory = sessionmaker(engine, expire_on_commit=False)
     for module in (access_http, models, scheduler, telegram):
         monkeypatch.setattr(module, "SessionLocal", factory)
+    monkeypatch.setattr(scheduler, "ReceiptSessionLocal", factory)
     monkeypatch.setattr(access_http.settings, "ACCESS_OPERATOR_SECRET", "disposable-operator")
     monkeypatch.setattr(access_proof, "rate_limit", lambda *args, **kwargs: None)
     monkeypatch.setattr(scheduler, "_event_loop", asyncio.get_running_loop())
@@ -152,3 +153,128 @@ async def test_enrollment_gate_progresses_during_another_owners_transaction(engi
         holder.close()
         if gate is not None:
             await gate
+
+
+async def test_delivery_receipt_has_checkout_capacity_while_general_pool_is_full(engine, monkeypatch):
+    from contextlib import ExitStack
+    from time import monotonic
+
+    from sqlalchemy import create_engine
+
+    from app import scheduler, telegram
+    from tests.test_wp_03_4_postgres_delivery import active_step
+
+    ordinary = create_engine(engine.url, pool_size=2, max_overflow=0, pool_timeout=2)
+    receipts = create_engine(engine.url, pool_size=1, max_overflow=0, pool_timeout=2)
+    app_sessions = sessionmaker(ordinary, expire_on_commit=False)
+    receipt_sessions = sessionmaker(receipts, expire_on_commit=False)
+    monkeypatch.setattr(scheduler, "SessionLocal", app_sessions)
+    monkeypatch.setattr(scheduler, "ReceiptSessionLocal", receipt_sessions)
+    monkeypatch.setattr(scheduler, "_event_loop", asyncio.get_running_loop())
+
+    with app_sessions.begin() as db:
+        user, _, step = active_step(db)
+        user.profile.active_days = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+        tg_id, step_id = user.tg_id, step.id
+
+    sending = asyncio.Event()
+    confirm = asyncio.Event()
+
+    async def send(**_kwargs):
+        sending.set()
+        await confirm.wait()
+        return SimpleNamespace(chat=SimpleNamespace(id=tg_id), message_id=4321, date=datetime.now(timezone.utc))
+
+    transport = AsyncMock(side_effect=send)
+    monkeypatch.setattr(telegram, "bot", SimpleNamespace(
+        id=1, send_message=transport, send_animation=transport,
+    ))
+    send_job = asyncio.create_task(asyncio.to_thread(scheduler.send_scheduled_message, tg_id, "", step_id))
+    try:
+        await asyncio.wait_for(sending.wait(), 2)
+        with ExitStack() as full:
+            full.enter_context(ordinary.connect())
+            full.enter_context(ordinary.connect())
+            assert ordinary.pool.checkedout() == 2
+            start = monotonic()
+            confirm.set()
+            while True:
+                with engine.connect() as conn:
+                    state = conn.execute(
+                        models.ExerciseDelivery.__table__.select().where(models.ExerciseDelivery.plan_step_id == step_id)
+                    ).one()
+                if state.state == "delivered":
+                    assert state.message_id == 4321
+                    break
+                assert monotonic() - start < 1.5, "receipt waited for the occupied general pool"
+                await asyncio.sleep(0.01)
+            print(f"receipt_write_with_general_pool_full_ms={(monotonic() - start)*1000:.1f}")
+    finally:
+        confirm.set()
+        await send_job
+        ordinary.dispose()
+        receipts.dispose()
+    transport.assert_awaited_once()
+
+
+async def test_erasure_resumes_jobstore_scan_at_persisted_cursor_after_restart(engine, monkeypatch):
+    from datetime import timedelta
+
+    from app import scheduler, session_memory
+    from app.runtime_jobstore import RuntimeJobStore
+    from tests.test_wp_03_5_postgres_completion import source_plan
+
+    factory = sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(scheduler, "SessionLocal", factory)
+    monkeypatch.setattr(models, "SessionLocal", factory)
+    monkeypatch.setattr(session_memory, "SessionMemory", lambda: SimpleNamespace(delete_user=AsyncMock()))
+    with factory.begin() as db:
+        user, plan = source_plan(db)
+        step = plan.days[0].steps[0]
+        request = privacy.receive_request(
+            db, tg_id=user.tg_id, kind="deletion", source_operation_id="scale:jobstore-erase",
+        )
+        privacy.begin_account_deletion(db, request.id)
+        ids = (user.id, plan.id, step.id, user.tg_id, request.id)
+    user_id, plan_id, step_id, chat_id, request_id = ids
+
+    def start():
+        store = RuntimeJobStore(engine=engine, tablename="wp_scale_job_scan")
+        jobs = BackgroundScheduler(jobstores={"default": store})
+        jobs.start(paused=True)
+        monkeypatch.setattr(scheduler, "scheduler", jobs)
+        monkeypatch.setattr(scheduler, "_application_scheduler", jobs)
+        monkeypatch.setattr(scheduler, "jobstores", {"default": store})
+        return jobs
+
+    jobs = start()
+    tomorrow = datetime.now(timezone.utc) + timedelta(days=1)
+    unrelated_ids = {f"a-{number:03}" for number in range(127)} | {"z-unrelated"}
+    try:
+        for job_id in unrelated_ids:
+            jobs.add_job("app.scheduler:check_plan_completions", "date", id=job_id, run_date=tomorrow)
+        jobs.add_job("app.scheduler:check_plan_completions", "date", id=f"plan_{plan_id}_old", run_date=tomorrow)
+        jobs.add_job("app.scheduler:send_scheduled_message", "date", id="z-custom-legacy",
+                     args=[chat_id, "", step_id], run_date=tomorrow)
+        await scheduler.privacy_maintenance()
+        assert jobs.get_job(f"plan_{plan_id}_old") is None
+        assert jobs.get_job("z-custom-legacy") is not None
+        with factory() as db:
+            request = db.get(models.PrivacyRequest, request_id)
+            assert request.state == "deleting"
+            assert request.evidence["job_scan_after"] == f"plan_{plan_id}_old"
+            assert db.get(models.User, user_id) is not None
+    finally:
+        jobs.shutdown()
+
+    jobs = start()
+    try:
+        await scheduler.privacy_maintenance()
+        assert {job.id for job in jobs.get_jobs()} == unrelated_ids
+        with factory() as db:
+            assert db.get(models.User, user_id) is None
+            request = db.get(models.PrivacyRequest, request_id)
+            assert request.state == "completed"
+            assert request.evidence == {"result": "account_erased"}
+    finally:
+        jobs.shutdown()

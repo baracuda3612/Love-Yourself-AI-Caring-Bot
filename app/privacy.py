@@ -347,7 +347,8 @@ def begin_account_deletion(db, request_id):
     return user.id, [r[0] for r in db.query(models.AIPlan.id).filter_by(user_id=user.id)]
 
 
-async def delete_account(request_id, *, memory, cancel_jobs, session_factory=None):
+async def delete_account(request_id, *, memory, cancel_jobs, session_factory=None,
+                         run_blocking=None, cancel_job_page=None):
     """Repeatable erasure; failed external cleanup leaves the durable fence.
 
     Already claimed network I/O may finish; no new claim can begin after the
@@ -355,6 +356,7 @@ async def delete_account(request_id, *, memory, cancel_jobs, session_factory=Non
     """
     import asyncio
     session_factory = session_factory or models.SessionLocal
+    run_blocking = run_blocking or asyncio.to_thread
 
     def fence():
         with session_factory() as db:
@@ -362,18 +364,33 @@ async def delete_account(request_id, *, memory, cancel_jobs, session_factory=Non
             if result is not None:
                 # Commit attempt advancement before external I/O; a failed
                 # case cannot monopolize the bounded worker after restart.
-                owned_request(db, request_id).last_attempted_at = utcnow()
+                request = owned_request(db, request_id)
+                request.last_attempted_at = utcnow()
+                result = (*result, request.evidence.get("job_scan_after"))
             db.commit()
             if result is not None:
                 notice_cache.forget_user(db, result[0])
             return result
-    result = await asyncio.to_thread(fence)
+    result = await run_blocking(fence)
     if result is None:
         return
-    user_id, plan_ids = result
+    user_id, plan_ids, after = result
     # These operations must confirm success; retry preserves the same case id.
     await memory.delete_user(user_id)
-    await asyncio.to_thread(cancel_jobs, user_id, plan_ids)
+    if cancel_job_page is None:
+        await run_blocking(cancel_jobs, user_id, plan_ids)
+    else:
+        cursor = await run_blocking(cancel_job_page, user_id, plan_ids, after)
+        if cursor is not None:
+            def save_cursor():
+                with session_factory() as db:
+                    request = owned_request(db, request_id, kind="deletion")
+                    if request.state == "deleting" and request.evidence.get("job_scan_after") == after:
+                        request.evidence = {**request.evidence, "job_scan_after": cursor}
+                        db.commit()
+
+            await run_blocking(save_cursor)
+            return
 
     def erase():
         with session_factory() as db:
@@ -392,7 +409,7 @@ async def delete_account(request_id, *, memory, cancel_jobs, session_factory=Non
             db.flush()
             db.execute(models.User.__table__.delete().where(models.User.id == user_id))
             db.commit()
-    await asyncio.to_thread(erase)
+    await run_blocking(erase)
 
 
 def _erase_personal_rows(db, user_id):
