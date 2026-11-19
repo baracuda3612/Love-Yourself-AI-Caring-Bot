@@ -179,7 +179,7 @@ def _delivery_recovery_time(now):
     return max(now + timedelta(seconds=30), min(times)) if times else None
 
 
-def can_deliver_tasks(user: User, plan: AIPlan | None = None) -> bool:
+def can_deliver_tasks(user: User, plan: AIPlan | None = None, *, delivery: bool = True) -> bool:
     # NOTE:
     # Missed scheduled deliveries while user is not ACTIVE are intentional.
     # Replay/recovery (if any) must be handled by adaptation/reconciliation layer.
@@ -187,7 +187,7 @@ def can_deliver_tasks(user: User, plan: AIPlan | None = None) -> bool:
         return False
     from sqlalchemy.orm import object_session
     owning_db = object_session(user) if hasattr(user, '_sa_instance_state') else None
-    if owning_db is None or not may_access(owning_db, user.id, delivery=True):
+    if owning_db is None or not may_access(owning_db, user.id, delivery=delivery):
         return False
     if plan is not None:
         return plan.status == "active"
@@ -376,7 +376,9 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
         
     if not user or not user.is_active:
         return False
-    if not can_deliver_tasks(user, step.day.plan if step.day else None):
+    # The operator switch fences the durable send claim. Keep future timers
+    # exact even while delivery is disabled so a resume preserves their dates.
+    if not can_deliver_tasks(user, step.day.plan if step.day else None, delivery=False):
         return False
 
     if not step.day or not step.day.plan:
@@ -694,7 +696,7 @@ async def schedule_daily_loop():
             .join(User, User.id == AIPlan.user_id)
             .filter(
                 AIPlan.status == "active",
-                and_(User.is_active.is_(True), access_predicate(User.id, delivery=True)),
+                and_(User.is_active.is_(True), access_predicate(User.id)),
                 AIPlanStep.step_status == "pending",
                 AIPlanStep.scheduled_for != None, # Only schedule if time is set
                 AIPlanStep.scheduled_for > now_utc
