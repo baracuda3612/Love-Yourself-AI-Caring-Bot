@@ -573,3 +573,42 @@ def test_enrollment_policy_draft_is_readable_before_login():
     assert 'Драфт для обговорення' in policy.text
     assert 'Content-Security-Policy' in policy.headers
     assert not policy.headers.get('set-cookie')
+
+
+async def test_urgent_revoke_can_commit_while_roster_preview_is_blocked(monkeypatch):
+    from threading import Event
+    from unittest.mock import Mock
+    from httpx import ASGITransport, AsyncClient
+
+    from app import access_http
+
+    started, release = Event(), Event()
+    revoke = Mock()
+
+    def preview(_db, **_kwargs):
+        started.set()
+        assert release.wait(4)
+        return SimpleNamespace(version_id=1, counts={}, confirmation="fixture")
+
+    monkeypatch.setattr(access_http.settings, "ACCESS_OPERATOR_SECRET", "test-only")
+    monkeypatch.setattr(access_proof, "rate_limit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(access_http, "SessionLocal", lambda: nullcontext(SimpleNamespace(commit=lambda: None)))
+    monkeypatch.setattr(access, "preview_roster", preview)
+    monkeypatch.setattr(access, "revoke_entitlement", revoke)
+
+    async with AsyncClient(transport=ASGITransport(app=api.app), base_url="http://fixture",
+                           headers={"Authorization": "Bearer test-only"}) as client:
+        slow = asyncio.create_task(client.post(
+            "/access/roster/preview",
+            json={"deployment_id": 10, "mode": "full_snapshot", "rows": [],
+                  "expected_total": 1, "source_ref": "fixture"},
+        ))
+        try:
+            assert await asyncio.to_thread(started.wait, 2)
+            reply = await asyncio.wait_for(client.post("/access/revoke", json={"entitlement_id": 20}), 1)
+            assert reply.status_code == 200
+            assert not slow.done()
+            assert revoke.call_args.kwargs["entitlement_id"] == 20
+        finally:
+            release.set()
+            assert (await slow).status_code == 200

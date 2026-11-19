@@ -23,6 +23,8 @@ COOKIE = 'ly_enrollment_browser'
 
 _enrollment = BlockingLane(3, "http-enrollment")
 _operator_db = BlockingLane(1, "http-operator")
+_rosters = BlockingLane(1, "http-roster")
+_revocations = BlockingLane(1, "http-revoke")
 _providers = BlockingLane(4, "http-enrollment-provider")
 
 
@@ -322,7 +324,7 @@ async def roster_preview(request: Request):
     body = await request.json()
     if set(body) != {'deployment_id', 'mode', 'rows', 'expected_total', 'source_ref'}:
         raise access.AccessDenied()
-    preview = await _operator_db.run(_commit, access.preview_roster, **body, operator=operator)
+    preview = await _rosters.run(_commit, access.preview_roster, **body, operator=operator)
     return {'version_id': preview.version_id, 'counts': preview.counts, 'confirmation': preview.confirmation}
 
 
@@ -332,7 +334,7 @@ async def roster_apply(request: Request):
     body = await request.json()
     if set(body) != {'deployment_id', 'version_id', 'confirmation', 'counts'}:
         raise access.AccessDenied()
-    version = await _operator_db.run(_commit, access.apply_roster, **body, operator=operator)
+    version = await _rosters.run(_commit, access.apply_roster, **body, operator=operator)
     return {'accepted_count': version.eligible_count}
 
 
@@ -352,11 +354,11 @@ async def founder_handoff(request: Request):
 
 @router.post('/access/revoke')
 async def revoke(request: Request):
-    operator = await _operator_db.run(_operator, request)
+    operator = await _revocations.run(_operator, request)
     body = await request.json()
     if set(body) != {'entitlement_id'}:
         raise access.AccessDenied()
-    await _operator_db.run(_commit, access.revoke_entitlement, **body, operator=operator)
+    await _revocations.run(_commit, access.revoke_entitlement, **body, operator=operator)
     return JSONResponse({'accepted': True})
 
 
