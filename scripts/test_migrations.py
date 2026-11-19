@@ -55,6 +55,7 @@ EXPECTED_APPLICATION_TABLES = {
     "plan_instances",
     "plan_lifecycle_operations",
     "plan_completions",
+    "plan_continuation_attempts",
     "privacy_notice_versions",
     "privacy_requests",
     "organizations",
