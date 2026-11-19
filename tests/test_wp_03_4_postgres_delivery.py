@@ -751,10 +751,21 @@ async def test_real_callback_lock_wait_does_not_block_polling_or_lose_arrival_ti
     from app import telegram, scheduler, exercise_status
     with Session(migrated_engine) as db:
         user, _, step = active_step(db)
-        step.expires_at = datetime.now(timezone.utc)+timedelta(seconds=.3)
-        db.flush(); deliver(db, step)
-        if operation == 'feedback': action(db, user, step, 'completed')
-        db.commit(); user_id, tg_id, step_id, deadline = user.id, user.tg_id, step.id, step.expires_at
+        deliver(db, step)
+        if operation == 'feedback':
+            action(db, user, step, 'completed')
+        tap_at = datetime.now(timezone.utc)
+        deadline = tap_at + timedelta(milliseconds=300)
+        step.expires_at = deadline
+        db.commit()
+        user_id, tg_id, step_id = user.id, user.tg_id, step.id
+
+    class CallbackClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return tap_at.astimezone(tz) if tz else tap_at.replace(tzinfo=None)
+
+    monkeypatch.setattr(telegram, 'datetime', CallbackClock)
     factory = sessionmaker(bind=migrated_engine, expire_on_commit=False)
     monkeypatch.setattr(telegram, 'SessionLocal', factory)
     monkeypatch.setattr(scheduler, 'SessionLocal', factory)
@@ -770,7 +781,9 @@ async def test_real_callback_lock_wait_does_not_block_polling_or_lose_arrival_ti
             db.query(User).filter_by(id=user_id).with_for_update().one()
             held.set(); release.wait(3); db.commit()
     holder = Thread(target=hold); holder.start(); assert held.wait(3)
-    timer = Timer(.6, release.set); timer.start()
+    remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
+    timer = Timer(max(.3, remaining + .1), release.set)
+    timer.start()
     cb = SimpleNamespace(id='waiting-tap', data=f'task_feedback:{step_id}:better' if operation == 'feedback' else f'task_complete:{step_id}',
                          from_user=SimpleNamespace(id=tg_id), message=SimpleNamespace(answer=AsyncMock()), answer=AsyncMock())
     try:
