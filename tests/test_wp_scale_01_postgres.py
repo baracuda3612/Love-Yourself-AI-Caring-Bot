@@ -278,3 +278,75 @@ async def test_erasure_resumes_jobstore_scan_at_persisted_cursor_after_restart(e
             assert request.evidence == {"result": "account_erased"}
     finally:
         jobs.shutdown()
+
+
+async def test_feedback_commit_does_not_wait_for_the_previous_telegram_edit(engine, monkeypatch):
+    from datetime import timedelta
+    from threading import Event
+
+    from app import exercise_status, lifecycle, scheduler, telegram
+    from tests.test_wp_03_4_postgres_delivery import deliver
+    from tests.test_wp_03_5_postgres_completion import source_plan
+
+    factory = sessionmaker(engine, expire_on_commit=False)
+    for module in (scheduler, telegram):
+        monkeypatch.setattr(module, "SessionLocal", factory)
+    monkeypatch.setattr(scheduler, "_enable_delivery_recovery", lambda: None)
+
+    with factory.begin() as db:
+        user, plan = source_plan(db)
+        step = plan.days[0].steps[0]
+        now = datetime.now(timezone.utc)
+        step.scheduled_for = now - timedelta(minutes=1)
+        step.expires_at = now + timedelta(hours=1)
+        db.flush()
+        deliver(db, step)
+        lifecycle.transition_plan_step(
+            db, user_id=user.id, step_id=step.id, target_status="completed",
+            source_operation_id="scale:project-completed",
+        )
+        tg_id, step_id = user.tg_id, step.id
+
+    editing = asyncio.Event()
+    release = Event()
+    runtime_loop = asyncio.get_running_loop()
+    projections = []
+
+    class Bot:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def edit_message_text(self, **kwargs):
+            projections.append(kwargs["reply_markup"])
+            if len(projections) == 1:
+                runtime_loop.call_soon_threadsafe(editing.set)
+                assert await asyncio.to_thread(release.wait, 3)
+
+    monkeypatch.setattr(exercise_status, "Bot", Bot)
+    worker = asyncio.create_task(asyncio.to_thread(scheduler.reconcile_terminal_step_keyboards, [step_id]))
+    try:
+        await asyncio.wait_for(editing.wait(), 2)
+        callback = SimpleNamespace(
+            id="scale-feedback", data=f"task_feedback:{step_id}:better",
+            from_user=SimpleNamespace(id=tg_id), answer=AsyncMock(),
+        )
+        await asyncio.wait_for(telegram.handle_task_feedback(callback), 1.0)
+        callback.answer.assert_awaited_once_with("Відгук збережено: краще")
+        assert not worker.done()
+        with factory() as db:
+            assert db.query(models.FeedbackEvent).filter_by(plan_step_id=step_id, source="exercise_efficacy").one().value == "better"
+    finally:
+        release.set()
+        await worker
+
+    await asyncio.to_thread(scheduler.reconcile_terminal_step_keyboards, [step_id])
+    assert len(projections) == 2 and projections[0] is not None and projections[1] is None
+    with factory() as db:
+        receipt = db.query(models.ExerciseDelivery).filter_by(plan_step_id=step_id).one()
+        assert receipt.visible_status == "completed" and receipt.visible_feedback == "better"
