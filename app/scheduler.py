@@ -1505,9 +1505,13 @@ def cancel_privacy_jobs(user_id, plan_ids):
 
 async def privacy_maintenance():
     """Bounded indexed retention and pending erasure recovery; no full DB scan."""
+    from app.access_proof import purge_expired_proofs
     from app.privacy import purge_retained_data, delete_account
     from app.db import PrivacyRequest
     from app.session_memory import SessionMemory
+    with SessionLocal() as db:
+        purge_expired_proofs(db)
+        db.commit()
     total = 0
     for _ in range(10):
         with SessionLocal() as db:

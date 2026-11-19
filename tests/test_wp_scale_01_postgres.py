@@ -116,3 +116,39 @@ async def test_first_plan_is_scheduled_before_due_after_delivery_reenable(engine
             assert db.query(models.UserEvent).filter_by(plan_step_id=step_id, event_name="task_delivered").count() == 1
     finally:
         jobs.shutdown()
+
+
+async def test_enrollment_gate_progresses_during_another_owners_transaction(engine, monkeypatch):
+    from uuid import uuid4
+
+    from app import telegram
+    from tests.access_fixtures import enroll
+
+    factory = sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(telegram, "SessionLocal", factory)
+    with factory.begin() as db:
+        first, deployment, notice = subject(db)
+        second = models.User(tg_id=uuid4().int % 10**12, is_active=True)
+        db.add(second)
+        db.flush()
+        enroll(db, second, target=deployment)
+        privacy.acknowledge_notice(db, first.id, notice.id, "scale:first-owner")
+        first_id, second_tg_id = first.id, second.tg_id
+
+    callback = SimpleNamespace(
+        data="task_complete:1", from_user=SimpleNamespace(id=second_tg_id),
+        message=SimpleNamespace(chat=SimpleNamespace(id=second_tg_id, type="private")),
+        answer=AsyncMock(),
+    )
+    handler = AsyncMock(return_value="entered")
+    holder = factory()
+    gate = None
+    try:
+        privacy.pinned_notice(holder, first_id, acknowledged=True)
+        gate = asyncio.create_task(telegram.EnrollmentMiddleware()(handler, callback, {}))
+        assert await asyncio.wait_for(asyncio.shield(gate), 1.0) == "entered"
+        handler.assert_awaited_once_with(callback, {})
+    finally:
+        holder.close()
+        if gate is not None:
+            await gate
