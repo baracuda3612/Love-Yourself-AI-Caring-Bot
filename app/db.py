@@ -34,13 +34,25 @@ from sqlalchemy import text as sql_text
 from app.config import settings
 from app.schemas.planner import PlanModule, StepType, DifficultyLevel
 
-engine = create_engine(settings.DATABASE_URL, echo=False, future=True)
+engine = create_engine(
+    settings.DATABASE_URL, echo=False, future=True,
+    pool_size=20, max_overflow=0, pool_timeout=2,
+    connect_args={'connect_timeout': 3},
+)
 SessionLocal = sessionmaker(
     autocommit=False,
     autoflush=False,
     bind=engine,
     expire_on_commit=False,
 )
+# Transport outcomes need guaranteed checkout capacity when foreground
+# reads or recovery saturate the general pool. Both engines use the same DB.
+receipt_engine = create_engine(
+    settings.DATABASE_URL, future=True,
+    pool_size=6, max_overflow=0, pool_timeout=2,
+    connect_args={"connect_timeout": 3},
+)
+ReceiptSessionLocal = sessionmaker(bind=receipt_engine, autoflush=False, expire_on_commit=False)
 Base = declarative_base()
 logger = logging.getLogger(__name__)
 

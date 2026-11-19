@@ -299,14 +299,27 @@ def test_scheduler_wait_timeout_preserves_late_receipt_without_duplicate(db,monk
     from test_exercise_presentation_delivery import bot
     user,_,step=active_step(db)
     monkeypatch.setattr(scheduler,'SessionLocal',lambda:nullcontext(db))
+    monkeypatch.setattr(scheduler,'ReceiptSessionLocal',lambda:nullcontext(db))
     monkeypatch.setattr(db,'commit',db.flush)
     monkeypatch.setattr(scheduler,'_event_loop',object())
     monkeypatch.setattr(active_days,'is_active_day',lambda *_a:True)
     tg=bot(chat_id=user.tg_id); monkeypatch.setattr(telegram,'bot',tg)
     pending=[]
-    class UnknownFuture:
+    class UnknownFuture(Future):
         def result(self,**kwargs): raise TimeoutError()
-    def submit(coro): pending.append(coro); return UnknownFuture()
+
+    def submit(coro):
+        future = UnknownFuture()
+
+        async def complete():
+            try:
+                future.set_result(await coro)
+            except BaseException as exc:
+                future.set_exception(exc)
+                raise
+
+        pending.append(complete())
+        return future
     monkeypatch.setattr(scheduler,'_submit_coroutine',submit)
     result=scheduler.send_scheduled_message(0,'',step.id)
     assert result.outcome=='uncertain' and not events(db,step)
@@ -328,7 +341,9 @@ def test_restart_sweep_restores_past_due_retry_and_ui(db,monkeypatch):
     # its claim or the freshly migrated event catalogue.
     latest_attempt(db,step.id).next_attempt_at=now-timedelta(seconds=1)
     db.flush()
-    monkeypatch.setattr(scheduler,'SessionLocal',lambda:nullcontext(db)); monkeypatch.setattr(db,'commit',db.flush)
+    monkeypatch.setattr(scheduler,'SessionLocal',lambda:nullcontext(db))
+    monkeypatch.setattr(db,'commit',db.flush)
+    monkeypatch.setattr(scheduler,'ReceiptSessionLocal',lambda:nullcontext(db))
     monkeypatch.setattr(scheduler,'_event_loop',object()); monkeypatch.setattr(active_days,'is_active_day',lambda *_a:True)
     tg=bot(chat_id=user.tg_id); monkeypatch.setattr(telegram,'bot',tg)
     def submit(coro):
@@ -515,20 +530,20 @@ def test_recovery_only_locks_stale_ui_and_stops_when_repaired(db, monkeypatch, v
     monkeypatch.setattr(exercise_status, 'Bot', FakeBot)
     assert set(exercise_status.pending_status_step_ids(db)) == {steps[4].id, steps[5].id}
     scheduler.reconcile_scheduled_deliveries()
-    assert len(locks) == 2 and len(calls) == 2
+    assert len(locks) == 3 and len(calls) == 2
     assert 'scheduled_delivery_recovery' in jobs
     scheduler.reconcile_scheduled_deliveries()
-    assert len(locks) == 3 and len(calls) == 3
+    assert len(locks) == 5 and len(calls) == 3
     assert 'scheduled_delivery_recovery' not in jobs
     scheduler.reconcile_scheduled_deliveries()
-    assert len(locks) == 3 and len(calls) == 3
+    assert len(locks) == 5 and len(calls) == 3
     assert steps[6].step_status == 'delivered' and plan.status == 'paused'
     # A later answer on a previously aligned completed message wakes only that
     # message; NULL/NULL feedback on the remaining history stays aligned.
     submit_step_feedback(db, telegram_user_id=user.tg_id, step_id=steps[4].id, value='same')
     assert exercise_status.pending_status_step_ids(db) == [steps[4].id]
     scheduler.reconcile_scheduled_deliveries()
-    assert len(locks) == 4 and len(calls) == 4
+    assert len(locks) == 7 and len(calls) == 4
     assert not jobs and not exercise_status.pending_status_step_ids(db)
 
 
@@ -544,6 +559,7 @@ def test_recovery_is_dormant_for_success_and_wakes_for_definite_retry(db, monkey
         def remove_job(self, job_id, **kwargs): jobs.pop(job_id, None)
     monkeypatch.setattr(scheduler, 'scheduler', FakeScheduler())
     monkeypatch.setattr(scheduler, 'SessionLocal', lambda: nullcontext(db))
+    monkeypatch.setattr(scheduler, 'ReceiptSessionLocal', lambda: nullcontext(db))
     monkeypatch.setattr(db, 'commit', db.flush)
     monkeypatch.setattr(scheduler, '_event_loop', object())
     monkeypatch.setattr(active_days, 'is_active_day', lambda *_a: True)
@@ -715,7 +731,7 @@ def test_due_backlog_dispatches_with_bounded_concurrency(db, monkeypatch):
         step.scheduled_for = datetime.now(timezone.utc)-timedelta(minutes=1)
         step.expires_at = datetime.now(timezone.utc)+timedelta(hours=1)
     db.flush()
-    barrier = Barrier(len(steps)); errors = []; called = []
+    barrier = Barrier(scheduler._DELIVERY_WORKERS); errors = []; called = []
     def send(_chat, _text, step_id):
         called.append(step_id)
         try: barrier.wait(timeout=3)
@@ -724,7 +740,7 @@ def test_due_backlog_dispatches_with_bounded_concurrency(db, monkeypatch):
     monkeypatch.setattr(scheduler, 'send_scheduled_message', send)
     monkeypatch.setattr(scheduler, '_enable_delivery_recovery', lambda: None)
     scheduler.reconcile_scheduled_deliveries()
-    assert set(called) == {step.id for step in steps} and not errors
+    assert len(set(called)) == scheduler._DELIVERY_WORKERS and not errors
 
 
 @pytest.mark.parametrize('operation', ['completed', 'skipped', 'feedback'])
@@ -740,7 +756,8 @@ async def test_real_callback_lock_wait_does_not_block_polling_or_lose_arrival_ti
         if operation == 'feedback': action(db, user, step, 'completed')
         db.commit(); user_id, tg_id, step_id, deadline = user.id, user.tg_id, step.id, step.expires_at
     factory = sessionmaker(bind=migrated_engine, expire_on_commit=False)
-    monkeypatch.setattr(telegram, 'SessionLocal', factory); monkeypatch.setattr(scheduler, 'SessionLocal', factory)
+    monkeypatch.setattr(telegram, 'SessionLocal', factory)
+    monkeypatch.setattr(scheduler, 'SessionLocal', factory)
     class FakeBot:
         def __init__(self, **kwargs): pass
         async def __aenter__(self): return self

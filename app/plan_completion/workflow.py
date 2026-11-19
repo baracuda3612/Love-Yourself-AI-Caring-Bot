@@ -156,12 +156,12 @@ def finish_report(db, user_id, claim, *, outcome, message_id=None, retry_after=N
 async def deliver_report(user_id, plan_id):
     """Claim/receipt work is off the polling loop; an ambiguous call never resends."""
     import asyncio
-    from app.db import SessionLocal
+    from app.db import ReceiptSessionLocal, SessionLocal
     from app.lifecycle import CompletionDeliveryResult
     from app.telegram import bot
     from app.exercise_delivery import _DEFINITE_REJECTIONS
     from aiogram.exceptions import TelegramRetryAfter
-    from app.scheduler import enable_completion_recovery
+    from app.scheduler import completion_receipts, enable_completion_recovery
 
     def claim_transaction():
         with SessionLocal() as db:
@@ -204,16 +204,16 @@ async def deliver_report(user_id, plan_id):
     except Exception:
         pass  # Includes timeout/network loss: no proof of non-delivery.
     def receipt_transaction():
-        with SessionLocal() as db:
+        with ReceiptSessionLocal() as db:
             finish_report(db, user_id, claim, outcome=outcome, message_id=message_id, retry_after=retry_after, now=delivered_at)
             db.commit()
     try:
-        await asyncio.to_thread(receipt_transaction)
+        await completion_receipts.run(receipt_transaction)
     except Exception:
         # The committed in-flight claim remains the fence after process loss.
         # Keep the observed result for one bounded receipt-only local retry.
         try:
-            await asyncio.to_thread(receipt_transaction)
+            await completion_receipts.run(receipt_transaction)
         except Exception:
             await asyncio.to_thread(enable_completion_recovery)
             return CompletionDeliveryResult(user_id, plan_id, False, code='receipt_unconfirmed')

@@ -932,6 +932,9 @@ def test_expiry_sweep_isolates_unexpected_candidate_failure(monkeypatch, caplog)
         def order_by(self, *_args):
             return self
 
+        def limit(self, _size):
+            return self
+
         def all(self):
             return [(1,), (2,), (3,)]
 
@@ -1004,6 +1007,8 @@ def test_expiry_sweep_isolates_unexpected_candidate_failure(monkeypatch, caplog)
 
     monkeypatch.setattr(scheduler, "SessionLocal", lambda: next(sessions))
     monkeypatch.setattr(scheduler, "expire_plan_step", _expire)
+    monkeypatch.setattr(scheduler, "_submit_continuation", lambda *_args: True)
+    monkeypatch.setattr(scheduler, "enable_completion_recovery", lambda: None)
     monkeypatch.setattr(
         scheduler,
         "reconcile_expired_step_keyboards",
@@ -1038,6 +1043,9 @@ def test_expiry_does_not_scan_old_terminal_buttons(monkeypatch):
             return self
 
         def order_by(self, *_args):
+            return self
+
+        def limit(self, _size):
             return self
 
         def all(self):

@@ -21,8 +21,8 @@ def test_no_two_hour_trigger_or_process_local_send_authority():
 def test_done_skip_and_expiry_reach_explicit_completion():
     source=Path('app/telegram.py').read_text()
     assert 'request_plan_completion, transition.user_id, transition.plan_id' in source
-    expiry=Path('app/scheduler.py').read_text().split('def expire_overdue_steps()',1)[1].split('def check_plan_completions()',1)[0]
-    assert expiry.index('candidate_db.commit()') < expiry.index('request_plan_completion(')
+    expiry=Path('app/scheduler.py').read_text().split('def _expire_overdue_batch()',1)[1].split('def check_plan_completions()',1)[0]
+    assert expiry.index('candidate_db.commit()') < expiry.index('_submit_continuation(')
 
 
 def test_fixed_cron_only_enters_recovery(monkeypatch):
@@ -125,6 +125,7 @@ async def test_transport_retains_telegram_outcome_without_implicit_resend(monkey
     @contextmanager
     def session(): yield FakeDB()
     monkeypatch.setattr(db,'SessionLocal',session)
+    monkeypatch.setattr(db,'ReceiptSessionLocal',session)
     monkeypatch.setattr(workflow,'claim_report',lambda *a,**k:claim)
     finishes=[]
     monkeypatch.setattr(workflow,'finish_report',lambda *a,**k:finishes.append(k))
@@ -146,6 +147,7 @@ async def test_receipt_failure_only_retries_receipt(monkeypatch):
     @contextmanager
     def session(): yield FakeDB()
     monkeypatch.setattr(db,'SessionLocal',session)
+    monkeypatch.setattr(db,'ReceiptSessionLocal',session)
     monkeypatch.setattr(workflow,'claim_report',lambda *a,**k:workflow.ReportClaim(11,22,'x'))
     calls=[]
     def finish(*a,**k):
