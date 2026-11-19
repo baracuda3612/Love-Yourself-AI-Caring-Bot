@@ -26,22 +26,22 @@ roster diff were left in place. The main checkout is the sole implementation wor
 | Telegram enrollment middleware and participant mutations | A real transaction holding the pinned-notice authority for one member made a second member of the same deployment miss the one-second middleware assertion on the base. Shared deployment read fences allow the second member through and retain exclusive fences for controls, roster application, revocation and replacement. The primary owner row still serializes conflicting operations on the same account. |
 | Email/OIDC proof issuance and verified membership | The base's issuance deleted all old proofs across deployments during a request. Retention now selects up to 500 expired proofs per privacy pass, skipping locked rows. Verifying a member uses a single keyed roster lookup. Operator preview/apply still process a whole atomic roster change. Their lock duration at a large accepted roster size is `NOT_PROVEN`. |
 | First onboarding plan with delivery disabled | Telegram `/start`, setup confirmation and the real operator controls route commit the first plan and switch. On the base, the stored future step had no job after re-enable. The candidate registers the exact future timer while disabled and fences the actual send at claim time. The rehearsal invokes the persisted job twice at the recorded due instant, with a controlled clock and Telegram response. PostgreSQL records one attempt, one message ID and one delivery event. |
-| Startup, due recovery, expiry and active calendar | Future restoration is off-loop in pages of 32 by time and step ID. Each write re-reads current state under the owner fence. Due recovery admits four sends at a time and pages retry cleanup, interrupted attempts and dirty projections by 16. Expiry takes 32 IDs and enqueues continuation after commit. Because page limits bound materialized results, query plans and actual SQL scan or lock times still require measurement. Calendar commands run off-loop and use the existing exact post-commit reconciliation. |
+| Startup, due recovery, expiry and active calendar | Future restoration is off-loop in pages of 32 by time and step ID. Each write re-reads current state under the owner fence. One failed restore item leaves a durable plan-schedule repair and the batch continues. Due recovery admits two sends independently of the four normal timer workers. Status projection has two recovery workers. Retry cleanup, interrupted attempts and dirty projections are selected in pages of 16. Expiry takes 32 IDs and enqueues continuation after commit. Because page limits bound materialized results, query plans and actual SQL scan or lock times still require measurement. Calendar commands run off-loop. Explicit lifecycle changes persist the owed proof in the same transaction. Repair leases at most two plans per poll, keyed by owner, and dispatches through the existing exact schedule and format-switch proofs. |
 | Telegram status projection | Status and feedback are captured in a short transaction. Telegram edit runs after commit, with a per-step in-process gate and a 20-second caller deadline. The second transaction records the exact projection sent so a later state remains discoverable. Unknown delivery attempts remain fenced by the durable attempt journal. |
 | Completion and successor scheduling | PR #275's independent continuation, schedule and summary recovery remain authoritative. Each existing lane admits two jobs. Directly prepared reports enter the same report lane, with dedicated receipt workers. Existing scenarios cover a successor re-enabled before its first step, independently of the new onboarding scenario. |
-| Privacy erasure, retention and export | The five-minute worker admits ten erasure cases, two concurrently. It scans one 128-job keyset page per case per pass. A durable cursor survives restart and includes custom historical jobs matched by step ownership. The user fence is committed before external cleanup and the receipt is written after erasure. Support export comes from a separate operator CLI, holds the subject's row lock while materializing that subject's data and preserves the existing coverage. Its duration and shared DB pressure are `NOT_PROVEN`. |
+| Privacy erasure, retention and export | The five-minute worker admits ten erasure cases, two concurrently. It scans up to sixteen 128-job keyset pages per case per pass, saves the cursor after each page and schedules an early follow-up for cases that made progress. A durable cursor survives restart and includes custom historical jobs matched by step ownership. The user fence is committed before external cleanup and the receipt is written after erasure. Support export comes from a separate operator CLI, holds the subject's row lock while materializing that subject's data and preserves the existing coverage. Its duration and shared DB pressure are `NOT_PROVEN`. |
 | Silent reminders and weekly snapshots | Both were scheduled at startup on the base. Silent sends wait serially per user. Weekly snapshots also await Telegram while visiting the active cohort. Startup now removes their persisted cron IDs. The daily pulse was already disabled. WP-08.1 still owns removal of the legacy implementations and related cleanup. |
 
 ## Configured per-process budget
 
 | Resource | Limit and admission |
 | --- | --- |
-| DB connections | 20 general, 4 APScheduler, 6 reserved for durable transport receipts. Total 30 with zero overflow, a 2-second checkout wait and a 3-second connection setting. The receipt pool shares the PostgreSQL server and keeps its own checkout capacity. |
-| HTTP | 3 enrollment workers, 1 operator worker, 2 private report/calendar workers and 4 SMTP/OIDC workers. Work above lane capacity receives a retryable 503. Authentication and proof validity continue to use their existing authority. |
-| Bot | 32 polling updates in flight, 8 ingress DB workers and 2 calendar/scheduler effect workers. The default async blocking executor has 4 workers. |
-| Delivery | 4 scheduled timer workers, 4 recovery worker slots and a common 4-send permit held through the transport result and receipt processing. The 4 exercise receipt workers are independent of general work. APScheduler reads at most 64 due persistent jobs at a time. Rejected date jobs leave pending DB facts for recovery. |
+| DB connections | 18 general, 4 APScheduler, 8 reserved for durable transport receipts. Total 30 with zero overflow, a 2-second checkout wait and a 3-second connection setting. The receipt pool shares the PostgreSQL server and keeps its own checkout capacity. |
+| HTTP | 3 enrollment workers, 1 operator worker, 1 bulk roster worker, 1 revocation worker, 2 private report/calendar workers and 4 SMTP/OIDC workers. Work above lane capacity receives a retryable 503. Authentication and proof validity continue to use their existing authority. |
+| Bot | 32 polling updates in flight, 8 ingress DB workers and 2 calendar/scheduler effect workers. The default async blocking executor has 4 workers. Durable schedule repair has 2 workers of its own. |
+| Delivery | 4 normal timer sends and 2 recovery sends, with separate permits held through the transport result and receipt. The 6 exercise receipt workers use reserved connections. The persistent jobstore offers only as many due jobs as the executor can admit. At capacity it keeps unadmitted timers in PostgreSQL, and a free worker wakes the scheduler. |
 | Completion | 2 continuation, 2 successor scheduling and 2 report dispatch slots. A separate 2-worker receipt lane persists observed report outcomes. The durable source and obligations remain the backlog. |
-| Privacy | 2 blocking workers and 2 active erasures. Retention selects at most ten 500-message batches and one 500-proof batch per pass. |
+| Privacy | 2 blocking workers and 2 active erasures, with up to 2,048 jobstore rows per case per pass. Retention selects at most ten 500-message batches and one 500-proof batch per pass. |
 
 ## Local and release evidence
 
@@ -51,7 +51,7 @@ SMTP, OIDC and Telegram transports are controlled. The first-plan test advances
 application clocks to the persisted due timestamp and invokes the exact
 persisted job. The receipt-capacity test fills a two-slot general pool and
 records receipt latency through a separate checkout. Observed local receipt
-latency in two runs was 192–278 ms. The baseline deployment-lock case missed
+latency across three runs was 172–278 ms. The baseline deployment-lock case missed
 a one-second deadline while the other user's transaction was open.
 
 Live provider/device behavior, actual SQL deadlines and query plans under
@@ -59,12 +59,12 @@ contention, production pool saturation, recovery lag at a large backlog and
 large-cohort capacity remain `NOT_PROVEN`. These settings and local results
 establish no production throughput threshold.
 
-## Independent local audit
+## Initial independent local audit
 
 The independent read-only review used `c5657abaca55e5be4a25b5ed772f21758de013c6`
 against the integration merge base above. It reported two P1 and two P2
 findings. The full local suite with the WebApp proof fixture corrected passed
-881 tests against disposable PostgreSQL and Redis. The audit findings are open.
+881 tests against disposable PostgreSQL and Redis before remediation.
 
 | Priority | Confirmed behavior or modeled consequence |
 | --- | --- |
@@ -73,5 +73,15 @@ findings. The full local suite with the WebApp proof fixture corrected passed
 | P2 | One operator lane handles bulk roster work and unrelated deployment revocation. A busy roster slot produces a 503 before that revocation can commit. |
 | P2 | The five-minute privacy job resumes one 128-job page per case. Lag grows with the number of global jobstore entries. The local test covers a restart and exact deletion across two pages. |
 
-The candidate is awaiting disposition and remediation before publication. The
-local PostgreSQL results cover correctness under the exercised conditions.
+The founder approved all four repairs. The corrective rehearsal used the
+new Alembic revision `20261119_schedule_reconcile`. It verified an eight-timer
+burst with four workers held. The four excess timers remained in the SQL
+jobstore and drained in 21 ms after release in one local run. The first-plan
+case also saturated both foreground scheduling workers and restarted the
+APScheduler instance. Repair took 223 ms from dispatch to durable proof in
+one local run, before the first exercise became due. A companion case
+verified format-switch and calendar jobs against the latest committed dates.
+Revocation proceeded while a roster preview was held. The erasure case
+verified an early follow-up, a persisted cursor and exact historical job
+ownership after restart. These measurements describe these fixtures and
+controlled transports.
