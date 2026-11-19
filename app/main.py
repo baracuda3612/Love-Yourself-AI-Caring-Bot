@@ -2,6 +2,7 @@ from app.logging.privacy_logging import install_privacy_logging
 install_privacy_logging()
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 try:
     import uvloop
@@ -26,6 +27,9 @@ async def main() -> None:
         from app.db import SessionLocal
         with SessionLocal() as db:
             audit_environment(db)
+    asyncio.get_running_loop().set_default_executor(
+        ThreadPoolExecutor(max_workers=4, thread_name_prefix="runtime-io"),
+    )
     asyncio.create_task(schedule_daily_loop())
 
     config = uvicorn.Config(
@@ -37,7 +41,7 @@ async def main() -> None:
     )
     server = uvicorn.Server(config)
 
-    await asyncio.gather(dp.start_polling(bot), server.serve())
+    await asyncio.gather(dp.start_polling(bot, tasks_concurrency_limit=32), server.serve())
 
 
 if __name__ == "__main__":

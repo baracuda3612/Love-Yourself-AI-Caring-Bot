@@ -13,7 +13,7 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.config import settings
-from app.blocking_db import DBBusyError, run_db
+from app.blocking_db import DBBusyError, run_db, schedule_effects_lane
 from app.db import AIPlan, AIPlanDay, AIPlanStep, ChatHistory, MenuInput, SessionLocal, User, UserEvent, UserProfile
 from app import menu_input, onboarding, user_menu
 from app.orchestrator import handle_incoming_message, session_memory
@@ -144,7 +144,7 @@ async def cmd_start(message: Message):
     args = message.text.split(maxsplit=1)[1].strip() if message.text and " " in message.text else ""
     if not message.from_user or message.chat.type != "private" or message.chat.id != message.from_user.id:
         return
-    try:
+    def commit():
         with SessionLocal() as db:
             if args:
                 user, _ = redeem_handoff(db, args, message.from_user)
@@ -152,7 +152,10 @@ async def cmd_start(message: Message):
             else:
                 user, _ = _ensure_user(db, message.from_user)
             user_id = user.id
-            pinned_notice(db, user_id, acknowledged=True)
+            try:
+                pinned_notice(db, user_id, acknowledged=True)
+            except NoticeRequired:
+                return user_id, None, True
             pending = db.get(MenuInput, user_id)
             if pending is not None:
                 pending.action = None
@@ -162,12 +165,16 @@ async def cmd_start(message: Message):
                 progress.revision += 1
             screen = onboarding.render(user, progress) if progress is not None else None
             db.commit()
-    except NoticeRequired:
-        await _open_menu(message, message.from_user.id, "root")
-        await _show_privacy(message, user_id)
-        return
+            return user_id, screen, False
+
+    try:
+        user_id, screen, notice_required = await run_db(commit)
     except AccessDenied:
         await _open_menu(message, message.from_user.id, "root", denied_start=True)
+        return
+    if notice_required:
+        await _open_menu(message, message.from_user.id, "root")
+        await _show_privacy(message, user_id)
         return
     await message.answer("Меню", reply_markup=user_menu.keyboard(schedule=screen is None, own_data=True))
     if screen is not None:
@@ -179,7 +186,7 @@ async def stop_setup(message: Message):
     from app.privacy import NoticeRequired, pinned_notice
     from app.access import AccessDenied
 
-    try:
+    def commit():
         with SessionLocal() as db:
             user, _ = _ensure_user(db, message.from_user)
             pinned_notice(db, user.id, acknowledged=True)
@@ -190,6 +197,10 @@ async def stop_setup(message: Message):
             screen = onboarding.render(user, progress) if progress is not None else None
             user_id = user.id
             db.commit()
+            return user_id, screen
+
+    try:
+        user_id, screen = await run_db(commit)
     except (AccessDenied, NoticeRequired):
         await message.answer("Доступ зараз недоступний.")
         return
@@ -236,6 +247,8 @@ class ActorIngressMiddleware(BaseMiddleware):
         data["release_ingress"] = release_ingress
         try:
             return await handler(event, data)
+        except DBBusyError:
+            await event.answer("Зараз багато запитів. Спробуй ще раз за кілька секунд.")
         finally:
             release_ingress()
 
@@ -304,10 +317,13 @@ async def _show_privacy(message, user_id):
     from html import escape
     from app.privacy import pinned_notice
     from app.access import AccessDenied
-    try:
+    def read_notice():
         with SessionLocal() as db:
-            deployment, notice = pinned_notice(db, user_id)
-            body, version, notice_id = notice.notice_text, notice.version, notice.id
+            _, notice = pinned_notice(db, user_id)
+            return notice.notice_text, notice.version, notice.id
+
+    try:
+        body, version, notice_id = await run_db(read_notice)
     except AccessDenied:
         screen = user_menu.navigation(
             "Повідомлення про приватність поки недоступне. Запити щодо своїх даних можна подати в «Мої дані».",
@@ -329,12 +345,14 @@ async def _show_privacy(message, user_id):
 
 @router.message(Command("privacy"))
 async def privacy_notice(message: Message):
-    with SessionLocal() as db:
-        user = db.query(User).filter_by(tg_id=message.from_user.id).first()
-        if user is None:
-            await message.answer("Дані недоступні.")
-            return
-        user_id = user.id
+    def read_user_id():
+        with SessionLocal() as db:
+            return db.query(User.id).filter_by(tg_id=message.from_user.id).scalar()
+
+    user_id = await run_db(read_user_id)
+    if user_id is None:
+        await message.answer("Дані недоступні.")
+        return
     await _show_privacy(message, user_id)
 
 
@@ -342,8 +360,7 @@ async def privacy_notice(message: Message):
 async def privacy_ack(callback: CallbackQuery):
     from app.privacy import acknowledge_notice
     from app.access import AccessDenied
-    try:
-        notice_id = int(callback.data.split(':',1)[1])
+    def commit_acknowledgement(notice_id):
         with SessionLocal() as db:
             user = db.query(User).filter_by(tg_id=callback.from_user.id).first()
             if user is None:
@@ -354,6 +371,11 @@ async def privacy_ack(callback: CallbackQuery):
             progress = onboarding.setup_progress(db, user)
             screen = onboarding.render(user, progress) if progress is not None else None
             db.commit()
+            return user_id, screen
+
+    try:
+        notice_id = int(callback.data.split(':', 1)[1])
+        user_id, screen = await run_db(commit_acknowledgement, notice_id)
     except (AccessDenied, ValueError):
         await callback.answer("Повідомлення змінилося або доступ недоступний. Відкрий «Конфіденційність» у розділі «Про проєкт».")
         return
@@ -374,14 +396,16 @@ async def data_request(message: Message):
         await message.answer("Вкажи вид: /data_request access, export, correction або deletion. "
             "Не надсилай документи чи чутливі подробиці в цей чат.")
         return
-    try:
+    def commit_request():
         with SessionLocal() as db:
             row = receive_request(db, tg_id=message.from_user.id, kind=args[1],
                 source_operation_id=f"telegram:rights:{message.chat.id}:{message.message_id}",
                 case_id=args[2] if len(args)==3 else None)
             db.commit()
-            receipt = f"Запит {row.id} отримано. Строк відповіді: {row.due_at.date().isoformat()}."
-        await message.answer(receipt)
+            return f"Запит {row.id} отримано. Строк відповіді: {row.due_at.date().isoformat()}."
+
+    try:
+        await message.answer(await run_db(commit_request))
     except (AccessDenied, ValueError):
         await message.answer("Запит не записано: підтримка зараз недоступна. Спробуй пізніше.")
 
@@ -389,12 +413,15 @@ async def data_request(message: Message):
 @router.message(Command("request_status"))
 async def request_status(message: Message):
     from app.db import PrivacyRequest
-    with SessionLocal() as db:
-        user = db.query(User).filter_by(tg_id=message.from_user.id).first()
-        rows = [] if user is None else db.query(PrivacyRequest).filter_by(user_id=user.id).order_by(
-            PrivacyRequest.received_at.desc()).limit(10).all()
-        status_names = {'received':'отримано','deleting':'видалення триває','completed':'виконано'}
-        reply = '\n'.join(f"{r.id}: {status_names[r.state]}, строк {r.due_at.date().isoformat()}" for r in rows)
+    def read_status():
+        with SessionLocal() as db:
+            user = db.query(User).filter_by(tg_id=message.from_user.id).first()
+            rows = [] if user is None else db.query(PrivacyRequest).filter_by(user_id=user.id).order_by(
+                PrivacyRequest.received_at.desc()).limit(10).all()
+            status_names = {'received':'отримано','deleting':'видалення триває','completed':'виконано'}
+            return '\n'.join(f"{r.id}: {status_names[r.state]}, строк {r.due_at.date().isoformat()}" for r in rows)
+
+    reply = await run_db(read_status)
     await message.answer(reply or "Активних записів запитів немає.")
 
 
@@ -411,6 +438,22 @@ async def menu_action(callback: CallbackQuery):
 
 
 async def _open_menu(message, tg_id, route, *, operation_id=None, denied_start=False, hint="", from_menu=False):
+    if message.chat.type != "private" or message.chat.id != tg_id:
+        return
+
+    result, screen, markup, show_notice, user_id = await run_db(
+        _commit_menu, message, tg_id, route, operation_id, denied_start, hint, from_menu,
+    )
+    if result is not None:
+        hint = await _reconcile_menu_schedule(result)
+        await _open_menu(message, tg_id, user_menu.SCHEDULE, hint=hint)
+        return
+    if show_notice:
+        await _show_privacy(message, user_id)
+    await message.answer(screen.text, reply_markup=markup or screen.keyboard)
+
+
+def _commit_menu(message, tg_id, route, operation_id, denied_start, hint, from_menu):
     from html import escape
 
     from app.access import AccessDenied, environment, may_access, require_access
@@ -422,9 +465,6 @@ async def _open_menu(message, tg_id, route, *, operation_id=None, denied_start=F
     from app.plan_drafts.plan_builder_v5 import NoCandidatesError
     from app.plan_finalization import FinalizationError
     from app.privacy import NoticeRequired, pinned_notice, receive_request
-
-    if message.chat.type != "private" or message.chat.id != tg_id:
-        return
 
     result = None
     with SessionLocal() as db:
@@ -783,27 +823,24 @@ async def _open_menu(message, tg_id, route, *, operation_id=None, denied_start=F
         if user is not None:
             db.commit()
 
-    if result is not None:
-        hint = await _reconcile_menu_schedule(result)
-        await _open_menu(message, tg_id, user_menu.SCHEDULE, hint=hint)
-        return
-    if show_notice:
-        await _show_privacy(message, user_id)
-    await message.answer(screen.text, reply_markup=markup or screen.keyboard)
+    return result, screen, markup, show_notice, user_id
 
 
 async def _reconcile_menu_schedule(result):
     from app.lifecycle_reconciliation import reconcile_scheduler_effects
     from app.plan_runtime.tools import _finish_plan_format_result
 
-    if result.operation == "switch_plan_format":
-        outcome = await asyncio.to_thread(_finish_plan_format_result, result, pending_status="needs_evening_time")
-        if outcome.get("status") != "ok":
-            return "Не вдалося підтвердити оновлення розкладу."
-        return ""
-    outcome = await asyncio.to_thread(reconcile_scheduler_effects, result)
-    if outcome.external_effects_succeeded:
-        return ""
+    try:
+        if result.operation == "switch_plan_format":
+            outcome = await schedule_effects_lane.run(_finish_plan_format_result, result, pending_status="needs_evening_time")
+            if outcome.get("status") != "ok":
+                return "Не вдалося підтвердити оновлення розкладу."
+            return ""
+        outcome = await schedule_effects_lane.run(reconcile_scheduler_effects, result)
+        if outcome.external_effects_succeeded:
+            return ""
+    except DBBusyError:
+        pass  # The lifecycle decision is already committed; show pending proof.
     hint = "Оновлення надсилання ще не підтверджено."
     if result.operation == "change_schedule_calendar":
         hint += " Відкрий «Змінити налаштування» й повторно застосуй ті самі дні або часовий пояс."
@@ -898,7 +935,7 @@ async def on_text(message: Message, release_ingress=None):
 async def _send_setup_screen(message, user_id, screen):
     from app.access import outbound_claim
 
-    if await asyncio.to_thread(outbound_claim, user_id) is None:
+    if await run_db(outbound_claim, user_id) is None:
         await message.answer("Доступ зараз недоступний.")
         return
     await message.answer(screen.text, reply_markup=screen.keyboard)
@@ -953,14 +990,16 @@ async def setup_action(callback: CallbackQuery):
         await callback.answer("Ця кнопка вже неактуальна.")
         return
     _, revision, action = parts
-    result = None
-    try:
+    def commit():
         with SessionLocal() as db:
             user = db.query(User).filter_by(tg_id=callback.from_user.id).with_for_update().first()
             if user is None:
                 raise AccessDenied()
             user_id = user.id
-            pinned_notice(db, user_id, acknowledged=True)
+            try:
+                pinned_notice(db, user_id, acknowledged=True)
+            except NoticeRequired:
+                return user_id, None, None, True
             progress = onboarding.setup_progress(db, user)
             if progress is None:
                 screen = onboarding.SetupScreen("Налаштування вже завершено.")
@@ -968,22 +1007,29 @@ async def setup_action(callback: CallbackQuery):
             else:
                 screen, result = onboarding.handle_action(db, user, progress, int(revision), action)
             db.commit()
-    except NoticeRequired:
-        await callback.answer()
-        await _show_privacy(callback.message, user_id)
-        return
+            return user_id, screen, result, False
+
+    try:
+        user_id, screen, result, notice_required = await run_db(commit)
     except (AccessDenied, LifecycleEntitlementError):
         await callback.answer("Доступ зараз недоступний.")
         return
     except (FinalizationError, NoCandidatesError, LifecycleTransitionError):
-        logger.exception("Setup activation failed for user %s", user_id)
+        logger.exception("Setup activation failed")
         await callback.answer("Не вдалося створити розклад. Спробуй підтвердити ще раз.", show_alert=True)
+        return
+    if notice_required:
+        await callback.answer()
+        await _show_privacy(callback.message, user_id)
         return
 
     await callback.answer()
     if result is not None:
         try:
-            screen = await asyncio.to_thread(_setup_activation_screen, user_id, result)
+            screen = await schedule_effects_lane.run(_setup_activation_screen, user_id, result)
+        except DBBusyError:
+            # Retry the activation confirmation to reconcile the committed plan.
+            screen = onboarding.SetupScreen("Розклад створено. Поки не можемо підтвердити час першого нагадування.")
         except NoticeRequired:
             await _show_privacy(callback.message, user_id)
             return
@@ -1026,7 +1072,7 @@ async def _handle_step_action(callback_query: CallbackQuery, target: str):
             db.commit()
             return transition
     try:
-        transition = await asyncio.to_thread(commit_action)
+        transition = await run_db(commit_action)
     except LifecycleOwnershipError:
         await callback_query.answer("Це не ваше завдання")
         return
@@ -1075,7 +1121,7 @@ async def handle_task_feedback(callback_query: CallbackQuery):
             db.commit()
             return recorded, duplicate
     try:
-        recorded, duplicate = await asyncio.to_thread(commit_feedback)
+        recorded, duplicate = await run_db(commit_feedback)
     except LifecycleOwnershipError:
         await callback_query.answer("Це не ваша вправа")
         return
@@ -1093,20 +1139,24 @@ async def handle_task_feedback(callback_query: CallbackQuery):
 
 async def _send_agent_response(message: Message, user_id: int, response: dict) -> None:
     from app.access import outbound_claim
-    if await asyncio.to_thread(outbound_claim, user_id) is None:
+    if await run_db(outbound_claim, user_id) is None:
         await message.answer("Доступ зараз недоступний.")
         return
     reply_text = _sanitize_message_text(response.get("reply_text"))
     await message.answer(reply_text)
-    with SessionLocal() as db:
-        from app.access import AccessDenied, require_access
-        try:
-            require_access(db, user_id)
-        except AccessDenied:
-            return
-        db.add(ChatHistory(user_id=user_id, role="assistant", text=reply_text))
-        db.commit()
-    await session_memory.append_message(user_id, "assistant", reply_text)
+    def save_reply():
+        with SessionLocal() as db:
+            from app.access import AccessDenied, require_access
+            try:
+                require_access(db, user_id)
+            except AccessDenied:
+                return False
+            db.add(ChatHistory(user_id=user_id, role="assistant", text=reply_text))
+            db.commit()
+        return True
+
+    if await run_db(save_reply):
+        await session_memory.append_message(user_id, "assistant", reply_text)
 
 
 __all__ = ["bot", "dp", "router"]

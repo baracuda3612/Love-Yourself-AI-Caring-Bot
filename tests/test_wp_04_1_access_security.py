@@ -335,7 +335,7 @@ async def test_runtime_startup_audits_bound_contours_only(monkeypatch, is_dev):
     monkeypatch.setattr('app.db.SessionLocal', lambda: nullcontext(db))
     audit_calls = []
     monkeypatch.setattr('app.access_environment.audit_environment', lambda session: audit_calls.append(session))
-    async def finished(*args): pass
+    async def finished(*args, **kwargs): pass
     monkeypatch.setattr(main, 'schedule_daily_loop', finished)
     monkeypatch.setattr(main.dp, 'start_polling', finished)
     monkeypatch.setattr(main.uvicorn, 'Config', lambda *args, **kwargs: object())
