@@ -731,8 +731,8 @@ def test_due_backlog_dispatches_with_bounded_concurrency(db, monkeypatch):
         step.scheduled_for = datetime.now(timezone.utc)-timedelta(minutes=1)
         step.expires_at = datetime.now(timezone.utc)+timedelta(hours=1)
     db.flush()
-    barrier = Barrier(scheduler._DELIVERY_WORKERS); errors = []; called = []
-    def send(_chat, _text, step_id):
+    barrier = Barrier(scheduler._DELIVERY_RECOVERY_WORKERS); errors = []; called = []
+    def send(_chat, _text, step_id, **_kwargs):
         called.append(step_id)
         try: barrier.wait(timeout=3)
         except Exception as exc: errors.append(exc)
@@ -740,7 +740,7 @@ def test_due_backlog_dispatches_with_bounded_concurrency(db, monkeypatch):
     monkeypatch.setattr(scheduler, 'send_scheduled_message', send)
     monkeypatch.setattr(scheduler, '_enable_delivery_recovery', lambda: None)
     scheduler.reconcile_scheduled_deliveries()
-    assert len(set(called)) == scheduler._DELIVERY_WORKERS and not errors
+    assert len(set(called)) == scheduler._DELIVERY_RECOVERY_WORKERS and not errors
 
 
 @pytest.mark.parametrize('operation', ['completed', 'skipped', 'feedback'])

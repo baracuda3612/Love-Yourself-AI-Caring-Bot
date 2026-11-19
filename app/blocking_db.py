@@ -1,7 +1,8 @@
 """Bounded admission for synchronous database units called by async ingress."""
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from threading import BoundedSemaphore
+from threading import Lock
+
 
 class DBBusyError(RuntimeError):
     pass
@@ -12,17 +13,28 @@ class BlockingLane:
 
     def __init__(self, workers, name):
         self._workers = ThreadPoolExecutor(max_workers=workers, thread_name_prefix=name)
-        self._slots = BoundedSemaphore(workers)
+        self._lock = Lock()
+        self._available = workers
+
+    def available(self):
+        with self._lock:
+            return self._available
+
+    def _release(self, _future=None):
+        with self._lock:
+            self._available += 1
 
     def submit(self, fn, /, *args, **kwargs):
-        if not self._slots.acquire(blocking=False):
-            raise DBBusyError("blocking worker capacity exhausted")
+        with self._lock:
+            if not self._available:
+                raise DBBusyError("blocking worker capacity exhausted")
+            self._available -= 1
         try:
             future = self._workers.submit(fn, *args, **kwargs)
         except BaseException:
-            self._slots.release()
+            self._release()
             raise
-        future.add_done_callback(lambda _done: self._slots.release())
+        future.add_done_callback(self._release)
         return future
 
     def shutdown(self, *, wait=True):

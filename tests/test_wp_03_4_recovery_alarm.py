@@ -13,9 +13,10 @@ def test_real_alarm_survives_failed_run_and_stops_after_repair(monkeypatch):
     alarm = BackgroundScheduler(jobstores={'delivery_recovery': MemoryJobStore()}, timezone='UTC')
     monkeypatch.setattr(scheduler, 'scheduler', alarm)
     failed = Event()
-    def outage(*args):
+    def outage(*args, **_kwargs):
         raise RuntimeError('temporary DB outage')
-    def recover():
+    def recover(*, wait):
+        assert wait is False
         failed.set(); outage()
     monkeypatch.setattr(scheduler, '_recover_scheduled_deliveries', recover)
     monkeypatch.setattr(scheduler, '_delivery_recovery_time', outage)
@@ -36,7 +37,7 @@ def test_real_alarm_survives_failed_run_and_stops_after_repair(monkeypatch):
 def test_recovery_failure_before_claim_retains_an_alarm(monkeypatch):
     alarm = BackgroundScheduler(jobstores={'delivery_recovery': MemoryJobStore()}, timezone='UTC')
     monkeypatch.setattr(scheduler, 'scheduler', alarm)
-    def outage(*args): raise RuntimeError('DB unavailable')
+    def outage(*args, **_kwargs): raise RuntimeError('DB unavailable')
     monkeypatch.setattr(scheduler, '_recover_scheduled_deliveries', outage)
     monkeypatch.setattr(scheduler, '_delivery_recovery_time', outage)
     alarm.start(paused=True)

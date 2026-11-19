@@ -1,5 +1,7 @@
 """Bounded reads of the persistent APScheduler store."""
 
+from datetime import datetime, timedelta, timezone
+
 from apscheduler.executors.base import BaseExecutor, MaxInstancesReachedError, run_job
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.util import datetime_to_utc_timestamp
@@ -9,11 +11,28 @@ from app.blocking_db import BlockingLane, DBBusyError
 
 
 class RuntimeJobStore(SQLAlchemyJobStore):
+    def __init__(self, *args, delivery_capacity=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._delivery_capacity = delivery_capacity
+
     def get_due_jobs(self, now):
+        # APScheduler removes a once-only job after submission, even when an
+        # executor rejects it. Leave unadmitted timer rows in this store.
+        limit = min(64, self._delivery_capacity()) if self._delivery_capacity is not None else 64
+        if not limit:
+            return []
         columns = self.jobs_t.c
         due = (select(columns.id).where(columns.next_run_time <= datetime_to_utc_timestamp(now))
-               .order_by(columns.next_run_time, columns.id).limit(64))
+               .order_by(columns.next_run_time, columns.id).limit(limit))
         return self._get_jobs(columns.id.in_(due))
+
+    def get_next_run_time(self):
+        run_at = super().get_next_run_time()
+        if run_at is None or self._delivery_capacity is None or self._delivery_capacity():
+            return run_at
+        # A worker also wakes the scheduler on completion. The timed backstop
+        # keeps an already-due row from causing a polling spin during overload.
+        return max(run_at, datetime.now(timezone.utc) + timedelta(seconds=1))
 
     def remove_legacy_completion_jobs(self):
         job_id = self.jobs_t.c.id
@@ -31,7 +50,21 @@ class RuntimeJobStore(SQLAlchemyJobStore):
             query = query.where(columns.id > after)
         with self.engine.connect() as connection:
             rows = connection.execute(query).all()
-        return [self._reconstitute_job(row.job_state) for row in rows]
+        jobs = []
+        invalid = []
+        for row in rows:
+            try:
+                jobs.append(self._reconstitute_job(row.job_state))
+            except Exception:
+                self._logger.exception("Removing unreadable persisted job")
+                invalid.append(row)
+        if invalid:
+            with self.engine.begin() as connection:
+                for row in invalid:
+                    connection.execute(self.jobs_t.delete().where(
+                        columns.id == row.id, columns.job_state == row.job_state,
+                    ))
+        return jobs, rows[-1].id if len(rows) == limit else None
 
 
 class DeliveryJobExecutor(BaseExecutor):
@@ -41,6 +74,9 @@ class DeliveryJobExecutor(BaseExecutor):
         super().__init__()
         self._lane = BlockingLane(workers, "delivery-timers")
         self._overflow = overflow
+
+    def available(self):
+        return self._lane.available()
 
     def _do_submit_job(self, job, run_times):
         try:
@@ -55,6 +91,7 @@ class DeliveryJobExecutor(BaseExecutor):
                 self._run_job_success(job.id, result.result())
             else:
                 self._run_job_error(job.id, error, error.__traceback__)
+            self._scheduler.wakeup()
 
         future.add_done_callback(finished)
 

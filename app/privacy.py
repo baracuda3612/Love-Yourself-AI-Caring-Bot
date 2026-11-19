@@ -348,7 +348,7 @@ def begin_account_deletion(db, request_id):
 
 
 async def delete_account(request_id, *, memory, cancel_jobs, session_factory=None,
-                         run_blocking=None, cancel_job_page=None):
+                         run_blocking=None, cancel_job_page=None, job_scan_page_limit=1):
     """Repeatable erasure; failed external cleanup leaves the durable fence.
 
     Already claimed network I/O may finish; no new claim can begin after the
@@ -380,17 +380,24 @@ async def delete_account(request_id, *, memory, cancel_jobs, session_factory=Non
     if cancel_job_page is None:
         await run_blocking(cancel_jobs, user_id, plan_ids)
     else:
-        cursor = await run_blocking(cancel_job_page, user_id, plan_ids, after)
-        if cursor is not None:
-            def save_cursor():
-                with session_factory() as db:
-                    request = owned_request(db, request_id, kind="deletion")
-                    if request.state == "deleting" and request.evidence.get("job_scan_after") == after:
-                        request.evidence = {**request.evidence, "job_scan_after": cursor}
-                        db.commit()
+        def save_cursor(previous, cursor):
+            with session_factory() as db:
+                request = owned_request(db, request_id, kind="deletion")
+                if request.state != "deleting" or request.evidence.get("job_scan_after") != previous:
+                    return False
+                request.evidence = {**request.evidence, "job_scan_after": cursor}
+                db.commit()
+                return True
 
-            await run_blocking(save_cursor)
-            return
+        for _ in range(job_scan_page_limit):
+            cursor = await run_blocking(cancel_job_page, user_id, plan_ids, after)
+            if cursor is None:
+                break
+            if not await run_blocking(save_cursor, after, cursor):
+                return False
+            after = cursor
+        else:
+            return True
 
     def erase():
         with session_factory() as db:
@@ -410,6 +417,7 @@ async def delete_account(request_id, *, memory, cancel_jobs, session_factory=Non
             db.execute(models.User.__table__.delete().where(models.User.id == user_id))
             db.commit()
     await run_blocking(erase)
+    return False
 
 
 def _erase_personal_rows(db, user_id):

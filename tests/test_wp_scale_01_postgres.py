@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+
 from apscheduler.jobstores.memory import MemoryJobStore
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -15,7 +17,10 @@ from app import access_proof, api, db as models, onboarding, privacy, scheduled_
 from tests.test_wp_04_2_privacy_postgres import engine, pytestmark, subject  # noqa: F401
 
 
-async def test_first_plan_is_scheduled_before_due_after_delivery_reenable(engine, monkeypatch):
+@pytest.mark.parametrize("saturated", [False, True])
+async def test_first_plan_is_scheduled_before_due_after_delivery_reenable(engine, monkeypatch, saturated):
+    from threading import Event
+    from time import monotonic
     from app import access_http, scheduler, telegram
 
     factory = sessionmaker(engine, expire_on_commit=False)
@@ -29,19 +34,25 @@ async def test_first_plan_is_scheduled_before_due_after_delivery_reenable(engine
     with factory.begin() as db:
         user, deployment, notice = subject(db)
         deployment.delivery_enabled = False
-        privacy.acknowledge_notice(db, user.id, notice.id, "scale:first-plan:notice")
+        privacy.acknowledge_notice(db, user.id, notice.id, f"scale:first-plan:notice:{user.id}")
         user_id, tg_id, deployment_id = user.id, user.tg_id, deployment.id
 
-    jobs = BackgroundScheduler(
-        jobstores={
-            "default": SQLAlchemyJobStore(engine=engine),
-            "delivery_recovery": MemoryJobStore(),
-            "completion_recovery": MemoryJobStore(),
-        },
-        timezone="UTC",
-    )
-    jobs.start(paused=True)
-    monkeypatch.setattr(scheduler, "scheduler", jobs)
+    def start_scheduler():
+        jobs = BackgroundScheduler(
+            jobstores={
+                "default": SQLAlchemyJobStore(engine=engine),
+                "delivery_recovery": MemoryJobStore(),
+                "completion_recovery": MemoryJobStore(),
+            },
+            timezone="UTC",
+        )
+        jobs.start(paused=True)
+        monkeypatch.setattr(scheduler, "scheduler", jobs)
+        return jobs
+
+    jobs = start_scheduler()
+    release = Event()
+    held = [telegram.schedule_effects_lane.submit(release.wait, 5) for _ in range(2)] if saturated else []
     actor = SimpleNamespace(id=tg_id, username=None, first_name=None)
     message = SimpleNamespace(
         from_user=actor, chat=SimpleNamespace(id=tg_id, type="private"),
@@ -72,6 +83,7 @@ async def test_first_plan_is_scheduled_before_due_after_delivery_reenable(engine
             step_id, due = first.id, first.scheduled_for
             job_id = scheduler._generate_step_job_id(first)
             assert due > datetime.now(timezone.utc)
+            assert (plan.schedule_reconcile_at is not None) == saturated
             assert db.query(models.ExerciseDelivery).filter_by(plan_step_id=step_id).count() == 0
 
         async with AsyncClient(transport=ASGITransport(app=api.app), base_url="http://testserver") as client:
@@ -84,6 +96,20 @@ async def test_first_plan_is_scheduled_before_due_after_delivery_reenable(engine
         assert datetime.now(timezone.utc) < due
         with factory() as db:
             assert db.get(models.Deployment, deployment_id).delivery_enabled
+        if saturated:
+            assert jobs.get_job(job_id) is None
+            jobs.shutdown()
+            jobs = start_scheduler()
+            recovery_start = monotonic()
+            await asyncio.to_thread(scheduler.dispatch_plan_schedule_recovery)
+            while True:
+                with factory() as db:
+                    repaired = db.get(models.AIPlan, plan.id).schedule_reconcile_at is None
+                if repaired:
+                    break
+                assert monotonic() - recovery_start < 3.0
+                await asyncio.sleep(0.02)
+            print(f"admitted_schedule_repair_after_restart_ms={(monotonic() - recovery_start)*1000:.1f}")
         exact_job = jobs.get_job(job_id)
         assert exact_job is not None
         assert exact_job.next_run_time == due
@@ -116,6 +142,9 @@ async def test_first_plan_is_scheduled_before_due_after_delivery_reenable(engine
             assert db.get(models.AIPlanStep, step_id).step_status == "delivered"
             assert db.query(models.UserEvent).filter_by(plan_step_id=step_id, event_name="task_delivered").count() == 1
     finally:
+        release.set()
+        for worker in held:
+            worker.result(timeout=3)
         jobs.shutdown()
 
 
@@ -219,6 +248,7 @@ async def test_delivery_receipt_has_checkout_capacity_while_general_pool_is_full
 
 async def test_erasure_resumes_jobstore_scan_at_persisted_cursor_after_restart(engine, monkeypatch):
     from datetime import timedelta
+    from time import monotonic
 
     from app import scheduler, session_memory
     from app.runtime_jobstore import RuntimeJobStore
@@ -226,8 +256,10 @@ async def test_erasure_resumes_jobstore_scan_at_persisted_cursor_after_restart(e
 
     factory = sessionmaker(engine, expire_on_commit=False)
     monkeypatch.setattr(scheduler, "SessionLocal", factory)
+    monkeypatch.setattr(scheduler, "_event_loop", asyncio.get_running_loop())
     monkeypatch.setattr(models, "SessionLocal", factory)
     monkeypatch.setattr(session_memory, "SessionMemory", lambda: SimpleNamespace(delete_user=AsyncMock()))
+    monkeypatch.setattr(scheduler, "_PRIVACY_JOB_PAGES_PER_PASS", 1)
     with factory.begin() as db:
         user, plan = source_plan(db)
         step = plan.days[0].steps[0]
@@ -240,7 +272,7 @@ async def test_erasure_resumes_jobstore_scan_at_persisted_cursor_after_restart(e
 
     def start():
         store = RuntimeJobStore(engine=engine, tablename="wp_scale_job_scan")
-        jobs = BackgroundScheduler(jobstores={"default": store})
+        jobs = BackgroundScheduler(jobstores={"default": store, "maintenance": MemoryJobStore()})
         jobs.start(paused=True)
         monkeypatch.setattr(scheduler, "scheduler", jobs)
         monkeypatch.setattr(scheduler, "_application_scheduler", jobs)
@@ -256,7 +288,10 @@ async def test_erasure_resumes_jobstore_scan_at_persisted_cursor_after_restart(e
         jobs.add_job("app.scheduler:check_plan_completions", "date", id=f"plan_{plan_id}_old", run_date=tomorrow)
         jobs.add_job("app.scheduler:send_scheduled_message", "date", id="z-custom-legacy",
                      args=[chat_id, "", step_id], run_date=tomorrow)
-        await scheduler.privacy_maintenance()
+        await asyncio.to_thread(scheduler.run_privacy_maintenance)
+        followup = jobs.get_job("privacy_scan_followup", jobstore="maintenance")
+        assert followup is not None
+        assert followup.next_run_time < datetime.now(timezone.utc) + timedelta(seconds=2)
         assert jobs.get_job(f"plan_{plan_id}_old") is None
         assert jobs.get_job("z-custom-legacy") is not None
         with factory() as db:
@@ -269,7 +304,9 @@ async def test_erasure_resumes_jobstore_scan_at_persisted_cursor_after_restart(e
 
     jobs = start()
     try:
+        start = monotonic()
         await scheduler.privacy_maintenance()
+        print(f"privacy_scan_resumed_after_restart_ms={(monotonic()-start)*1000:.1f}")
         assert {job.id for job in jobs.get_jobs()} == unrelated_ids
         with factory() as db:
             assert db.get(models.User, user_id) is None
@@ -350,3 +387,130 @@ async def test_feedback_commit_does_not_wait_for_the_previous_telegram_edit(engi
     with factory() as db:
         receipt = db.query(models.ExerciseDelivery).filter_by(plan_step_id=step_id).one()
         assert receipt.visible_status == "completed" and receipt.visible_feedback == "better"
+
+
+_timer_probe = None
+
+
+def _run_timer_probe(number):
+    release, started, done, lock = _timer_probe
+    with lock:
+        started.append(number)
+    assert release.wait(5)
+    with lock:
+        done.append(number)
+
+
+def test_busy_timer_executor_keeps_excess_jobs_in_persistent_store(engine, monkeypatch):
+    from datetime import timedelta
+    from threading import Event, Lock
+    from time import monotonic, sleep
+    import sys
+
+    from app.runtime_jobstore import DeliveryJobExecutor, RuntimeJobStore
+
+    release, overflow, lock = Event(), Event(), Lock()
+    started, done = [], []
+    monkeypatch.setattr(sys.modules[__name__], "_timer_probe", (release, started, done, lock))
+    executor = DeliveryJobExecutor(4, overflow)
+    store = RuntimeJobStore(engine=engine, tablename="wp_scale_timer_backlog", delivery_capacity=executor.available)
+    jobs = BackgroundScheduler(jobstores={"default": store}, executors={"scheduled_delivery": executor})
+    jobs.start(paused=True)
+
+    def wait_until(condition):
+        deadline = monotonic() + 4
+        while not condition():
+            assert monotonic() < deadline
+            sleep(0.02)
+
+    try:
+        due = datetime.now(timezone.utc) - timedelta(seconds=1)
+        for number in range(8):
+            jobs.add_job(_run_timer_probe, "date", id=f"timer-{number}", args=[number], run_date=due,
+                         executor="scheduled_delivery", misfire_grace_time=None)
+        jobs.resume()
+        wait_until(lambda: len(started) == 4 and len(jobs.get_jobs()) == 4)
+        assert {job.id for job in jobs.get_jobs()} == {f"timer-{number}" for number in range(4, 8)}
+        start = monotonic()
+        release.set()
+        wait_until(lambda: len(done) == 8)
+        print(f"persisted_timer_backlog_drained_ms={(monotonic()-start)*1000:.1f}")
+        assert sorted(done) == list(range(8))
+        assert not overflow.is_set()
+        wait_until(lambda: not jobs.get_jobs())
+    finally:
+        release.set()
+        jobs.shutdown()
+
+
+async def test_format_and_calendar_recover_exact_jobs_without_replaying_user_action(engine, monkeypatch):
+    from time import monotonic
+
+    from app import lifecycle, scheduler
+    from tests.test_wp_03_5_postgres_completion import source_plan
+
+    factory = sessionmaker(engine, expire_on_commit=False)
+    for module in (models, scheduler):
+        monkeypatch.setattr(module, "SessionLocal", factory)
+    jobs = BackgroundScheduler(
+        jobstores={"default": SQLAlchemyJobStore(engine=engine, tablename="wp_scale_format_jobs")},
+        timezone="UTC",
+    )
+    jobs.start(paused=True)
+    monkeypatch.setattr(scheduler, "scheduler", jobs)
+
+    async def repair(plan_id):
+        await asyncio.to_thread(scheduler.dispatch_plan_schedule_recovery)
+        deadline = monotonic() + 3
+        while True:
+            with factory() as db:
+                if db.get(models.AIPlan, plan_id).schedule_reconcile_at is None:
+                    return
+            assert monotonic() < deadline
+            await asyncio.sleep(0.02)
+
+    try:
+        with factory.begin() as db:
+            user, first = source_plan(db)
+            user.profile.evening_slot_collected = True
+            db.flush()
+            user_id, first_id = user.id, first.id
+        assert scheduler.reconcile_plan_schedule(first_id).failed_ids == ()
+        old_jobs = {job.id for job in jobs.get_jobs()}
+        assert old_jobs
+
+        with factory.begin() as db:
+            switch = lifecycle.switch_plan_format(
+                db, user_id=user_id, target_plan_type="MEDIUM", source_operation_id="scale:switch",
+            )
+            assert switch.code == "applied"
+            new_id = switch.plan_id
+            assert db.get(models.AIPlan, new_id).schedule_switch_source == "scale:switch"
+        assert {job.id for job in jobs.get_jobs()} == old_jobs
+        await repair(new_id)
+        with factory.begin() as db:
+            plan = db.get(models.AIPlan, new_id)
+            assert plan.schedule_switch_source is None
+            assert lifecycle._switch_schedule_ready(db, user_id, new_id)
+            initial = {scheduler._generate_step_job_id(step): step.scheduled_for
+                       for day in plan.days for step in day.steps}
+            assert {job.id: job.next_run_time for job in jobs.get_jobs()} == initial
+            calendar = lifecycle.change_schedule_calendar(
+                db, user_id=user_id, plan_id=new_id, plan_version=plan.version,
+                source_operation_id="scale:calendar", active_days=["MON", "WED", "FRI"],
+            )
+            assert calendar.details["updated_step_ids"]
+            expected = {scheduler._generate_step_job_id(step): step.scheduled_for
+                        for day in plan.days for step in day.steps}
+            assert expected != initial and plan.schedule_reconcile_at is not None
+        assert {job.id: job.next_run_time for job in jobs.get_jobs()} == initial
+        await repair(new_id)
+        assert {job.id: job.next_run_time for job in jobs.get_jobs()} == expected
+        with factory() as db:
+            receipts = db.query(models.PlanLifecycleOperation).filter(
+                models.PlanLifecycleOperation.user_id == user_id,
+                models.PlanLifecycleOperation.operation.in_(["switch_plan_format", "change_schedule_calendar", "switch_schedule_ready"]),
+            ).all()
+            assert {receipt.operation for receipt in receipts} == {"switch_plan_format", "change_schedule_calendar", "switch_schedule_ready"}
+    finally:
+        jobs.shutdown()

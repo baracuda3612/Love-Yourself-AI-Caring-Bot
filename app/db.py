@@ -36,7 +36,7 @@ from app.schemas.planner import PlanModule, StepType, DifficultyLevel
 
 engine = create_engine(
     settings.DATABASE_URL, echo=False, future=True,
-    pool_size=20, max_overflow=0, pool_timeout=2,
+    pool_size=18, max_overflow=0, pool_timeout=2,
     connect_args={'connect_timeout': 3},
 )
 SessionLocal = sessionmaker(
@@ -49,14 +49,14 @@ SessionLocal = sessionmaker(
 # reads or recovery saturate the general pool. Both engines use the same DB.
 receipt_engine = create_engine(
     settings.DATABASE_URL, future=True,
-    pool_size=6, max_overflow=0, pool_timeout=2,
+    pool_size=8, max_overflow=0, pool_timeout=2,
     connect_args={"connect_timeout": 3},
 )
 ReceiptSessionLocal = sessionmaker(bind=receipt_engine, autoflush=False, expire_on_commit=False)
 Base = declarative_base()
 logger = logging.getLogger(__name__)
 
-EXPECTED_ALEMBIC_REVISION = "20261111_continuation_attempt"
+EXPECTED_ALEMBIC_REVISION = "20261119_schedule_reconcile"
 
 
 class SchemaVersionError(RuntimeError):
@@ -280,6 +280,8 @@ class AIPlan(Base):
             postgresql_where=text("status IN ('active','paused')"),
         ),
         Index("ix_ai_plans_user_created", "user_id", text("created_at DESC")),
+        Index("ix_ai_plans_schedule_reconcile", "schedule_reconcile_at", "id",
+              postgresql_where=text("schedule_reconcile_at IS NOT NULL")),
     )
 
     id = Column(Integer, primary_key=True)
@@ -309,6 +311,8 @@ class AIPlan(Base):
     activated_at = Column(DateTime(timezone=True), nullable=False)
     abandoned_at = Column(DateTime(timezone=True), nullable=True)
     version = Column(Integer, nullable=False, default=1)
+    schedule_reconcile_at = Column(DateTime(timezone=True))
+    schedule_switch_source = Column(String(160))
     start_date = Column(DateTime(timezone=True), server_default=func.now())
     end_date = Column(DateTime(timezone=True), nullable=True)
     # WP-01.3 compatibility storage only; progress is derived from child steps.

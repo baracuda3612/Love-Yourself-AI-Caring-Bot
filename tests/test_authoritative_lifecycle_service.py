@@ -33,7 +33,7 @@ class _OneQuery:
         self.populated = True
         return self
 
-    def with_for_update(self):
+    def with_for_update(self, **_kwargs):
         self.locked = True
         return self
 
@@ -647,7 +647,7 @@ def test_plan_schedule_reconciliation_fences_newer_lifecycle_decision(
         def populate_existing(self):
             return self
 
-        def with_for_update(self):
+        def with_for_update(self, **_kwargs):
             self.lock = True
             return self
 
