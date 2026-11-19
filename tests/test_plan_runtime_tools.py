@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from dataclasses import replace
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -387,6 +388,7 @@ def test_switch_tool_reconciles_source_and_replacement_after_commit(monkeypatch)
     fake_db = _DB(user=SimpleNamespace(id=1), profile=SimpleNamespace(user_id=1))
     monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(fake_db))
     captured = {}
+    pending_at = datetime(2026, 11, 19, tzinfo=timezone.utc)
 
     def decide(_db, **kwargs):
         captured.update(kwargs)
@@ -403,6 +405,7 @@ def test_switch_tool_reconciles_source_and_replacement_after_commit(monkeypatch)
             details={
                 "source_plan_id": 11,
                 "switch_source_operation_id": "switch:applied",
+                "schedule_reconcile_at": pending_at,
             },
         )
 
@@ -441,6 +444,7 @@ def test_switch_tool_reconciles_source_and_replacement_after_commit(monkeypatch)
         "user_id": 1,
         "plan_id": 12,
         "switch_source_operation_id": "switch:applied",
+        "expected_reconcile_at": pending_at,
     }
 
 
