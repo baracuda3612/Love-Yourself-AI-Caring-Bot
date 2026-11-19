@@ -85,3 +85,16 @@ Revocation proceeded while a roster preview was held. The erasure case
 verified an early follow-up, a persisted cursor and exact historical job
 ownership after restart. These measurements describe these fixtures and
 controlled transports.
+
+The next independent review closed the original four findings and identified
+one P2 in the format-switch handoff. A time change committed between job proof
+and the switch-ready receipt could lose its newer repair. The ready receipt
+now consumes only the repair timestamp read for that switch, keeping a newer
+time change queued. A controlled concurrent PostgreSQL test checks the exact
+recovered job dates without replaying the participant's action.
+
+In a separate synthetic burst, 128 SQL-backed timers became due together.
+While four workers were held, the other 124 timers stayed in PostgreSQL. After
+release, all 128 callbacks ran exactly once and the queue drained in 709 ms.
+Callbacks used 5 ms of controlled work. An in-process enrollment GET measured
+8.4 ms p95 across 44 requests during the drain.

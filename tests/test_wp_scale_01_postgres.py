@@ -460,9 +460,9 @@ async def test_format_and_calendar_recover_exact_jobs_without_replaying_user_act
     monkeypatch.setattr(scheduler, "scheduler", jobs)
 
     async def repair(plan_id):
-        await asyncio.to_thread(scheduler.dispatch_plan_schedule_recovery)
         deadline = monotonic() + 3
         while True:
+            await asyncio.to_thread(scheduler.dispatch_plan_schedule_recovery)
             with factory() as db:
                 if db.get(models.AIPlan, plan_id).schedule_reconcile_at is None:
                     return
@@ -512,5 +512,74 @@ async def test_format_and_calendar_recover_exact_jobs_without_replaying_user_act
                 models.PlanLifecycleOperation.operation.in_(["switch_plan_format", "change_schedule_calendar", "switch_schedule_ready"]),
             ).all()
             assert {receipt.operation for receipt in receipts} == {"switch_plan_format", "change_schedule_calendar", "switch_schedule_ready"}
+    finally:
+        jobs.shutdown()
+
+
+async def test_switch_completion_preserves_concurrent_time_edit_repair(engine, monkeypatch):
+    from time import monotonic
+
+    from app import lifecycle, scheduler
+    from app.plan_runtime.tools import _finish_plan_format_result
+    from tests.test_wp_03_5_postgres_completion import source_plan
+
+    factory = sessionmaker(engine, expire_on_commit=False)
+    for module in (models, scheduler):
+        monkeypatch.setattr(module, "SessionLocal", factory)
+    jobs = BackgroundScheduler(
+        jobstores={"default": SQLAlchemyJobStore(engine=engine, tablename="wp_scale_switch_race")},
+        timezone="UTC",
+    )
+    jobs.start(paused=True)
+    monkeypatch.setattr(scheduler, "scheduler", jobs)
+
+    with factory.begin() as db:
+        user, _ = source_plan(db)
+        user.profile.evening_slot_collected = True
+        db.flush()
+        switch = lifecycle.switch_plan_format(
+            db, user_id=user.id, target_plan_type="MEDIUM", source_operation_id="scale:race-switch",
+        )
+        assert switch.code == "applied"
+        user_id, plan_id = user.id, switch.plan_id
+
+    record_ready = lifecycle.record_switch_schedule_ready
+    edited_jobs = {}
+
+    def interleave(db, **kwargs):
+        # The switch already proved its timers. Save a later time edit in
+        # another transaction and leave its immediate effects unrun.
+        with factory.begin() as editing_db:
+            change = lifecycle.change_delivery_time(
+                editing_db, user_id=user_id, slot="DAY", hhmm="18:20",
+                source_operation_id="scale:concurrent-time",
+            )
+            assert change.details["updated_step_ids"]
+            plan = editing_db.get(models.AIPlan, plan_id)
+            edited_jobs.update({scheduler._generate_step_job_id(step): step.scheduled_for
+                                for day in plan.days for step in day.steps})
+        return record_ready(db, **kwargs)
+
+    monkeypatch.setattr(lifecycle, "record_switch_schedule_ready", interleave)
+    try:
+        outcome = await asyncio.to_thread(_finish_plan_format_result, switch, pending_status="pending")
+        assert outcome["status"] == "ok"
+        assert {job.id: job.next_run_time for job in jobs.get_jobs()} != edited_jobs
+        with factory() as db:
+            plan = db.get(models.AIPlan, plan_id)
+            assert lifecycle._switch_schedule_ready(db, user_id, plan_id)
+            assert plan.schedule_switch_source is None
+            assert plan.schedule_reconcile_at is not None
+
+        deadline = monotonic() + 3
+        while True:
+            await asyncio.to_thread(scheduler.dispatch_plan_schedule_recovery)
+            with factory() as db:
+                if db.get(models.AIPlan, plan_id).schedule_reconcile_at is None:
+                    break
+            assert monotonic() < deadline
+            await asyncio.sleep(0.02)
+
+        assert {job.id: job.next_run_time for job in jobs.get_jobs()} == edited_jobs
     finally:
         jobs.shutdown()
