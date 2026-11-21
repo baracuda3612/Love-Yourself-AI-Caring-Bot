@@ -12,12 +12,11 @@ import pytz
 from sqlalchemy import and_, case, func, or_, text as sql_text, tuple_
 from apscheduler.executors.pool import ThreadPoolExecutor as SchedulerExecutor
 from apscheduler.jobstores.memory import MemoryJobStore
-from apscheduler.schedulers.background import BackgroundScheduler
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.blocking_db import BlockingLane, DBBusyError, fail_fast_on_deployment_lock
 from app.config import settings
-from app.runtime_jobstore import DeliveryJobExecutor, RuntimeJobStore
+from app.runtime_jobstore import DeliveryJobExecutor, RuntimeJobStore, RuntimeScheduler
 from app.active_days import resolve_timezone, step_expires_at
 from app.plan_completion.tokens import issue_report_grant
 from app.db import AIPlan, AIPlanDay, AIPlanStep, ReceiptSessionLocal, SessionLocal, User, UserEvent
@@ -47,7 +46,7 @@ _delivery_executor = DeliveryJobExecutor(_DELIVERY_WORKERS, _delivery_overflow)
 jobstores = {
     "default": RuntimeJobStore(url=jobstore_url, delivery_capacity=_delivery_executor.available, engine_options={
         "pool_size": 4, "max_overflow": 0, "pool_timeout": 2,
-        "connect_args": {"connect_timeout": 3},
+        "connect_args": {"connect_timeout": 3, "options": "-c lock_timeout=3000 -c statement_timeout=10000"},
     }),
     "delivery_recovery": MemoryJobStore(),
     "completion_recovery": MemoryJobStore(),
@@ -55,7 +54,7 @@ jobstores = {
 }
 from app.access import AccessDenied, access_predicate, may_access, outbound_claim
 
-scheduler = BackgroundScheduler(
+scheduler = RuntimeScheduler(
     jobstores=jobstores, timezone="UTC",
     executors={
         "default": SchedulerExecutor(5),

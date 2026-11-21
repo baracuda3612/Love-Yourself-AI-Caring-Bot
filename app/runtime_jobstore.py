@@ -4,10 +4,23 @@ from datetime import datetime, timedelta, timezone
 
 from apscheduler.executors.base import BaseExecutor, MaxInstancesReachedError, run_job
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.util import datetime_to_utc_timestamp
 from sqlalchemy import or_, select
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.blocking_db import BlockingLane, DBBusyError
+
+
+class RuntimeScheduler(BackgroundScheduler):
+    def _process_jobs(self):
+        try:
+            return super()._process_jobs()
+        except SQLAlchemyError:
+            # APScheduler guards the due scan. Later job-store reads and
+            # writes must also leave the polling thread alive on SQL failure.
+            self._logger.exception("Scheduler job store operation failed")
+            return self.jobstore_retry_interval
 
 
 class RuntimeJobStore(SQLAlchemyJobStore):
