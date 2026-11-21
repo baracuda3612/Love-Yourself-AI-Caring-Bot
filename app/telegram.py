@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from weakref import WeakValueDictionary
 
-from aiogram import Bot, Dispatcher, F, Router
+from aiogram import Bot, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -19,6 +19,7 @@ from app import menu_input, onboarding, user_menu
 from app.orchestrator import handle_incoming_message, session_memory
 from app.telemetry import log_user_event
 from app.step_action_ingress import PollingStepActions, track_step_action
+from app.telegram_polling import ActorFairDispatcher
 from app.lifecycle import (
     LifecycleEntitlementError,
     LifecycleOwnershipError,
@@ -30,7 +31,7 @@ bot = Bot(
     token=settings.BOT_TOKEN,
     default=DefaultBotProperties(parse_mode="HTML"),
 )
-dp = Dispatcher(disable_fsm=True)
+dp = ActorFairDispatcher(disable_fsm=True)
 _polling_step_actions = PollingStepActions()
 bot.session.middleware(_polling_step_actions.receive)
 dp.update.outer_middleware(_polling_step_actions.dispatch)
@@ -257,6 +258,9 @@ class ActorIngressMiddleware(BaseMiddleware):
             if held:
                 held = False
                 lock.release()
+                release_polling_actor = data.get("release_polling_actor")
+                if release_polling_actor is not None:
+                    release_polling_actor()
 
         data["release_ingress"] = release_ingress
         try:
