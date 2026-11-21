@@ -15,7 +15,7 @@ from apscheduler.jobstores.memory import MemoryJobStore
 from apscheduler.schedulers.background import BackgroundScheduler
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from app.blocking_db import BlockingLane, DBBusyError
+from app.blocking_db import BlockingLane, DBBusyError, fail_fast_on_deployment_lock
 from app.config import settings
 from app.runtime_jobstore import DeliveryJobExecutor, RuntimeJobStore
 from app.active_days import resolve_timezone, step_expires_at
@@ -810,9 +810,12 @@ def _restore_future_job_batch(after):
     for _, step_id, user_id, plan_id in rows:
         try:
             with SessionLocal() as db:
-                user = db.query(User).filter_by(id=user_id).with_for_update().first()
+                user = db.query(User).filter_by(id=user_id).with_for_update(skip_locked=True).first()
+                if user is None:
+                    failed_plans.add(plan_id)
+                    continue
                 step = db.get(AIPlanStep, step_id)
-                if user is None or not user.is_active or step is None or step.step_status != "pending":
+                if not user.is_active or step is None or step.step_status != "pending":
                     continue
                 if (step.day.plan.status != "active" or not step.scheduled_for
                         or step.scheduled_for <= datetime.now(pytz.UTC)):
@@ -821,16 +824,23 @@ def _restore_future_job_batch(after):
                 existing = scheduler.get_job(job_id)
                 if (existing is None or existing.next_run_time != step.scheduled_for
                         or (scheduler is _application_scheduler and existing.executor != "scheduled_delivery")):
-                    schedule_plan_step(step, user)
+                    with fail_fast_on_deployment_lock():
+                        schedule_plan_step(step, user)
+        except DBBusyError:
+            failed_plans.add(plan_id)
         except Exception:
             failed_plans.add(plan_id)
             logger.exception("Scheduled timer restoration failed step=%s", step_id)
+    rescan = False
     if failed_plans:
         with SessionLocal.begin() as db:
-            db.query(AIPlan).filter(AIPlan.id.in_(failed_plans), AIPlan.schedule_reconcile_at.is_(None)).update({
-                AIPlan.schedule_reconcile_at: now,
-            }, synchronize_session=False)
-    return (rows[-1][0], rows[-1][1]) if len(rows) == _RESTORE_BATCH else None
+            plans = db.query(AIPlan).filter(AIPlan.id.in_(failed_plans)).with_for_update(skip_locked=True).all()
+            for plan in plans:
+                if plan.status == "active" and plan.schedule_reconcile_at is None:
+                    plan.schedule_reconcile_at = now
+            rescan = len(plans) != len(failed_plans)
+    after = (rows[-1][0], rows[-1][1]) if len(rows) == _RESTORE_BATCH else None
+    return after, rescan
 
 
 async def start_scheduler():
@@ -849,17 +859,23 @@ async def restore_scheduled_timers():
     )
 
     after = None
+    rescan = False
     while True:
         try:
-            after = await asyncio.to_thread(_restore_future_job_batch, after)
+            after, deferred = await asyncio.to_thread(_restore_future_job_batch, after)
+            rescan |= deferred
         except Exception:
             logger.exception("Scheduled timer restoration interrupted")
             await asyncio.sleep(5)
             continue
         if after is None:
-            break
-
-    await asyncio.to_thread(_enable_delivery_recovery)
+            await asyncio.to_thread(_enable_delivery_recovery)
+            if not rescan:
+                break
+            # A transaction held both the owner and the repair marker. Finish
+            # the pass for other owners before retrying from durable state.
+            rescan = False
+            await asyncio.sleep(5)
 
 
 def send_daily_pulse():
