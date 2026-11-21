@@ -18,6 +18,7 @@ from app.db import AIPlan, AIPlanDay, AIPlanStep, ChatHistory, MenuInput, Sessio
 from app import menu_input, onboarding, user_menu
 from app.orchestrator import handle_incoming_message, session_memory
 from app.telemetry import log_user_event
+from app.step_action_ingress import PollingStepActions, track_step_action
 from app.lifecycle import (
     LifecycleEntitlementError,
     LifecycleOwnershipError,
@@ -30,6 +31,10 @@ bot = Bot(
     default=DefaultBotProperties(parse_mode="HTML"),
 )
 dp = Dispatcher(disable_fsm=True)
+_polling_step_actions = PollingStepActions()
+bot.session.middleware(_polling_step_actions.receive)
+dp.update.outer_middleware(_polling_step_actions.dispatch)
+dp.shutdown.register(_polling_step_actions.clear_buffered)
 router = Router()
 dp.include_router(router)
 logger = logging.getLogger(__name__)
@@ -213,7 +218,6 @@ async def stop_setup(message: Message):
 # Gate all Telegram entrances before text, callbacks, the AI assistant or history writes.
 # Start alone may redeem a token; it implements the same guard above.
 from aiogram import BaseMiddleware
-from app.step_action_ingress import track_step_action
 
 
 class ActorIngressMiddleware(BaseMiddleware):
@@ -232,6 +236,8 @@ class ActorIngressMiddleware(BaseMiddleware):
         actor = getattr(event, "from_user", None)
         if not actor or not message or message.chat.type != "private" or message.chat.id != actor.id:
             return await handler(event, data)
+        if "step_action_received_at" in data:
+            return await self._handle_for_actor(handler, event, data, actor.id)
         callback_data = event.data if isinstance(event, CallbackQuery) else None
         with track_step_action(actor.id, callback_data) as received_at:
             if received_at is not None:
