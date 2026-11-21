@@ -203,7 +203,7 @@ async def test_dispatcher_action_arriving_before_deadline_wins_over_expiry(engin
     monkeypatch.setattr(scheduler, "enable_completion_recovery", lambda: None)
     monkeypatch.setattr(scheduler, "request_plan_completion", lambda *_a: None)
     monkeypatch.setattr(scheduler, "_dispatch_terminal_projections", lambda _ids: None)
-    monkeypatch.setattr(scheduler, "_enable_delivery_recovery", lambda: None)
+    monkeypatch.setattr(scheduler, "_request_delivery_recovery", lambda: None)
     monkeypatch.setattr(telegram, "_project_step_status", AsyncMock())
 
     with factory.begin() as db:

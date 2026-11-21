@@ -994,7 +994,7 @@ def test_expiry_sweep_isolates_unexpected_candidate_failure(monkeypatch, caplog)
     monkeypatch.setattr(scheduler, "_submit_continuation", lambda *_args: True)
     monkeypatch.setattr(scheduler, "enable_completion_recovery", lambda: None)
     monkeypatch.setattr(scheduler, "_dispatch_terminal_projections", button_attempts.append)
-    monkeypatch.setattr(scheduler, "_enable_delivery_recovery", lambda: None)
+    monkeypatch.setattr(scheduler, "_request_delivery_recovery", lambda: None)
 
     scheduler.expire_overdue_steps()
 

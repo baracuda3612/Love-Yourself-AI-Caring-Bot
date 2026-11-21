@@ -124,7 +124,7 @@ async def test_expiry_keeps_running_while_one_telegram_edit_waits(engine, monkey
     monkeypatch.setattr(scheduler, "SessionLocal", factory)
     monkeypatch.setattr(scheduler, "_submit_continuation", lambda *_: None)
     monkeypatch.setattr(scheduler, "enable_completion_recovery", lambda: None)
-    monkeypatch.setattr(scheduler, "_enable_delivery_recovery", lambda: None)
+    monkeypatch.setattr(scheduler, "_request_delivery_recovery", lambda: None)
     monkeypatch.setattr(scheduler, "_expiry_after", 0)
     past = datetime.now(timezone.utc) - timedelta(seconds=1)
     with factory.begin() as db:

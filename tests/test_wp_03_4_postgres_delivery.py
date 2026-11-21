@@ -567,6 +567,8 @@ def test_recovery_is_dormant_for_success_and_wakes_for_definite_retry(db, monkey
     def submit(coro):
         future = Future(); future.set_result(asyncio.run(coro)); return future
     monkeypatch.setattr(scheduler, '_submit_coroutine', submit)
+    # This fixture shares a single transaction. Check alarm policy synchronously.
+    monkeypatch.setattr(scheduler, '_request_delivery_recovery', scheduler._enable_delivery_recovery)
     scheduler.send_scheduled_message(0, '', step.id)
     assert not jobs
     # Rehearse a separate delivery's definite failure, then two retries. Only

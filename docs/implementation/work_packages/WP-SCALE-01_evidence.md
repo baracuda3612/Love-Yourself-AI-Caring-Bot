@@ -36,10 +36,10 @@ roster diff were left in place. The main checkout is the sole implementation wor
 
 | Resource | Limit and admission |
 | --- | --- |
-| DB connections | 18 general, 4 APScheduler, 8 reserved for durable transport receipts. Total 30 with zero overflow, a 2-second checkout wait and a 3-second connection setting. The receipt pool shares the PostgreSQL server and keeps its own checkout capacity. |
+| DB connections | 18 general, 4 APScheduler, 8 reserved for durable transport receipts. Total 30 per application process with zero overflow, a 2-second checkout wait and a 3-second connection setting. The jobstore also uses 3-second row-lock and 10-second statement limits. The receipt pool shares the PostgreSQL server and keeps its own checkout capacity. |
 | HTTP | 3 enrollment workers, 1 operator worker, 1 bulk roster worker, 1 revocation worker, 2 private report/calendar workers and 4 SMTP/OIDC workers. The provider worker also runs the short OIDC finalization transaction after verification. At most 4 such transactions contend with ordinary work for the existing general pool. No database session spans provider I/O. Admission overflow returns 503 before OIDC state is consumed. Authentication and proof validity continue to use their existing authority. |
 | Bot | 32 polling handlers, one ordered ingress and at most two active handlers per actor. A Coach turn can release ingress ahead of its reply, leaving room for the next action. The update buffer is bounded and polling does not confirm past its first waiting update. There are 8 ingress DB workers and 2 calendar/scheduler effect workers. The default async blocking executor has 4 workers. Durable schedule repair has 2 workers of its own. |
-| Delivery | 4 normal timer sends and 2 recovery sends, with separate permits held through the transport result and receipt. The 6 exercise receipt workers use reserved connections. The persistent jobstore offers only as many due jobs as the executor can admit. At capacity it keeps unadmitted timers in PostgreSQL, and a free worker wakes the scheduler. |
+| Delivery | 4 normal timer sends and 2 recovery sends, with separate permits held through the transport result and receipt. The 6 exercise receipt workers use reserved connections. One coalescing worker checks delivery recovery wake times through the existing general pool. The persistent jobstore offers only as many due jobs as the executor can admit. At capacity it keeps unadmitted timers in PostgreSQL, and a free worker wakes the scheduler. |
 | Completion | 2 continuation, 2 successor scheduling and 2 report dispatch slots. A separate 2-worker receipt lane persists observed report outcomes. The durable source and obligations remain the backlog. |
 | Privacy | 2 blocking workers and 2 active erasures, with up to 2,048 jobstore rows per case per pass. Retention selects at most ten 500-message batches and one 500-proof batch per pass. |
 
@@ -118,3 +118,19 @@ remain outstanding.
 | Roster and Telegram access | An interactive Telegram DB operation keeps the shared deployment authority fence and uses PostgreSQL NOWAIT to return the existing retryable busy response when exclusive authority is held. The roster test holds the real apply transaction, checks eight affected accounts release worker capacity and verifies that another deployment can open privacy while the apply is still held. |
 | Startup timer restoration | The scan skips a held user row. It marks an available plan for durable schedule repair or finishes the pass and returns to the deferred owner if the plan row is also held. Tests check that another owner's timer appears first and that the deferred owner's exact timer is restored after release in both cases. |
 | Expiry and Telegram message edits | The expiry sweep commits overdue steps before handing visible changes to the existing two projection workers. Recovery reads pending receipt state or the historical expired step's retained message ID. The test holds the first edit, confirms the second edit and commits a newly overdue step while the first edit is still waiting. |
+
+### Delivery isolation follow-up
+
+- Claiming a new send and reconciling interrupted attempts skip locked owners. A deferred claim leaves the pending step intact and signals recovery. A regression holds the first owner's PostgreSQL lock while the recovery sweep reconciles the second owner, then checks the first case after release.
+- The durable transport result releases its sender and receipt capacity without waiting for the retry alarm query. A regression holds the alarm query after four rate-limited sends. The next persisted timer delivers while the query is still held. Any pending alarm checks are coalesced into one worker, using the same DB connection cap.
+- Persisted future retry deadlines keep their original time when the wake query is recalculated. A stale timestamp still falls back to a 30-second reconciliation interval. The confirmed 429 backoff remains at least 30 seconds.
+- A transient database error while APScheduler peeks or updates its jobstore returns to the retry loop. The timer-thread regression injects a failed peek and observes a later scheduled callback without restarting the scheduler.
+
+In the controlled 128-exercise replay, four held sends left 124 due timers
+in PostgreSQL. A different participant completed the action and continuation
+while the barrier was held. After release, the first wave drained in 9.6 seconds.
+Telegram's confirmed 429 retried 32.5 seconds after the first attempt started
+and about 30 seconds after the controlled failure. Final outcomes were 127
+deliveries and one uncertain send with no duplicate. The three pools peaked
+separately at 6 general, 6 receipt and 2 jobstore connections. These observations
+apply to the disposable stack and controlled transport.

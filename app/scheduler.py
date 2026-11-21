@@ -75,6 +75,8 @@ _DELIVERY_SCAN_BATCH = 16
 _delivery_slots = BoundedSemaphore(_DELIVERY_WORKERS)
 _delivery_recovery_slots = BoundedSemaphore(_DELIVERY_RECOVERY_WORKERS)
 _delivery_receipts = BlockingLane(_DELIVERY_WORKERS + _DELIVERY_RECOVERY_WORKERS, "delivery-receipt")
+_delivery_wake_lane = BlockingLane(1, "delivery-wake")
+_delivery_wake_requested = Event()
 _recovery_workers = BlockingLane(_DELIVERY_RECOVERY_WORKERS, "delivery-recovery")
 _PROJECTION_WORKERS = 2
 _projection_recovery = BlockingLane(_PROJECTION_WORKERS, "projection-recovery")
@@ -187,6 +189,36 @@ def _enable_delivery_recovery():
                               replace_existing=True, max_instances=1, coalesce=True, misfire_grace_time=None)
 
 
+def _request_delivery_recovery():
+    """Coalesce durable wake requests without waiting in a send or receipt slot."""
+    _delivery_wake_requested.set()
+    _dispatch_delivery_wake()
+
+
+def _refresh_delivery_wake():
+    _delivery_wake_requested.clear()
+    _enable_delivery_recovery()
+
+
+def _dispatch_delivery_wake():
+    if not _delivery_wake_requested.is_set():
+        return
+    try:
+        future = _delivery_wake_lane.submit(_refresh_delivery_wake)
+    except DBBusyError:
+        return
+
+    def finished(result):
+        try:
+            result.result()
+        except Exception:
+            _delivery_overflow.set()
+            logger.exception("Unable to arm scheduled delivery recovery")
+        _dispatch_delivery_wake()
+
+    future.add_done_callback(finished)
+
+
 def wake_scheduled_delivery_recovery():
     """After a committed delivery resume, wake any due work without blocking on sends."""
     _enable_delivery_recovery()
@@ -218,7 +250,12 @@ def _delivery_recovery_time(now):
         ready = pending_status_steps(db).first() is not None or _due_delivery_steps(db, now).first() is not None
     if ready:
         return now + timedelta(seconds=1)
-    return max(now + timedelta(seconds=30), min(times)) if times else None
+    if not times:
+        return None
+    next_due = min(times)
+    # A future retry already has a persisted backoff. Rechecking the queue
+    # must not push that wake into another interval.
+    return next_due if next_due > now else now + timedelta(seconds=30)
 
 
 def can_deliver_tasks(user: User, plan: AIPlan | None = None, *, delivery: bool = True) -> bool:
@@ -271,7 +308,7 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None,
     slots = _delivery_recovery_slots if recovery else _delivery_slots
     if not slots.acquire(blocking=False):
         # No attempt was claimed. The durable due row remains recoverable.
-        _enable_delivery_recovery()
+        _request_delivery_recovery()
         return
     future = None
     try:
@@ -288,8 +325,13 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None,
             if not is_active_day(today, resolve_active_days(user.profile)):
                 return
             try:
-                claim = claim_send(db, step_id)
+                with fail_fast_on_deployment_lock():
+                    claim = claim_send(db, step_id, skip_busy_owner=True)
                 db.commit()
+            except DBBusyError:
+                db.rollback()
+                _request_delivery_recovery()
+                return
             except ValueError:
                 db.rollback()
                 logger.exception("Invalid scheduled presentation step=%s", step_id)
@@ -315,7 +357,7 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None,
                 )
                 db.commit()
             if retry_pending or late_projection:
-                _enable_delivery_recovery()
+                _request_delivery_recovery()
 
         async def send_and_record():
             from app.telegram import bot as tg_bot
@@ -339,12 +381,12 @@ def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None,
         future = _submit_coroutine(send_and_record())
         if future is None:
             # The durable claim is deliberately quarantined if submission is lost.
-            _enable_delivery_recovery()
+            _request_delivery_recovery()
             return
         try:
             return future.result(timeout=None if wait_for_receipt else 30)
         except Exception:
-            _enable_delivery_recovery()
+            _request_delivery_recovery()
             logger.warning("Scheduled send outcome pending/unknown step=%s", step_id, exc_info=True)
             return ExerciseSendResult('uncertain', None, claim.presentation, '', failure_code='send_result_uncertain')
     except Exception:
@@ -361,7 +403,10 @@ def reconcile_scheduled_deliveries(*, wait=True):
     try:
         _recover_scheduled_deliveries(wait=wait)
     finally:
-        _enable_delivery_recovery()
+        if wait:
+            _enable_delivery_recovery()
+        else:
+            _request_delivery_recovery()
 
 
 def _recovery_page(query, column, cursor_name):
@@ -416,22 +461,26 @@ def _recover_scheduled_deliveries(*, wait):
         for future in pending:
             future.result()
 
-    from app.scheduled_delivery import claim_send
+    from app.scheduled_delivery import claim_send, try_lock_delivery_owner
     for step_id in set(retry_ids):
         with SessionLocal() as db:
             # claim_send also closes retries whose delivery window has ended.
             # Sending belongs to send_scheduled_message, not this cleanup pass.
             step = db.get(AIPlanStep, step_id)
             if step is not None and (step.step_status != 'pending' or not step.scheduled_for or now > _to_utc(step.scheduled_for) + LATE_GRACE or (step.expires_at and now >= _to_utc(step.expires_at))):
-                claim_send(db, step_id, now=now)
+                try:
+                    with fail_fast_on_deployment_lock():
+                        claim_send(db, step_id, now=now, skip_busy_owner=True)
+                except DBBusyError:
+                    continue
                 db.commit()
     for attempt_id in stale_ids:
         with SessionLocal() as db:
             attempt = db.get(ExerciseDelivery, attempt_id)
             if attempt:
-                from app.lifecycle import _lock_user
                 step = db.get(AIPlanStep, attempt.plan_step_id)
-                _lock_user(db, step.day.plan.user_id, require_entitlement=False)
+                if step is None or try_lock_delivery_owner(db, step) is None:
+                    continue
                 db.refresh(attempt)
                 if attempt.state == 'in_flight':
                     attempt.state = 'uncertain'
@@ -1192,7 +1241,7 @@ def expire_overdue_steps() -> None:
     try:
         if _delivery_overflow.is_set():
             _delivery_overflow.clear()
-            _enable_delivery_recovery()
+            _request_delivery_recovery()
         _expire_overdue_batch()
     finally:
         _expiry_lock.release()
@@ -1321,7 +1370,7 @@ def _expire_overdue_batch() -> None:
 
     if expired_keyboard_ids:
         _dispatch_terminal_projections(expired_keyboard_ids)
-        _enable_delivery_recovery()
+        _request_delivery_recovery()
 
 
 def check_plan_completions() -> None:
