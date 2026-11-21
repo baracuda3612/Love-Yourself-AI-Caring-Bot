@@ -351,7 +351,8 @@ async def test_runtime_startup_audits_bound_contours_only(monkeypatch, is_dev):
     audit_calls = []
     monkeypatch.setattr('app.access_environment.audit_environment', lambda session: audit_calls.append(session))
     async def finished(*args, **kwargs): pass
-    monkeypatch.setattr(main, 'schedule_daily_loop', finished)
+    monkeypatch.setattr(main, 'start_scheduler', finished)
+    monkeypatch.setattr(main, 'restore_scheduled_timers', finished)
     monkeypatch.setattr(main.dp, 'start_polling', finished)
     monkeypatch.setattr(main.uvicorn, 'Config', lambda *args, **kwargs: object())
     monkeypatch.setattr(main.uvicorn, 'Server', lambda config: SimpleNamespace(serve=finished))
@@ -369,9 +370,28 @@ async def test_bound_runtime_stops_before_polling_when_isolation_audit_fails(mon
     monkeypatch.setattr('app.db.SessionLocal', lambda: nullcontext(object()))
     def rejected(db): raise access.AccessDenied()
     monkeypatch.setattr('app.access_environment.audit_environment', rejected)
-    monkeypatch.setattr(main, 'schedule_daily_loop', lambda: pytest.fail('no scheduler before isolation proof'))
+    monkeypatch.setattr(main, 'start_scheduler', lambda: pytest.fail('no scheduler before isolation proof'))
 
     with pytest.raises(access.AccessDenied):
+        await main.main()
+
+
+@pytest.mark.asyncio
+async def test_runtime_scheduler_start_failure_never_opens_http_or_polling(monkeypatch):
+    from app import scheduler
+    main = importlib.import_module('app.main')
+    monkeypatch.setattr(main.settings, 'IS_DEV', True)
+    monkeypatch.setattr(main, 'audit_startup_schema', lambda: None)
+    monkeypatch.setattr(scheduler, '_event_loop', None)
+
+    def fail_init():
+        raise RuntimeError('job store unavailable')
+
+    monkeypatch.setattr(scheduler, 'init_scheduler', fail_init)
+    monkeypatch.setattr(main.dp, 'start_polling', lambda *_a, **_k: pytest.fail('polling started'))
+    monkeypatch.setattr(main.uvicorn, 'Server', lambda *_: pytest.fail('HTTP started'))
+
+    with pytest.raises(RuntimeError, match='job store unavailable'):
         await main.main()
 
 

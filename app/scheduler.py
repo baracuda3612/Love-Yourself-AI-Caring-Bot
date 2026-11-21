@@ -69,7 +69,6 @@ logger = logging.getLogger(__name__)
 # Never reuse ORM objects across SQLAlchemy sessions.
 # Always re-fetch entities inside the session where they are used.
 
-_scheduler_started = False
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
 _recovery_job_lock = Lock()
 _DELIVERY_SCAN_BATCH = 16
@@ -833,18 +832,15 @@ def _restore_future_job_batch(after):
     return (rows[-1][0], rows[-1][1]) if len(rows) == _RESTORE_BATCH else None
 
 
-async def schedule_daily_loop():
-    """Restore future timers without holding startup or polling on a full scan."""
-    global _scheduler_started, _event_loop
-
-    if _scheduler_started:
-        return
-
-    _scheduler_started = True
+async def start_scheduler():
+    """Initialize the scheduler before serving traffic."""
+    global _event_loop
     _event_loop = asyncio.get_running_loop()
     await asyncio.to_thread(init_scheduler)
 
-    # Register alarms for already-due actions before walking future timers.
+
+async def restore_scheduled_timers():
+    """Restore alarms and timers without gating new requests on scans."""
     await asyncio.gather(
         asyncio.to_thread(expire_overdue_steps),
         asyncio.to_thread(_enable_delivery_recovery),
@@ -863,7 +859,6 @@ async def schedule_daily_loop():
             break
 
     await asyncio.to_thread(_enable_delivery_recovery)
-    await asyncio.Event().wait()
 
 
 def send_daily_pulse():
