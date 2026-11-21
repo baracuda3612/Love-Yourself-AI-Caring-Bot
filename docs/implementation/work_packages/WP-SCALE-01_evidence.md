@@ -37,7 +37,7 @@ roster diff were left in place. The main checkout is the sole implementation wor
 | Resource | Limit and admission |
 | --- | --- |
 | DB connections | 18 general, 4 APScheduler, 8 reserved for durable transport receipts. Total 30 with zero overflow, a 2-second checkout wait and a 3-second connection setting. The receipt pool shares the PostgreSQL server and keeps its own checkout capacity. |
-| HTTP | 3 enrollment workers, 1 operator worker, 1 bulk roster worker, 1 revocation worker, 2 private report/calendar workers and 4 SMTP/OIDC workers. Work above lane capacity receives a retryable 503. Authentication and proof validity continue to use their existing authority. |
+| HTTP | 3 enrollment workers, 1 operator worker, 1 bulk roster worker, 1 revocation worker, 2 private report/calendar workers and 4 SMTP/OIDC workers. The provider worker also runs the short OIDC finalization transaction after verification. At most 4 such transactions contend with ordinary work for the existing general pool. No database session spans provider I/O. Admission overflow returns 503 before OIDC state is consumed. Authentication and proof validity continue to use their existing authority. |
 | Bot | 32 polling updates in flight, 8 ingress DB workers and 2 calendar/scheduler effect workers. The default async blocking executor has 4 workers. Durable schedule repair has 2 workers of its own. |
 | Delivery | 4 normal timer sends and 2 recovery sends, with separate permits held through the transport result and receipt. The 6 exercise receipt workers use reserved connections. The persistent jobstore offers only as many due jobs as the executor can admit. At capacity it keeps unadmitted timers in PostgreSQL, and a free worker wakes the scheduler. |
 | Completion | 2 continuation, 2 successor scheduling and 2 report dispatch slots. A separate 2-worker receipt lane persists observed report outcomes. The durable source and obligations remain the backlog. |
@@ -98,3 +98,12 @@ While four workers were held, the other 124 timers stayed in PostgreSQL. After
 release, all 128 callbacks ran exactly once and the queue drained in 709 ms.
 Callbacks used 5 ms of controlled work. An in-process enrollment GET measured
 8.4 ms p95 across 44 requests during the drain.
+
+## PR #277 follow-up
+
+- The routed Google callback retains the admitted provider worker through finalization, with a separate short database transaction before and after provider I/O. A disposable PostgreSQL test holds all three ordinary enrollment workers during provider return. It checks that the callback still creates one entitlement and that replay is denied. Provider responses are controlled in this test.
+- The production entry point awaits core scheduler initialization before starting HTTP or polling. A failed initialization exits for the runtime to restart. After successful initialization, restoration runs under the service task group and scans future timers in the existing bounded batches. The startup test checks that an initialization exception prevents either ingress from opening.
+- The Telegram router captures the action time before waiting for the actor or database. The expiry sweep skips locked owners and defers expiry for a matching timely action still in flight in the single polling process. PostgreSQL remains authoritative for ownership, current access and the committed terminal fact. A dispatcher test holds a real owner lock past the deadline, runs expiry both under and after the lock, and checks unrelated progress, one completion, a duplicate click and a late click. Updates awaiting dispatch or lost with the polling process before commit are outside this in-process ordering proof.
+
+The separate mixed-load audit and measurements against live dependencies are
+release evidence still to be collected.

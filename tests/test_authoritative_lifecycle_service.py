@@ -912,6 +912,7 @@ def test_expiry_sweep_isolates_unexpected_candidate_failure(monkeypatch, caplog)
             tg_message_id=900 + step_id,
             expires_at=past,
             scheduled_for=past,
+            step_status="delivered",
             day=SimpleNamespace(
                 plan=SimpleNamespace(
                     user_id=1,
@@ -936,7 +937,7 @@ def test_expiry_sweep_isolates_unexpected_candidate_failure(monkeypatch, caplog)
             return self
 
         def all(self):
-            return [(1,), (2,), (3,)]
+            return [(1, 1), (2, 1), (3, 1)]
 
     class _KeyboardQuery:
         def filter(self, *_args):
@@ -952,7 +953,7 @@ def test_expiry_sweep_isolates_unexpected_candidate_failure(monkeypatch, caplog)
         def __exit__(self, *_args):
             return False
 
-        def query(self, _model):
+        def query(self, *_models):
             return _CandidatesQuery()
 
     class _CandidateDB:
@@ -968,6 +969,8 @@ def test_expiry_sweep_isolates_unexpected_candidate_failure(monkeypatch, caplog)
             return False
 
         def query(self, _model):
+            if _model is scheduler.User:
+                return _OneQuery(SimpleNamespace(tg_id=100))
             return _OneQuery(self.step)
 
         def commit(self):

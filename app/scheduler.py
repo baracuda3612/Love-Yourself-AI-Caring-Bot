@@ -28,6 +28,7 @@ from app.ux.persona import get_persona
 from app.ux.pulse_prompt import generate_pulse_message
 from app.ux.rate_limit import can_send_auto_message
 from app.exercise_delivery import ExerciseSendResult, send_exercise
+from app.step_action_ingress import has_timely_step_action
 from app.lifecycle import (
     LifecycleTransitionError,
     derive_current_day,
@@ -1205,48 +1206,49 @@ def _expire_overdue_batch() -> None:
     now_utc = datetime.now(pytz.UTC)
 
     with SessionLocal() as scan_db:
-        candidate_ids = [
-            step_id
-            for (step_id,) in (
-                scan_db.query(AIPlanStep.id)
-                .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
-                .join(AIPlan, AIPlan.id == AIPlanDay.plan_id)
-                .join(User, User.id == AIPlan.user_id)
-                .filter(
-                    or_(AIPlanStep.step_status != "pending", ~exists().where(*legacy_repair_pending)),
-                    access_predicate(User.id),
-                    AIPlanStep.id > _expiry_after,
-                    AIPlanStep.step_status.in_(["pending", "delivered"]),
-                    or_(
-                        and_(AIPlanStep.expires_at.is_(None), AIPlanStep.scheduled_for.is_not(None)),
-                        AIPlanStep.expires_at < now_utc,
-                    ),
-                )
-                .order_by(AIPlanStep.id)
-                .limit(_EXPIRY_BATCH)
-                .all()
+        candidates = (
+            scan_db.query(AIPlanStep.id, AIPlan.user_id)
+            .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+            .join(AIPlan, AIPlan.id == AIPlanDay.plan_id)
+            .join(User, User.id == AIPlan.user_id)
+            .filter(
+                or_(AIPlanStep.step_status != "pending", ~exists().where(*legacy_repair_pending)),
+                access_predicate(User.id),
+                AIPlanStep.id > _expiry_after,
+                AIPlanStep.step_status.in_(["pending", "delivered"]),
+                or_(
+                    and_(AIPlanStep.expires_at.is_(None), AIPlanStep.scheduled_for.is_not(None)),
+                    AIPlanStep.expires_at < now_utc,
+                ),
             )
-        ]
-    _expiry_after = candidate_ids[-1] if len(candidate_ids) == _EXPIRY_BATCH else 0
+            .order_by(AIPlanStep.id)
+            .limit(_EXPIRY_BATCH)
+            .all()
+        )
+    _expiry_after = candidates[-1][0] if len(candidates) == _EXPIRY_BATCH else 0
 
     repaired = 0
     count = 0
     failed_ids: list[int] = []
     expired_keyboard_ids: list[int] = []
-    for step_id in candidate_ids:
+    for step_id, user_id in candidates:
         with SessionLocal() as candidate_db:
+            # Skip an owner already busy with a callback or another transaction.
+            # The step remains eligible for a later sweep.
+            owner = (candidate_db.query(User).filter(User.id == user_id)
+                     .with_for_update(skip_locked=True).first())
+            if owner is None:
+                continue
             step = (
                 candidate_db.query(AIPlanStep)
                 .filter(AIPlanStep.id == step_id)
                 .first()
             )
-            if step is None:
+            if step is None or step.step_status not in {"pending", "delivered"}:
                 continue
             repaired_candidate = False
             if step.expires_at is None and step.scheduled_for is not None:
-                user_tz = resolve_timezone(
-                    getattr(step.day.plan.user, "timezone", None)
-                )
+                user_tz = resolve_timezone(owner.timezone)
                 step.expires_at = step_expires_at(step.scheduled_for, user_tz)
                 repaired_candidate = True
 
@@ -1256,10 +1258,13 @@ def _expire_overdue_batch() -> None:
                     repaired += 1
                 continue
 
+            if has_timely_step_action(owner.tg_id, step_id, _to_utc(step.expires_at)):
+                continue
+
             try:
                 expiry = expire_plan_step(
                     candidate_db,
-                    user_id=step.day.plan.user_id,
+                    user_id=user_id,
                     step_id=step.id,
                     source_operation_id=(
                         f"scheduler:expiry:{step.id}:{step.expires_at.isoformat()}"

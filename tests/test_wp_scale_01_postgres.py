@@ -184,6 +184,133 @@ async def test_enrollment_gate_progresses_during_another_owners_transaction(engi
             await gate
 
 
+async def test_dispatcher_action_arriving_before_deadline_wins_over_expiry(engine, monkeypatch):
+    from datetime import timedelta
+    from threading import Event
+
+    from aiogram.methods import AnswerCallbackQuery
+    from aiogram.types import Update
+
+    from app import scheduler, step_action_ingress, telegram
+    from tests.test_wp_03_4_postgres_delivery import deliver
+    from tests.test_wp_03_5_postgres_completion import source_plan
+
+    factory = sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(telegram, "SessionLocal", factory)
+    monkeypatch.setattr(scheduler, "SessionLocal", factory)
+    monkeypatch.setattr(scheduler, "_expiry_after", 0)
+    monkeypatch.setattr(scheduler, "_submit_continuation", lambda *_a: None)
+    monkeypatch.setattr(scheduler, "enable_completion_recovery", lambda: None)
+    monkeypatch.setattr(scheduler, "request_plan_completion", lambda *_a: None)
+    monkeypatch.setattr(scheduler, "reconcile_expired_step_keyboards",
+                        lambda ids: SimpleNamespace(failed_ids=()))
+    monkeypatch.setattr(telegram, "_project_step_status", AsyncMock())
+
+    with factory.begin() as db:
+        def delivered_step():
+            owner, plan = source_plan(db)
+            step = plan.days[0].steps[0]
+            now = datetime.now(timezone.utc)
+            step.scheduled_for = now - timedelta(minutes=1)
+            step.expires_at = now + timedelta(hours=1)
+            db.flush()
+            deliver(db, step)
+            return owner, step
+
+        first, first_step = delivered_step()
+        second, second_step = delivered_step()
+        overdue, overdue_step = delivered_step()
+        received_at = datetime.now(timezone.utc)
+        deadline = received_at + timedelta(milliseconds=250)
+        first_step.expires_at = overdue_step.expires_at = deadline
+
+    time_at_ingress = received_at
+
+    class TestClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return time_at_ingress.astimezone(tz) if tz else time_at_ingress.replace(tzinfo=None)
+
+    monkeypatch.setattr(step_action_ingress, "datetime", TestClock)
+
+    answers = {}
+
+    async def transport(_bot, method, **_kwargs):
+        assert isinstance(method, AnswerCallbackQuery)
+        answers[method.callback_query_id] = method.text
+        return True
+
+    monkeypatch.setattr(type(telegram.bot), "__call__", transport)
+
+    async def click(owner, step, update_id, query_id):
+        actor = {"id": owner.tg_id, "is_bot": False, "first_name": "Test"}
+        update = Update.model_validate({
+            "update_id": update_id,
+            "callback_query": {
+                "id": query_id, "from": actor, "chat_instance": str(owner.tg_id),
+                "data": f"task_complete:{step.id}",
+                "message": {"message_id": 777, "date": received_at,
+                            "chat": {"id": owner.tg_id, "type": "private"}},
+            },
+        })
+        await telegram.dp.feed_update(telegram.bot, update)
+
+    waiting_on_owner, authorized, release_action = Event(), asyncio.Event(), asyncio.Event()
+    require_enrollment, run_db = telegram._require_enrollment, telegram.run_db
+
+    def tracked_access(tg_id):
+        if tg_id == first.tg_id:
+            waiting_on_owner.set()
+        return require_enrollment(tg_id)
+
+    async def held_after_access(operation, *args):
+        result = await run_db(operation, *args)
+        if operation is tracked_access and args == (first.tg_id,):
+            authorized.set()
+            await release_action.wait()
+        return result
+
+    monkeypatch.setattr(telegram, "_require_enrollment", tracked_access)
+    monkeypatch.setattr(telegram, "run_db", held_after_access)
+    holder = factory()
+    callback = None
+    try:
+        holder.query(models.User).filter_by(id=first.id).with_for_update().one()
+        callback = asyncio.create_task(click(first, first_step, 11, "timely"))
+        assert await asyncio.to_thread(waiting_on_owner.wait, 3)
+        await asyncio.sleep(max(0, (deadline - datetime.now(timezone.utc)).total_seconds()) + 0.01)
+        time_at_ingress = datetime.now(timezone.utc)
+
+        await asyncio.wait_for(click(second, second_step, 12, "unrelated"), 3)
+        assert answers["unrelated"] == "Виконано"
+        await asyncio.wait_for(asyncio.to_thread(scheduler.expire_overdue_steps), 3)
+        with factory() as db:
+            assert db.get(models.AIPlanStep, overdue_step.id).step_status == "expired"
+
+        holder.rollback()
+        await asyncio.wait_for(authorized.wait(), 3)
+        # No DB lock now protects A. Its already-received update must still win.
+        await asyncio.to_thread(scheduler.expire_overdue_steps)
+        with factory() as db:
+            assert db.get(models.AIPlanStep, first_step.id).step_status == "delivered"
+        release_action.set()
+        await asyncio.wait_for(asyncio.shield(callback), 3)
+        await click(first, first_step, 13, "duplicate")
+        await click(overdue, overdue_step, 14, "late")
+        assert answers == {"unrelated": "Виконано", "timely": "Виконано",
+                           "duplicate": "Виконано", "late": "Час дії завершився"}
+        with factory() as db:
+            assert db.get(models.AIPlanStep, first_step.id).terminal_at == received_at
+            first_events = db.query(models.UserEvent.event_name).filter_by(plan_step_id=first_step.id)
+            assert first_events.filter_by(event_name="task_completed").count() == 1
+            assert first_events.filter_by(event_name="task_ignored").count() == 0
+    finally:
+        holder.close()
+        release_action.set()
+        if callback is not None:
+            await callback
+
+
 async def test_delivery_receipt_has_checkout_capacity_while_general_pool_is_full(engine, monkeypatch):
     from contextlib import ExitStack
     from time import monotonic

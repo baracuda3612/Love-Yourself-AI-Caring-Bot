@@ -213,6 +213,7 @@ async def stop_setup(message: Message):
 # Gate all Telegram entrances before text, callbacks, the AI assistant or history writes.
 # Start alone may redeem a token; it implements the same guard above.
 from aiogram import BaseMiddleware
+from app.step_action_ingress import track_step_action
 
 
 class ActorIngressMiddleware(BaseMiddleware):
@@ -231,10 +232,17 @@ class ActorIngressMiddleware(BaseMiddleware):
         actor = getattr(event, "from_user", None)
         if not actor or not message or message.chat.type != "private" or message.chat.id != actor.id:
             return await handler(event, data)
-        lock = self.locks.get(actor.id)
+        callback_data = event.data if isinstance(event, CallbackQuery) else None
+        with track_step_action(actor.id, callback_data) as received_at:
+            if received_at is not None:
+                data["step_action_received_at"] = received_at
+            return await self._handle_for_actor(handler, event, data, actor.id)
+
+    async def _handle_for_actor(self, handler, event, data, telegram_user_id):
+        lock = self.locks.get(telegram_user_id)
         if lock is None:
             lock = asyncio.Lock()
-            self.locks[actor.id] = lock
+            self.locks[telegram_user_id] = lock
         await lock.acquire()
         held = True
 
@@ -1053,9 +1061,9 @@ async def _project_step_status(step_id):
     return await asyncio.to_thread(reconcile_terminal_step_keyboards, [step_id])
 
 
-async def _handle_step_action(callback_query: CallbackQuery, target: str):
+async def _handle_step_action(callback_query: CallbackQuery, target: str, received_at: datetime | None = None):
     import asyncio
-    received_at = datetime.now(timezone.utc)
+    received_at = received_at or datetime.now(timezone.utc)
     try:
         step_id = int((callback_query.data or '').split(':')[1])
     except (ValueError, IndexError):
@@ -1095,13 +1103,13 @@ async def _handle_step_action(callback_query: CallbackQuery, target: str):
 
 
 @router.callback_query(F.data.startswith("task_complete:"))
-async def handle_task_completed(callback_query: CallbackQuery):
-    await _handle_step_action(callback_query, "completed")
+async def handle_task_completed(callback_query: CallbackQuery, step_action_received_at: datetime | None = None):
+    await _handle_step_action(callback_query, "completed", step_action_received_at)
 
 
 @router.callback_query(F.data.startswith("task_skip:"))
-async def handle_task_skipped(callback_query: CallbackQuery):
-    await _handle_step_action(callback_query, "skipped")
+async def handle_task_skipped(callback_query: CallbackQuery, step_action_received_at: datetime | None = None):
+    await _handle_step_action(callback_query, "skipped", step_action_received_at)
 
 
 @router.callback_query(F.data.startswith("task_feedback:"))
