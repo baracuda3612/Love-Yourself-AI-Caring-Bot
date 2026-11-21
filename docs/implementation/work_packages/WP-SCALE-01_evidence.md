@@ -38,7 +38,7 @@ roster diff were left in place. The main checkout is the sole implementation wor
 | --- | --- |
 | DB connections | 18 general, 4 APScheduler, 8 reserved for durable transport receipts. Total 30 with zero overflow, a 2-second checkout wait and a 3-second connection setting. The receipt pool shares the PostgreSQL server and keeps its own checkout capacity. |
 | HTTP | 3 enrollment workers, 1 operator worker, 1 bulk roster worker, 1 revocation worker, 2 private report/calendar workers and 4 SMTP/OIDC workers. The provider worker also runs the short OIDC finalization transaction after verification. At most 4 such transactions contend with ordinary work for the existing general pool. No database session spans provider I/O. Admission overflow returns 503 before OIDC state is consumed. Authentication and proof validity continue to use their existing authority. |
-| Bot | 32 polling updates in flight, 8 ingress DB workers and 2 calendar/scheduler effect workers. The default async blocking executor has 4 workers. Durable schedule repair has 2 workers of its own. |
+| Bot | 32 polling handlers, one ordered ingress and at most two active handlers per actor. A Coach turn can release ingress ahead of its reply, leaving room for the next action. The update buffer is bounded and polling does not confirm past its first waiting update. There are 8 ingress DB workers and 2 calendar/scheduler effect workers. The default async blocking executor has 4 workers. Durable schedule repair has 2 workers of its own. |
 | Delivery | 4 normal timer sends and 2 recovery sends, with separate permits held through the transport result and receipt. The 6 exercise receipt workers use reserved connections. The persistent jobstore offers only as many due jobs as the executor can admit. At capacity it keeps unadmitted timers in PostgreSQL, and a free worker wakes the scheduler. |
 | Completion | 2 continuation, 2 successor scheduling and 2 report dispatch slots. A separate 2-worker receipt lane persists observed report outcomes. The durable source and obligations remain the backlog. |
 | Privacy | 2 blocking workers and 2 active erasures, with up to 2,048 jobstore rows per case per pass. Retention selects at most ten 500-message batches and one 500-proof batch per pass. |
@@ -109,3 +109,12 @@ Callbacks used 5 ms of controlled work. An in-process enrollment GET measured
 
 The independent remediation verdict and measurements against live dependencies
 remain outstanding.
+
+### Isolation of four shared waits
+
+| Path | Repair and regression check |
+| --- | --- |
+| Telegram polling | The dispatcher admits one ordered action per actor without assigning slots to same-actor waiters. It reads again from the unconfirmed prefix, deduplicates updates already seen in the live process, and preserves order within a chat. Tests hold the first of 32 menu replies from the same actor and confirm the other actor proceeds in the same or a later response. A separate case confirms the menu still opens during that actor's Coach reply. Visibility is bounded by Telegram's returned update window. |
+| Roster and Telegram access | An interactive Telegram DB operation keeps the shared deployment authority fence and uses PostgreSQL NOWAIT to return the existing retryable busy response when exclusive authority is held. The roster test holds the real apply transaction, checks eight affected accounts release worker capacity and verifies that another deployment can open privacy while the apply is still held. |
+| Startup timer restoration | The scan skips a held user row. It marks an available plan for durable schedule repair or finishes the pass and returns to the deferred owner if the plan row is also held. Tests check that another owner's timer appears first and that the deferred owner's exact timer is restored after release in both cases. |
+| Expiry and Telegram message edits | The expiry sweep commits overdue steps before handing visible changes to the existing two projection workers. Recovery reads pending receipt state or the historical expired step's retained message ID. The test holds the first edit, confirms the second edit and commits a newly overdue step while the first edit is still waiting. |

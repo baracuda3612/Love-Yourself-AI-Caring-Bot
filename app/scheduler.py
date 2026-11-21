@@ -77,7 +77,10 @@ _delivery_slots = BoundedSemaphore(_DELIVERY_WORKERS)
 _delivery_recovery_slots = BoundedSemaphore(_DELIVERY_RECOVERY_WORKERS)
 _delivery_receipts = BlockingLane(_DELIVERY_WORKERS + _DELIVERY_RECOVERY_WORKERS, "delivery-receipt")
 _recovery_workers = BlockingLane(_DELIVERY_RECOVERY_WORKERS, "delivery-recovery")
-_projection_recovery = BlockingLane(2, "projection-recovery")
+_PROJECTION_WORKERS = 2
+_projection_recovery = BlockingLane(_PROJECTION_WORKERS, "projection-recovery")
+_projection_inflight_lock = Lock()
+_projection_inflight: set[int] = set()
 _recovery_cursors = {"stale": 0, "retry": 0, "keyboard": 0}
 _due_after = None
 
@@ -397,7 +400,7 @@ def _recover_scheduled_deliveries(*, wait):
             or_(AIPlanStep.step_status != 'pending', AIPlanStep.scheduled_for.is_(None),
                 AIPlanStep.scheduled_for < now - LATE_GRACE, AIPlanStep.expires_at <= now),
         ).distinct(), ExerciseDelivery.plan_step_id, "retry")
-        ui_ids = _recovery_page(pending_status_steps(db), ExerciseDelivery.plan_step_id, "keyboard")
+        ui_ids = _recovery_page(pending_status_steps(db), AIPlanStep.id, "keyboard")
     def recover_step(step_id):
         try:
             send_scheduled_message(0, "", step_id, recovery=True, wait_for_receipt=not wait)
@@ -438,11 +441,7 @@ def _recover_scheduled_deliveries(*, wait):
     if wait:
         reconcile_terminal_step_keyboards(ui_ids)
     else:
-        for step_id in ui_ids:
-            try:
-                _projection_recovery.submit(reconcile_terminal_step_keyboards, [step_id])
-            except DBBusyError:
-                break
+        _dispatch_terminal_projections(ui_ids)
 
 
 
@@ -1114,7 +1113,7 @@ def reconcile_terminal_step_keyboards(
     succeeded_ids: list[int] = []
     failed_ids: list[int] = []
     for step_id in ordered_ids:
-        from app.exercise_status import reconcile_status
+        from app.exercise_status import permanent_projection_failure, reconcile_status
         try:
             with SessionLocal() as db:
                 projected = reconcile_status(db, step_id)
@@ -1151,7 +1150,7 @@ def reconcile_terminal_step_keyboards(
             # A callback may have removed the buttons before its DB marker
             # could be cleared. Telegram's exact no-change reply proves the
             # requested empty markup is already in place.
-            if "message is not modified" not in str(exc).lower():
+            if "message is not modified" not in str(exc).lower() and not permanent_projection_failure(exc):
                 failed_ids.append(step_id)
                 continue
         with SessionLocal() as db:
@@ -1173,11 +1172,14 @@ def reconcile_terminal_step_keyboards(
     )
 
 
-def reconcile_expired_step_keyboards(
-    step_ids: list[int],
-) -> SchedulerReconciliation:
-    """Compatibility alias for the terminal keyboard reconciler."""
-    return reconcile_terminal_step_keyboards(step_ids)
+def _dispatch_terminal_projections(step_ids):
+    for step_id in step_ids:
+        if not _submit_lane(
+            _projection_recovery, _projection_inflight_lock, _projection_inflight,
+            step_id, reconcile_terminal_step_keyboards, [step_id],
+            wake_completion=False, limit=_PROJECTION_WORKERS,
+        ) and not _projection_recovery.available():
+            break
 
 
 _EXPIRY_BATCH = 32
@@ -1278,18 +1280,19 @@ def _expire_overdue_batch() -> None:
                 continue
 
             try:
-                expiry = expire_plan_step(
-                    candidate_db,
-                    user_id=user_id,
-                    step_id=step.id,
-                    source_operation_id=(
-                        f"scheduler:expiry:{step.id}:{step.expires_at.isoformat()}"
-                    ),
-                    occurred_at=step.expires_at,
-                )
+                with fail_fast_on_deployment_lock():
+                    expiry = expire_plan_step(
+                        candidate_db,
+                        user_id=user_id,
+                        step_id=step.id,
+                        source_operation_id=(
+                            f"scheduler:expiry:{step.id}:{step.expires_at.isoformat()}"
+                        ),
+                        occurred_at=step.expires_at,
+                    )
                 candidate_db.commit()
                 _submit_continuation(expiry.user_id, expiry.plan_id)
-            except LifecycleTransitionError:
+            except (LifecycleTransitionError, DBBusyError):
                 candidate_db.rollback()
                 continue
             except Exception:
@@ -1318,14 +1321,8 @@ def _expire_overdue_batch() -> None:
         logger.error("[EXPIRE] Candidate failures for step ids: %s", failed_ids)
 
     if expired_keyboard_ids:
-        reconciliation = reconcile_expired_step_keyboards(expired_keyboard_ids)
-    else:
-        reconciliation = SchedulerReconciliation(attempted=0, succeeded=0)
-    if reconciliation.failed_ids:
-        logger.warning(
-            "[EXPIRE] Status projection pending for step ids: %s",
-            reconciliation.failed_ids,
-        )
+        _dispatch_terminal_projections(expired_keyboard_ids)
+        _enable_delivery_recovery()
 
 
 def check_plan_completions() -> None:
@@ -1458,9 +1455,9 @@ def _lane_capacity(lock, inflight):
         return max(0, _COMPLETION_WORKERS - len(inflight)), tuple(inflight)
 
 
-def _submit_lane(executor, lock, inflight, key, work, *args, wake_completion=True):
+def _submit_lane(executor, lock, inflight, key, work, *args, wake_completion=True, limit=_COMPLETION_WORKERS):
     with lock:
-        if key in inflight or len(inflight) >= _COMPLETION_WORKERS:
+        if key in inflight or len(inflight) >= limit:
             return False
         inflight.add(key)
     try:

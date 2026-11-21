@@ -939,13 +939,6 @@ def test_expiry_sweep_isolates_unexpected_candidate_failure(monkeypatch, caplog)
         def all(self):
             return [(1, 1), (2, 1), (3, 1)]
 
-    class _KeyboardQuery:
-        def filter(self, *_args):
-            return self
-
-        def all(self):
-            return []
-
     class _ScanDB:
         def __enter__(self):
             return self
@@ -979,20 +972,8 @@ def test_expiry_sweep_isolates_unexpected_candidate_failure(monkeypatch, caplog)
         def rollback(self):
             self.rollbacks += 1
 
-    class _KeyboardDB:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def query(self, _model):
-            return _KeyboardQuery()
-
     candidate_dbs = {step_id: _CandidateDB(step) for step_id, step in steps.items()}
-    sessions = iter(
-        [_ScanDB(), candidate_dbs[1], candidate_dbs[2], candidate_dbs[3], _KeyboardDB()]
-    )
+    sessions = iter([_ScanDB(), candidate_dbs[1], candidate_dbs[2], candidate_dbs[3]])
     attempted = []
     button_attempts = []
 
@@ -1012,14 +993,8 @@ def test_expiry_sweep_isolates_unexpected_candidate_failure(monkeypatch, caplog)
     monkeypatch.setattr(scheduler, "expire_plan_step", _expire)
     monkeypatch.setattr(scheduler, "_submit_continuation", lambda *_args: True)
     monkeypatch.setattr(scheduler, "enable_completion_recovery", lambda: None)
-    monkeypatch.setattr(
-        scheduler,
-        "reconcile_expired_step_keyboards",
-        lambda ids: (
-            button_attempts.append(ids)
-            or SimpleNamespace(failed_ids=())
-        ),
-    )
+    monkeypatch.setattr(scheduler, "_dispatch_terminal_projections", button_attempts.append)
+    monkeypatch.setattr(scheduler, "_enable_delivery_recovery", lambda: None)
 
     scheduler.expire_overdue_steps()
 
@@ -1066,7 +1041,7 @@ def test_expiry_does_not_scan_old_terminal_buttons(monkeypatch):
 
     monkeypatch.setattr(scheduler, "SessionLocal", _DB)
     monkeypatch.setattr(
-        scheduler, "reconcile_expired_step_keyboards",
+        scheduler, "_dispatch_terminal_projections",
         lambda _ids: pytest.fail("old button cleanup was retried"),
     )
 

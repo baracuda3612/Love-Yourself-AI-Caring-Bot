@@ -22,19 +22,33 @@ _projection_locks_guard = Lock()
 
 def pending_status_steps(db):
     """Find durable receipts whose last visible projection is stale."""
-    return (db.query(ExerciseDelivery.plan_step_id)
-            .join(AIPlanStep, AIPlanStep.id == ExerciseDelivery.plan_step_id)
+    return (db.query(AIPlanStep.id)
+            .outerjoin(ExerciseDelivery, and_(ExerciseDelivery.plan_step_id == AIPlanStep.id,
+                                              ExerciseDelivery.state == 'delivered'))
             .outerjoin(FeedbackEvent, and_(FeedbackEvent.plan_step_id == AIPlanStep.id,
                                           FeedbackEvent.source == 'exercise_efficacy'))
-            .filter(ExerciseDelivery.state == 'delivered',
-                    ExerciseDelivery.projection_failure_code.is_(None),
-                    AIPlanStep.step_status.in_(('completed', 'skipped', 'expired', 'canceled')),
-                    or_(ExerciseDelivery.visible_status.is_distinct_from(AIPlanStep.step_status.cast(String)),
-                        ExerciseDelivery.visible_feedback.is_distinct_from(FeedbackEvent.value))))
+            .filter(AIPlanStep.step_status.in_(('completed', 'skipped', 'expired', 'canceled')),
+                    or_(
+                        and_(ExerciseDelivery.id.is_(None), AIPlanStep.step_status == 'expired',
+                             AIPlanStep.tg_message_id.is_not(None)),
+                        and_(ExerciseDelivery.id.is_not(None), ExerciseDelivery.projection_failure_code.is_(None),
+                             or_(ExerciseDelivery.visible_status.is_distinct_from(AIPlanStep.step_status.cast(String)),
+                                 ExerciseDelivery.visible_feedback.is_distinct_from(FeedbackEvent.value))),
+                    )))
 
 
 def pending_status_step_ids(db, *, limit=16):
-    return [step_id for step_id, in pending_status_steps(db).order_by(ExerciseDelivery.plan_step_id).limit(limit)]
+    return [step_id for step_id, in pending_status_steps(db).order_by(AIPlanStep.id).limit(limit)]
+
+
+def permanent_projection_failure(exc):
+    if isinstance(exc, TelegramForbiddenError):
+        return 'chat_inaccessible'
+    if isinstance(exc, TelegramBadRequest) and any(reason in str(exc).lower() for reason in (
+        'message to edit not found', "message can't be edited", 'message can not be edited', 'chat not found',
+    )):
+        return 'message_uneditable'
+    return None
 
 
 def reconcile_status(db, step_id):
@@ -101,13 +115,8 @@ def _project_status(db, step_id):
         asyncio.run(asyncio.wait_for(edit(), timeout=20))
     except Exception as exc:
         if 'message is not modified' not in str(exc).lower():
-            if isinstance(exc, TelegramForbiddenError):
-                failure = 'chat_inaccessible'
-            elif isinstance(exc, TelegramBadRequest) and any(reason in str(exc).lower() for reason in (
-                'message to edit not found', "message can't be edited", 'message can not be edited', 'chat not found',
-            )):
-                failure = 'message_uneditable'
-            else:
+            failure = permanent_projection_failure(exc)
+            if failure is None:
                 return False
 
     # Record the exact snapshot sent. If a concurrent button action changed
