@@ -28,9 +28,24 @@ def test_webapp_valid_owner_identity():
     assert access_proof.verify_webapp(webapp(123))==123
 
 
-@pytest.mark.parametrize('raw', ['', 'forged', webapp(seconds_ago=301), webapp(seconds_ago=-60),webapp(token='another-bot'),webapp(actor='123'),webapp(actor=-1),webapp(actor=True), webapp()+'&auth_date=1'])
-def test_webapp_forged_expired_duplicate_or_cross_bot_rejected(raw):
-    with pytest.raises(access.AccessDenied,match='^access_unavailable$'):access_proof.verify_webapp(raw)
+@pytest.mark.parametrize("case", [
+    "empty", "forged", "expired", "future", "cross_bot",
+    "string_actor", "negative_actor", "boolean_actor", "duplicate",
+])
+def test_webapp_forged_expired_duplicate_or_cross_bot_rejected(case):
+    raw = {
+        "empty": "",
+        "forged": "forged",
+        "expired": webapp(seconds_ago=301),
+        "future": webapp(seconds_ago=-60),
+        "cross_bot": webapp(token="another-bot"),
+        "string_actor": webapp(actor="123"),
+        "negative_actor": webapp(actor=-1),
+        "boolean_actor": webapp(actor=True),
+        "duplicate": webapp() + "&auth_date=1",
+    }[case]
+    with pytest.raises(access.AccessDenied, match="^access_unavailable$"):
+        access_proof.verify_webapp(raw)
 
 
 @pytest.mark.parametrize('proof',['','forged',webapp(seconds_ago=600),webapp(token='wrong-environment-bot')])
@@ -66,6 +81,65 @@ def test_enrollment_page_csrf_headers_and_no_raw_credentials():
     assert result.status_code==403 and 'private@client.org' not in result.text
     result=client.get('/enroll/123/oidc/google/callback?state=secret&code=secret')
     assert result.status_code==403 and 'secret' not in result.text
+
+
+@pytest.mark.anyio
+async def test_email_transport_does_not_block_other_http_requests(monkeypatch):
+    import re
+    import threading
+
+    import httpx
+
+    from app import access_http
+
+    loop = asyncio.get_running_loop()
+    sending = asyncio.Event()
+    release = threading.Event()
+    calls = []
+
+    class DB:
+        def __enter__(self):
+            return self
+
+        def commit(self):
+            calls.append("commit")
+
+        def __exit__(self, *_):
+            calls.append("closed")
+
+    def send(email, proof):
+        assert calls == ["commit", "closed"]
+        loop.call_soon_threadsafe(sending.set)
+        release.wait(1)
+
+    for name in ("SMTP_HOST", "SMTP_FROM", "SMTP_USERNAME", "SMTP_PASSWORD"):
+        monkeypatch.setattr(access.settings, name, "configured")
+    monkeypatch.setattr(access.settings, "APP_BASE_URL", "http://testserver")
+    monkeypatch.setattr(access_proof, "rate_limit", lambda *_, **__: None)
+    monkeypatch.setattr(access_http, "SessionLocal", DB)
+    monkeypatch.setattr(access_proof, "begin_email", lambda *_, **__: "proof")
+    monkeypatch.setattr(access_proof, "send_email", send)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=api.app), base_url="http://testserver",
+    ) as client:
+        page = await client.get("/enroll/1")
+        csrf = re.search(r'name="csrf" value="([^"]+)"', page.text).group(1)
+        delivery = asyncio.create_task(client.post("/enroll/1/email",
+            data={"csrf": csrf, "email": "member@client.org"},
+            headers={"origin": access.settings.APP_BASE_URL}))
+        try:
+            started = asyncio.create_task(sending.wait())
+            done, _ = await asyncio.wait((started, delivery), timeout=2, return_when=asyncio.FIRST_COMPLETED)
+            assert started in done, "Enrollment did not reach the mail transport"
+            other = await asyncio.wait_for(client.get("/enroll/2"), 2)
+            assert other.status_code == 200
+            assert not delivery.done()
+        finally:
+            release.set()
+            started.cancel()
+            response = await delivery
+        assert response.status_code == 200
+        assert "Код із листа" in response.text
 
 
 def test_operator_routes_reject_unauthenticated_request_before_db(monkeypatch):
@@ -276,8 +350,9 @@ async def test_runtime_startup_audits_bound_contours_only(monkeypatch, is_dev):
     monkeypatch.setattr('app.db.SessionLocal', lambda: nullcontext(db))
     audit_calls = []
     monkeypatch.setattr('app.access_environment.audit_environment', lambda session: audit_calls.append(session))
-    async def finished(*args): pass
-    monkeypatch.setattr(main, 'schedule_daily_loop', finished)
+    async def finished(*args, **kwargs): pass
+    monkeypatch.setattr(main, 'start_scheduler', finished)
+    monkeypatch.setattr(main, 'restore_scheduled_timers', finished)
     monkeypatch.setattr(main.dp, 'start_polling', finished)
     monkeypatch.setattr(main.uvicorn, 'Config', lambda *args, **kwargs: object())
     monkeypatch.setattr(main.uvicorn, 'Server', lambda config: SimpleNamespace(serve=finished))
@@ -295,9 +370,28 @@ async def test_bound_runtime_stops_before_polling_when_isolation_audit_fails(mon
     monkeypatch.setattr('app.db.SessionLocal', lambda: nullcontext(object()))
     def rejected(db): raise access.AccessDenied()
     monkeypatch.setattr('app.access_environment.audit_environment', rejected)
-    monkeypatch.setattr(main, 'schedule_daily_loop', lambda: pytest.fail('no scheduler before isolation proof'))
+    monkeypatch.setattr(main, 'start_scheduler', lambda: pytest.fail('no scheduler before isolation proof'))
 
     with pytest.raises(access.AccessDenied):
+        await main.main()
+
+
+@pytest.mark.asyncio
+async def test_runtime_scheduler_start_failure_never_opens_http_or_polling(monkeypatch):
+    from app import scheduler
+    main = importlib.import_module('app.main')
+    monkeypatch.setattr(main.settings, 'IS_DEV', True)
+    monkeypatch.setattr(main, 'audit_startup_schema', lambda: None)
+    monkeypatch.setattr(scheduler, '_event_loop', None)
+
+    def fail_init():
+        raise RuntimeError('job store unavailable')
+
+    monkeypatch.setattr(scheduler, 'init_scheduler', fail_init)
+    monkeypatch.setattr(main.dp, 'start_polling', lambda *_a, **_k: pytest.fail('polling started'))
+    monkeypatch.setattr(main.uvicorn, 'Server', lambda *_: pytest.fail('HTTP started'))
+
+    with pytest.raises(RuntimeError, match='job store unavailable'):
         await main.main()
 
 
@@ -499,3 +593,42 @@ def test_enrollment_policy_draft_is_readable_before_login():
     assert 'Драфт для обговорення' in policy.text
     assert 'Content-Security-Policy' in policy.headers
     assert not policy.headers.get('set-cookie')
+
+
+async def test_urgent_revoke_can_commit_while_roster_preview_is_blocked(monkeypatch):
+    from threading import Event
+    from unittest.mock import Mock
+    from httpx import ASGITransport, AsyncClient
+
+    from app import access_http
+
+    started, release = Event(), Event()
+    revoke = Mock()
+
+    def preview(_db, **_kwargs):
+        started.set()
+        assert release.wait(4)
+        return SimpleNamespace(version_id=1, counts={}, confirmation="fixture")
+
+    monkeypatch.setattr(access_http.settings, "ACCESS_OPERATOR_SECRET", "test-only")
+    monkeypatch.setattr(access_proof, "rate_limit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(access_http, "SessionLocal", lambda: nullcontext(SimpleNamespace(commit=lambda: None)))
+    monkeypatch.setattr(access, "preview_roster", preview)
+    monkeypatch.setattr(access, "revoke_entitlement", revoke)
+
+    async with AsyncClient(transport=ASGITransport(app=api.app), base_url="http://fixture",
+                           headers={"Authorization": "Bearer test-only"}) as client:
+        slow = asyncio.create_task(client.post(
+            "/access/roster/preview",
+            json={"deployment_id": 10, "mode": "full_snapshot", "rows": [],
+                  "expected_total": 1, "source_ref": "fixture"},
+        ))
+        try:
+            assert await asyncio.to_thread(started.wait, 2)
+            reply = await asyncio.wait_for(client.post("/access/revoke", json={"entitlement_id": 20}), 1)
+            assert reply.status_code == 200
+            assert not slow.done()
+            assert revoke.call_args.kwargs["entitlement_id"] == 20
+        finally:
+            release.set()
+            assert (await slow).status_code == 200

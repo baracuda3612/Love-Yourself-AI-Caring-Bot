@@ -82,6 +82,7 @@ def test_scheduler_uses_canonical_send_and_only_confirms_success(db,monkeypatch,
         tg.send_animation.side_effect = TimeoutError(); tg.send_message.side_effect = TimeoutError()
     monkeypatch.setattr(telegram,'bot',tg)
     monkeypatch.setattr(scheduler,'SessionLocal',lambda:retained_session(db))
+    monkeypatch.setattr(scheduler,'ReceiptSessionLocal',lambda:retained_session(db))
     # The outer fixture rolls back the entire database transaction.
     monkeypatch.setattr(db,'commit',db.flush)
     monkeypatch.setattr(scheduler,'_event_loop',object())

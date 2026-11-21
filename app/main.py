@@ -2,6 +2,7 @@ from app.logging.privacy_logging import install_privacy_logging
 install_privacy_logging()
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 try:
     import uvloop
@@ -15,7 +16,7 @@ import uvicorn
 from app.api import app
 from app.config import settings
 from app.db import audit_startup_schema
-from app.scheduler import schedule_daily_loop
+from app.scheduler import restore_scheduled_timers, start_scheduler
 from app.telegram import bot, dp
 
 
@@ -26,7 +27,11 @@ async def main() -> None:
         from app.db import SessionLocal
         with SessionLocal() as db:
             audit_environment(db)
-    asyncio.create_task(schedule_daily_loop())
+    asyncio.get_running_loop().set_default_executor(
+        ThreadPoolExecutor(max_workers=4, thread_name_prefix="runtime-io"),
+    )
+    # Failure here exits the process before it can serve as a healthy instance.
+    await start_scheduler()
 
     config = uvicorn.Config(
         app,
@@ -37,7 +42,12 @@ async def main() -> None:
     )
     server = uvicorn.Server(config)
 
-    await asyncio.gather(dp.start_polling(bot), server.serve())
+    async with asyncio.TaskGroup() as runtime:
+        restoration = runtime.create_task(restore_scheduled_timers())
+        try:
+            await asyncio.gather(dp.start_polling(bot, tasks_concurrency_limit=32), server.serve())
+        finally:
+            restoration.cancel()
 
 
 if __name__ == "__main__":

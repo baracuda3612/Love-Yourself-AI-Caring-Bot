@@ -73,12 +73,9 @@ def authorize_time_slots(db, raw, target_user_id):
 
 
 def new_proof(db, *, deployment_id, kind, browser, identity_key=None, subject=None):
-    deployment = lock_deployment(db, deployment_id, joining=True)
+    deployment = lock_deployment(db, deployment_id, joining=True, shared=True)
     if deployment.environment != 'production':
         raise AccessDenied()
-    # Expired proof material has no audit/business value. Opportunistic bounded
-    # retention needs no background recovery loop or additional scheduler owner.
-    db.query(AccessProof).filter(AccessProof.expires_at < now_utc() - timedelta(days=1)).delete(synchronize_session=False)
     raw, nonce = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
     at = now_utc()
     db.add(AccessProof(deployment_id=deployment_id, kind=kind,
@@ -89,8 +86,16 @@ def new_proof(db, *, deployment_id, kind, browser, identity_key=None, subject=No
     return raw, nonce
 
 
+def purge_expired_proofs(db, *, limit=500):
+    """Retain the existing proof window and skip rows already in use."""
+    expired = db.query(AccessProof.id).filter(
+        AccessProof.expires_at < now_utc() - timedelta(days=1),
+    ).order_by(AccessProof.expires_at, AccessProof.id).limit(limit).with_for_update(skip_locked=True)
+    return db.query(AccessProof).filter(AccessProof.id.in_(expired)).delete(synchronize_session=False)
+
+
 def consume_proof(db, *, deployment_id, raw, browser, kind):
-    lock_deployment(db, deployment_id, joining=True)
+    lock_deployment(db, deployment_id, joining=True, shared=True)
     proof = db.query(AccessProof).filter(AccessProof.secret_digest == digest(raw, 'proof'),
         AccessProof.deployment_id == deployment_id, AccessProof.kind == kind).populate_existing().with_for_update().first()
     at = now_utc()
@@ -164,7 +169,7 @@ def redirect_uri(deployment_id, provider):
 
 
 def begin_oidc(db, *, deployment_id, provider, browser):
-    deployment = lock_deployment(db, deployment_id, joining=True)
+    deployment = lock_deployment(db, deployment_id, joining=True, shared=True)
     config = _provider(deployment, provider)
     state, nonce = new_proof(db, deployment_id=deployment_id, kind=provider, browser=browser)
     verifier = digest(state, 'pkce')
@@ -206,7 +211,7 @@ def validate_id_token(config, raw):
 
 def prepare_oidc(db, *, deployment_id, provider, state, browser):
     """Consume state in a short transaction; caller commits before provider I/O."""
-    deployment = lock_deployment(db, deployment_id, joining=True)
+    deployment = lock_deployment(db, deployment_id, joining=True, shared=True)
     config = _provider(deployment, provider)
     proof = consume_proof(db, deployment_id=deployment_id, raw=state, browser=browser, kind=provider)
     return {'deployment_id': deployment_id, 'provider': provider, 'proof_id': proof.id,
@@ -229,7 +234,7 @@ def verify_oidc(prepared, *, state, code):
 
 def finish_oidc(db, *, prepared, claims, browser):
     deployment_id, provider = prepared['deployment_id'], prepared['provider']
-    deployment = lock_deployment(db, deployment_id, joining=True)
+    deployment = lock_deployment(db, deployment_id, joining=True, shared=True)
     proof = db.query(AccessProof).filter(AccessProof.id == prepared['proof_id']).populate_existing().with_for_update().first()
     if (proof is None or proof.kind != provider or not proof.consumed_at or proof.expires_at <= now_utc()
         or proof.deployment_id != deployment_id or deployment.access_policy != prepared['policy']

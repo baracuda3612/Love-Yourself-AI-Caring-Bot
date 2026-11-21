@@ -758,6 +758,8 @@ def activate_plan(
         activation_receipt_status=receipt_status,
     )
     plan = activation.plan
+    if not activation.duplicate:
+        plan.schedule_reconcile_at = datetime.now(timezone.utc)
     return LifecycleResult(
         user_id=user_id,
         plan_id=plan.id,
@@ -919,6 +921,7 @@ def transition_current_plan(
 
     plan.status = target
     plan.version = int(plan.version or 0) + 1
+    plan.schedule_reconcile_at = datetime.now(timezone.utc)
     record_lifecycle_operation(
         db,
         user_id=user_id,
@@ -1047,6 +1050,8 @@ def abandon_current_plan(
     plan.status = "abandoned"
     plan.abandoned_at = now
     plan.version = int(plan.version or 0) + 1
+    plan.schedule_switch_source = None
+    plan.schedule_reconcile_at = datetime.now(timezone.utc)
     record_lifecycle_operation(
         db,
         user_id=user_id,
@@ -1694,6 +1699,8 @@ def change_delivery_time(
     except TimeSlotError as exc:
         raise LifecycleTransitionError(str(exc)) from exc
     report_effects = completion_effects(context_plan.id)
+    if str(context_plan.status) == "active":
+        context_plan.schedule_reconcile_at = datetime.now(timezone.utc)
     record_lifecycle_operation(
         db,
         user_id=user_id,
@@ -1840,6 +1847,8 @@ def change_schedule_calendar(
         raise LifecycleTransitionError("schedule_calendar_unavailable") from exc
 
     plan.version += 1
+    if str(plan.status) == "active":
+        plan.schedule_reconcile_at = now
     record_lifecycle_operation(
         db, user_id=user_id, plan_id=plan.id, source_operation_id=source_operation_id,
         operation="change_schedule_calendar", result_status=receipt_status,
@@ -2054,6 +2063,7 @@ def record_switch_schedule_ready(
     user_id: int,
     plan_id: int,
     switch_source_operation_id: str,
+    expected_reconcile_at: datetime | None = None,
 ) -> None:
     """Record post-commit schedule proof, independently of button/event hygiene."""
     _lock_user(db, user_id)
@@ -2068,6 +2078,11 @@ def record_switch_schedule_ready(
         or current.id != plan_id
     ):
         raise LifecycleTransitionError("switch_schedule_proof_superseded")
+    if getattr(current, "schedule_switch_source", None) == switch_source_operation_id:
+        current.schedule_switch_source = None
+        # A newer calendar/time edit may have committed after the job proof.
+        if expected_reconcile_at is not None and current.schedule_reconcile_at == expected_reconcile_at:
+            current.schedule_reconcile_at = None
     ready_source = _switch_ready_source_id(activation_source)
     ready = find_lifecycle_operation(db, user_id, ready_source)
     if ready is not None:
@@ -2223,6 +2238,7 @@ def switch_plan_format(
                 details={
                     "source_plan_id": int(source.id),
                     "switch_source_operation_id": source_operation_id,
+                    "schedule_reconcile_at": getattr(replacement, "schedule_reconcile_at", None),
                     "target_plan_type": normalized_target,
                     "total_days": int(replacement.total_days),
                     "current_disposition": (
@@ -2315,6 +2331,7 @@ def switch_plan_format(
     plan.status = "abandoned"
     plan.abandoned_at = now
     plan.version = int(plan.version or 0) + 1
+    plan.schedule_reconcile_at = now
     db.flush()
 
     from app.plan_drafts.service import create_plan_for_lifecycle
@@ -2335,6 +2352,8 @@ def switch_plan_format(
         activation_receipt_status=receipt_status,
     )
     replacement = activation.plan
+    replacement.schedule_reconcile_at = datetime.now(timezone.utc)
+    replacement.schedule_switch_source = source_operation_id
     if source_was_paused:
         replacement.status = "paused"
         replacement.version = int(replacement.version or 0) + 1
@@ -2393,6 +2412,7 @@ def switch_plan_format(
         details={
             "source_plan_id": int(plan.id),
             "switch_source_operation_id": source_operation_id,
+            "schedule_reconcile_at": replacement.schedule_reconcile_at,
             "source_plan_type": source_plan_type,
             "target_plan_type": normalized_target,
             "total_days": int(replacement.total_days),
