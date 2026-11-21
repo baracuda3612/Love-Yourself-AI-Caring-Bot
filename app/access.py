@@ -16,7 +16,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import func, text, select, exists, or_
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import OperationalError
 
+from app.blocking_db import DBBusyError, deployment_lock_nowait
 from app.config import settings
 from app.db import (AccessAdminOperation, AccessEntitlement, AccessIdentity, AccessProof, Deployment,
     DeploymentEnrollment, DeploymentInvitation, DeploymentRosterEntry,
@@ -65,7 +67,13 @@ def lock_deployment(db, deployment_id, *, joining=False, delivery=False, now=Non
     query = db.query(Deployment).filter(Deployment.id == deployment_id).populate_existing()
     # Concurrent owners can hold a read fence. Controls, roster application
     # and revocation still take an exclusive fence before changing authority.
-    deployment = (query.with_for_update(read=shared) if lock else query).first()
+    nowait = shared and deployment_lock_nowait.get()
+    try:
+        deployment = (query.with_for_update(read=shared, nowait=nowait) if lock else query).first()
+    except OperationalError as exc:
+        if nowait and getattr(exc.orig, "pgcode", None) == "55P03":
+            raise DBBusyError("deployment authority is being updated") from exc
+        raise
     now = now or now_utc()
     if (deployment is None or deployment.environment != environment()
         or (require_active_period and deployment.starts_at and deployment.starts_at > now)

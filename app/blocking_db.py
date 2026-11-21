@@ -1,6 +1,8 @@
 """Bounded admission for synchronous database units called by async ingress."""
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from contextvars import ContextVar
 from threading import Lock
 
 
@@ -46,7 +48,22 @@ class BlockingLane:
 
 _ingress = BlockingLane(8, "bot-ingress")
 schedule_effects_lane = BlockingLane(2, "schedule-effects")
+deployment_lock_nowait = ContextVar("deployment_lock_nowait", default=False)
+
+
+@contextmanager
+def fail_fast_on_deployment_lock():
+    token = deployment_lock_nowait.set(True)
+    try:
+        yield
+    finally:
+        deployment_lock_nowait.reset(token)
+
+
+def _run_interactive(fn, args, kwargs):
+    with fail_fast_on_deployment_lock():
+        return fn(*args, **kwargs)
 
 
 async def run_db(fn, /, *args, **kwargs):
-    return await _ingress.run(fn, *args, **kwargs)
+    return await _ingress.run(_run_interactive, fn, args, kwargs)
