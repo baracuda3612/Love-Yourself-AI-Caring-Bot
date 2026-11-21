@@ -295,13 +295,13 @@ async def oidc_callback(deployment_id: int, provider: str, request: Request):
         raise access.AccessDenied()
     state, code = params.get('state', ''), params['code']
     def finish_provider_flow():
-        # Reserve a provider worker before consuming one-use state. Each DB
-        # phase closes its session before the provider phase starts.
+        # Admission to this worker covers the whole flow. Preparation can
+        # return busy before it consumes state. Finalization uses the already
+        # admitted worker and cannot be rejected by the general enrollment lane.
         prepared = _enrollment.submit(_commit, access_proof.prepare_oidc,
             deployment_id=deployment_id, provider=provider, state=state, browser=browser).result()
         claims = access_proof.verify_oidc(prepared, state=state, code=code)
-        result = _enrollment.submit(_commit, access_proof.finish_oidc,
-            prepared=prepared, claims=claims, browser=browser).result()
+        result = _commit(access_proof.finish_oidc, prepared=prepared, claims=claims, browser=browser)
         if 'challenge' in result:
             try:
                 access_proof.send_email(result['email'], result['challenge'])
