@@ -11,6 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict
 
+from app.blocking_db import BlockingLane, DBBusyError
 from app.config import settings
 from app.db import AIPlan, SessionLocal, User
 from app.plan_completion.metrics import build_completion_metrics
@@ -32,6 +33,7 @@ from app.access import AccessDenied
 from app.access_proof import RateLimited, authorize_time_slots
 from app.access_http import ENROLLMENT_STYLE, router as access_router
 app.include_router(access_router)
+_personal_http = BlockingLane(2, "http-personal")
 
 
 @app.middleware("http")
@@ -78,6 +80,11 @@ async def access_denied_handler(request, exc):
 
         return enrollment_error(int(deployment_id), rate_limited=isinstance(exc, RateLimited))
     return JSONResponse({"detail": "access_unavailable"}, status_code=429 if isinstance(exc, RateLimited) else 403)
+
+
+@app.exception_handler(DBBusyError)
+async def worker_busy_handler(request, exc):
+    return JSONResponse({"detail": "temporarily_unavailable"}, status_code=503, headers={"Retry-After": "1"})
 
 
 @app.exception_handler(RequestValidationError)
@@ -157,6 +164,20 @@ class TimeSlotsPayload(BaseModel):
 
 
 @app.post("/user/time-slots")
+async def update_time_slots_http(
+    payload: TimeSlotsPayload,
+    user_id: int = Query(..., description="User ID to update"),
+    idempotency_key: str = Header(
+        ...,
+        alias="Idempotency-Key",
+        min_length=1,
+        max_length=128,
+    ),
+    telegram_init_data: str = Header("", alias="X-Telegram-Init-Data", max_length=8192),
+) -> Dict[str, int | bool | str]:
+    return await _personal_http.run(set_user_time_slots, payload, user_id, idempotency_key, telegram_init_data)
+
+
 def set_user_time_slots(
     payload: TimeSlotsPayload,
     user_id: int = Query(..., description="User ID to update"),
@@ -323,6 +344,10 @@ def set_user_time_slots(
 
 @app.get("/report/{token}", response_class=HTMLResponse)
 async def completion_report(request: Request, token: str):
+    return await _personal_http.run(_render_completion_report, request, token)
+
+
+def _render_completion_report(request: Request, token: str):
     with SessionLocal() as db:
         try:
             plan_id = resolve_report_grant(db, token, "completion_report")
@@ -390,6 +415,10 @@ async def completion_report(request: Request, token: str):
 
 @app.get("/pulse/{token}", response_class=HTMLResponse)
 async def pulse_report(request: Request, token: str):
+    return await _personal_http.run(_render_pulse_report, request, token)
+
+
+def _render_pulse_report(request: Request, token: str):
     with SessionLocal() as db:
         try:
             plan_id = resolve_report_grant(db, token, "pulse_report")

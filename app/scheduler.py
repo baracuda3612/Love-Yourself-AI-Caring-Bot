@@ -3,22 +3,23 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import logging
-from threading import Lock
+from threading import BoundedSemaphore, Event, Lock
 from math import ceil
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import pytz
-from sqlalchemy import and_, case, func, or_
-from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+from sqlalchemy import and_, case, func, or_, text as sql_text, tuple_
+from apscheduler.executors.pool import ThreadPoolExecutor as SchedulerExecutor
 from apscheduler.jobstores.memory import MemoryJobStore
-from apscheduler.schedulers.background import BackgroundScheduler
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from app.blocking_db import BlockingLane, DBBusyError, fail_fast_on_deployment_lock
 from app.config import settings
+from app.runtime_jobstore import DeliveryJobExecutor, RuntimeJobStore, RuntimeScheduler
 from app.active_days import resolve_timezone, step_expires_at
 from app.plan_completion.tokens import issue_report_grant
-from app.db import AIPlan, AIPlanDay, AIPlanStep, SessionLocal, User, UserEvent
+from app.db import AIPlan, AIPlanDay, AIPlanStep, ReceiptSessionLocal, SessionLocal, User, UserEvent
 from app.ai import async_client
 from app.telemetry import log_user_event, write_event_operation
 from app.ux.catalog import get_trigger_message
@@ -26,6 +27,7 @@ from app.ux.persona import get_persona
 from app.ux.pulse_prompt import generate_pulse_message
 from app.ux.rate_limit import can_send_auto_message
 from app.exercise_delivery import ExerciseSendResult, send_exercise
+from app.step_action_ingress import has_timely_step_action
 from app.lifecycle import (
     LifecycleTransitionError,
     derive_current_day,
@@ -36,10 +38,30 @@ from app.lifecycle import (
 DATABASE_URL = settings.DATABASE_URL
 jobstore_url = DATABASE_URL
 
-jobstores = {"default": SQLAlchemyJobStore(url=jobstore_url), "delivery_recovery": MemoryJobStore(), "completion_recovery": MemoryJobStore()}
+_DELIVERY_WORKERS = 4
+_DELIVERY_RECOVERY_WORKERS = 2
+_delivery_overflow = Event()
+_delivery_executor = DeliveryJobExecutor(_DELIVERY_WORKERS, _delivery_overflow)
+
+jobstores = {
+    "default": RuntimeJobStore(url=jobstore_url, delivery_capacity=_delivery_executor.available, engine_options={
+        "pool_size": 4, "max_overflow": 0, "pool_timeout": 2,
+        "connect_args": {"connect_timeout": 3, "options": "-c lock_timeout=3000 -c statement_timeout=10000"},
+    }),
+    "delivery_recovery": MemoryJobStore(),
+    "completion_recovery": MemoryJobStore(),
+    "maintenance": MemoryJobStore(),
+}
 from app.access import AccessDenied, access_predicate, may_access, outbound_claim
 
-scheduler = BackgroundScheduler(jobstores=jobstores, timezone="UTC")
+scheduler = RuntimeScheduler(
+    jobstores=jobstores, timezone="UTC",
+    executors={
+        "default": SchedulerExecutor(5),
+        "scheduled_delivery": _delivery_executor,
+    },
+)
+_application_scheduler = scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +69,21 @@ logger = logging.getLogger(__name__)
 # Never reuse ORM objects across SQLAlchemy sessions.
 # Always re-fetch entities inside the session where they are used.
 
-_scheduler_started = False
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
 _recovery_job_lock = Lock()
+_DELIVERY_SCAN_BATCH = 16
+_delivery_slots = BoundedSemaphore(_DELIVERY_WORKERS)
+_delivery_recovery_slots = BoundedSemaphore(_DELIVERY_RECOVERY_WORKERS)
+_delivery_receipts = BlockingLane(_DELIVERY_WORKERS + _DELIVERY_RECOVERY_WORKERS, "delivery-receipt")
+_delivery_wake_lane = BlockingLane(1, "delivery-wake")
+_delivery_wake_requested = Event()
+_recovery_workers = BlockingLane(_DELIVERY_RECOVERY_WORKERS, "delivery-recovery")
+_PROJECTION_WORKERS = 2
+_projection_recovery = BlockingLane(_PROJECTION_WORKERS, "projection-recovery")
+_projection_inflight_lock = Lock()
+_projection_inflight: set[int] = set()
+_recovery_cursors = {"stale": 0, "retry": 0, "keyboard": 0}
+_due_after = None
 
 def _to_utc(dt: datetime) -> datetime:
     """Safely convert datetime to UTC-aware, handling both naive and aware inputs."""
@@ -67,12 +101,12 @@ def _generate_step_job_id(step: AIPlanStep) -> str:
 def init_scheduler():
     if not scheduler.running:
         scheduler.start(paused=True)
-    # P1 frozen: keep send_daily_pulse() available, but disable its cron trigger.
-    # scheduler.add_job("app.scheduler:send_daily_pulse", "cron", hour=9, minute=0, id="daily_pulse", replace_existing=True, max_instances=1)
     # Remove persisted jobs for retired runtime entrances. APScheduler owns its
     # job table, so cleanup stays at the scheduler boundary rather than Alembic.
     for retired_job_id in (
         "daily_pulse",
+        "silent_check",
+        "pulse_snapshot_check",
         "stuck_schedule_adj_check",
         "ignored_check",
         "scheduled_delivery_recovery",
@@ -81,14 +115,23 @@ def init_scheduler():
             scheduler.remove_job(retired_job_id)
         except Exception:
             pass
-    for job in scheduler.get_jobs():
-        if job.id.startswith(("completion_", "completion_retry_", "completion_receipt_retry_")):
-            remove_job(job.id)
-    scheduler.add_job("app.scheduler:expire_overdue_steps", "interval", seconds=30, id="expire_steps", replace_existing=True, max_instances=1)
-    scheduler.add_job("app.scheduler:check_silent_users", "cron", hour=12, minute=0, id="silent_check", replace_existing=True, max_instances=1)
-    scheduler.add_job("app.scheduler:check_plan_completions", "cron", hour=10, minute=30, id="plan_completion_check", replace_existing=True, max_instances=1)
-    scheduler.add_job("app.scheduler:send_plan_pulse_snapshots", "cron", hour=10, minute=0, id="pulse_snapshot_check", replace_existing=True, max_instances=1)
-    scheduler.add_job("app.scheduler:run_privacy_maintenance", "interval", minutes=5, id="privacy_maintenance", replace_existing=True, max_instances=1)
+    if scheduler is _application_scheduler:
+        jobstores["default"].remove_legacy_completion_jobs()
+    else:
+        for job in scheduler.get_jobs():
+            if job.id.startswith(("completion_", "completion_retry_", "completion_receipt_retry_")):
+                remove_job(job.id)
+    if scheduler is _application_scheduler:
+        for moved in ("expire_steps", "plan_completion_check", "privacy_maintenance"):
+            remove_job(moved)
+        scheduler.add_job("app.scheduler:dispatch_plan_schedule_recovery", "interval", seconds=1,
+                          id="plan_schedule_recovery", jobstore="maintenance", max_instances=1,
+                          coalesce=True, replace_existing=True)
+    maintenance = {"jobstore": "maintenance"} if scheduler is _application_scheduler else {}
+    privacy_timing = {**maintenance, "next_run_time": datetime.now(timezone.utc)} if maintenance else {}
+    scheduler.add_job("app.scheduler:expire_overdue_steps", "interval", seconds=30, id="expire_steps", replace_existing=True, max_instances=1, **maintenance)
+    scheduler.add_job("app.scheduler:check_plan_completions", "cron", hour=10, minute=30, id="plan_completion_check", replace_existing=True, max_instances=1, **maintenance)
+    scheduler.add_job("app.scheduler:run_privacy_maintenance", "interval", minutes=5, id="privacy_maintenance", replace_existing=True, max_instances=1, **privacy_timing)
     scheduler.resume()
 
 
@@ -142,8 +185,38 @@ def _enable_delivery_recovery():
             # DB proof that pending work is repaired, quarantined or terminal.
             scheduler.add_job('app.scheduler:reconcile_scheduled_deliveries', 'interval',
                               seconds=30, start_date=run_at, next_run_time=run_at,
-                              id='scheduled_delivery_recovery', jobstore='delivery_recovery',
+                              id='scheduled_delivery_recovery', jobstore='delivery_recovery', kwargs={'wait': False},
                               replace_existing=True, max_instances=1, coalesce=True, misfire_grace_time=None)
+
+
+def _request_delivery_recovery():
+    """Coalesce durable wake requests without waiting in a send or receipt slot."""
+    _delivery_wake_requested.set()
+    _dispatch_delivery_wake()
+
+
+def _refresh_delivery_wake():
+    _delivery_wake_requested.clear()
+    _enable_delivery_recovery()
+
+
+def _dispatch_delivery_wake():
+    if not _delivery_wake_requested.is_set():
+        return
+    try:
+        future = _delivery_wake_lane.submit(_refresh_delivery_wake)
+    except DBBusyError:
+        return
+
+    def finished(result):
+        try:
+            result.result()
+        except Exception:
+            _delivery_overflow.set()
+            logger.exception("Unable to arm scheduled delivery recovery")
+        _dispatch_delivery_wake()
+
+    future.add_done_callback(finished)
 
 
 def wake_scheduled_delivery_recovery():
@@ -157,7 +230,7 @@ def wake_scheduled_delivery_recovery():
 
 def _delivery_recovery_time(now):
     from app.db import ExerciseDelivery
-    from app.exercise_status import pending_status_step_ids
+    from app.exercise_status import pending_status_steps
     from app.scheduled_delivery import IN_FLIGHT_GRACE, LATE_GRACE
     with SessionLocal() as db:
         retry_at = db.query(func.min(case(
@@ -174,12 +247,18 @@ def _delivery_recovery_time(now):
             times.append(_to_utc(retry_at))
         if started_at is not None:
             times.append(_to_utc(started_at) + IN_FLIGHT_GRACE)
-        if pending_status_step_ids(db) or _due_delivery_steps(db, now).first() is not None:
-            times.append(now + timedelta(seconds=30))
-    return max(now + timedelta(seconds=30), min(times)) if times else None
+        ready = pending_status_steps(db).first() is not None or _due_delivery_steps(db, now).first() is not None
+    if ready:
+        return now + timedelta(seconds=1)
+    if not times:
+        return None
+    next_due = min(times)
+    # A future retry already has a persisted backoff. Rechecking the queue
+    # must not push that wake into another interval.
+    return next_due if next_due > now else now + timedelta(seconds=30)
 
 
-def can_deliver_tasks(user: User, plan: AIPlan | None = None) -> bool:
+def can_deliver_tasks(user: User, plan: AIPlan | None = None, *, delivery: bool = True) -> bool:
     # NOTE:
     # Missed scheduled deliveries while user is not ACTIVE are intentional.
     # Replay/recovery (if any) must be handled by adaptation/reconciliation layer.
@@ -187,7 +266,7 @@ def can_deliver_tasks(user: User, plan: AIPlan | None = None) -> bool:
         return False
     from sqlalchemy.orm import object_session
     owning_db = object_session(user) if hasattr(user, '_sa_instance_state') else None
-    if owning_db is None or not may_access(owning_db, user.id, delivery=True):
+    if owning_db is None or not may_access(owning_db, user.id, delivery=delivery):
         return False
     if plan is not None:
         return plan.status == "active"
@@ -221,127 +300,197 @@ async def _send_message_async(
         return None
 
 
-def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None):
+def send_scheduled_message(_chat_id: int, text: str, step_id: int | None = None,
+                           *, recovery: bool = False, wait_for_receipt: bool = False):
     """Claim once before Telegram; persist late results inside the send coroutine."""
     if step_id is None or _event_loop is None:
         return
-    from app.scheduled_delivery import claim_send, finish_send
-    from app.active_days import resolve_active_days, is_active_day
-    with SessionLocal() as db:
-        step = db.get(AIPlanStep, step_id)
-        if step is None:
+    slots = _delivery_recovery_slots if recovery else _delivery_slots
+    if not slots.acquire(blocking=False):
+        # No attempt was claimed. The durable due row remains recoverable.
+        _request_delivery_recovery()
+        return
+    future = None
+    try:
+        from app.scheduled_delivery import claim_send, finish_send
+        from app.active_days import resolve_active_days, is_active_day
+        with SessionLocal() as db:
+            db.execute(sql_text("SET LOCAL lock_timeout = '3s'"))
+            db.execute(sql_text("SET LOCAL statement_timeout = '10s'"))
+            step = db.get(AIPlanStep, step_id)
+            if step is None:
+                return
+            user = step.day.plan.user
+            today = datetime.now(timezone.utc).astimezone(resolve_timezone(user.timezone)).date()
+            if not is_active_day(today, resolve_active_days(user.profile)):
+                return
+            try:
+                with fail_fast_on_deployment_lock():
+                    claim = claim_send(db, step_id, skip_busy_owner=True)
+                db.commit()
+            except DBBusyError:
+                db.rollback()
+                _request_delivery_recovery()
+                return
+            except ValueError:
+                db.rollback()
+                logger.exception("Invalid scheduled presentation step=%s", step_id)
+                return
+        if claim is None:
             return
-        user = step.day.plan.user
-        user_id, plan_id = user.id, step.day.plan_id
-        today = datetime.now(timezone.utc).astimezone(resolve_timezone(user.timezone)).date()
-        if not is_active_day(today, resolve_active_days(user.profile)):
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Виконано", callback_data=f"task_complete:{step_id}"),
+            InlineKeyboardButton(text="Пропустити", callback_data=f"task_skip:{step_id}"),
+        ]])
+
+        def persist(result):
+            from app.db import ExerciseDelivery
+            with ReceiptSessionLocal() as db:
+                db.execute(sql_text("SET LOCAL lock_timeout = '3s'"))
+                db.execute(sql_text("SET LOCAL statement_timeout = '10s'"))
+                finish_send(db, claim.attempt_id, result)
+                attempt = db.get(ExerciseDelivery, claim.attempt_id)
+                retry_pending = attempt is not None and attempt.state == 'retryable'
+                step = db.get(AIPlanStep, step_id) if result.delivered else None
+                late_projection = step is not None and step.step_status in (
+                    "completed", "skipped", "expired", "canceled",
+                )
+                db.commit()
+            if retry_pending or late_projection:
+                _request_delivery_recovery()
+
+        async def send_and_record():
+            from app.telegram import bot as tg_bot
+            try:
+                result = await asyncio.wait_for(
+                    send_exercise(tg_bot, claim.chat_id, claim.presentation, reply_markup=keyboard), timeout=20,
+                )
+            except TimeoutError:
+                result = ExerciseSendResult('uncertain', None, claim.presentation, '', failure_code='send_result_uncertain')
+            # Even if the scheduler wait expires, this coroutine retains the receipt.
+            for attempt in range(3):
+                try:
+                    await _delivery_receipts.run(persist, result)
+                    break
+                except Exception:
+                    if attempt == 2:
+                        raise
+                    await asyncio.sleep(attempt + 1)
+            return result
+
+        future = _submit_coroutine(send_and_record())
+        if future is None:
+            # The durable claim is deliberately quarantined if submission is lost.
+            _request_delivery_recovery()
             return
         try:
-            claim = claim_send(db, step_id)
-            db.commit()
-        except ValueError:
-            db.rollback()
-            logger.exception("Invalid scheduled presentation step=%s", step_id)
-            return
-    if claim is None:
-        return
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="Виконано", callback_data=f"task_complete:{step_id}"),
-        InlineKeyboardButton(text="Пропустити", callback_data=f"task_skip:{step_id}"),
-    ]])
-
-    def persist(result):
-        with SessionLocal() as db:
-            finish_send(db, claim.attempt_id, result)
-            db.commit()
-            from app.scheduled_delivery import latest_attempt
-            retry_pending = latest_attempt(db, step_id).state == 'retryable'
-        if retry_pending:
-            _enable_delivery_recovery()
-
-    async def send_and_record():
-        from app.telegram import bot as tg_bot
-        result = await send_exercise(tg_bot, claim.chat_id, claim.presentation, reply_markup=keyboard)
-        # Even if the scheduler wait expires, this coroutine retains the receipt.
-        for attempt in range(3):
-            try:
-                await asyncio.to_thread(persist, result)
-                break
-            except Exception:
-                if attempt == 2:
-                    raise
-                await asyncio.sleep(attempt + 1)
-        if result.delivered:
-            await asyncio.to_thread(reconcile_terminal_step_keyboards, [step_id])
-
-        return result
-
-    future = _submit_coroutine(send_and_record())
-    if future is None:
-        # The durable claim is deliberately quarantined if submission is lost.
-        _enable_delivery_recovery()
-        return
-    try:
-        return future.result(timeout=30)
+            return future.result(timeout=None if wait_for_receipt else 30)
+        except Exception:
+            _request_delivery_recovery()
+            logger.warning("Scheduled send outcome pending/unknown step=%s", step_id, exc_info=True)
+            return ExerciseSendResult('uncertain', None, claim.presentation, '', failure_code='send_result_uncertain')
     except Exception:
-        _enable_delivery_recovery()
-        logger.warning("Scheduled send outcome pending/unknown step=%s", step_id, exc_info=True)
-        return ExerciseSendResult('uncertain', None, claim.presentation, '', failure_code='send_result_uncertain')
-
-
-def reconcile_scheduled_deliveries():
-    try:
-        _recover_scheduled_deliveries()
+        _delivery_overflow.set()
+        raise
     finally:
-        _enable_delivery_recovery()
+        if future is None:
+            slots.release()
+        else:
+            future.add_done_callback(lambda _done: slots.release())
 
 
-def _recover_scheduled_deliveries():
-    """Recover due work and pending UI effects; never resend uncertain attempts."""
+def reconcile_scheduled_deliveries(*, wait=True):
+    try:
+        _recover_scheduled_deliveries(wait=wait)
+    finally:
+        if wait:
+            _enable_delivery_recovery()
+        else:
+            _request_delivery_recovery()
+
+
+def _recovery_page(query, column, cursor_name):
+    after = _recovery_cursors[cursor_name]
+    page = [row[0] for row in query.filter(column > after).order_by(column).limit(_DELIVERY_SCAN_BATCH)]
+    if not page and after:
+        page = [row[0] for row in query.order_by(column).limit(_DELIVERY_SCAN_BATCH)]
+    _recovery_cursors[cursor_name] = page[-1] if len(page) == _DELIVERY_SCAN_BATCH else 0
+    return page
+
+
+def _recover_scheduled_deliveries(*, wait):
+    """Recover bounded pages and never resend an uncertain attempt."""
     from app.db import ExerciseDelivery
-    from app.exercise_status import pending_status_step_ids
+    from app.exercise_status import pending_status_steps
     from app.scheduled_delivery import LATE_GRACE, IN_FLIGHT_GRACE
+    global _due_after
     now = datetime.now(timezone.utc)
     with SessionLocal() as db:
-        due_ids = [row[0] for row in _due_delivery_steps(db, now).all()]
-        # Quarantine interrupted sends independently of plan status or expiry.
-        stale_ids = [row[0] for row in db.query(ExerciseDelivery.id).filter(
+        due = (_due_delivery_steps(db, now).add_columns(AIPlanStep.scheduled_for)
+               .order_by(AIPlanStep.scheduled_for, AIPlanStep.id))
+        page = due if _due_after is None else due.filter(
+            tuple_(AIPlanStep.scheduled_for, AIPlanStep.id) > _due_after)
+        capacity = _recovery_workers.available()
+        due_rows = page.limit(capacity).all() if capacity else []
+        if capacity and not due_rows and _due_after is not None:
+            due_rows = due.limit(capacity).all()
+        due_ids = [step_id for step_id, _ in due_rows]
+        _due_after = (due_rows[-1][1], due_ids[-1]) if due_rows and len(due_rows) == capacity else None
+        stale_ids = _recovery_page(db.query(ExerciseDelivery.id).filter(
             ExerciseDelivery.state == 'in_flight', ExerciseDelivery.started_at <= now - IN_FLIGHT_GRACE,
-        ).all()]
-        retry_ids = [row[0] for row in db.query(ExerciseDelivery.plan_step_id).filter(ExerciseDelivery.state == 'retryable').distinct().all()]
-        ui_ids = pending_status_step_ids(db)
-    from app.scheduled_delivery import claim_send
+        ), ExerciseDelivery.id, "stale")
+        retry_ids = _recovery_page(db.query(ExerciseDelivery.plan_step_id).join(AIPlanStep).filter(
+            ExerciseDelivery.state == 'retryable',
+            or_(AIPlanStep.step_status != 'pending', AIPlanStep.scheduled_for.is_(None),
+                AIPlanStep.scheduled_for < now - LATE_GRACE, AIPlanStep.expires_at <= now),
+        ).distinct(), ExerciseDelivery.plan_step_id, "retry")
+        ui_ids = _recovery_page(pending_status_steps(db), AIPlanStep.id, "keyboard")
+    def recover_step(step_id):
+        try:
+            send_scheduled_message(0, "", step_id, recovery=True, wait_for_receipt=not wait)
+        except Exception:
+            logger.exception("Scheduled recovery failed step=%s", step_id)
+
+    pending = []
+    for step_id in due_ids:
+        try:
+            pending.append(_recovery_workers.submit(recover_step, step_id))
+        except DBBusyError:
+            break
+    if wait:
+        for future in pending:
+            future.result()
+
+    from app.scheduled_delivery import claim_send, try_lock_delivery_owner
     for step_id in set(retry_ids):
         with SessionLocal() as db:
             # claim_send also closes retries whose delivery window has ended.
             # Sending belongs to send_scheduled_message, not this cleanup pass.
             step = db.get(AIPlanStep, step_id)
             if step is not None and (step.step_status != 'pending' or not step.scheduled_for or now > _to_utc(step.scheduled_for) + LATE_GRACE or (step.expires_at and now >= _to_utc(step.expires_at))):
-                claim_send(db, step_id, now=now)
+                try:
+                    with fail_fast_on_deployment_lock():
+                        claim_send(db, step_id, now=now, skip_busy_owner=True)
+                except DBBusyError:
+                    continue
                 db.commit()
     for attempt_id in stale_ids:
         with SessionLocal() as db:
             attempt = db.get(ExerciseDelivery, attempt_id)
             if attempt:
-                from app.lifecycle import _lock_user
                 step = db.get(AIPlanStep, attempt.plan_step_id)
-                _lock_user(db, step.day.plan.user_id, require_entitlement=False)
+                if step is None or try_lock_delivery_owner(db, step) is None:
+                    continue
                 db.refresh(attempt)
                 if attempt.state == 'in_flight':
                     attempt.state = 'uncertain'
                     attempt.failure_code = 'interrupted_send'
                     db.commit()
-    def recover_step(step_id):
-        try:
-            send_scheduled_message(0, '', step_id)
-        except Exception:
-            logger.exception("Scheduled recovery failed step=%s", step_id)
-    if due_ids:
-        # Reuse the same durable claim path with bounded parallel send waits.
-        # One slow user cannot hold every subsequent due user behind it.
-        with ThreadPoolExecutor(max_workers=8, thread_name_prefix='delivery-recovery') as workers:
-            list(workers.map(recover_step, due_ids))
-    reconcile_terminal_step_keyboards(ui_ids)
+    if wait:
+        reconcile_terminal_step_keyboards(ui_ids)
+    else:
+        _dispatch_terminal_projections(ui_ids)
+
 
 
 def _due_delivery_steps(db, now):
@@ -376,7 +525,9 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
         
     if not user or not user.is_active:
         return False
-    if not can_deliver_tasks(user, step.day.plan if step.day else None):
+    # The operator switch fences the durable send claim. Keep future timers
+    # exact even while delivery is disabled so a resume preserves their dates.
+    if not can_deliver_tasks(user, step.day.plan if step.day else None, delivery=False):
         return False
 
     if not step.day or not step.day.plan:
@@ -401,6 +552,8 @@ def schedule_plan_step(step: AIPlanStep, user: User) -> bool:
         run_date=run_date,
         args=[user.tg_id, "", step.id],
         replace_existing=True,
+        executor="scheduled_delivery" if scheduler is _application_scheduler else "default",
+        kwargs={"wait_for_receipt": True} if scheduler is _application_scheduler else {},
         misfire_grace_time=None,
         coalesce=False,
         max_instances=1,
@@ -473,7 +626,7 @@ def reconcile_plan_step_jobs(step_ids: list[int]) -> SchedulerReconciliation:
     )
 
 
-def reconcile_plan_schedule(plan_id: int) -> SchedulerReconciliation:
+def reconcile_plan_schedule(plan_id: int, *, skip_busy_owner: bool = False) -> SchedulerReconciliation:
     """Make jobs exact while fencing newer lifecycle decisions on the user row."""
     with SessionLocal() as db:
         initial_plan = (
@@ -494,7 +647,7 @@ def reconcile_plan_schedule(plan_id: int) -> SchedulerReconciliation:
             db.query(User)
             .filter(User.id == initial_plan.user_id)
             .populate_existing()
-            .with_for_update()
+            .with_for_update(skip_locked=skip_busy_owner)
             .first()
         )
         plan = (
@@ -547,7 +700,7 @@ def reconcile_plan_schedule(plan_id: int) -> SchedulerReconciliation:
         now_utc = datetime.now(pytz.UTC)
         failed: list[int] = []
         succeeded = 0
-        due_retry = False
+        wake_delivery = False
         for step in rows:
             job_id = _generate_step_job_id(step)
             scheduled_for = (
@@ -585,9 +738,18 @@ def reconcile_plan_schedule(plan_id: int) -> SchedulerReconciliation:
         pending_ids = [step.id for step in rows if step.step_status == 'pending']
         if str(plan.status) == 'active' and user.is_active and pending_ids:
             from app.db import ExerciseDelivery
-            due_retry = db.query(ExerciseDelivery.id).filter(
-                ExerciseDelivery.plan_step_id.in_(pending_ids), ExerciseDelivery.state == 'retryable').first() is not None
-        if (completion is not None and not failed and user.is_active
+            has_due = any(
+                step.step_status == "pending" and step.scheduled_for is not None
+                and getattr(step, "expires_at", None) is not None
+                and _to_utc(step.scheduled_for) <= now_utc < _to_utc(step.expires_at)
+                for step in rows
+            )
+            wake_delivery = has_due or db.query(ExerciseDelivery.id).filter(
+                ExerciseDelivery.plan_step_id.in_(pending_ids), ExerciseDelivery.state == "retryable",
+            ).first() is not None
+        repair_pending = getattr(plan, "schedule_reconcile_at", None) is not None
+        is_switch = getattr(plan, "schedule_switch_source", None) is not None
+        if ((completion is not None or (repair_pending and not is_switch)) and not failed and user.is_active
                 and str(plan.status) == 'active'
                 and any(step.step_status == 'pending' and step.scheduled_for is not None
                         and _to_utc(step.scheduled_for) > now_utc for step in rows)):
@@ -600,18 +762,26 @@ def reconcile_plan_schedule(plan_id: int) -> SchedulerReconciliation:
                         source_operation_id=f'plan-activation:{plan.id}', plan_id=plan.id,
                         properties={'total_days': plan.total_days})
             except Exception:
-                completion.schedule_pending = True
-                completion.schedule_wake_at = datetime.now(timezone.utc) + timedelta(seconds=30)
+                recheck = datetime.now(timezone.utc) + timedelta(seconds=30)
+                if completion is not None:
+                    completion.schedule_pending = True
+                    completion.schedule_wake_at = recheck
+                if repair_pending:
+                    plan.schedule_reconcile_at = recheck
                 db.commit()
-                enable_completion_recovery()
+                if completion is not None:
+                    enable_completion_recovery()
                 raise
         if completion is not None:
             # Clear/retry the obligation under the same lock as its proof;
             # an older scanner must not erase a newer resume's owed work.
             completion.schedule_pending = bool(failed)
             completion.schedule_wake_at = datetime.now(timezone.utc) + timedelta(seconds=30) if failed else None
+        if repair_pending and not is_switch:
+            plan.schedule_reconcile_at = datetime.now(timezone.utc) + timedelta(seconds=15) if failed else None
+        if completion is not None or repair_pending:
             db.commit()
-    if due_retry:
+    if wake_delivery:
         _enable_delivery_recovery()
     return SchedulerReconciliation(
         attempted=len(rows),
@@ -666,58 +836,93 @@ def reschedule_plan_steps(step_ids: list[int]) -> int:
     return reconcile_plan_step_jobs(step_ids).succeeded
 
 
-async def schedule_daily_loop():
-    """
-    Restores jobs on startup.
-    Handles the 3-level hierarchy join: Step -> Day -> Plan.
-    """
-    global _scheduler_started, _event_loop
+_RESTORE_BATCH = 32
 
-    if _scheduler_started:
-        return
 
-    _scheduler_started = True
-    _event_loop = asyncio.get_running_loop()
-
-    logger.info("Starting scheduler restoration loop...")
-    init_scheduler()
-
+def _restore_future_job_batch(after):
+    """Read a page in deadline order. Each step is re-read under its owner fence."""
+    now = datetime.now(pytz.UTC)
     with SessionLocal() as db:
-        now_utc = datetime.now(pytz.UTC)
-        
-        # JOIN: Step -> Day -> Plan -> User
-        # Filter: Active User + Active Plan + Future Step + Not terminal
-        pending_steps = (
-            db.query(AIPlanStep, AIPlanDay, AIPlan, User)
+        query = (db.query(AIPlanStep.scheduled_for, AIPlanStep.id, AIPlan.user_id, AIPlan.id)
             .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
             .join(AIPlan, AIPlan.id == AIPlanDay.plan_id)
             .join(User, User.id == AIPlan.user_id)
-            .filter(
-                AIPlan.status == "active",
-                and_(User.is_active.is_(True), access_predicate(User.id, delivery=True)),
-                AIPlanStep.step_status == "pending",
-                AIPlanStep.scheduled_for != None, # Only schedule if time is set
-                AIPlanStep.scheduled_for > now_utc
-            )
-            .all()
-        )
+            .filter(AIPlan.status == "active", User.is_active.is_(True), access_predicate(User.id),
+                    AIPlanStep.step_status == "pending", AIPlanStep.scheduled_for > now))
+        if after is not None:
+            query = query.filter(tuple_(AIPlanStep.scheduled_for, AIPlanStep.id) > after)
+        rows = query.order_by(AIPlanStep.scheduled_for, AIPlanStep.id).limit(_RESTORE_BATCH).all()
 
-        count = 0
-        for step, day, plan, user in pending_steps:
-            assigned = schedule_plan_step(step, user)
-            if assigned:
-                count += 1
-        
-        if count > 0:
-            db.commit()
-            logger.info(f"Restored {count} scheduled plan steps.")
+    failed_plans = set()
+    for _, step_id, user_id, plan_id in rows:
+        try:
+            with SessionLocal() as db:
+                user = db.query(User).filter_by(id=user_id).with_for_update(skip_locked=True).first()
+                if user is None:
+                    failed_plans.add(plan_id)
+                    continue
+                step = db.get(AIPlanStep, step_id)
+                if not user.is_active or step is None or step.step_status != "pending":
+                    continue
+                if (step.day.plan.status != "active" or not step.scheduled_for
+                        or step.scheduled_for <= datetime.now(pytz.UTC)):
+                    continue
+                job_id = _generate_step_job_id(step)
+                existing = scheduler.get_job(job_id)
+                if (existing is None or existing.next_run_time != step.scheduled_for
+                        or (scheduler is _application_scheduler and existing.executor != "scheduled_delivery")):
+                    with fail_fast_on_deployment_lock():
+                        schedule_plan_step(step, user)
+        except DBBusyError:
+            failed_plans.add(plan_id)
+        except Exception:
+            failed_plans.add(plan_id)
+            logger.exception("Scheduled timer restoration failed step=%s", step_id)
+    rescan = False
+    if failed_plans:
+        with SessionLocal.begin() as db:
+            plans = db.query(AIPlan).filter(AIPlan.id.in_(failed_plans)).with_for_update(skip_locked=True).all()
+            for plan in plans:
+                if plan.status == "active" and plan.schedule_reconcile_at is None:
+                    plan.schedule_reconcile_at = now
+            rescan = len(plans) != len(failed_plans)
+    after = (rows[-1][0], rows[-1][1]) if len(rows) == _RESTORE_BATCH else None
+    return after, rescan
 
-    await asyncio.to_thread(expire_overdue_steps)
-    await asyncio.to_thread(reconcile_scheduled_deliveries)
-    await asyncio.to_thread(reconcile_plan_completions)
 
-    # Keep the loop alive
-    await asyncio.Event().wait()
+async def start_scheduler():
+    """Initialize the scheduler before serving traffic."""
+    global _event_loop
+    _event_loop = asyncio.get_running_loop()
+    await asyncio.to_thread(init_scheduler)
+
+
+async def restore_scheduled_timers():
+    """Restore alarms and timers without gating new requests on scans."""
+    await asyncio.gather(
+        asyncio.to_thread(expire_overdue_steps),
+        asyncio.to_thread(_enable_delivery_recovery),
+        asyncio.to_thread(enable_completion_recovery),
+    )
+
+    after = None
+    rescan = False
+    while True:
+        try:
+            after, deferred = await asyncio.to_thread(_restore_future_job_batch, after)
+            rescan |= deferred
+        except Exception:
+            logger.exception("Scheduled timer restoration interrupted")
+            await asyncio.sleep(5)
+            continue
+        if after is None:
+            await asyncio.to_thread(_enable_delivery_recovery)
+            if not rescan:
+                break
+            # A transaction held both the owner and the repair marker. Finish
+            # the pass for other owners before retrying from durable state.
+            rescan = False
+            await asyncio.sleep(5)
 
 
 def send_daily_pulse():
@@ -956,7 +1161,7 @@ def reconcile_terminal_step_keyboards(
     succeeded_ids: list[int] = []
     failed_ids: list[int] = []
     for step_id in ordered_ids:
-        from app.exercise_status import reconcile_status
+        from app.exercise_status import permanent_projection_failure, reconcile_status
         try:
             with SessionLocal() as db:
                 projected = reconcile_status(db, step_id)
@@ -993,7 +1198,7 @@ def reconcile_terminal_step_keyboards(
             # A callback may have removed the buttons before its DB marker
             # could be cleared. Telegram's exact no-change reply proves the
             # requested empty markup is already in place.
-            if "message is not modified" not in str(exc).lower():
+            if "message is not modified" not in str(exc).lower() and not permanent_projection_failure(exc):
                 failed_ids.append(step_id)
                 continue
         with SessionLocal() as db:
@@ -1015,14 +1220,34 @@ def reconcile_terminal_step_keyboards(
     )
 
 
-def reconcile_expired_step_keyboards(
-    step_ids: list[int],
-) -> SchedulerReconciliation:
-    """Compatibility alias for the terminal keyboard reconciler."""
-    return reconcile_terminal_step_keyboards(step_ids)
+def _dispatch_terminal_projections(step_ids):
+    for step_id in step_ids:
+        if not _submit_lane(
+            _projection_recovery, _projection_inflight_lock, _projection_inflight,
+            step_id, reconcile_terminal_step_keyboards, [step_id],
+            wake_completion=False, limit=_PROJECTION_WORKERS,
+        ) and not _projection_recovery.available():
+            break
+
+
+_EXPIRY_BATCH = 32
+_expiry_after = 0
+_expiry_lock = Lock()
 
 
 def expire_overdue_steps() -> None:
+    if not _expiry_lock.acquire(blocking=False):
+        return
+    try:
+        if _delivery_overflow.is_set():
+            _delivery_overflow.clear()
+            _request_delivery_recovery()
+        _expire_overdue_batch()
+    finally:
+        _expiry_lock.release()
+
+
+def _expire_overdue_batch() -> None:
     """
     Runs every 30 seconds and at restart, using persisted deadlines.
 
@@ -1038,6 +1263,7 @@ def expire_overdue_steps() -> None:
     """
     from sqlalchemy import exists, or_
 
+    global _expiry_after
     from app.db import PlanCompletion
     legacy_repair_pending = (
         PlanCompletion.successor_plan_id == AIPlan.id,
@@ -1046,45 +1272,49 @@ def expire_overdue_steps() -> None:
     now_utc = datetime.now(pytz.UTC)
 
     with SessionLocal() as scan_db:
-        candidate_ids = [
-            step_id
-            for (step_id,) in (
-                scan_db.query(AIPlanStep.id)
-                .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
-                .join(AIPlan, AIPlan.id == AIPlanDay.plan_id)
-                .join(User, User.id == AIPlan.user_id)
-                .filter(
-                    or_(AIPlanStep.step_status != "pending", ~exists().where(*legacy_repair_pending)),
-                    access_predicate(User.id),
-                    AIPlanStep.step_status.in_(["pending", "delivered"]),
-                    or_(
-                        AIPlanStep.expires_at.is_(None),
-                        AIPlanStep.expires_at < now_utc,
-                    ),
-                )
-                .order_by(AIPlanStep.id)
-                .all()
+        candidates = (
+            scan_db.query(AIPlanStep.id, AIPlan.user_id)
+            .join(AIPlanDay, AIPlanDay.id == AIPlanStep.day_id)
+            .join(AIPlan, AIPlan.id == AIPlanDay.plan_id)
+            .join(User, User.id == AIPlan.user_id)
+            .filter(
+                or_(AIPlanStep.step_status != "pending", ~exists().where(*legacy_repair_pending)),
+                access_predicate(User.id),
+                AIPlanStep.id > _expiry_after,
+                AIPlanStep.step_status.in_(["pending", "delivered"]),
+                or_(
+                    and_(AIPlanStep.expires_at.is_(None), AIPlanStep.scheduled_for.is_not(None)),
+                    AIPlanStep.expires_at < now_utc,
+                ),
             )
-        ]
+            .order_by(AIPlanStep.id)
+            .limit(_EXPIRY_BATCH)
+            .all()
+        )
+    _expiry_after = candidates[-1][0] if len(candidates) == _EXPIRY_BATCH else 0
 
     repaired = 0
     count = 0
     failed_ids: list[int] = []
     expired_keyboard_ids: list[int] = []
-    for step_id in candidate_ids:
+    for step_id, user_id in candidates:
         with SessionLocal() as candidate_db:
+            # Skip an owner already busy with a callback or another transaction.
+            # The step remains eligible for a later sweep.
+            owner = (candidate_db.query(User).filter(User.id == user_id)
+                     .with_for_update(skip_locked=True).first())
+            if owner is None:
+                continue
             step = (
                 candidate_db.query(AIPlanStep)
                 .filter(AIPlanStep.id == step_id)
                 .first()
             )
-            if step is None:
+            if step is None or step.step_status not in {"pending", "delivered"}:
                 continue
             repaired_candidate = False
             if step.expires_at is None and step.scheduled_for is not None:
-                user_tz = resolve_timezone(
-                    getattr(step.day.plan.user, "timezone", None)
-                )
+                user_tz = resolve_timezone(owner.timezone)
                 step.expires_at = step_expires_at(step.scheduled_for, user_tz)
                 repaired_candidate = True
 
@@ -1094,19 +1324,23 @@ def expire_overdue_steps() -> None:
                     repaired += 1
                 continue
 
+            if has_timely_step_action(owner.tg_id, step_id, _to_utc(step.expires_at)):
+                continue
+
             try:
-                expiry = expire_plan_step(
-                    candidate_db,
-                    user_id=step.day.plan.user_id,
-                    step_id=step.id,
-                    source_operation_id=(
-                        f"scheduler:expiry:{step.id}:{step.expires_at.isoformat()}"
-                    ),
-                    occurred_at=step.expires_at,
-                )
+                with fail_fast_on_deployment_lock():
+                    expiry = expire_plan_step(
+                        candidate_db,
+                        user_id=user_id,
+                        step_id=step.id,
+                        source_operation_id=(
+                            f"scheduler:expiry:{step.id}:{step.expires_at.isoformat()}"
+                        ),
+                        occurred_at=step.expires_at,
+                    )
                 candidate_db.commit()
-                request_plan_completion(expiry.user_id, expiry.plan_id)
-            except LifecycleTransitionError:
+                _submit_continuation(expiry.user_id, expiry.plan_id)
+            except (LifecycleTransitionError, DBBusyError):
                 candidate_db.rollback()
                 continue
             except Exception:
@@ -1122,6 +1356,9 @@ def expire_overdue_steps() -> None:
             if step.tg_message_id is not None:
                 expired_keyboard_ids.append(step_id)
 
+    if count:
+        # A saturated lane left the terminal DB facts ready for the next pass.
+        enable_completion_recovery()
     if count or repaired:
         logger.info(
             "[EXPIRE] Marked %d steps as expired, repaired %d missing expires_at values.",
@@ -1132,14 +1369,8 @@ def expire_overdue_steps() -> None:
         logger.error("[EXPIRE] Candidate failures for step ids: %s", failed_ids)
 
     if expired_keyboard_ids:
-        reconciliation = reconcile_expired_step_keyboards(expired_keyboard_ids)
-    else:
-        reconciliation = SchedulerReconciliation(attempted=0, succeeded=0)
-    if reconciliation.failed_ids:
-        logger.warning(
-            "[EXPIRE] Status projection pending for step ids: %s",
-            reconciliation.failed_ids,
-        )
+        _dispatch_terminal_projections(expired_keyboard_ids)
+        _request_delivery_recovery()
 
 
 def check_plan_completions() -> None:
@@ -1254,25 +1485,27 @@ def send_plan_pulse_snapshots() -> None:
 # in PostgreSQL; the alarm parks at the earliest unfinished obligation deadline.
 _completion_recovery_lock = Lock()
 _completion_source_failure = False
-_continuation_workers = ThreadPoolExecutor(max_workers=8, thread_name_prefix='continuation')
+_COMPLETION_WORKERS = 2
+completion_receipts = BlockingLane(_COMPLETION_WORKERS, 'completion-receipt')
+_continuation_workers = ThreadPoolExecutor(max_workers=_COMPLETION_WORKERS, thread_name_prefix='continuation')
 _continuation_inflight_lock = Lock()
 _continuation_inflight: set[int] = set()
-_schedule_workers = ThreadPoolExecutor(max_workers=8, thread_name_prefix='completion-schedule')
+_schedule_workers = ThreadPoolExecutor(max_workers=_COMPLETION_WORKERS, thread_name_prefix='completion-schedule')
 _schedule_inflight_lock = Lock()
 _schedule_inflight: set[int] = set()
-_report_workers = ThreadPoolExecutor(max_workers=8, thread_name_prefix='completion-report')
+_report_workers = ThreadPoolExecutor(max_workers=_COMPLETION_WORKERS, thread_name_prefix='completion-report')
 _report_inflight_lock = Lock()
 _report_inflight: set[int] = set()
 
 
 def _lane_capacity(lock, inflight):
     with lock:
-        return max(0, 8 - len(inflight)), tuple(inflight)
+        return max(0, _COMPLETION_WORKERS - len(inflight)), tuple(inflight)
 
 
-def _submit_lane(executor, lock, inflight, key, work, *args):
+def _submit_lane(executor, lock, inflight, key, work, *args, wake_completion=True, limit=_COMPLETION_WORKERS):
     with lock:
-        if key in inflight or len(inflight) >= 8:
+        if key in inflight or len(inflight) >= limit:
             return False
         inflight.add(key)
     try:
@@ -1289,13 +1522,75 @@ def _submit_lane(executor, lock, inflight, key, work, *args):
             result.result()
         except Exception:
             logger.exception('Completion recovery worker failed key=%s', key)
-        try:
-            enable_completion_recovery()
-        except Exception:
-            logger.exception('Completion recovery wake failed key=%s', key)
+        if wake_completion:
+            try:
+                enable_completion_recovery()
+            except Exception:
+                logger.exception('Completion recovery wake failed key=%s', key)
 
     future.add_done_callback(finished)
     return True
+
+
+_schedule_repair_workers = ThreadPoolExecutor(max_workers=_COMPLETION_WORKERS, thread_name_prefix="schedule-repair")
+_schedule_repair_lock = Lock()
+_schedule_repair_inflight: set[int] = set()
+
+
+def dispatch_plan_schedule_recovery():
+    """Lease a small number of durable repairs before dispatching by owner."""
+    capacity, inflight = _lane_capacity(_schedule_repair_lock, _schedule_repair_inflight)
+    if not capacity:
+        return
+    now = datetime.now(timezone.utc)
+    claimed = []
+    owners = set(inflight)
+    with SessionLocal() as db:
+        candidates = (db.query(AIPlan).filter(AIPlan.schedule_reconcile_at <= now,
+            ~AIPlan.user_id.in_(inflight)).order_by(AIPlan.schedule_reconcile_at, AIPlan.id)
+            .limit(capacity * 4).with_for_update(skip_locked=True).all())
+        for plan in candidates:
+            if plan.user_id in owners:
+                continue
+            owners.add(plan.user_id)
+            plan.schedule_reconcile_at = now + timedelta(seconds=15)
+            claimed.append((plan.user_id, plan.id, plan.schedule_switch_source, plan.total_days))
+            if len(claimed) == capacity:
+                break
+        if claimed:
+            db.commit()
+    for user_id, plan_id, switch_source, total_days in claimed:
+        _submit_lane(_schedule_repair_workers, _schedule_repair_lock, _schedule_repair_inflight,
+                     user_id, _repair_plan_schedule, user_id, plan_id, switch_source, total_days,
+                     wake_completion=False)
+
+
+def _repair_plan_schedule(user_id, plan_id, switch_source, total_days):
+    if switch_source is None:
+        reconcile_plan_schedule(plan_id, skip_busy_owner=True)
+        return
+
+    from app.lifecycle import find_lifecycle_operation, switch_plan_format
+    from app.plan_runtime.tools import _finish_plan_format_result
+
+    with SessionLocal() as db:
+        user = db.query(User).filter_by(id=user_id).with_for_update(skip_locked=True).first()
+        if user is None or not user.is_active or not may_access(db, user.id):
+            return
+        request = find_lifecycle_operation(db, user_id, switch_source)
+        if request is None or request.operation != "switch_plan_format":
+            logger.warning("Unreplayable switch schedule repair plan=%s", plan_id)
+            return
+        replay = switch_plan_format(
+            db, user_id=user_id, target_plan_type="SHORT" if total_days == 7 else "MEDIUM",
+            source_operation_id=switch_source,
+        )
+    outcome = _finish_plan_format_result(replay, pending_status="needs_evening_time")
+    if outcome.get("code") == "superseded":
+        with SessionLocal.begin() as db:
+            db.query(AIPlan).filter(AIPlan.id == plan_id, AIPlan.schedule_switch_source == switch_source).update({
+                AIPlan.schedule_switch_source: None, AIPlan.schedule_reconcile_at: None,
+            }, synchronize_session=False)
 
 
 def _continuation_capacity() -> tuple[int, tuple[int, ...]]:
@@ -1315,7 +1610,7 @@ def _dispatch_completion_report(user_id, plan_id):
         coro.close()
         return
     try:
-        future.result(timeout=45)
+        future.result()
     except Exception:
         logger.exception('Completion dispatch unconfirmed plan=%s', plan_id)
 
@@ -1408,7 +1703,7 @@ def flag_completion_recovery():
 def request_plan_completion(user_id, plan_id):
     """Post-commit action/expiry entrance; failures retain terminal source facts."""
     global _completion_source_failure
-    from app.orchestrator import _auto_complete_plan_if_needed, send_plan_completion_message
+    from app.orchestrator import _auto_complete_plan_if_needed
     from app.plan_completion.continuation import prepare_automatic_continuation
     try:
         result = prepare_automatic_continuation(
@@ -1417,9 +1712,8 @@ def request_plan_completion(user_id, plan_id):
         if result is not None:
             # Normal completion is fast, but no-action waits for the durable due
             # time. claim_report is the sole arbiter even when called early.
-            coro = send_plan_completion_message(user_id, plan_id)
-            if _submit_coroutine(coro) is None:
-                coro.close()
+            _submit_lane(_report_workers, _report_inflight_lock, _report_inflight,
+                         plan_id, _dispatch_completion_report, user_id, plan_id)
     except Exception:
         _completion_source_failure = True
         logger.exception('Explicit completion pending user=%s plan=%s', user_id, plan_id)
@@ -1441,7 +1735,7 @@ def reconcile_plan_completions():
         capacity, inflight = _continuation_capacity()
         with SessionLocal() as db:
             sources = (_terminal_completion_sources(db, now=now)
-                .filter(~AIPlan.id.in_(inflight)).limit(capacity).all()) if capacity else []
+                .filter(~AIPlan.id.in_(inflight)).order_by(AIPlan.id).limit(capacity).all()) if capacity else []
         _completion_source_failure = False
         for user_id, plan_id in sources:
             _submit_continuation(user_id, plan_id)
@@ -1501,32 +1795,110 @@ def cancel_privacy_jobs(user_id, plan_ids):
         raise RuntimeError('personal_jobs_remain')
 
 
-async def privacy_maintenance():
-    """Bounded indexed retention and pending erasure recovery; no full DB scan."""
-    from app.privacy import purge_retained_data, delete_account
-    from app.db import PrivacyRequest
-    from app.session_memory import SessionMemory
-    total = 0
-    for _ in range(10):
-        with SessionLocal() as db:
-            count = purge_retained_data(db)
-            db.commit()
-        total += count
-        if count < 500:
-            break
-    logger.info('privacy_retention_removed=%d', total)
+def _cancel_privacy_job_page(user_id, _plan_ids, after):
+    """Scan one bounded page, including historical jobs with arbitrary IDs."""
+    import re
+
+    from apscheduler.jobstores.base import JobLookupError
+
+    if scheduler is not _application_scheduler:
+        cancel_privacy_jobs(user_id, _plan_ids)
+        return None
+
+    jobs, cursor = jobstores["default"].page(after, 128)
+    plan_by_job = {}
+    step_by_job = {}
+    for job in jobs:
+        match = re.fullmatch(r"plan_([0-9]+)_.*|completion_(?:receipt_retry_|retry_)?([0-9]+)", job.id)
+        if match:
+            # Persisted plans/steps are positive PostgreSQL INTEGER keys.
+            plan_id = int(match[1] or match[2])
+            if 0 < plan_id < 2**31:
+                plan_by_job[job.id] = plan_id
+        if job.func_ref == "app.scheduler:send_scheduled_message" and len(job.args) == 3:
+            step_id = job.args[2]
+            if type(step_id) is int and 0 < step_id < 2**31:
+                step_by_job[job.id] = step_id
+
     with SessionLocal() as db:
-        pending = [r[0] for r in db.query(PrivacyRequest.id).filter_by(state='deleting').order_by(
+        plans = {plan_id for plan_id, in db.query(AIPlan.id).filter(
+            AIPlan.user_id == user_id, AIPlan.id.in_(plan_by_job.values()))}
+        steps = {step_id for step_id, in db.query(AIPlanStep.id).join(AIPlanDay).join(AIPlan).filter(
+            AIPlan.user_id == user_id, AIPlanStep.id.in_(step_by_job.values()))}
+    for job in jobs:
+        if plan_by_job.get(job.id) in plans or step_by_job.get(job.id) in steps:
+            try:
+                scheduler.remove_job(job.id, jobstore="default")
+            except JobLookupError:
+                pass
+
+    return cursor
+
+
+_privacy_db = BlockingLane(2, "privacy-db")
+_privacy_maintenance_running = asyncio.Lock()
+_PRIVACY_JOB_PAGES_PER_PASS = 16
+
+
+def _privacy_maintenance_batch(*, followup):
+    from app.access_proof import purge_expired_proofs
+    from app.privacy import purge_retained_data
+    from app.db import PrivacyRequest
+
+    if not followup:
+        with SessionLocal() as db:
+            purge_expired_proofs(db)
+            db.commit()
+        total = 0
+        for _ in range(10):
+            with SessionLocal() as db:
+                count = purge_retained_data(db)
+                db.commit()
+            total += count
+            if count < 500:
+                break
+        logger.info("privacy_retention_removed=%d", total)
+    with SessionLocal() as db:
+        queue = db.query(PrivacyRequest.id).filter_by(state="deleting")
+        if followup:
+            queue = queue.filter(PrivacyRequest.evidence["job_scan_after"].astext.is_not(None))
+        return [r[0] for r in queue.order_by(
             PrivacyRequest.last_attempted_at.asc().nullsfirst(),
             PrivacyRequest.received_at, PrivacyRequest.id).limit(10)]
-    for request_id in pending:
-        try:
-            await delete_account(request_id, memory=SessionMemory(), cancel_jobs=cancel_privacy_jobs)
-        except Exception:
-            logger.error('privacy_erasure_pending')
 
 
-def run_privacy_maintenance():
-    future = _submit_coroutine(privacy_maintenance())
-    if future is not None:
-        future.result(timeout=120)
+async def privacy_maintenance(*, followup=False):
+    """Two concurrent erasures, durably checkpointing each bounded page."""
+    from app.privacy import delete_account
+    from app.session_memory import SessionMemory
+
+    if _privacy_maintenance_running.locked():
+        return False
+    async with _privacy_maintenance_running:
+        pending = await _privacy_db.run(_privacy_maintenance_batch, followup=followup)
+        cases = asyncio.Semaphore(2)
+
+        async def erase(request_id):
+            async with cases:
+                try:
+                    return await delete_account(
+                        request_id, memory=SessionMemory(), cancel_jobs=cancel_privacy_jobs,
+                        run_blocking=_privacy_db.run, cancel_job_page=_cancel_privacy_job_page,
+                        job_scan_page_limit=_PRIVACY_JOB_PAGES_PER_PASS,
+                    )
+                except Exception as exc:
+                    logger.error("privacy_erasure_pending error_type=%s", type(exc).__name__)
+                    return False
+
+        return any(await asyncio.gather(*(erase(request_id) for request_id in pending)))
+
+
+def run_privacy_maintenance(*, followup=False):
+    future = _submit_coroutine(privacy_maintenance(followup=followup))
+    if future is not None and future.result(timeout=120):
+        scheduler.add_job(
+            "app.scheduler:run_privacy_maintenance", "date",
+            id="privacy_scan_followup", jobstore="maintenance",
+            run_date=datetime.now(timezone.utc) + timedelta(seconds=1),
+            kwargs={"followup": True}, replace_existing=True, misfire_grace_time=None,
+        )

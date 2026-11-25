@@ -294,6 +294,7 @@ def _finish_plan_format_result(result, *, pending_status: str) -> dict:
                 user_id=int(result.user_id),
                 plan_id=int(result.plan_id),
                 switch_source_operation_id=result.details["switch_source_operation_id"],
+                expected_reconcile_at=result.details.get("schedule_reconcile_at"),
             )
             db.commit()
     except LifecycleTransitionError:

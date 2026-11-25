@@ -33,7 +33,7 @@ class _OneQuery:
         self.populated = True
         return self
 
-    def with_for_update(self):
+    def with_for_update(self, **_kwargs):
         self.locked = True
         return self
 
@@ -647,7 +647,7 @@ def test_plan_schedule_reconciliation_fences_newer_lifecycle_decision(
         def populate_existing(self):
             return self
 
-        def with_for_update(self):
+        def with_for_update(self, **_kwargs):
             self.lock = True
             return self
 
@@ -912,6 +912,7 @@ def test_expiry_sweep_isolates_unexpected_candidate_failure(monkeypatch, caplog)
             tg_message_id=900 + step_id,
             expires_at=past,
             scheduled_for=past,
+            step_status="delivered",
             day=SimpleNamespace(
                 plan=SimpleNamespace(
                     user_id=1,
@@ -932,15 +933,11 @@ def test_expiry_sweep_isolates_unexpected_candidate_failure(monkeypatch, caplog)
         def order_by(self, *_args):
             return self
 
-        def all(self):
-            return [(1,), (2,), (3,)]
-
-    class _KeyboardQuery:
-        def filter(self, *_args):
+        def limit(self, _size):
             return self
 
         def all(self):
-            return []
+            return [(1, 1), (2, 1), (3, 1)]
 
     class _ScanDB:
         def __enter__(self):
@@ -949,7 +946,7 @@ def test_expiry_sweep_isolates_unexpected_candidate_failure(monkeypatch, caplog)
         def __exit__(self, *_args):
             return False
 
-        def query(self, _model):
+        def query(self, *_models):
             return _CandidatesQuery()
 
     class _CandidateDB:
@@ -965,6 +962,8 @@ def test_expiry_sweep_isolates_unexpected_candidate_failure(monkeypatch, caplog)
             return False
 
         def query(self, _model):
+            if _model is scheduler.User:
+                return _OneQuery(SimpleNamespace(tg_id=100))
             return _OneQuery(self.step)
 
         def commit(self):
@@ -973,20 +972,8 @@ def test_expiry_sweep_isolates_unexpected_candidate_failure(monkeypatch, caplog)
         def rollback(self):
             self.rollbacks += 1
 
-    class _KeyboardDB:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def query(self, _model):
-            return _KeyboardQuery()
-
     candidate_dbs = {step_id: _CandidateDB(step) for step_id, step in steps.items()}
-    sessions = iter(
-        [_ScanDB(), candidate_dbs[1], candidate_dbs[2], candidate_dbs[3], _KeyboardDB()]
-    )
+    sessions = iter([_ScanDB(), candidate_dbs[1], candidate_dbs[2], candidate_dbs[3]])
     attempted = []
     button_attempts = []
 
@@ -1004,14 +991,10 @@ def test_expiry_sweep_isolates_unexpected_candidate_failure(monkeypatch, caplog)
 
     monkeypatch.setattr(scheduler, "SessionLocal", lambda: next(sessions))
     monkeypatch.setattr(scheduler, "expire_plan_step", _expire)
-    monkeypatch.setattr(
-        scheduler,
-        "reconcile_expired_step_keyboards",
-        lambda ids: (
-            button_attempts.append(ids)
-            or SimpleNamespace(failed_ids=())
-        ),
-    )
+    monkeypatch.setattr(scheduler, "_submit_continuation", lambda *_args: True)
+    monkeypatch.setattr(scheduler, "enable_completion_recovery", lambda: None)
+    monkeypatch.setattr(scheduler, "_dispatch_terminal_projections", button_attempts.append)
+    monkeypatch.setattr(scheduler, "_request_delivery_recovery", lambda: None)
 
     scheduler.expire_overdue_steps()
 
@@ -1040,6 +1023,9 @@ def test_expiry_does_not_scan_old_terminal_buttons(monkeypatch):
         def order_by(self, *_args):
             return self
 
+        def limit(self, _size):
+            return self
+
         def all(self):
             return []
 
@@ -1055,7 +1041,7 @@ def test_expiry_does_not_scan_old_terminal_buttons(monkeypatch):
 
     monkeypatch.setattr(scheduler, "SessionLocal", _DB)
     monkeypatch.setattr(
-        scheduler, "reconcile_expired_step_keyboards",
+        scheduler, "_dispatch_terminal_projections",
         lambda _ids: pytest.fail("old button cleanup was retried"),
     )
 

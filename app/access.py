@@ -16,7 +16,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import func, text, select, exists, or_
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import OperationalError
 
+from app.blocking_db import DBBusyError, deployment_lock_nowait
 from app.config import settings
 from app.db import (AccessAdminOperation, AccessEntitlement, AccessIdentity, AccessProof, Deployment,
     DeploymentEnrollment, DeploymentInvitation, DeploymentRosterEntry,
@@ -61,9 +63,17 @@ def email_digest(email):
 
 
 def lock_deployment(db, deployment_id, *, joining=False, delivery=False, now=None, lock=True,
-                    require_active_period=True):
+                    require_active_period=True, shared=False):
     query = db.query(Deployment).filter(Deployment.id == deployment_id).populate_existing()
-    deployment = (query.with_for_update() if lock else query).first()
+    # Concurrent owners can hold a read fence. Controls, roster application
+    # and revocation still take an exclusive fence before changing authority.
+    nowait = shared and deployment_lock_nowait.get()
+    try:
+        deployment = (query.with_for_update(read=shared, nowait=nowait) if lock else query).first()
+    except OperationalError as exc:
+        if nowait and getattr(exc.orig, "pgcode", None) == "55P03":
+            raise DBBusyError("deployment authority is being updated") from exc
+        raise
     now = now or now_utc()
     if (deployment is None or deployment.environment != environment()
         or (require_active_period and deployment.starts_at and deployment.starts_at > now)
@@ -84,7 +94,7 @@ def require_access(db, user_id, *, delivery=False, now=None):
         DeploymentEnrollment.user_id == user_id, DeploymentEnrollment.ended_at.is_(None)).first()
     if enrollment is None:
         raise AccessDenied()
-    deployment = lock_deployment(db, enrollment.deployment_id, delivery=delivery, now=now)
+    deployment = lock_deployment(db, enrollment.deployment_id, delivery=delivery, now=now, shared=True)
     now = now or now_utc()
     entitlement = db.query(AccessEntitlement).filter(AccessEntitlement.id == enrollment.entitlement_id).populate_existing().first()
     if (entitlement is None or entitlement.deployment_id != deployment.id
@@ -144,10 +154,14 @@ def require_planning_timezone(user):
         raise AccessDenied() from None
 
 
-def _roster(db, deployment_id):
-    version = db.query(DeploymentRosterVersion).filter(
+def _current_roster_version(db, deployment_id):
+    return db.query(DeploymentRosterVersion).filter(
         DeploymentRosterVersion.deployment_id == deployment_id,
         DeploymentRosterVersion.is_current.is_(True)).first()
+
+
+def _roster(db, deployment_id):
+    version = _current_roster_version(db, deployment_id)
     if version is None:
         return None, set()
     ids = {row.access_identity_id for row in db.query(DeploymentRosterEntry).filter(
@@ -264,13 +278,23 @@ def apply_roster(db, *, deployment_id, version_id, confirmation, counts, operato
 
 
 def grant_verified(db, deployment_id, identity_key, *, provider='email', subject_digest=None):
-    deployment = lock_deployment(db, deployment_id, joining=True)
+    deployment = lock_deployment(db, deployment_id, joining=True, shared=True)
     if deployment.environment != 'production':
         raise AccessDenied()
-    version, members = _roster(db, deployment_id)
+    version = _current_roster_version(db, deployment_id)
+    if version is None:
+        raise AccessDenied()
     identity = db.query(AccessIdentity).filter(AccessIdentity.identity_digest == identity_key,
         AccessIdentity.provider == 'email').with_for_update().first()
-    if identity is None or identity.id not in members:
+    if identity is None:
+        raise AccessDenied()
+    member = db.query(DeploymentRosterEntry.id).filter(
+        DeploymentRosterEntry.roster_version_id == version.id,
+        DeploymentRosterEntry.entry_key == str(identity.id),
+        DeploymentRosterEntry.access_identity_id == identity.id,
+        DeploymentRosterEntry.delta_action == 'add',
+    ).first()
+    if member is None:
         raise AccessDenied()
     metadata = dict(identity.verification_metadata or {})
     if subject_digest:
@@ -309,7 +333,7 @@ def issue_handoff(db, entitlement_id):
     hint = db.get(AccessEntitlement, entitlement_id)
     if hint is None:
         raise AccessDenied()
-    lock_deployment(db, hint.deployment_id, joining=True)
+    lock_deployment(db, hint.deployment_id, joining=True, shared=True)
     entitlement = db.query(AccessEntitlement).filter(AccessEntitlement.id == entitlement_id).populate_existing().with_for_update().first()
     at = now_utc()
     if entitlement.revoked_at is not None or entitlement.granted_at > at:
@@ -336,7 +360,7 @@ def redeem_handoff(db, raw, tg_user):
     if hint is None:
         raise AccessDenied()
     entitlement_hint = db.get(AccessEntitlement, hint.entitlement_id)
-    deployment = lock_deployment(db, entitlement_hint.deployment_id, joining=True)
+    deployment = lock_deployment(db, entitlement_hint.deployment_id, joining=True, shared=True)
     entitlement = db.query(AccessEntitlement).filter(AccessEntitlement.id == hint.entitlement_id).populate_existing().with_for_update().first()
     token = db.query(DeploymentInvitation).filter(DeploymentInvitation.id == hint.id).populate_existing().with_for_update().first()
     at = now_utc()

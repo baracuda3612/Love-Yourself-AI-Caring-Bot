@@ -833,6 +833,70 @@ def test_google_issuer_variants_keep_one_stable_identity(db,monkeypatch):
     assert db.query(AccessEntitlement).filter_by(deployment_id=dep.id,revoked_at=None).count()==1
 
 
+async def test_google_callback_finishes_with_the_ordinary_enrollment_lane_full(engine, monkeypatch, request):
+    import asyncio
+    from threading import Event
+    from urllib.parse import parse_qs, urlsplit
+
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy.orm import sessionmaker
+
+    from app.blocking_db import BlockingLane
+
+    monkeypatch.setattr(access.settings, "ENVIRONMENT", "prod")
+    monkeypatch.setattr(access.settings, "GOOGLE_CLIENT_ID", "google-client")
+    monkeypatch.setattr(access.settings, "GOOGLE_CLIENT_SECRET", "google-secret")
+    monkeypatch.setattr(access_proof, "rate_limit", lambda *_a, **_k: None)
+    factory = sessionmaker(engine)
+    monkeypatch.setattr(access_http, "SessionLocal", factory)
+    browser = "b" * 43
+    with factory.begin() as db:
+        dep = deployment(db, environment="production")
+        dep.access_policy = dict(dep.access_policy, google_domain="client.org")
+        roster(db, dep, ["member@client.org"])
+        deployment_id = dep.id
+        url = access_proof.begin_oidc(db, deployment_id=dep.id, provider="google", browser=browser)
+    params = parse_qs(urlsplit(url).query)
+    query = {"state": params["state"][0], "code": "auth-code"}
+
+    exchanging, release_exchange, release_enrollment = Event(), Event(), Event()
+
+    def exchange(*_args):
+        assert engine.pool.checkedout() == 0
+        exchanging.set()
+        assert release_exchange.wait(5)
+        return "signed-test-token"
+
+    monkeypatch.setattr(access_proof, "exchange_code", exchange)
+    monkeypatch.setattr(access_proof, "validate_id_token", lambda *_a: {
+        "sub": "subject", "nonce": params["nonce"][0], "iss": access_proof.GOOGLE_ISSUERS[0],
+        "email": "member@client.org", "email_verified": True, "hd": "client.org",
+    })
+    enrollment = BlockingLane(3, "test-enrollment")
+    request.addfinalizer(enrollment.shutdown)
+    monkeypatch.setattr(access_http, "_enrollment", enrollment)
+    path = f"/enroll/{deployment_id}/oidc/google/callback"
+    async with AsyncClient(transport=ASGITransport(app=api.app), base_url="http://testserver") as client:
+        client.cookies.set(access_http.COOKIE, browser, path="/enroll")
+        callback = asyncio.create_task(client.get(path, params=query))
+        try:
+            assert await asyncio.to_thread(exchanging.wait, 3)
+            held = [enrollment.submit(release_enrollment.wait, 5) for _ in range(3)]
+            assert enrollment.available() == 0
+            release_exchange.set()
+            response = await asyncio.wait_for(asyncio.shield(callback), 3)
+            assert response.status_code == 200 and "Відкрити Telegram" in response.text
+        finally:
+            release_exchange.set()
+            release_enrollment.set()
+            await callback
+        assert all(await asyncio.gather(*(asyncio.wrap_future(worker) for worker in held)))
+        assert (await client.get(path, params=query)).status_code == 403
+    with factory() as db:
+        assert db.query(AccessEntitlement).filter_by(deployment_id=deployment_id, revoked_at=None).count() == 1
+        assert db.query(AccessProof).filter_by(deployment_id=deployment_id, kind="verified").count() == 1
+
+
 @pytest.mark.parametrize('valid_tenant',[True,False])
 def test_microsoft_missing_email_guides_to_real_mailbox_proof(db,monkeypatch,valid_tenant):
     from urllib.parse import urlsplit,parse_qs

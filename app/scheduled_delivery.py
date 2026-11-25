@@ -2,7 +2,8 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from app.db import AIPlanStep, ExerciseDelivery, FeedbackEvent
+from app.blocking_db import DBBusyError
+from app.db import AIPlanStep, ExerciseDelivery, FeedbackEvent, User
 from app.exercise_delivery import ExerciseSendResult
 from app.exercise_presentation import ExerciseMedia, ExercisePresentation, step_presentation
 from app.lifecycle import _lock_user, accept_confirmed_step_delivery
@@ -42,13 +43,23 @@ class SendClaim:
     presentation: ExercisePresentation
 
 
-def claim_send(db, step_id, *, now=None):
+def try_lock_delivery_owner(db, step):
+    return (db.query(User).filter_by(id=step.day.plan.user_id)
+            .populate_existing().with_for_update(skip_locked=True).first())
+
+
+def claim_send(db, step_id, *, now=None, skip_busy_owner=False):
     now = now or datetime.now(timezone.utc)
     step = db.get(AIPlanStep, step_id)
     if step is None:
         return None
     user_id = step.day.plan.user_id
-    user = _lock_user(db, user_id, require_entitlement=False)
+    if skip_busy_owner:
+        user = try_lock_delivery_owner(db, step)
+        if user is None:
+            raise DBBusyError("delivery owner is busy")
+    else:
+        user = _lock_user(db, user_id, require_entitlement=False)
     db.refresh(step)
     plan = step.day.plan
     db.refresh(plan)

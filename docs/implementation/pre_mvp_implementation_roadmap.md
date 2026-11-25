@@ -1310,6 +1310,12 @@ original references.
   factual counts for the previous cycle. When summarizing exercise feedback,
   count missing feedback separately. The completion report format remains
   in WP-07.4.
+* consolidate duplicate access reads in the Coach request and tool paths.
+  Start with the repeated access and notice snapshot in `get_plan_status` and
+  the overlapping entitlement checks within pause and delivery-time changes.
+  Preserve current entitlement at execution, revocation during the model turn,
+  notice acknowledgement, plan-state checks, and the final Telegram send guard.
+  Compare SQL statement counts before and after on supported Coach paths.
 * resolve an explicit Telegram Reply to the referenced message in the current
   user's chat and pass verified context with the initial model request. Cover
   user and AI assistant messages, delivered exercises, and completion summaries.

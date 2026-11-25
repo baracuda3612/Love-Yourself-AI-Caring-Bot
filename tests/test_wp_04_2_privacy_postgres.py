@@ -520,7 +520,7 @@ async def test_deletion_retry_rotates_past_ten_broken_cases(engine,monkeypatch):
     monkeypatch.setattr(scheduling,'SessionLocal',factory)
     monkeypatch.setattr(m,'SessionLocal',factory)
     monkeypatch.setattr(session_memory,'SessionMemory',Memory)
-    monkeypatch.setattr(scheduling,'cancel_privacy_jobs',lambda *a:None)
+    monkeypatch.setattr(scheduling,'_cancel_privacy_job_page',lambda *a:None)
     await scheduling.privacy_maintenance()
     assert set(attempts)==set(ids[:10])
     with factory() as db:

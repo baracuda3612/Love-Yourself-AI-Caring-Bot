@@ -1,5 +1,7 @@
 """Transport contract; authoritative state/concurrency is covered by WP-03.4 PG tests."""
+import asyncio
 from contextlib import nullcontext
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -7,6 +9,7 @@ import pytest
 
 from app import telegram
 from app.lifecycle import LifecycleResult, LifecycleOwnershipError, LifecycleEntitlementError, LifecycleTransitionError
+from app.step_action_ingress import has_timely_step_action
 
 
 def callback(data='task_complete:10'):
@@ -51,6 +54,221 @@ async def test_malformed_action_is_factual(data):
     cb = callback(data)
     await telegram.handle_task_completed(cb)
     cb.answer.assert_awaited_once_with('Завдання не знайдено')
+
+
+@pytest.mark.parametrize("stop_while_queued", [False, True])
+async def test_polling_keeps_timely_actions_in_entire_buffered_batch(monkeypatch, stop_while_queued):
+    from aiogram.methods import GetMe, GetUpdates, SetMyCommands
+    from aiogram.types import Update, User
+
+    occupied, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    started = {}
+    batch = []
+    for number in range(1, 35):
+        actor_id = 900_000 + number
+        batch.append(Update.model_validate({
+            "update_id": number,
+            "callback_query": {
+                "id": str(number), "from": {"id": actor_id, "is_bot": False, "first_name": "Test"},
+                "chat_instance": str(actor_id), "data": f"task_complete:{number}",
+                "message": {"message_id": 777, "date": 1, "chat": {"id": actor_id, "type": "private"}},
+            },
+        }, context={"bot": telegram.bot}))
+
+    batch_received_at = []
+
+    async def transport(_bot, method, **_kwargs):
+        if isinstance(method, GetMe):
+            return User(id=telegram.bot.id, is_bot=True, first_name="Test bot")
+        if isinstance(method, SetMyCommands):
+            return True
+        assert isinstance(method, GetUpdates)
+        if batch:
+            batch_received_at.append(datetime.now(timezone.utc))
+            updates = batch[:]
+            batch.clear()
+            return updates
+        await asyncio.Future()
+
+    async def handle(callback_query, _target, received_at):
+        number = int(callback_query.id)
+        started[number] = received_at
+        if len(started) == 32:
+            occupied.set()
+        if number <= 32:
+            await release.wait()
+        elif 33 in started and 34 in started:
+            completed.set()
+
+    monkeypatch.setattr(telegram.bot.session, "make_request", transport)
+    monkeypatch.setattr(telegram, "run_db", AsyncMock())
+    monkeypatch.setattr(telegram, "_handle_step_action", handle)
+    monkeypatch.setattr(telegram.dp, "_stop_signal", None)
+    monkeypatch.setattr(telegram.dp, "_stopped_signal", None)
+    polling = asyncio.create_task(telegram.dp.start_polling(
+        telegram.bot, tasks_concurrency_limit=32, handle_signals=False, close_bot_session=False,
+    ))
+    try:
+        await asyncio.wait_for(occupied.wait(), 3)
+        assert set(started) == set(range(1, 33))
+        deadline = datetime.now(timezone.utc)
+        assert has_timely_step_action(900_033, 33, deadline)
+        assert has_timely_step_action(900_034, 34, deadline)
+        if not stop_while_queued:
+            release.set()
+            await asyncio.wait_for(completed.wait(), 3)
+            assert batch_received_at[0] <= started[33] == started[34] < deadline
+    finally:
+        if not polling.done():
+            await asyncio.wait_for(telegram.dp.stop_polling(), 3)
+        release.set()
+        await asyncio.wait_for(polling, 3)
+        await asyncio.gather(*telegram.dp._handle_update_tasks)
+
+    cutoff = datetime.now(timezone.utc) + timedelta(seconds=1)
+    assert not any(has_timely_step_action(900_000 + n, n, cutoff) for n in range(1, 35))
+    if stop_while_queued:
+        assert set(started) == set(range(1, 33))
+
+
+@pytest.mark.parametrize("other_in_next_poll", [False, True])
+async def test_one_actors_menu_backlog_does_not_consume_other_polling_slots(monkeypatch, other_in_next_poll):
+    from aiogram.methods import GetMe, GetUpdates, SendMessage, SetMyCommands
+    from aiogram.types import Update, User
+
+    from app import user_menu
+
+    first_actor, other_actor = 800101, 800102
+    first_send, release, other_send, first_actor_drained = (asyncio.Event() for _ in range(4))
+    sent = []
+    offsets = []
+    batch = [
+        Update.model_validate({
+            "update_id": number,
+            "message": {
+                "message_id": number, "date": 1, "text": next(iter(user_menu.MENU_TEXTS)),
+                "from": {"id": actor, "first_name": "Test", "is_bot": False},
+                "chat": {"id": actor, "type": "private"},
+            },
+        }, context={"bot": telegram.bot})
+        for number, actor in enumerate([first_actor] * 32 + [other_actor], start=1)
+    ]
+
+    async def transport(_bot, method, **_kwargs):
+        if isinstance(method, GetMe):
+            return User(id=telegram.bot.id, is_bot=True, first_name="Test bot")
+        if isinstance(method, SetMyCommands):
+            return True
+        if isinstance(method, GetUpdates):
+            offsets.append(method.offset)
+            if len(offsets) == 1:
+                return batch[:32] if other_in_next_poll else batch[:]
+            updates = [update for update in batch if update.update_id >= method.offset]
+            if updates:
+                return updates
+            await asyncio.Future()
+        assert isinstance(method, SendMessage)
+        if method.chat_id == first_actor:
+            sent.append(int(method.text))
+            if len(sent) == 1:
+                first_send.set()
+                await release.wait()
+            if len(sent) == 32:
+                first_actor_drained.set()
+        else:
+            assert method.chat_id == other_actor
+            other_send.set()
+        return True
+
+    async def menu(message, *_args, **_kwargs):
+        await message.answer(str(message.message_id))
+
+    monkeypatch.setattr(telegram, "_open_menu", menu)
+    monkeypatch.setattr(telegram.bot.session, "make_request", transport)
+    monkeypatch.setattr(telegram.dp, "_stop_signal", None)
+    monkeypatch.setattr(telegram.dp, "_stopped_signal", None)
+    polling = asyncio.create_task(telegram.dp.start_polling(
+        telegram.bot, tasks_concurrency_limit=32, handle_signals=False, close_bot_session=False,
+    ))
+    try:
+        await asyncio.wait_for(asyncio.gather(first_send.wait(), other_send.wait()), 3)
+        assert sent == [1]
+        if other_in_next_poll:
+            assert offsets[:2] == [None, 2]
+        release.set()
+        await asyncio.wait_for(first_actor_drained.wait(), 3)
+        assert sent == list(range(1, 33))
+    finally:
+        release.set()
+        if not polling.done():
+            await asyncio.wait_for(telegram.dp.stop_polling(), 3)
+        await asyncio.wait_for(polling, 3)
+        await asyncio.gather(*telegram.dp._handle_update_tasks)
+
+
+async def test_polling_menu_opens_while_same_actors_coach_reply_waits(monkeypatch):
+    from aiogram.methods import GetMe, GetUpdates, SetMyCommands
+    from aiogram.types import Update, User
+
+    from app import user_menu
+
+    actor = 801001
+    coach_waiting, allow_reply, menu_opened = (asyncio.Event() for _ in range(3))
+    batch = [
+        Update.model_validate({
+            "update_id": number,
+            "message": {
+                "message_id": number, "date": 1, "text": text,
+                "from": {"id": actor, "first_name": "Test", "is_bot": False},
+                "chat": {"id": actor, "type": "private"},
+            },
+        }, context={"bot": telegram.bot})
+        for number, text in enumerate(("How do I start?", next(iter(user_menu.MENU_TEXTS))), start=1)
+    ]
+
+    async def transport(_bot, method, **_kwargs):
+        if isinstance(method, GetMe):
+            return User(id=telegram.bot.id, is_bot=True, first_name="Test bot")
+        if isinstance(method, SetMyCommands):
+            return True
+        assert isinstance(method, GetUpdates)
+        if batch:
+            updates = batch[:]
+            batch.clear()
+            return updates
+        await asyncio.Future()
+
+    async def run_db(operation, *args):
+        if operation == telegram._commit_text_ingress:
+            return actor, None, None, False
+
+    async def coach(*_args):
+        coach_waiting.set()
+        await allow_reply.wait()
+        return {"reply_text": "Test reply"}
+
+    async def menu(*_args, **_kwargs):
+        menu_opened.set()
+
+    monkeypatch.setattr(telegram.bot.session, "make_request", transport)
+    monkeypatch.setattr(telegram, "run_db", run_db)
+    monkeypatch.setattr(telegram, "handle_incoming_message", coach)
+    monkeypatch.setattr(telegram, "_send_agent_response", AsyncMock())
+    monkeypatch.setattr(telegram, "_open_menu", menu)
+    monkeypatch.setattr(telegram.dp, "_stop_signal", None)
+    monkeypatch.setattr(telegram.dp, "_stopped_signal", None)
+    polling = asyncio.create_task(telegram.dp.start_polling(
+        telegram.bot, tasks_concurrency_limit=32, handle_signals=False, close_bot_session=False,
+    ))
+    try:
+        await asyncio.wait_for(asyncio.gather(coach_waiting.wait(), menu_opened.wait()), 3)
+        assert not allow_reply.is_set()
+    finally:
+        allow_reply.set()
+        if not polling.done():
+            await asyncio.wait_for(telegram.dp.stop_polling(), 3)
+        await asyncio.wait_for(polling, 3)
+        await asyncio.gather(*telegram.dp._handle_update_tasks)
 
 
 @pytest.mark.parametrize('duplicate', [False, True])
