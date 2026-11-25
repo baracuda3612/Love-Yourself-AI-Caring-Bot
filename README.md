@@ -8,12 +8,11 @@ PostgreSQL, and optional local Redis-backed state.
 Implementation progress: B3 and B4 are complete for integration. The founder
 merged WP-05.1 and the WP-03.5 continuation follow-up in
 [PR #275](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/275)
-on 2026-11-18 (`5700e6d`). B5 is in progress. The next bounded effort is
-[WP-SCALE-01](docs/implementation/work_packages/WP-SCALE-01_annex.md), an
-off-roadmap annex to verify and repair bottlenecks in completed packages;
-WP-05.2 follows it.
+on 2026-11-18 (`5700e6d`). WP-SCALE-01 runtime isolation merged in
+[PR #277](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/277) on 2026-11-25
+(`ef02b63`). B5 is in progress and WP-05.2 is ready.
 See the [roadmap](docs/implementation/pre_mvp_implementation_roadmap.md) and
-[next-session handoff](docs/implementation/work_packages/WP-SCALE-01_annex.md).
+[WP-05.2 handoff](docs/implementation/work_packages/WP-05.2_start_message.md).
 This is implementation status, not a production release claim.
 
 Copy `.env.example` to an untracked `.env` for local development and replace

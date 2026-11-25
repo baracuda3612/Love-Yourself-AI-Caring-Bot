@@ -1,6 +1,6 @@
 # WP-SCALE-01 — annex: runtime isolation in completed packages
 
-**Status:** `READY` after this documentation PR merges. **Route:** one separate
+**Status:** `VERIFIED` for integration as of 2026-11-25. [PR #277](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/277) merged as `ef02b63`. **Route:** one separate
 off-roadmap remediation PR before WP-05.2. This annex does not reopen or
 rename completed WPs, and it is not a new roadmap block. Its job is to verify
 and repair reachable shared-resource bottlenecks already present in completed
@@ -83,8 +83,8 @@ release artifact. The capacity target comes from the expected cohort and
 required headroom, not a fixed 30,000-user promise. Until those checks run,
 scale and release readiness remain `NOT_PROVEN`.
 
-After this annex PR merges, update the roadmap to mark it `VERIFIED` for
-integration and make [WP-05.2](WP-05.2_start_message.md) the current package.
+[WP-05.2](WP-05.2_start_message.md) is the next package. See the
+[verification record](WP-SCALE-01_evidence.md) for the evidence and its limits.
 
 **Local implementation handoff, observed 2026-11-18:** an existing
 `fix/runtime-isolation` worktree contains commit `5866b8f` for HTTP isolation
