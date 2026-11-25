@@ -107,8 +107,13 @@ Callbacks used 5 ms of controlled work. An in-process enrollment GET measured
 - The mixed-load audit of `a743bfa` found another wait before the router. Telegram had returned a timely action while all 32 polling slots were occupied. The Bot session now registers timely-action candidates for the entire GetUpdates response before dispatcher admission. The polling limit and database worker budget stay the same. The queued entries are bounded by one polling response plus the admitted tasks, and polling shutdown clears entries that never reached a handler.
 - The remediation check used actual aiogram polling and PostgreSQL with a controlled Telegram transport. While all 32 slots were held, an expiry sweep expired the truly late action. Once slots opened, the timely 33rd and 34th actions each committed one completion with the batch timestamp and no ignored event. The participant revoked while queued was denied. The check covers received updates in one live process. Crash durability before commit and actual provider timings remain outside its evidence.
 
-The independent remediation verdict and measurements against live dependencies
-remain outstanding.
+The founder merged [PR #277](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/277) on 2026-11-25 as
+`ef02b63ad87ed4487645030e31e27fe4a852a2e3`. The runtime revision
+`8636b68` passed 904 tests on disposable PostgreSQL and Redis and received
+[GitHub Codex review with zero findings](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/277#issuecomment-7068217726).
+The PR head `e7a3727` added the WP-05.2 roadmap item only. The independent
+local scenario verdict applies to its earlier candidate, and live
+dependency and production capacity measurements remain outstanding.
 
 ### Isolation of four shared waits
 

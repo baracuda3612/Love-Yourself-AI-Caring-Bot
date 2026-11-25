@@ -1228,12 +1228,11 @@ privacy/reporting contract; WP-04.3 adds no analytics surface.
 
 ## WP-SCALE-01 annex — Repair verified bottlenecks in completed packages
 
-**Status:** `READY` after this documentation closeout merges. This is one
-off-roadmap remediation PR, not a new B5 implementation package. Execute it
-before WP-05.2. The [annex contract](work_packages/WP-SCALE-01_annex.md)
-owns candidate inventory, original WP owners, proof standard, bounded repair
-and acceptance. Earlier static audits are leads, not proof of a live defect or
-measured capacity. Do not carry fixes for future WP mechanisms into this PR.
+**Status:** `VERIFIED` for integration. The founder merged [PR #277](https://github.com/baracuda3612/Love-Yourself-AI-Caring-Bot/pull/277)
+on 2026-11-25 (`ef02b63`). The [annex](work_packages/WP-SCALE-01_annex.md) owns
+the scope and the [evidence record](work_packages/WP-SCALE-01_evidence.md)
+captures the runtime tests and reviewed revisions. Live dependencies and
+production capacity remain `NOT_PROVEN`.
 
 ---
 
@@ -1291,7 +1290,7 @@ original references.
 
 ### WP-05.2 — Implement the bounded tool-result loop
 
-**Status:** `NOT STARTED` until WP-SCALE-01 closes; then `READY`. Start from the
+**Status:** `READY` after WP-SCALE-01 integration. Start from the
 [WP-05.2 handoff](work_packages/WP-05.2_start_message.md).
 
 **Scope**
@@ -1994,7 +1993,7 @@ block exit gate passes.
   - [x] WP-04.1 — Implement deployment, entitlement, and enrollment authority
   - [x] WP-04.2 — Implement the minimum privacy and data-rights lifecycle
   - [x] WP-04.3 — Implement deterministic onboarding and user menu
-- [ ] WP-SCALE-01 annex — Repair verified bottlenecks in completed packages
+- [x] WP-SCALE-01 annex — Repair verified bottlenecks in completed packages
 - [ ] B5 — AI assistant integration and bounded agency
   - [x] WP-05.1 — Build canonical AI assistant context and plan-aware tool exposure
   - [ ] WP-05.2 — Implement the bounded tool-result loop
@@ -2028,9 +2027,9 @@ block exit gate passes.
 
 | Field | Value |
 |---|---|
-| Current package | [WP-SCALE-01 annex — completed-package runtime isolation](work_packages/WP-SCALE-01_annex.md) |
-| Status | `READY` after this documentation handoff merges. WP-05.1 and the WP-03.5 follow-up were founder-merged in PR #275; B5 remains `IN PROGRESS`. |
-| Next action | In one separate remediation PR, verify and fix reachable shared-resource bottlenecks owned by completed WPs. Use the [annex](work_packages/WP-SCALE-01_annex.md), preserve the [WP-05.1 merged contract](work_packages/WP-05.1_integration_closeout.md), and keep unmeasured capacity `NOT_PROVEN`. After that PR merges, start [WP-05.2](work_packages/WP-05.2_start_message.md). |
+| Current package | [WP-05.2 — bounded tool-result loop](work_packages/WP-05.2_start_message.md) |
+| Status | `READY`. WP-05.1 and the WP-03.5 follow-up merged in PR #275. WP-SCALE-01 merged in PR #277. B5 remains `IN PROGRESS`. |
+| Next action | After this documentation PR merges, synchronize `implementation/pre-mvp` and start WP-05.2 in a fresh session and branch. Use the [start message](work_packages/WP-05.2_start_message.md) and the [roadmap scope](#wp-052--implement-the-bounded-tool-result-loop). |
 | Open release acceptance | Read [A43-01…06](work_packages/WP-04.3_acceptance_followups.md) when preparing WP-09.1, WP-09.3, WP-09.4, WP-10.1, WP-10.2 and WP-10.3. Carry each assigned scenario and its expected result and evidence into the owning WP plan. G1/G3/G4 and the applicable medical/device gates remain in force. |
 
 ### Private founder log
